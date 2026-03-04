@@ -1,0 +1,15 @@
+pub mod ast;
+pub mod validator;
+pub mod resolver;
+pub mod normaliser;
+
+use anyhow::Result;
+use ast::SchemaAst;
+
+pub fn parse(input: &str) -> Result<SchemaAst> {
+    let raw: SchemaAst = serde_json::from_str(input)
+        .map_err(|e| anyhow::anyhow!("Invalid schema AST: {e}"))?;
+    let validated = validator::validate(raw)?;
+    let resolved = resolver::resolve(validated)?;
+    Ok(normaliser::normalise(resolved))
+}

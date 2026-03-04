@@ -1,0 +1,40 @@
+{
+  "models": [
+    {
+      "name": "User",
+      "tableName": "users",
+      "fields": {
+        "id": { "kind": "uuid", "pgType": "UUID", "required": true, "unique": false, "index": false, "default": { "kind": "genRandomUuid" } },
+        "email": { "kind": "email", "pgType": "TEXT", "required": true, "unique": true, "index": false },
+        "name": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "index": false }
+      },
+      "access": {
+        "read": { "type": "public" },
+        "create": { "type": "role", "roles": ["admin"] },
+        "update": { "type": "owner", "field": "id" },
+        "delete": { "type": "role", "roles": ["admin"] }
+      },
+      "indexes": [],
+      "options": { "timestamps": true, "softDelete": false }
+    },
+    {
+      "name": "Post",
+      "tableName": "posts",
+      "fields": {
+        "id": { "kind": "uuid", "pgType": "UUID", "required": true, "unique": false, "index": false, "default": { "kind": "genRandomUuid" } },
+        "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "index": false },
+        "slug": { "kind": "slug", "pgType": "TEXT", "required": true, "unique": true, "from": "title" },
+        "content": { "kind": "richText", "pgType": "JSONB", "required": true, "unique": false, "index": false },
+        "authorId": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "foreignKey": "author_id", "onDelete": "cascade" }
+      },
+      "access": {
+        "read": { "type": "public" },
+        "create": { "type": "role", "roles": ["admin", "editor"] },
+        "update": { "type": "owner", "field": "authorId" },
+        "delete": { "type": "role", "roles": ["admin"] }
+      },
+      "indexes": [],
+      "options": { "timestamps": true, "softDelete": false }
+    }
+  ]
+}

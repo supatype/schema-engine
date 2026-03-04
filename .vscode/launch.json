@@ -1,0 +1,153 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug: Parse",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "filter": {
+                    "name": "definatype-engine",
+                    "kind": "bin"
+                }
+            },
+            "args": ["parse", "-i", "${workspaceFolder}/tests/fixtures/basic_blog.json"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Generate TypeScript",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "filter": {
+                    "name": "definatype-engine",
+                    "kind": "bin"
+                }
+            },
+            "args": ["generate", "-i", "${workspaceFolder}/tests/fixtures/basic_blog.json"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: RLS",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "filter": {
+                    "name": "definatype-engine",
+                    "kind": "bin"
+                }
+            },
+            "args": ["rls", "-i", "${workspaceFolder}/tests/fixtures/basic_blog.json"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Diff",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "filter": {
+                    "name": "definatype-engine",
+                    "kind": "bin"
+                }
+            },
+            "args": ["diff", "-i", "${workspaceFolder}/tests/fixtures/basic_blog.json", "--database-url", "${env:DATABASE_URL}"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Migrate",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "filter": {
+                    "name": "definatype-engine",
+                    "kind": "bin"
+                }
+            },
+            "args": ["migrate", "-i", "${workspaceFolder}/tests/fixtures/basic_blog.json", "--database-url", "${env:DATABASE_URL}"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Introspect",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "filter": {
+                    "name": "definatype-engine",
+                    "kind": "bin"
+                }
+            },
+            "args": ["introspect", "--database-url", "${env:DATABASE_URL}"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Unit Tests",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["test", "--lib", "--no-run", "--package=definatype-engine"],
+                "filter": {
+                    "kind": "lib"
+                }
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Parser Tests",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["test", "--test=parser_tests", "--no-run", "--package=definatype-engine"],
+                "filter": {
+                    "name": "parser_tests",
+                    "kind": "test"
+                }
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Differ Tests",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["test", "--test=differ_tests", "--no-run", "--package=definatype-engine"],
+                "filter": {
+                    "name": "differ_tests",
+                    "kind": "test"
+                }
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Migration Tests",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["test", "--test=migration_tests", "--no-run", "--package=definatype-engine"],
+                "filter": {
+                    "name": "migration_tests",
+                    "kind": "test"
+                }
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug: Integration Tests",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": ["test", "--test=integration_test", "--no-run", "--package=definatype-engine"],
+                "filter": {
+                    "name": "integration_test",
+                    "kind": "test"
+                }
+            },
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
