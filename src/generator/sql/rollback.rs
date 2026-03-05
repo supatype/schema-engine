@@ -54,10 +54,9 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         Operation::RenameColumn { table, from, to, .. } => {
             format!("ALTER TABLE \"public\".\"{table}\" RENAME COLUMN \"{to}\" TO \"{from}\";")
         }
-        // AlterColumn → cannot easily reverse without old type info; emit warning
-        Operation::AlterColumn { table, column, .. } => {
-            format!("-- WARNING: Cannot automatically roll back ALTER COLUMN \"{table}\".\"{column}\". \
-                     Restore from backup or apply inverse ALTER manually.")
+        // AlterColumn → reverse each change using stored metadata
+        Operation::AlterColumn { table, column, changes, .. } => {
+            rollback_alter_column(table, column, changes)
         }
         // AddIndex → DROP INDEX
         Operation::AddIndex { table, index, .. } => {
@@ -121,6 +120,75 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
     };
     Ok(Some(sql))
+}
+
+fn rollback_alter_column(table: &str, column: &str, changes: &serde_json::Value) -> String {
+    let mut stmts: Vec<String> = Vec::new();
+
+    // Reverse type change: restore old type from from_udt
+    if let Some(type_change) = changes.get("type") {
+        let from_udt = type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("text");
+        // Map udt_name back to a castable type keyword
+        let restore_type = udt_to_pg_type(from_udt);
+        stmts.push(format!(
+            "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
+             TYPE {restore_type} USING \"{column}\"::{restore_type}; \
+             -- restoring from {from_udt}"
+        ));
+    }
+
+    // Reverse nullability change
+    if let Some(null_change) = changes.get("nullability") {
+        let original_state = null_change.get("from").and_then(|v| v.as_str()).unwrap_or("");
+        if original_state == "not_null" {
+            // Was NOT NULL, now re-apply NOT NULL constraint
+            stmts.push(format!(
+                "DO $$ BEGIN\n  \
+                 IF EXISTS (SELECT 1 FROM \"public\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
+                 RAISE EXCEPTION 'Cannot restore NOT NULL on {table}.{column}: NULL values exist.';\n  \
+                 END IF;\n\
+                 END $$;"
+            ));
+            stmts.push(format!(
+                "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
+            ));
+        } else {
+            // Was nullable — restore by dropping not null
+            stmts.push(format!(
+                "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
+            ));
+        }
+    }
+
+    if stmts.is_empty() {
+        format!("-- WARNING: Cannot automatically roll back ALTER COLUMN \"{table}\".\"{column}\".")
+    } else {
+        stmts.join("\n")
+    }
+}
+
+fn udt_to_pg_type(udt: &str) -> &'static str {
+    match udt {
+        "int2" => "SMALLINT",
+        "int4" => "INTEGER",
+        "int8" => "BIGINT",
+        "float4" => "REAL",
+        "float8" => "DOUBLE PRECISION",
+        "bool" => "BOOLEAN",
+        "uuid" => "UUID",
+        "timestamptz" => "TIMESTAMPTZ",
+        "timestamp" => "TIMESTAMP",
+        "date" => "DATE",
+        "bytea" => "BYTEA",
+        "jsonb" => "JSONB",
+        "inet" => "INET",
+        "cidr" => "CIDR",
+        "macaddr" => "MACADDR",
+        "interval" => "INTERVAL",
+        "tsquery" => "TSQUERY",
+        "tsvector" => "TSVECTOR",
+        "varchar" | "bpchar" | "text" | _ => "TEXT",
+    }
 }
 
 fn forward_description(op: &Operation) -> String {

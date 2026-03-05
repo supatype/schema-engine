@@ -221,8 +221,9 @@ fn test_fk_already_exists_no_op() {
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
         tables: vec![
-            DbTable { schema: "public".into(), name: "users".into(), columns: vec![col("id", "uuid")] },
-            DbTable { schema: "public".into(), name: "posts".into(), columns: vec![col("id", "uuid"), col("author_id", "uuid")] },
+            // Use col_nn for PK — a real DB would never have a nullable PK
+            DbTable { schema: "public".into(), name: "users".into(), columns: vec![col_nn("id", "uuid")] },
+            DbTable { schema: "public".into(), name: "posts".into(), columns: vec![col_nn("id", "uuid"), col("author_id", "uuid")] },
         ],
         constraints: vec![fk("posts", "author_id", "users")], // already applied
         ..DatabaseState::default()
@@ -510,6 +511,19 @@ fn test_rollback_reverses_create_table() {
     assert!(rollback_sql.contains("COMMIT;"), "rollback must commit");
 }
 
+// ─── Helpers (extended) ───────────────────────────────────────────────────────
+
+fn col_nn(name: &str, udt: &str) -> DbColumn {
+    DbColumn {
+        name: name.into(),
+        data_type: udt.into(),
+        udt_name: udt.into(),
+        nullable: false,
+        default: None,
+        ordinal_position: 0,
+    }
+}
+
 // ─── Scenario 14: rollback reverses AddForeignKey ────────────────────────────
 
 #[test]
@@ -539,4 +553,256 @@ fn test_rollback_reverses_add_fk() {
     let rollback_sql = rollback::generate(&diff).unwrap();
 
     assert!(rollback_sql.contains("DROP CONSTRAINT"), "rollback must drop the FK constraint");
+}
+
+// ─── Scenario 15: add_column_not_null_with_default ───────────────────────────
+
+#[test]
+fn test_add_column_not_null_with_default() {
+    // Adding a NOT NULL column with a DEFAULT is safe — Postgres fills existing rows.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":        { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "published": { "kind": "boolean", "pgType": "BOOLEAN", "required": true, "unique": false, "default": { "kind": "value", "value": false } }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let add_ops: Vec<_> = diff.operations.iter()
+        .filter(|op| matches!(op, Operation::AddColumn { column, .. } if column == "published"))
+        .collect();
+    assert_eq!(add_ops.len(), 1, "should add NOT NULL column with default");
+    assert!(!diff.summary.is_destructive, "adding column with default is safe");
+}
+
+// ─── Scenario 16: change_column_type_safe ────────────────────────────────────
+
+#[test]
+fn test_change_column_type_safe_widening() {
+    // Widening int2 → BIGINT is a safe AlterColumn.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Counter", "tableName": "counters",
+            "fields": {
+                "id":    { "kind": "uuid",    "pgType": "UUID",   "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "value": { "kind": "bigInt",  "pgType": "BIGINT", "required": false, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "counters".into(),
+            // DB has value as SMALLINT (int2); id is PK so NOT NULL
+            columns: vec![col_nn("id", "uuid"), col("value", "int2")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let alter_ops: Vec<_> = diff.operations.iter()
+        .filter(|op| matches!(op, Operation::AlterColumn { column, .. } if column == "value"))
+        .collect();
+    assert_eq!(alter_ops.len(), 1, "should emit AlterColumn for type widening");
+
+    // Safe widening must not be destructive
+    assert!(!diff.summary.is_destructive, "safe type widening must not be destructive");
+}
+
+// ─── Scenario 17: change_column_type_lossy ───────────────────────────────────
+
+#[test]
+fn test_change_column_type_lossy() {
+    // Narrowing bigint → integer is a cautious type change (may lose data).
+    let ast_json = r#"{
+        "models": [{
+            "name": "Counter", "tableName": "counters",
+            "fields": {
+                "id":    { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "value": { "kind": "integer", "pgType": "INTEGER", "required": false, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "counters".into(),
+            // DB has value as BIGINT (int8) — narrowing to int4; id is PK so NOT NULL
+            columns: vec![col_nn("id", "uuid"), col("value", "int8")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let alter_ops: Vec<_> = diff.operations.iter()
+        .filter(|op| matches!(op, Operation::AlterColumn { column, .. } if column == "value"))
+        .collect();
+    assert_eq!(alter_ops.len(), 1, "should emit AlterColumn for lossy type change");
+    assert_eq!(diff.summary.cautious, 1, "lossy type change must be classified cautious");
+}
+
+// ─── Scenario 18: add_not_null to existing column ────────────────────────────
+
+#[test]
+fn test_add_not_null_to_existing_nullable_column() {
+    // Making an existing nullable column NOT NULL is cautious (pre-flight guard needed).
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            // id is PK (NOT NULL); title is currently nullable
+            columns: vec![col_nn("id", "uuid"), col("title", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let alter_ops: Vec<_> = diff.operations.iter()
+        .filter(|op| matches!(op, Operation::AlterColumn { column, changes, .. }
+            if column == "title" && changes.get("nullability").is_some()))
+        .collect();
+    assert_eq!(alter_ops.len(), 1, "should emit AlterColumn for NULL → NOT NULL change");
+    assert_eq!(diff.summary.cautious, 1, "NULL → NOT NULL must be cautious");
+}
+
+// ─── Scenario 19: drop_not_null from existing column ─────────────────────────
+
+#[test]
+fn test_drop_not_null_from_existing_column() {
+    // Making an existing NOT NULL column nullable is safe.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            // id is PK (NOT NULL); title is NOT NULL in DB, schema wants nullable
+            columns: vec![col_nn("id", "uuid"), col_nn("title", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let alter_ops: Vec<_> = diff.operations.iter()
+        .filter(|op| matches!(op, Operation::AlterColumn { column, changes, .. }
+            if column == "title" && changes.get("nullability").is_some()))
+        .collect();
+    assert_eq!(alter_ops.len(), 1, "should emit AlterColumn to drop NOT NULL");
+    // Dropping NOT NULL is safe
+    assert!(!diff.summary.is_destructive, "dropping NOT NULL is safe");
+    assert_eq!(diff.summary.cautious, 0, "dropping NOT NULL must not be cautious");
+}
+
+// ─── Scenario 20: alter_column SQL includes pre-flight NULL guard ─────────────
+
+#[test]
+fn test_alter_column_not_null_sql_has_preflight_guard() {
+    use definatype_engine::generator::sql::migration;
+
+    // Schema wants title to be NOT NULL
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            // id is PK (NOT NULL); title is nullable → schema wants NOT NULL
+            columns: vec![col_nn("id", "uuid"), col("title", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    // Use force=true so the cautious op passes the guard in migration::generate
+    let sql = migration::generate(&diff, true).unwrap();
+
+    assert!(sql.contains("RAISE EXCEPTION"), "SQL must include pre-flight NULL check guard");
+    assert!(sql.contains("SET NOT NULL"), "SQL must contain SET NOT NULL");
+}
+
+// ─── Scenario 21: alter_column rollback reverses nullability ──────────────────
+
+#[test]
+fn test_alter_column_rollback_reverses_nullability() {
+    use definatype_engine::generator::sql::rollback;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            // id is PK (NOT NULL); title is nullable → schema wants NOT NULL → rollback drops NOT NULL
+            columns: vec![col_nn("id", "uuid"), col("title", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let rollback_sql = rollback::generate(&diff).unwrap();
+
+    // Rollback of NOT NULL should emit DROP NOT NULL
+    assert!(rollback_sql.contains("DROP NOT NULL"), "rollback must restore nullable state");
 }

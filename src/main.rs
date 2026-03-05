@@ -63,6 +63,10 @@ enum Command {
         force: bool,
         #[arg(long, help = "Human-readable name for the migration record")]
         name: Option<String>,
+        #[arg(long, help = "Skip interactive rename confirmation prompts (for CI)")]
+        non_interactive: bool,
+        #[arg(long, help = "Bypass schema state cache and do a full DB introspection")]
+        no_cache: bool,
     },
     /// Generate TypeScript type definitions
     Generate,
@@ -123,7 +127,7 @@ async fn main() -> Result<()> {
             let migration = definatype_engine::generator::sql::migration::generate(&diff, force)?;
             println!("{migration}");
         }
-        Command::Push { database_url, schema, force, name } => {
+        Command::Push { database_url, schema, force, name, non_interactive, no_cache } => {
             use definatype_engine::state::migration_history;
             let ast = definatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await
@@ -133,10 +137,28 @@ async fn main() -> Result<()> {
             sqlx::raw_sql(migration_history::create_migrations_table_sql())
                 .execute(&pool)
                 .await
-                .context("Failed to create _platform.migrations table")?;
+                .context("Failed to create _platform schema tables")?;
 
-            let db_state = definatype_engine::introspector::introspect(&pool, &schema).await?;
-            let diff = definatype_engine::differ::diff(&ast, &db_state)?;
+            // Load DB state: from cache unless --no-cache
+            let db_state = if !no_cache {
+                migration_history::load_schema_state(&pool).await
+            } else {
+                None
+            };
+            let db_state = match db_state {
+                Some(cached) => {
+                    info!("Using cached schema state (use --no-cache to force full introspection)");
+                    cached
+                }
+                None => definatype_engine::introspector::introspect(&pool, &schema).await?,
+            };
+
+            let mut diff = definatype_engine::differ::diff(&ast, &db_state)?;
+
+            // Interactive rename confirmation (skipped in CI with --non-interactive)
+            if !non_interactive {
+                diff = confirm_renames(diff)?;
+            }
 
             if diff.operations.is_empty() {
                 info!("Schema is up to date — no changes to apply.");
@@ -152,6 +174,11 @@ async fn main() -> Result<()> {
             // Apply migration
             sqlx::raw_sql(&migration_sql).execute(&pool).await
                 .context("Failed to apply migration")?;
+
+            // Refresh and cache post-migration DB state
+            let new_db_state = definatype_engine::introspector::introspect(&pool, &schema).await?;
+            migration_history::save_schema_state(&pool, &new_db_state).await
+                .context("Failed to save schema state cache")?;
 
             // Record in history
             let hash = format!("sha256:{}", {
@@ -213,6 +240,66 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// For each RenameColumn operation, prompt the user to confirm it's a rename.
+/// If the user declines, replace the RenameColumn with DropColumn + AddColumn.
+fn confirm_renames(mut diff: definatype_engine::differ::DiffOutput) -> Result<definatype_engine::differ::DiffOutput> {
+    use definatype_engine::differ::{Operation, Risk};
+    use std::io::{BufRead, Write};
+
+    let mut final_ops: Vec<Operation> = Vec::new();
+
+    for op in diff.operations {
+        match &op {
+            Operation::RenameColumn { table, from, to, .. } => {
+                eprint!(
+                    "  ? Column '{from}' removed and '{to}' added on '{table}'. \
+                     Treat as rename? [Y/n] "
+                );
+                let _ = io::stderr().flush();
+
+                let mut line = String::new();
+                io::stdin().lock().read_line(&mut line)?;
+                let answer = line.trim().to_lowercase();
+
+                if answer == "n" || answer == "no" {
+                    // User declined — emit DropColumn + AddColumn instead
+                    final_ops.push(Operation::DropColumn {
+                        table: table.clone(),
+                        column: from.clone(),
+                        risk: Risk::Destructive,
+                    });
+                    final_ops.push(Operation::AddColumn {
+                        table: table.clone(),
+                        column: to.clone(),
+                        field: Box::new(definatype_engine::parser::ast::FieldAst::Text(
+                            definatype_engine::parser::ast::ScalarFieldAst {
+                                required: false,
+                                ..Default::default()
+                            }
+                        )),
+                        risk: Risk::Safe,
+                    });
+                } else {
+                    final_ops.push(op);
+                }
+            }
+            _ => final_ops.push(op),
+        }
+    }
+
+    let safe = final_ops.iter().filter(|o| matches!(definatype_engine::differ::risk_of(o), Risk::Safe)).count();
+    let cautious = final_ops.iter().filter(|o| matches!(definatype_engine::differ::risk_of(o), Risk::Cautious)).count();
+    let destructive = final_ops.iter().filter(|o| matches!(definatype_engine::differ::risk_of(o), Risk::Destructive)).count();
+
+    diff.operations = final_ops;
+    diff.summary.safe = safe;
+    diff.summary.cautious = cautious;
+    diff.summary.destructive = destructive;
+    diff.summary.is_destructive = destructive > 0;
+
+    Ok(diff)
 }
 
 fn read_input(path: Option<&str>) -> Result<String> {

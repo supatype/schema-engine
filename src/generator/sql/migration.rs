@@ -128,8 +128,7 @@ fn render_operation(op: &Operation) -> Result<String> {
             Ok(format!("ALTER TABLE \"public\".\"{table}\" RENAME COLUMN \"{from}\" TO \"{to}\";"))
         }
         Operation::AlterColumn { table, column, changes, .. } => {
-            // Generic alter — specific changes rendered from the changes JSON
-            Ok(format!("-- ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" ... (see changes: {changes})"))
+            alter_column_sql(table, column, changes)
         }
         Operation::AddIndex { table, index, .. } => create_index_sql(table, index),
         Operation::DropIndex { index_name, .. } => {
@@ -224,7 +223,8 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
         }
     }
 
-    if model.options.soft_delete && !model.fields.contains_key("softDelete") {
+    let has_soft_delete_field = model.fields.contains_key("softDelete");
+    if model.options.soft_delete && !has_soft_delete_field {
         if !model.fields.contains_key("deleted_at") {
             col_defs.push("    \"deleted_at\" TIMESTAMPTZ".into());
         }
@@ -251,6 +251,19 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
             };
             statements.push(create_index_sql(table, &auto_idx)?);
         }
+    }
+
+    // Index on deleted_at when softDelete is active (composite field or option)
+    let needs_soft_delete_index = has_soft_delete_field
+        || (model.options.soft_delete && !model.fields.contains_key("softDelete"));
+    if needs_soft_delete_index {
+        let idx = IndexAst {
+            name: Some(format!("{table}_deleted_at_idx")),
+            fields: vec!["deleted_at".into()],
+            unique: false,
+            using: IndexMethod::Btree,
+        };
+        statements.push(create_index_sql(table, &idx)?);
     }
 
     Ok(statements.join("\n\n"))
@@ -410,6 +423,48 @@ fn render_default(d: &DefaultValueAst) -> String {
         DefaultValueAst::Now => "NOW()".into(),
         DefaultValueAst::GenRandomUuid => "gen_random_uuid()".into(),
     }
+}
+
+// ─── ALTER COLUMN ─────────────────────────────────────────────────────────────
+
+fn alter_column_sql(table: &str, column: &str, changes: &serde_json::Value) -> Result<String> {
+    let mut stmts: Vec<String> = Vec::new();
+
+    // Type change
+    if let Some(type_change) = changes.get("type") {
+        let pg_type = type_change.get("to_pg").and_then(|v| v.as_str()).unwrap_or("TEXT");
+        let from_udt = type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("?");
+        // Use a USING cast — Postgres handles safe widenings; for others the user must verify
+        stmts.push(format!(
+            "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
+             TYPE {pg_type} USING \"{column}\"::{pg_type}; \
+             -- was: {from_udt}"
+        ));
+    }
+
+    // Nullability change
+    if let Some(null_change) = changes.get("nullability") {
+        let to = null_change.get("to").and_then(|v| v.as_str()).unwrap_or("");
+        if to == "not_null" {
+            // Pre-flight guard: fail if NULLs exist
+            stmts.push(format!(
+                "DO $$ BEGIN\n  \
+                 IF EXISTS (SELECT 1 FROM \"public\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
+                 RAISE EXCEPTION 'Cannot set NOT NULL on {table}.{column}: NULL values exist.';\n  \
+                 END IF;\n\
+                 END $$;"
+            ));
+            stmts.push(format!(
+                "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
+            ));
+        } else {
+            stmts.push(format!(
+                "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
+            ));
+        }
+    }
+
+    Ok(stmts.join("\n"))
 }
 
 // ─── INDEX ───────────────────────────────────────────────────────────────────
