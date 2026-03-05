@@ -1,0 +1,29 @@
+{
+  "models": [
+    {
+      "name": "Location",
+      "tableName": "locations",
+      "fields": {
+        "id":          { "kind": "uuid",   "pgType": "UUID",  "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+        "name":        { "kind": "text",   "pgType": "TEXT",  "required": true, "unique": false },
+        "description": { "kind": "text",   "pgType": "TEXT",  "required": false,"unique": false },
+        "point":       { "kind": "geo",    "pgType": "GEOGRAPHY(POINT,4326)", "required": true,  "geoType": "point",   "srid": 4326 },
+        "region":      { "kind": "geo",    "pgType": "GEOGRAPHY(POLYGON,4326)","required": false, "geoType": "polygon", "srid": 4326 },
+        "category":    { "kind": "enum",   "pgType": "TEXT",  "required": true, "unique": false, "values": ["restaurant","hotel","attraction","transport","other"], "default": "other" },
+        "metadata":    { "kind": "json",   "pgType": "JSONB", "required": false }
+      },
+      "access": {
+        "read":   { "type": "public" },
+        "create": { "type": "role", "roles": ["admin","contributor"] },
+        "update": { "type": "role", "roles": ["admin","contributor"] },
+        "delete": { "type": "role", "roles": ["admin"] }
+      },
+      "indexes": [
+        { "fields": ["point"],  "unique": false, "using": "gist" },
+        { "fields": ["region"], "unique": false, "using": "gist" },
+        { "fields": ["category"], "unique": false, "using": "btree" }
+      ],
+      "options": { "timestamps": true, "softDelete": false }
+    }
+  ]
+}

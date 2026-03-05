@@ -34,19 +34,36 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
 fn ts_type_of(field: &FieldAst) -> (String, bool) {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Bytes(f) => ("string".into(), !f.required),
+        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Url(f)
+        | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
+        | FieldAst::Bytes(f) | FieldAst::Xml(f) => ("string".into(), !f.required),
         FieldAst::RichText(f) => ("Record<string, unknown>".into(), !f.required),
-        FieldAst::Integer(f) | FieldAst::Float(f) => ("number".into(), !f.required),
-        FieldAst::BigInt(f) => ("string".into(), !f.required), // bigint as string for JSON safety
+        FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::SmallInt(f)
+        | FieldAst::Serial(f) | FieldAst::Money(f) => ("number".into(), !f.required),
+        FieldAst::BigInt(f) | FieldAst::BigSerial(f) => {
+            ("string".into(), !f.required) // large ints as string for JSON safety
+        }
+        FieldAst::Decimal(f) => ("string".into(), !f.required),
         FieldAst::Boolean(f) => ("boolean".into(), !f.required),
-        FieldAst::Datetime(f) | FieldAst::Uuid(f) => ("string".into(), !f.required),
+        FieldAst::Datetime(f) | FieldAst::Date(f) | FieldAst::Timestamp(f)
+        | FieldAst::Uuid(f) | FieldAst::Interval(f) => ("string".into(), !f.required),
         FieldAst::Slug(f) => ("string".into(), !f.required),
+        FieldAst::TsQuery(f) | FieldAst::TsVector(f) => ("string".into(), !f.required),
         FieldAst::Enum(f) => {
             let union = f.values.iter().map(|v| format!("\"{v}\"")).collect::<Vec<_>>().join(" | ");
             (union, !f.required)
         }
         FieldAst::Json(f) => ("unknown".into(), !f.required),
-        FieldAst::Decimal(f) => ("string".into(), !f.required),
+        FieldAst::Array(f) => {
+            let elem = match f.element_type.to_lowercase().as_str() {
+                "integer" | "int4" | "int" | "smallint" | "int2"
+                | "bigint" | "int8" | "float" | "double precision" | "float8"
+                | "real" | "float4" | "numeric" => "number",
+                "boolean" | "bool" => "boolean",
+                _ => "string",
+            };
+            (format!("{elem}[]"), !f.required)
+        }
         FieldAst::Image(f) | FieldAst::File(f) => ("StorageReference".into(), !f.required),
         FieldAst::Geo(f) => ("GeoJSON.Geometry".into(), !f.required),
         FieldAst::Vector(f) => (format!("number[] /* vector({}) */", f.dimensions), !f.required),

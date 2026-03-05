@@ -1,6 +1,6 @@
 use anyhow::Result;
 use strsim::jaro_winkler;
-use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality};
+use crate::parser::ast::{FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality};
 use crate::introspector::tables::DbTable;
 use super::{Operation, Risk};
 
@@ -20,6 +20,21 @@ fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
         FieldAst::Publishable => vec!["status".into(), "published_at".into(), "scheduled_at".into()],
         FieldAst::SoftDelete => vec!["deleted_at".into()],
         _ => vec![field_name.to_string()],
+    }
+}
+
+/// Returns true if the field has `index: true` set.
+fn has_index_flag(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Uuid(f)
+        | FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f) | FieldAst::BigInt(f) | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f) | FieldAst::Date(f) | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
+        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f) | FieldAst::Interval(f) | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f) | FieldAst::Xml(f) | FieldAst::RichText(f) => f.index,
+        _ => false,
     }
 }
 
@@ -110,6 +125,20 @@ pub fn diff(
                     field: Box::new((*field).clone()),
                     risk: Risk::Safe,
                 });
+
+                // If the field has `index: true` and it's a new column, also emit AddIndex.
+                if has_index_flag(field) {
+                    ops.push(Operation::AddIndex {
+                        table: model.table_name.clone(),
+                        index: Box::new(IndexAst {
+                            name: None,
+                            fields: vec![col.to_string()],
+                            unique: false,
+                            using: IndexMethod::Btree,
+                        }),
+                        risk: Risk::Safe,
+                    });
+                }
             }
         }
     }

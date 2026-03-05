@@ -1,0 +1,41 @@
+{
+  "models": [
+    {
+      "name": "Category",
+      "tableName": "categories",
+      "fields": {
+        "id":       { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+        "name":     { "kind": "text",    "pgType": "TEXT", "required": true,  "unique": false },
+        "slug":     { "kind": "slug",    "pgType": "TEXT", "required": true,  "unique": true, "from": "name" },
+        "parentId": { "kind": "relation","cardinality": "belongsTo", "target": "Category", "foreignKey": "parent_id", "onDelete": "setNull" },
+        "depth":    { "kind": "integer", "pgType": "INTEGER", "required": true, "unique": false, "default": { "kind": "value", "value": 0 } },
+        "path":     { "kind": "array",   "elementType": "TEXT", "required": false, "unique": false }
+      },
+      "access": {
+        "read": { "type": "public" },
+        "create": { "type": "role", "roles": ["admin"] },
+        "update": { "type": "role", "roles": ["admin"] },
+        "delete": { "type": "role", "roles": ["admin"] }
+      },
+      "indexes": [
+        { "fields": ["parent_id"], "unique": false, "using": "btree" }
+      ],
+      "options": { "timestamps": true, "softDelete": false }
+    },
+    {
+      "name": "Employee",
+      "tableName": "employees",
+      "fields": {
+        "id":         { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+        "name":       { "kind": "text",    "pgType": "TEXT", "required": true,  "unique": false },
+        "email":      { "kind": "email",   "pgType": "TEXT", "required": true,  "unique": true  },
+        "managerId":  { "kind": "relation","cardinality": "belongsTo", "target": "Employee", "foreignKey": "manager_id", "onDelete": "setNull" }
+      },
+      "access": {},
+      "indexes": [
+        { "fields": ["manager_id"], "unique": false, "using": "btree" }
+      ],
+      "options": { "timestamps": true, "softDelete": false }
+    }
+  ]
+}

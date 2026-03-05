@@ -50,6 +50,25 @@ pub enum FieldAst {
     Decimal(DecimalFieldAst),
     BigInt(ScalarFieldAst),
     Bytes(ScalarFieldAst),
+    // Extended numeric / date types
+    SmallInt(ScalarFieldAst),
+    Date(ScalarFieldAst),
+    Timestamp(ScalarFieldAst),  // TIMESTAMP (without time zone)
+    Serial(ScalarFieldAst),
+    BigSerial(ScalarFieldAst),
+    Money(ScalarFieldAst),
+    // Network / system types
+    Url(ScalarFieldAst),
+    Ip(ScalarFieldAst),
+    Cidr(ScalarFieldAst),
+    Macaddr(ScalarFieldAst),
+    // Text-search / interval / xml
+    Interval(ScalarFieldAst),
+    TsQuery(ScalarFieldAst),
+    TsVector(ScalarFieldAst),
+    Xml(ScalarFieldAst),
+    // Array
+    Array(ArrayFieldAst),
     // Storage fields
     Image(StorageFieldAst),
     File(StorageFieldAst),
@@ -149,6 +168,20 @@ pub struct RelationFieldAst {
     pub through: Option<String>,     // junction table for manyToMany
     pub on_delete: Option<String>,
     pub on_update: Option<String>,
+    /// True when the corresponding hasOne on the other side requires the FK to be UNIQUE.
+    #[serde(default)]
+    pub unique_fk: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArrayFieldAst {
+    /// The Postgres element type, e.g. "TEXT", "INTEGER", "UUID".
+    pub element_type: String,
+    pub required: bool,
+    #[serde(default)]
+    pub unique: bool,
+    pub default: Option<DefaultValueAst>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

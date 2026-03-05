@@ -15,7 +15,7 @@ pub fn generate(diff: &DiffOutput, force: bool) -> Result<String> {
     }
 
     let forward = render_forward(diff)?;
-    let rollback = render_rollback_stub();
+    let rollback = super::rollback::generate(diff)?;
     let hash = migration_hash(&forward);
 
     Ok(format!(
@@ -188,7 +188,8 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                     let fk_col = rel.foreign_key.as_deref()
                         .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                    col_defs.push(format!("    \"{fk_col}\" UUID"));
+                    let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
+                    col_defs.push(format!("    \"{fk_col}\" UUID{uniq}"));
                     // FK constraint is a separate AddForeignKey operation (emitted after all tables).
                 }
                 // hasMany / hasOne / manyToMany produce no column here
@@ -234,12 +235,42 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
         col_defs.join(",\n")
     )];
 
-    // Indexes
+    // Explicit model-level indexes
     for index in &model.indexes {
         statements.push(create_index_sql(table, index)?);
     }
 
+    // Auto-indexes from fields with `index: true`
+    for (field_name, field) in &model.fields {
+        if let Some(true) = field_index_flag(field) {
+            let auto_idx = IndexAst {
+                name: None,
+                fields: vec![field_name.clone()],
+                unique: false,
+                using: IndexMethod::Btree,
+            };
+            statements.push(create_index_sql(table, &auto_idx)?);
+        }
+    }
+
     Ok(statements.join("\n\n"))
+}
+
+/// Returns Some(true) if the field has an `index: true` flag, None otherwise.
+fn field_index_flag(field: &FieldAst) -> Option<bool> {
+    match field {
+        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Uuid(f)
+        | FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f) | FieldAst::BigInt(f) | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f) | FieldAst::Date(f) | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
+        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f) | FieldAst::Interval(f) | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f) | FieldAst::Xml(f) | FieldAst::RichText(f) => {
+            if f.index { Some(true) } else { None }
+        }
+        _ => None,
+    }
 }
 
 // ─── COLUMN DEFINITION ───────────────────────────────────────────────────────
@@ -267,6 +298,44 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
         FieldAst::Boolean(f) => Ok(scalar_col(name, "BOOLEAN", f)),
         FieldAst::Datetime(f) => Ok(scalar_col(name, "TIMESTAMPTZ", f)),
         FieldAst::BigInt(f) => Ok(scalar_col(name, "BIGINT", f)),
+        FieldAst::SmallInt(f) => Ok(scalar_col(name, "SMALLINT", f)),
+        FieldAst::Date(f) => Ok(scalar_col(name, "DATE", f)),
+        FieldAst::Timestamp(f) => Ok(scalar_col(name, "TIMESTAMP", f)),
+        FieldAst::Serial(f) => {
+            // SERIAL is self-declaring — NOT NULL + sequence default are implicit.
+            // primary_key / unique flags still apply.
+            let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
+            let uniq = if f.unique && !f.primary_key { " UNIQUE" } else { "" };
+            Ok(format!("\"{name}\" SERIAL{pk}{uniq}"))
+        }
+        FieldAst::BigSerial(f) => {
+            let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
+            let uniq = if f.unique && !f.primary_key { " UNIQUE" } else { "" };
+            Ok(format!("\"{name}\" BIGSERIAL{pk}{uniq}"))
+        }
+        FieldAst::Money(f) => Ok(scalar_col(name, "NUMERIC(19,4)", f)),
+        FieldAst::Url(f) => {
+            let mut def = scalar_col(name, "TEXT", f);
+            def.push_str(&format!(" CHECK (\"{name}\" ~* '^https?://')"));
+            Ok(def)
+        }
+        FieldAst::Ip(f) => Ok(scalar_col(name, "INET", f)),
+        FieldAst::Cidr(f) => Ok(scalar_col(name, "CIDR", f)),
+        FieldAst::Macaddr(f) => Ok(scalar_col(name, "MACADDR", f)),
+        FieldAst::Interval(f) => Ok(scalar_col(name, "INTERVAL", f)),
+        FieldAst::TsQuery(f) => Ok(scalar_col(name, "TSQUERY", f)),
+        FieldAst::TsVector(f) => {
+            // tsvector is typically NOT NULL; index is GIN.
+            let req = if f.required { " NOT NULL" } else { "" };
+            Ok(format!("\"{name}\" TSVECTOR{req}"))
+        }
+        FieldAst::Xml(f) => Ok(scalar_col(name, "XML", f)),
+        FieldAst::Array(f) => {
+            let req = if f.required { " NOT NULL" } else { "" };
+            let uniq = if f.unique { " UNIQUE" } else { "" };
+            let elem = f.element_type.to_uppercase();
+            Ok(format!("\"{name}\" {elem}[]{req}{uniq}"))
+        }
         FieldAst::Slug(f) => {
             let unique = if f.unique { " UNIQUE" } else { "" };
             let req = if f.required { " NOT NULL" } else { "" };
@@ -316,6 +385,7 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
         FieldAst::Relation(_) => {
             anyhow::bail!("relation field '{name}' must be handled at table level")
         }
+        // Array is handled above; this arm satisfies exhaustiveness if a new variant slips through
     }
 }
 
@@ -406,11 +476,3 @@ fn migration_hash(sql: &str) -> String {
     format!("sha256:{}", hex::encode(h.finalize()))
 }
 
-fn render_rollback_stub() -> String {
-    "-- ============================================================\n\
-     -- ROLLBACK MIGRATION\n\
-     -- ============================================================\n\
-     -- Run: npx definatype rollback\n\
-     -- (rollback SQL generated by definatype-engine generate --rollback)"
-        .into()
-}

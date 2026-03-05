@@ -1,0 +1,41 @@
+{
+  "models": [
+    {
+      "name": "Post",
+      "tableName": "posts",
+      "fields": {
+        "id":       { "kind": "uuid",     "pgType": "UUID",  "primaryKey": true, "required": true,  "unique": false, "default": { "kind": "genRandomUuid" } },
+        "title":    { "kind": "text",     "pgType": "TEXT",  "required": true,  "unique": false },
+        "slug":     { "kind": "slug",     "pgType": "TEXT",  "required": true,  "unique": true,  "from": "title"  },
+        "body":     { "kind": "richText", "pgType": "JSONB", "required": true,  "unique": false },
+        "authorId": { "kind": "uuid",     "pgType": "UUID",  "required": true,  "unique": false, "index": true  }
+      },
+      "access": {
+        "read":   { "type": "public" },
+        "create": { "type": "role", "roles": ["author","admin"] },
+        "update": { "type": "role", "roles": ["author","admin"] },
+        "delete": { "type": "role", "roles": ["admin"] }
+      },
+      "indexes": [],
+      "options": { "timestamps": true, "softDelete": true }
+    },
+    {
+      "name": "Comment",
+      "tableName": "comments",
+      "fields": {
+        "id":       { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true,  "unique": false, "default": { "kind": "genRandomUuid" } },
+        "postId":   { "kind": "relation","cardinality": "belongsTo", "target": "Post", "foreignKey": "post_id", "onDelete": "cascade" },
+        "authorId": { "kind": "uuid",    "pgType": "UUID", "required": true,  "unique": false, "index": true },
+        "body":     { "kind": "text",    "pgType": "TEXT", "required": true,  "unique": false }
+      },
+      "access": {
+        "read":   { "type": "public" },
+        "create": { "type": "role", "roles": ["authenticated"] },
+        "update": { "type": "owner","field": "author_id" },
+        "delete": { "type": "owner","field": "author_id" }
+      },
+      "indexes": [],
+      "options": { "timestamps": true, "softDelete": true }
+    }
+  ]
+}

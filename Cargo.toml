@@ -41,6 +41,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sha2 = "0.10"
 hex = "0.4"
 
+# Timestamps for migration names
+chrono = { version = "0.4", features = ["serde"] }
+
 # Topological sort for operation ordering
 petgraph = "0.7"
 

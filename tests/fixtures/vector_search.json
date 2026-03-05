@@ -1,0 +1,27 @@
+{
+  "models": [
+    {
+      "name": "Document",
+      "tableName": "documents",
+      "fields": {
+        "id":        { "kind": "uuid",    "pgType": "UUID",  "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+        "title":     { "kind": "text",    "pgType": "TEXT",  "required": true,  "unique": false },
+        "content":   { "kind": "text",    "pgType": "TEXT",  "required": true,  "unique": false },
+        "embedding": { "kind": "vector",  "pgType": "vector(1536)", "required": false, "dimensions": 1536 },
+        "metadata":  { "kind": "json",    "pgType": "JSONB", "required": false },
+        "source":    { "kind": "text",    "pgType": "TEXT",  "required": false, "unique": false },
+        "score":     { "kind": "float",   "pgType": "DOUBLE PRECISION", "required": false, "unique": false }
+      },
+      "access": {
+        "read":   { "type": "public" },
+        "create": { "type": "role", "roles": ["admin","ingest"] },
+        "update": { "type": "role", "roles": ["admin"] },
+        "delete": { "type": "role", "roles": ["admin"] }
+      },
+      "indexes": [
+        { "fields": ["embedding"], "unique": false, "using": "hnsw" }
+      ],
+      "options": { "timestamps": true, "softDelete": false }
+    }
+  ]
+}
