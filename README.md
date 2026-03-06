@@ -1,8 +1,8 @@
-# Definatype Schema Engine
+# Supatype Schema Engine
 
-The schema engine that powers [Definatype](https://definatype.com) — **define your types, we generate your backend.**
+The schema engine that powers [Supatype](https://supatype.com) — **define your types, we generate your backend.**
 
-Built in Rust, the engine consumes a JSON AST produced by the `@definatype/schema` TypeScript package and turns it into Postgres migrations, TypeScript types, RLS policies, PostgREST config, and admin panel config. It targets frontend developers who think in data shapes rather than SQL.
+Built in Rust, the engine consumes a JSON AST produced by the `@supatype/schema` TypeScript package and turns it into Postgres migrations, TypeScript types, RLS policies, PostgREST config, and admin panel config. It targets frontend developers who think in data shapes rather than SQL.
 
 ## How It Works
 
@@ -14,7 +14,7 @@ Database  ◄── Migrate ◄── Diff ◄───────────�
                            Introspector ──► DatabaseState ──────────────────►┘
 ```
 
-1. **Parse** — Deserialise and validate the JSON AST that `@definatype/schema` emits.
+1. **Parse** — Deserialise and validate the JSON AST that `@supatype/schema` emits.
 2. **Introspect** — Read the live Postgres database (tables, columns, indexes, constraints, RLS, triggers, extensions).
 3. **Diff** — Compare the desired schema against the current database state to produce a set of operations, each tagged with a risk level (safe / cautious / destructive). Column renames are detected via Jaro–Winkler similarity, and operations are topologically sorted.
 4. **Migrate** — Generate a forward SQL migration (wrapped in a transaction, SHA-256 hashed) from the diff.
@@ -40,25 +40,25 @@ Input is read from a file (`-i path`) or stdin (default). Output goes to stdout.
 
 ```bash
 # Parse and validate a schema
-definatype-engine parse -i schema.json
+supatype-engine parse -i schema.json
 
 # Diff against a live database
-definatype-engine diff -i schema.json --database-url "$DATABASE_URL"
+supatype-engine diff -i schema.json --database-url "$DATABASE_URL"
 
 # Generate a migration
-definatype-engine migrate -i schema.json --database-url "$DATABASE_URL"
+supatype-engine migrate -i schema.json --database-url "$DATABASE_URL"
 
 # Allow destructive operations without prompting
-definatype-engine migrate -i schema.json --database-url "$DATABASE_URL" --force
+supatype-engine migrate -i schema.json --database-url "$DATABASE_URL" --force
 
 # Generate TypeScript types
-definatype-engine generate -i schema.json
+supatype-engine generate -i schema.json
 
 # Generate RLS policies
-definatype-engine rls -i schema.json
+supatype-engine rls -i schema.json
 
 # Introspect an existing database
-definatype-engine introspect --database-url "$DATABASE_URL"
+supatype-engine introspect --database-url "$DATABASE_URL"
 ```
 
 Global flags:
@@ -72,7 +72,7 @@ Global flags:
 
 ## Schema Format
 
-Schemas are defined in TypeScript with `@definatype/schema` and compiled to a JSON AST that the engine consumes. A minimal example:
+Schemas are defined in TypeScript with `@supatype/schema` and compiled to a JSON AST that the engine consumes. A minimal example:
 
 ```json
 {

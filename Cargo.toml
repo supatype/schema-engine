@@ -1,17 +1,17 @@
 [package]
-name = "definatype-engine"
+name = "supatype-engine"
 version = "0.1.0"
 edition = "2021"
-authors = ["Definatype"]
-description = "Definatype schema engine — closed source binary"
+authors = ["Supatype"]
+description = "Supatype schema engine — closed source binary"
 # No license field — proprietary, all rights reserved
 
 [[bin]]
-name = "definatype-engine"
+name = "supatype-engine"
 path = "src/main.rs"
 
 [lib]
-name = "definatype_engine"
+name = "supatype_engine"
 path = "src/lib.rs"
 # lib target enables future WASM compilation
 

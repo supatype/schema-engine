@@ -6,9 +6,9 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "args": ["build", "--bin=supatype-engine", "--package=supatype-engine"],
                 "filter": {
-                    "name": "definatype-engine",
+                    "name": "supatype-engine",
                     "kind": "bin"
                 }
             },
@@ -20,9 +20,9 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "args": ["build", "--bin=supatype-engine", "--package=supatype-engine"],
                 "filter": {
-                    "name": "definatype-engine",
+                    "name": "supatype-engine",
                     "kind": "bin"
                 }
             },
@@ -34,9 +34,9 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "args": ["build", "--bin=supatype-engine", "--package=supatype-engine"],
                 "filter": {
-                    "name": "definatype-engine",
+                    "name": "supatype-engine",
                     "kind": "bin"
                 }
             },
@@ -48,9 +48,9 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "args": ["build", "--bin=supatype-engine", "--package=supatype-engine"],
                 "filter": {
-                    "name": "definatype-engine",
+                    "name": "supatype-engine",
                     "kind": "bin"
                 }
             },
@@ -62,9 +62,9 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "args": ["build", "--bin=supatype-engine", "--package=supatype-engine"],
                 "filter": {
-                    "name": "definatype-engine",
+                    "name": "supatype-engine",
                     "kind": "bin"
                 }
             },
@@ -76,9 +76,9 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["build", "--bin=definatype-engine", "--package=definatype-engine"],
+                "args": ["build", "--bin=supatype-engine", "--package=supatype-engine"],
                 "filter": {
-                    "name": "definatype-engine",
+                    "name": "supatype-engine",
                     "kind": "bin"
                 }
             },
@@ -90,7 +90,7 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["test", "--lib", "--no-run", "--package=definatype-engine"],
+                "args": ["test", "--lib", "--no-run", "--package=supatype-engine"],
                 "filter": {
                     "kind": "lib"
                 }
@@ -102,7 +102,7 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["test", "--test=parser_tests", "--no-run", "--package=definatype-engine"],
+                "args": ["test", "--test=parser_tests", "--no-run", "--package=supatype-engine"],
                 "filter": {
                     "name": "parser_tests",
                     "kind": "test"
@@ -115,7 +115,7 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["test", "--test=differ_tests", "--no-run", "--package=definatype-engine"],
+                "args": ["test", "--test=differ_tests", "--no-run", "--package=supatype-engine"],
                 "filter": {
                     "name": "differ_tests",
                     "kind": "test"
@@ -128,7 +128,7 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["test", "--test=migration_tests", "--no-run", "--package=definatype-engine"],
+                "args": ["test", "--test=migration_tests", "--no-run", "--package=supatype-engine"],
                 "filter": {
                     "name": "migration_tests",
                     "kind": "test"
@@ -141,7 +141,7 @@
             "type": "lldb",
             "request": "launch",
             "cargo": {
-                "args": ["test", "--test=integration_test", "--no-run", "--package=definatype-engine"],
+                "args": ["test", "--test=integration_test", "--no-run", "--package=supatype-engine"],
                 "filter": {
                     "name": "integration_test",
                     "kind": "test"

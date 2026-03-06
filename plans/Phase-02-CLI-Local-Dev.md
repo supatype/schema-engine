@@ -1,6 +1,6 @@
 # Phase 2 — CLI & Local Dev
 
-> **Definatype** · Weeks 11–16 · March 2026 · Draft
+> **Supatype** · Weeks 11–16 · March 2026 · Draft
 
 ---
 
@@ -14,7 +14,7 @@ Phase 1 complete — engine handles all common operations.
 
 ## Deliverable
 
-`npx @definatype/cli init my-project && npx definatype dev && npx definatype push` works end-to-end. Developer has a running REST and GraphQL API.
+`npx @supatype/cli init my-project && npx supatype dev && npx supatype push` works end-to-end. Developer has a running REST and GraphQL API.
 
 ## Task Breakdown
 
@@ -22,14 +22,14 @@ Phase 1 complete — engine handles all common operations.
 
 | # | Task | Status |
 |---|------|--------|
-| 1 | @definatype/cli npm package — TypeScript CLI wrapping the engine binary, built with commander or oclif | ○ |
+| 1 | @supatype/cli npm package — TypeScript CLI wrapping the engine binary, built with commander or oclif | ○ |
 | 2 | Binary download on postinstall — platform detection (darwin/linux, x64/arm64), CDN download, checksum verification, same pattern as Prisma/esbuild/SWC | ○ |
 
 ### Commands
 
 | # | Task | Status |
 |---|------|--------|
-| 3 | `init` command — scaffold project directory, generate definatype.config.ts, schema/, .env, docker-compose.yml, seed.ts | ○ |
+| 3 | `init` command — scaffold project directory, generate supatype.config.ts, schema/, .env, docker-compose.yml, seed.ts | ○ |
 | 4 | `dev` command — start Docker Compose (Postgres, PostgREST, Kong, pg_graphql), wait for health checks, watch schema files for changes | ○ |
 | 5 | `push` command — load schema files → run serialiser → engine parse → diff against DB → prompt for destructive changes → apply migration → generate types | ○ |
 | 6 | `diff` command — dry run of push, shows planned changes without applying | ○ |
@@ -42,7 +42,7 @@ Phase 1 complete — engine handles all common operations.
 
 | # | Task | Status |
 |---|------|--------|
-| 11 | definatype.config.ts — configuration loading for DB connection, schema paths, output paths, engine options | ○ |
+| 11 | supatype.config.ts — configuration loading for DB connection, schema paths, output paths, engine options | ○ |
 
 ### Infra
 
@@ -70,16 +70,16 @@ Phase 1 complete — engine handles all common operations.
 | Risk | Mitigation |
 |------|------------|
 | Docker Compose startup reliability across platforms (macOS Docker Desktop, Linux native, WSL) | Extensive health check polling with clear error messages; document minimum Docker versions |
-| Binary download failures (corporate firewalls, China) | Support DEFINATYPE_ENGINE_PATH env var for manual binary placement; mirror on multiple CDNs |
+| Binary download failures (corporate firewalls, China) | Support SUPATYPE_ENGINE_PATH env var for manual binary placement; mirror on multiple CDNs |
 | pg_graphql version compatibility with Postgres | Pin pg_graphql version in Docker image; test against target Postgres versions |
 
 ## Success Criteria
 
 Phase 2 is complete when:
 
-- [ ] `npx @definatype/cli init` creates a valid project scaffold
-- [ ] `npx definatype dev` starts all services and passes health checks within 30 seconds
-- [ ] `npx definatype push` migrates DB and generates types for a multi-model schema
+- [ ] `npx @supatype/cli init` creates a valid project scaffold
+- [ ] `npx supatype dev` starts all services and passes health checks within 30 seconds
+- [ ] `npx supatype push` migrates DB and generates types for a multi-model schema
 - [ ] PostgREST serves correct CRUD endpoints for generated tables
 - [ ] pg_graphql serves correct GraphQL schema reflecting the data model
-- [ ] `npx definatype pull` generates valid schema files from an existing DB
+- [ ] `npx supatype pull` generates valid schema files from an existing DB

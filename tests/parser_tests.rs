@@ -1,4 +1,4 @@
-use definatype_engine::parser;
+use supatype_engine::parser;
 
 #[test]
 fn test_parse_empty_schema() {

@@ -1,4 +1,4 @@
-use definatype_engine::{
+use supatype_engine::{
     differ,
     introspector::{indexes::DbIndex, tables::{DbColumn, DbTable}},
     parser,

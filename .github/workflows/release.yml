@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: definatype-engine
+  BINARY_NAME: supatype-engine
 
 jobs:
   build:
@@ -20,25 +20,25 @@ jobs:
           # macOS — native builds
           - target: aarch64-apple-darwin
             os: macos-14          # M1 runner
-            artifact: definatype-engine-macos-arm64
+            artifact: supatype-engine-macos-arm64
           - target: x86_64-apple-darwin
             os: macos-13          # Intel runner
-            artifact: definatype-engine-macos-x64
+            artifact: supatype-engine-macos-x64
 
           # Linux — cross-compiled via cross-rs
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
-            artifact: definatype-engine-linux-x64
+            artifact: supatype-engine-linux-x64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             use_cross: true
-            artifact: definatype-engine-linux-arm64
+            artifact: supatype-engine-linux-arm64
 
           # Windows
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            artifact: definatype-engine-windows-x64.exe
+            artifact: supatype-engine-windows-x64.exe
 
     steps:
       - uses: actions/checkout@v4

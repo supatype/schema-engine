@@ -1,4 +1,4 @@
-use definatype_engine::{differ, generator::sql::migration, parser, state::database_state::DatabaseState};
+use supatype_engine::{differ, generator::sql::migration, parser, state::database_state::DatabaseState};
 
 #[test]
 fn test_migration_generated_for_new_schema() {

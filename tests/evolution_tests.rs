@@ -8,7 +8,7 @@
 //!
 //! These are pure unit tests — no DB required.
 
-use definatype_engine::{
+use supatype_engine::{
     differ::{self, Operation},
     introspector::{
         constraints::{DbConstraint, DbConstraintType},
@@ -491,7 +491,7 @@ fn test_auto_index_emitted_with_new_indexed_column() {
 
 #[test]
 fn test_rollback_reverses_create_table() {
-    use definatype_engine::generator::sql::rollback;
+    use supatype_engine::generator::sql::rollback;
 
     let ast_json = r#"{
         "models": [{
@@ -529,7 +529,7 @@ fn col_nn(name: &str, udt: &str) -> DbColumn {
 
 #[test]
 fn test_rollback_reverses_add_fk() {
-    use definatype_engine::generator::sql::rollback;
+    use supatype_engine::generator::sql::rollback;
 
     let ast_json = r#"{
         "models": [
@@ -740,7 +740,7 @@ fn test_drop_not_null_from_existing_column() {
 
 #[test]
 fn test_alter_column_not_null_sql_has_preflight_guard() {
-    use definatype_engine::generator::sql::migration;
+    use supatype_engine::generator::sql::migration;
 
     // Schema wants title to be NOT NULL
     let ast_json = r#"{
@@ -777,7 +777,7 @@ fn test_alter_column_not_null_sql_has_preflight_guard() {
 
 #[test]
 fn test_alter_column_rollback_reverses_nullability() {
-    use definatype_engine::generator::sql::rollback;
+    use supatype_engine::generator::sql::rollback;
 
     let ast_json = r#"{
         "models": [{
@@ -852,8 +852,8 @@ fn test_rls_fresh_model_authenticated() {
 
 #[test]
 fn test_rls_any_rule_generates_or_expression() {
-    use definatype_engine::generator::sql::rls::access_rule_to_expr;
-    use definatype_engine::parser::ast::{AccessRule};
+    use supatype_engine::generator::sql::rls::access_rule_to_expr;
+    use supatype_engine::parser::ast::{AccessRule};
 
     // access.any([owner("user_id"), role(["admin"])]) should produce an OR-joined expression.
     let rule = AccessRule::Any {
@@ -973,7 +973,7 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
 
 #[test]
 fn test_rls_generator_output_force_rls_and_policy_naming() {
-    use definatype_engine::generator::sql::rls;
+    use supatype_engine::generator::sql::rls;
 
     let ast_json = r#"{
         "models": [{

@@ -48,9 +48,9 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
 /// Returns SQL DDL for auth helper functions (auth.uid, auth.role, auth.roles).
 /// These must be installed once per database before RLS policies can be applied.
-/// The TypeScript CLI calls `definatype-engine rls` which includes this automatically.
+/// The TypeScript CLI calls `supatype-engine rls` which includes this automatically.
 pub fn generate_auth_helpers() -> &'static str {
-    r#"-- Auth helper functions for Definatype RLS policies.
+    r#"-- Auth helper functions for Supatype RLS policies.
 -- Install once per database. Safe to run repeatedly (CREATE OR REPLACE).
 
 CREATE SCHEMA IF NOT EXISTS auth;

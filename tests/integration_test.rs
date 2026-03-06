@@ -3,7 +3,7 @@
 /// Requires Docker to be running. Each test spins up a fresh Postgres 16
 /// container via testcontainers, applies the generated migration, introspects
 /// the resulting schema, and asserts the DB state matches the target AST.
-use definatype_engine::{differ, generator::sql::migration, introspector, parser};
+use supatype_engine::{differ, generator::sql::migration, introspector, parser};
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 

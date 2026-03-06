@@ -5,9 +5,9 @@ use tracing::info;
 
 #[derive(Parser)]
 #[command(
-    name = "definatype-engine",
+    name = "supatype-engine",
     version = env!("ENGINE_VERSION"),
-    about = "Definatype schema engine"
+    about = "Supatype schema engine"
 )]
 struct Cli {
     #[arg(long, short, global = true, help = "Input file path, or '-' for stdin")]
@@ -94,42 +94,42 @@ async fn main() -> Result<()> {
         .with_writer(io::stderr)
         .init();
 
-    info!(version = env!("ENGINE_VERSION"), target = env!("BUILD_TARGET"), "definatype-engine starting");
+    info!(version = env!("ENGINE_VERSION"), target = env!("BUILD_TARGET"), "supatype-engine starting");
 
-    let _license = definatype_engine::licensing::License::new(cli.license.as_deref());
+    let _license = supatype_engine::licensing::License::new(cli.license.as_deref());
 
     let input = read_input(cli.input.as_deref())?;
 
     match cli.command {
         Command::Parse => {
-            let ast = definatype_engine::parser::parse(&input)?;
+            let ast = supatype_engine::parser::parse(&input)?;
             println!("{}", serde_json::to_string_pretty(&ast)?);
         }
         Command::Introspect { database_url, schema } => {
             let pool = sqlx::PgPool::connect(&database_url)
                 .await
                 .context("Failed to connect to database")?;
-            let state = definatype_engine::introspector::introspect(&pool, &schema).await?;
+            let state = supatype_engine::introspector::introspect(&pool, &schema).await?;
             println!("{}", serde_json::to_string_pretty(&state)?);
         }
         Command::Diff { database_url, schema } => {
-            let ast = definatype_engine::parser::parse(&input)?;
+            let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let db_state = definatype_engine::introspector::introspect(&pool, &schema).await?;
-            let diff = definatype_engine::differ::diff(&ast, &db_state)?;
+            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
+            let diff = supatype_engine::differ::diff(&ast, &db_state)?;
             println!("{}", serde_json::to_string_pretty(&diff)?);
         }
         Command::Migrate { database_url, schema, force } => {
-            let ast = definatype_engine::parser::parse(&input)?;
+            let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let db_state = definatype_engine::introspector::introspect(&pool, &schema).await?;
-            let diff = definatype_engine::differ::diff(&ast, &db_state)?;
-            let migration = definatype_engine::generator::sql::migration::generate(&diff, force)?;
+            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
+            let diff = supatype_engine::differ::diff(&ast, &db_state)?;
+            let migration = supatype_engine::generator::sql::migration::generate(&diff, force)?;
             println!("{migration}");
         }
         Command::Push { database_url, schema, force, name, non_interactive, no_cache } => {
-            use definatype_engine::state::migration_history;
-            let ast = definatype_engine::parser::parse(&input)?;
+            use supatype_engine::state::migration_history;
+            let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await
                 .context("Failed to connect to database")?;
 
@@ -150,10 +150,10 @@ async fn main() -> Result<()> {
                     info!("Using cached schema state (use --no-cache to force full introspection)");
                     cached
                 }
-                None => definatype_engine::introspector::introspect(&pool, &schema).await?,
+                None => supatype_engine::introspector::introspect(&pool, &schema).await?,
             };
 
-            let mut diff = definatype_engine::differ::diff(&ast, &db_state)?;
+            let mut diff = supatype_engine::differ::diff(&ast, &db_state)?;
 
             // Interactive rename confirmation (skipped in CI with --non-interactive)
             if !non_interactive {
@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let migration_sql = definatype_engine::generator::sql::migration::generate(&diff, force)?;
+            let migration_sql = supatype_engine::generator::sql::migration::generate(&diff, force)?;
             let migration_name = name.unwrap_or_else(|| {
                 format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"))
             });
@@ -176,7 +176,7 @@ async fn main() -> Result<()> {
                 .context("Failed to apply migration")?;
 
             // Refresh and cache post-migration DB state
-            let new_db_state = definatype_engine::introspector::introspect(&pool, &schema).await?;
+            let new_db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
             migration_history::save_schema_state(&pool, &new_db_state).await
                 .context("Failed to save schema state cache")?;
 
@@ -206,35 +206,35 @@ async fn main() -> Result<()> {
             );
         }
         Command::Generate => {
-            let ast = definatype_engine::parser::parse(&input)?;
-            let ts = definatype_engine::generator::typescript::types::generate(&ast)?;
+            let ast = supatype_engine::parser::parse(&input)?;
+            let ts = supatype_engine::generator::typescript::types::generate(&ast)?;
             println!("{ts}");
         }
         Command::Triggers => {
-            let ast = definatype_engine::parser::parse(&input)?;
-            let sql = definatype_engine::generator::sql::triggers::generate(&ast)?;
+            let ast = supatype_engine::parser::parse(&input)?;
+            let sql = supatype_engine::generator::sql::triggers::generate(&ast)?;
             println!("{sql}");
         }
         Command::Rls => {
-            let ast = definatype_engine::parser::parse(&input)?;
-            println!("{}", definatype_engine::generator::sql::rls::generate_auth_helpers());
-            println!("{}", definatype_engine::generator::sql::rls::generate(&ast)?);
+            let ast = supatype_engine::parser::parse(&input)?;
+            println!("{}", supatype_engine::generator::sql::rls::generate_auth_helpers());
+            println!("{}", supatype_engine::generator::sql::rls::generate(&ast)?);
         }
         Command::Postgrest => {
-            let ast = definatype_engine::parser::parse(&input)?;
-            let config = definatype_engine::generator::config::postgrest::generate(&ast)?;
+            let ast = supatype_engine::parser::parse(&input)?;
+            let config = supatype_engine::generator::config::postgrest::generate(&ast)?;
             println!("{}", serde_json::to_string_pretty(&config)?);
         }
         Command::Admin => {
-            let ast = definatype_engine::parser::parse(&input)?;
-            let config = definatype_engine::generator::typescript::admin::generate(&ast)?;
+            let ast = supatype_engine::parser::parse(&input)?;
+            let config = supatype_engine::generator::typescript::admin::generate(&ast)?;
             println!("{}", serde_json::to_string_pretty(&config)?);
         }
         Command::Validate { database_url } => {
-            let diff: definatype_engine::differ::DiffOutput =
+            let diff: supatype_engine::differ::DiffOutput =
                 serde_json::from_str(&input).context("Failed to parse diff JSON")?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let report = definatype_engine::differ::risk_analyser::validate(&diff, &pool).await?;
+            let report = supatype_engine::differ::risk_analyser::validate(&diff, &pool).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
     }
@@ -244,8 +244,8 @@ async fn main() -> Result<()> {
 
 /// For each RenameColumn operation, prompt the user to confirm it's a rename.
 /// If the user declines, replace the RenameColumn with DropColumn + AddColumn.
-fn confirm_renames(mut diff: definatype_engine::differ::DiffOutput) -> Result<definatype_engine::differ::DiffOutput> {
-    use definatype_engine::differ::{Operation, Risk};
+fn confirm_renames(mut diff: supatype_engine::differ::DiffOutput) -> Result<supatype_engine::differ::DiffOutput> {
+    use supatype_engine::differ::{Operation, Risk};
     use std::io::{BufRead, Write};
 
     let mut final_ops: Vec<Operation> = Vec::new();
@@ -273,8 +273,8 @@ fn confirm_renames(mut diff: definatype_engine::differ::DiffOutput) -> Result<de
                     final_ops.push(Operation::AddColumn {
                         table: table.clone(),
                         column: to.clone(),
-                        field: Box::new(definatype_engine::parser::ast::FieldAst::Text(
-                            definatype_engine::parser::ast::ScalarFieldAst {
+                        field: Box::new(supatype_engine::parser::ast::FieldAst::Text(
+                            supatype_engine::parser::ast::ScalarFieldAst {
                                 required: false,
                                 ..Default::default()
                             }
@@ -289,9 +289,9 @@ fn confirm_renames(mut diff: definatype_engine::differ::DiffOutput) -> Result<de
         }
     }
 
-    let safe = final_ops.iter().filter(|o| matches!(definatype_engine::differ::risk_of(o), Risk::Safe)).count();
-    let cautious = final_ops.iter().filter(|o| matches!(definatype_engine::differ::risk_of(o), Risk::Cautious)).count();
-    let destructive = final_ops.iter().filter(|o| matches!(definatype_engine::differ::risk_of(o), Risk::Destructive)).count();
+    let safe = final_ops.iter().filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Safe)).count();
+    let cautious = final_ops.iter().filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Cautious)).count();
+    let destructive = final_ops.iter().filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Destructive)).count();
 
     diff.operations = final_ops;
     diff.summary.safe = safe;

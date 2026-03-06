@@ -1,6 +1,6 @@
 # Phase 1 — Core Schema Engine
 
-> **Definatype** · Weeks 5–10 · March 2026 · Draft
+> **Supatype** · Weeks 5–10 · March 2026 · Draft
 
 ---
 
@@ -67,7 +67,7 @@ A robust schema engine that handles real-world schema definitions and evolution,
 | # | Task | Status |
 |---|------|--------|
 | 10 | Rollback migration generation: generate reverse SQL for every forward operation | ○ |
-| 11 | Migration history tracking: _definatype_migrations table with hash, timestamp, checksum, applied status | ○ |
+| 11 | Migration history tracking: _supatype_migrations table with hash, timestamp, checksum, applied status | ○ |
 
 ### Performance
 

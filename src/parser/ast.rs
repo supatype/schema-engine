@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Top-level schema AST as produced by @definatype/schema and consumed by the engine.
+/// Top-level schema AST as produced by @supatype/schema and consumed by the engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaAst {
