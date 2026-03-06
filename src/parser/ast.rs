@@ -216,9 +216,12 @@ pub struct AccessAst {
 pub enum AccessRule {
     Public,
     Private,
+    Authenticated,
     Owner { field: String },
     Role { roles: Vec<String> },
     Custom { expression: String },
+    /// OR-join of multiple rules — any one matching grants access.
+    Any { rules: Vec<AccessRule> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

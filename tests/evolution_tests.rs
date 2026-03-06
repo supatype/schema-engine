@@ -12,6 +12,7 @@ use definatype_engine::{
     differ::{self, Operation},
     introspector::{
         constraints::{DbConstraint, DbConstraintType},
+        rls::DbRlsPolicy,
         tables::{DbColumn, DbTable},
     },
     parser,
@@ -805,4 +806,207 @@ fn test_alter_column_rollback_reverses_nullability() {
 
     // Rollback of NOT NULL should emit DROP NOT NULL
     assert!(rollback_sql.contains("DROP NOT NULL"), "rollback must restore nullable state");
+}
+
+// ─── Scenario 22: fresh model with access.authenticated ──────────────────────
+
+#[test]
+fn test_rls_fresh_model_authenticated() {
+    // A brand-new model with read access.authenticated → EnableRls + CreateRlsPolicy
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+            },
+            "access": { "read": { "type": "authenticated" } },
+            "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let enable_rls = diff.operations.iter()
+        .any(|op| matches!(op, Operation::EnableRls { table, .. } if table == "posts"));
+    assert!(enable_rls, "should emit EnableRls for posts");
+
+    let create_policy = diff.operations.iter()
+        .any(|op| matches!(op, Operation::CreateRlsPolicy { table, policy, .. }
+            if table == "posts" && policy == "posts_select"));
+    assert!(create_policy, "should emit CreateRlsPolicy for posts_select");
+
+    assert!(!diff.summary.is_destructive, "RLS enable is safe");
+}
+
+// ─── Scenario 23: access.any([owner, role]) OR expression ────────────────────
+
+#[test]
+fn test_rls_any_rule_generates_or_expression() {
+    use definatype_engine::generator::sql::rls::access_rule_to_expr;
+    use definatype_engine::parser::ast::{AccessRule};
+
+    // access.any([owner("user_id"), role(["admin"])]) should produce an OR-joined expression.
+    let rule = AccessRule::Any {
+        rules: vec![
+            AccessRule::Owner { field: "user_id".to_string() },
+            AccessRule::Role { roles: vec!["admin".to_string()] },
+        ],
+    };
+
+    let expr = access_rule_to_expr(&rule);
+    assert!(expr.contains("OR"), "any() rule must produce OR expression");
+    assert!(expr.contains("auth.uid()"), "owner clause must reference auth.uid()");
+    assert!(expr.contains("auth.role()"), "role clause must reference auth.role()");
+    assert!(expr.contains("admin"), "role clause must include role name");
+}
+
+// ─── Scenario 24: access rule changed → drop + recreate policy ───────────────
+
+#[test]
+fn test_rls_changed_expression_triggers_recreate() {
+    // DB has posts_select with expression for 'public'; schema now says 'authenticated'.
+    // Differ must emit DropRlsPolicy + CreateRlsPolicy.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+            },
+            "access": { "read": { "type": "authenticated" } },
+            "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid")],
+        }],
+        rls_policies: vec![
+            DbRlsPolicy {
+                table: "posts".into(),
+                name: "posts_select".into(),
+                command: "r".into(),
+                permissive: true,
+                // Old expression: true (public access)
+                using_expr: Some("true".into()),
+                check_expr: None,
+            },
+        ],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let drop_policy = diff.operations.iter()
+        .any(|op| matches!(op, Operation::DropRlsPolicy { policy, .. } if policy == "posts_select"));
+    assert!(drop_policy, "should emit DropRlsPolicy when expression changed");
+
+    let create_policy = diff.operations.iter()
+        .any(|op| matches!(op, Operation::CreateRlsPolicy { policy, .. } if policy == "posts_select"));
+    assert!(create_policy, "should emit CreateRlsPolicy after drop");
+}
+
+// ─── Scenario 25: model loses access rules → all policies dropped + warning ───
+
+#[test]
+fn test_rls_removed_access_rules_drops_policies_and_warns() {
+    // Schema no longer has access rules; DB has existing policy.
+    // Differ must drop all policies and emit a warning.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+            },
+            "access": {},
+            "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid")],
+        }],
+        rls_policies: vec![
+            DbRlsPolicy {
+                table: "posts".into(),
+                name: "posts_select".into(),
+                command: "r".into(),
+                permissive: true,
+                using_expr: Some("auth.uid() IS NOT NULL".into()),
+                check_expr: None,
+            },
+        ],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let drop_policy = diff.operations.iter()
+        .any(|op| matches!(op, Operation::DropRlsPolicy { policy, .. } if policy == "posts_select"));
+    assert!(drop_policy, "should drop orphaned policy when access rules removed");
+
+    assert!(!diff.warnings.is_empty(), "should emit warning when RLS policies removed");
+    assert!(
+        diff.warnings.iter().any(|w| w.contains("posts")),
+        "warning must mention the affected table"
+    );
+}
+
+// ─── Scenario 26: RLS generator output — FORCE RLS + correct naming ───────────
+
+#[test]
+fn test_rls_generator_output_force_rls_and_policy_naming() {
+    use definatype_engine::generator::sql::rls;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+            },
+            "access": {
+                "read":   { "type": "authenticated" },
+                "create": { "type": "authenticated" },
+                "update": { "type": "owner", "field": "user_id" },
+                "delete": { "type": "owner", "field": "user_id" }
+            },
+            "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let sql = rls::generate(&ast).unwrap();
+
+    assert!(sql.contains("ENABLE ROW LEVEL SECURITY"), "must enable RLS");
+    assert!(sql.contains("FORCE ROW LEVEL SECURITY"), "must force RLS");
+
+    // Policy naming: {table}_{operation}, no _policy suffix
+    assert!(sql.contains("\"posts_select\""), "select policy must be named posts_select");
+    assert!(sql.contains("\"posts_insert\""), "insert policy must be named posts_insert");
+    assert!(sql.contains("\"posts_update\""), "update policy must be named posts_update");
+    assert!(sql.contains("\"posts_delete\""), "delete policy must be named posts_delete");
+
+    // INSERT uses WITH CHECK, not USING
+    assert!(sql.contains("FOR INSERT"), "must have INSERT policy");
+    assert!(sql.contains("WITH CHECK"), "INSERT policy must use WITH CHECK");
+
+    // UPDATE uses both USING and WITH CHECK
+    assert!(sql.contains("FOR UPDATE"), "must have UPDATE policy");
 }

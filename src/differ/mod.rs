@@ -149,7 +149,7 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState) -> Result<DiffOutput> {
 
     table_diff::diff(ast, db, &mut ops, &mut warnings)?;
     index_diff::diff(ast, db, &mut ops)?;
-    rls_diff::diff(ast, db, &mut ops)?;
+    rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
     trigger_diff::diff(ast, db, &mut ops)?;
 
     let ordered_ops = ordering::topological_sort(ops)?;

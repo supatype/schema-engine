@@ -217,8 +217,8 @@ async fn main() -> Result<()> {
         }
         Command::Rls => {
             let ast = definatype_engine::parser::parse(&input)?;
-            let sql = definatype_engine::generator::sql::rls::generate(&ast)?;
-            println!("{sql}");
+            println!("{}", definatype_engine::generator::sql::rls::generate_auth_helpers());
+            println!("{}", definatype_engine::generator::sql::rls::generate(&ast)?);
         }
         Command::Postgrest => {
             let ast = definatype_engine::parser::parse(&input)?;

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(cargo check)",
       "Bash(cargo build)",
-      "Bash(cargo test --lib)"
+      "Bash(cargo test --lib)",
+      "Bash(cargo test --test evolution_tests)"
     ]
   }
 }
