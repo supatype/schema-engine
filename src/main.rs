@@ -68,8 +68,12 @@ enum Command {
         #[arg(long, help = "Bypass schema state cache and do a full DB introspection")]
         no_cache: bool,
     },
-    /// Generate TypeScript type definitions
-    Generate,
+    /// Generate typed client code (TypeScript by default; use --lang for other languages)
+    Generate {
+        /// Target language: typescript (default), python, go, php, swift, kotlin, dart
+        #[arg(long, default_value = "typescript")]
+        lang: String,
+    },
     /// Generate trigger SQL (updated_at + slug)
     Triggers,
     /// Generate RLS policy SQL
@@ -216,10 +220,13 @@ async fn main() -> Result<()> {
                 migration_name, diff.operations.len()
             );
         }
-        Command::Generate => {
+        Command::Generate { lang } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let ts = supatype_engine::generator::typescript::types::generate(&ast)?;
-            println!("{ts}");
+            let output = match lang.as_str() {
+                "typescript" | "ts" => supatype_engine::generator::typescript::types::generate(&ast)?,
+                other => supatype_engine::generator::sdk::generate(&ast, other)?,
+            };
+            println!("{output}");
         }
         Command::Triggers => {
             let ast = supatype_engine::parser::parse(&input)?;

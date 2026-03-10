@@ -1734,3 +1734,169 @@ fn test_plugin_custom_field_studio_metadata() {
     assert_eq!(phone_field["pgType"], "TEXT");
     assert_eq!(phone_field["tsType"], "PhoneNumber");
 }
+
+// ─── Phase 10: Multi-Language SDK & WASM ─────────────────────────────────────
+
+fn simple_post_ast() -> &'static str {
+    r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":           { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title":        { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false },
+                "score":        { "kind": "integer", "pgType": "INTEGER", "required": false, "unique": false },
+                "active":       { "kind": "boolean", "pgType": "BOOLEAN", "required": true,  "unique": false },
+                "_timestamps":  { "kind": "timestamps" }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": true, "softDelete": false, "singleton": false }
+        }]
+    }"#
+}
+
+// ─── Scenario 49: Python @dataclass with correct type annotations ─────────────
+
+#[test]
+fn test_sdk_python_dataclass() {
+    use supatype_engine::generator::sdk;
+
+    let ast = parser::parse(simple_post_ast()).unwrap();
+    let out = sdk::generate(&ast, "python").unwrap();
+
+    assert!(out.contains("@dataclass"), "Python output must use @dataclass decorator");
+    assert!(out.contains("class Post:"), "Python output must define class Post");
+    assert!(out.contains("from dataclasses import dataclass"), "Python output must import dataclass");
+    assert!(out.contains(": str"), "required text field must use str type");
+    assert!(out.contains(": bool"), "required boolean field must use bool type");
+    assert!(out.contains("Optional[int]"), "optional integer field must use Optional[int]");
+    assert!(out.contains("Optional[datetime]"), "timestamp composite must emit Optional[datetime] fields");
+}
+
+// ─── Scenario 50: Go struct with json tags ────────────────────────────────────
+
+#[test]
+fn test_sdk_go_struct_json_tags() {
+    use supatype_engine::generator::sdk;
+
+    let ast = parser::parse(simple_post_ast()).unwrap();
+    let out = sdk::generate(&ast, "go").unwrap();
+
+    assert!(out.contains("type Post struct {"), "Go output must define Post struct");
+    assert!(out.contains("package supatype"), "Go output must declare package");
+    assert!(out.contains("`json:\"title\"`"), "required field must have json tag without omitempty");
+    assert!(out.contains("`json:\"score,omitempty\"`"), "optional field must have omitempty json tag");
+    assert!(out.contains("Active bool"), "required boolean field must be bool");
+    assert!(out.contains("CreatedAt *time.Time"), "timestamps composite must add CreatedAt *time.Time");
+}
+
+// ─── Scenario 51: PHP class with typed constructor properties ─────────────────
+
+#[test]
+fn test_sdk_php_typed_class() {
+    use supatype_engine::generator::sdk;
+
+    let ast = parser::parse(simple_post_ast()).unwrap();
+    let out = sdk::generate(&ast, "php").unwrap();
+
+    assert!(out.contains("<?php"), "PHP output must start with <?php");
+    assert!(out.contains("class Post {"), "PHP output must define class Post");
+    assert!(out.contains("declare(strict_types=1)"), "PHP output must declare strict types");
+    assert!(out.contains("public readonly string $title"), "required string field must be typed string");
+    assert!(out.contains("public readonly ?int $score = null"), "optional int field must be ?int with null default");
+    assert!(out.contains("public readonly bool $active"), "required bool field must be typed bool");
+}
+
+// ─── Scenario 52: Swift struct with Codable conformance ───────────────────────
+
+#[test]
+fn test_sdk_swift_codable_struct() {
+    use supatype_engine::generator::sdk;
+
+    let ast = parser::parse(simple_post_ast()).unwrap();
+    let out = sdk::generate(&ast, "swift").unwrap();
+
+    assert!(out.contains("import Foundation"), "Swift output must import Foundation");
+    assert!(out.contains("struct Post: Codable {"), "Swift output must define Post as Codable struct");
+    assert!(out.contains("var title: String"), "required String field must not be optional");
+    assert!(out.contains("var score?: Int"), "optional Int field must use ? suffix");
+    assert!(out.contains("var active: Bool"), "required Bool field must not be optional");
+    assert!(out.contains("enum CodingKeys: String, CodingKey"), "Swift output must include CodingKeys enum");
+    assert!(out.contains("var createdAt: Date?"), "timestamps composite must add createdAt Date? field");
+}
+
+// ─── Scenario 53: Kotlin data class with @Serializable ────────────────────────
+
+#[test]
+fn test_sdk_kotlin_data_class() {
+    use supatype_engine::generator::sdk;
+
+    let ast = parser::parse(simple_post_ast()).unwrap();
+    let out = sdk::generate(&ast, "kotlin").unwrap();
+
+    assert!(out.contains("package supatype.generated"), "Kotlin output must declare package");
+    assert!(out.contains("@Serializable"), "Kotlin output must use @Serializable annotation");
+    assert!(out.contains("data class Post("), "Kotlin output must define Post as data class");
+    assert!(out.contains("val title: String"), "required String field must not be nullable");
+    assert!(out.contains("val score: Int? = null"), "optional Int field must be Int? with null default");
+    assert!(out.contains("val active: Boolean"), "required Boolean field must not be nullable");
+    assert!(out.contains("val createdAt: String? = null"), "timestamps composite must emit createdAt String?");
+}
+
+// ─── Scenario 54: Dart class with fromJson/toJson ────────────────────────────
+
+#[test]
+fn test_sdk_dart_class_from_to_json() {
+    use supatype_engine::generator::sdk;
+
+    let ast = parser::parse(simple_post_ast()).unwrap();
+    let out = sdk::generate(&ast, "dart").unwrap();
+
+    assert!(out.contains("class Post {"), "Dart output must define class Post");
+    assert!(out.contains("factory Post.fromJson(Map<String, dynamic> json)"), "Dart output must have fromJson factory");
+    assert!(out.contains("Map<String, dynamic> toJson()"), "Dart output must have toJson method");
+    assert!(out.contains("final String title;"), "required String field must be final String");
+    assert!(out.contains("final int? score;"), "optional int field must be final int?");
+    assert!(out.contains("final bool active;"), "required bool field must be final bool");
+    assert!(out.contains("final DateTime? createdAt;"), "timestamps composite must add createdAt DateTime?");
+}
+
+// ─── Scenario 55: Unknown language returns an error ──────────────────────────
+
+#[test]
+fn test_sdk_unknown_language_error() {
+    use supatype_engine::generator::sdk;
+
+    let ast = parser::parse(simple_post_ast()).unwrap();
+    let result = sdk::generate(&ast, "brainfuck");
+
+    assert!(result.is_err(), "unsupported language must return an Err");
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("brainfuck"), "error message must include the unknown language name");
+}
+
+// ─── Scenario 56: wasm_parse returns valid resolved AST JSON ─────────────────
+
+#[test]
+fn test_wasm_parse_returns_ast_json() {
+    use supatype_engine::wasm;
+
+    let result = wasm::wasm_parse(simple_post_ast());
+
+    let parsed: serde_json::Value = serde_json::from_str(&result)
+        .expect("wasm_parse must return valid JSON");
+    assert!(parsed.get("error").is_none(), "wasm_parse must not return an error for valid input");
+    assert!(parsed["models"].as_array().unwrap().iter().any(|m| m["name"] == "Post"),
+        "wasm_parse AST must contain the Post model");
+}
+
+// ─── Scenario 57: wasm_generate_typescript returns TypeScript interface ───────
+
+#[test]
+fn test_wasm_generate_typescript_interface() {
+    use supatype_engine::wasm;
+
+    let result = wasm::wasm_generate_typescript(simple_post_ast());
+
+    assert!(!result.contains("\"error\""), "wasm_generate_typescript must not return an error JSON");
+    assert!(result.contains("interface PostRow"), "wasm_generate_typescript must emit PostRow interface");
+    assert!(result.contains("title: string"), "must include the title field typed as string");
+}

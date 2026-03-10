@@ -13,15 +13,32 @@ path = "src/main.rs"
 [lib]
 name = "supatype_engine"
 path = "src/lib.rs"
-# lib target enables future WASM compilation
+# lib target supports both native CLI use and WASM compilation.
+# Server-only deps (sqlx, tokio, etc.) are gated to non-wasm32 targets below.
+
+# ─── Core deps (WASM-compatible) ─────────────────────────────────────────────
 
 [dependencies]
-# CLI
-clap = { version = "4", features = ["derive", "env"] }
-
-# Serialisation
+# Serialisation — used by parser + generator, WASM-compatible
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Pure computation — wasm-compatible
+sha2 = "0.10"
+hex = "0.4"
+petgraph = "0.7"
+strsim = "0.11"
+similar = "2"
+
+# ─── Server-only deps (excluded from wasm32 builds) ──────────────────────────
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -29,32 +46,19 @@ tokio = { version = "1", features = ["full"] }
 # Database
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "macros"] }
 
-# Error handling
-anyhow = "1"
-thiserror = "2"
-
 # Logging/tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Migration hashing
-sha2 = "0.10"
-hex = "0.4"
-
-# Timestamps for migration names
+# Timestamps for migration names (DB module only — uses system clock)
 chrono = { version = "0.4", features = ["serde"] }
 
-# Topological sort for operation ordering
-petgraph = "0.7"
-
-# String similarity (rename detection)
-strsim = "0.11"
-
-# Text diffing (migration previews)
-similar = "2"
+# ─── WASM-only deps ───────────────────────────────────────────────────────────
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+
+# ─── Dev dependencies ─────────────────────────────────────────────────────────
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -18,19 +18,95 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets
       - run: cargo fmt --check
       - run: cargo clippy -- -D warnings
+      # Verify the lib compiles to WASM (no DB deps, no tokio)
+      - run: cargo check --lib --target wasm32-unknown-unknown
 
   test:
-    name: Unit Tests
+    name: Unit & Evolution Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --lib
+      - name: Run all non-integration tests
+        run: |
+          cargo test --lib \
+            --test parser_tests \
+            --test differ_tests \
+            --test migration_tests \
+            --test evolution_tests
+
+  sdk-exec:
+    name: SDK Exec Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      # ── Python ──────────────────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── Go ──────────────────────────────────────────────────────────────────
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      # ── PHP ─────────────────────────────────────────────────────────────────
+      - name: Install PHP (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y php-cli
+      - name: Install PHP (macOS)
+        if: runner.os == 'macOS'
+        run: brew install php
+
+      # ── Swift ───────────────────────────────────────────────────────────────
+      # Swift is pre-installed on macOS runners; install on Linux via swiftly
+      - name: Install Swift (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL https://swiftlang.github.io/swiftly/swiftly-install.sh | bash -s -- --quiet
+          echo "$HOME/.local/share/swiftly/bin" >> $GITHUB_PATH
+          $HOME/.local/share/swiftly/bin/swiftly install latest
+          echo "$HOME/.local/share/swiftly/toolchains/$(ls $HOME/.local/share/swiftly/toolchains/ | sort -V | tail -1)/usr/bin" >> $GITHUB_PATH
+
+      # ── Kotlin ──────────────────────────────────────────────────────────────
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+      - name: Install Kotlin
+        run: |
+          KOTLIN_VERSION=2.0.21
+          curl -fsSL "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip" -o kotlin.zip
+          unzip -q kotlin.zip -d "$HOME/kotlin"
+          echo "$HOME/kotlin/kotlinc/bin" >> $GITHUB_PATH
+
+      # ── Dart ────────────────────────────────────────────────────────────────
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      # ── Run all exec tests ──────────────────────────────────────────────────
+      - name: Run SDK exec tests (hard-fail — all toolchains present)
+        env:
+          SUPATYPE_FORCE_EXEC_TESTS: "1"
+        run: cargo test --test sdk_exec_tests -- --nocapture
 
   integration:
     name: Integration Tests (Postgres ${{ matrix.pg }})
