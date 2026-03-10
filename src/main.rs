@@ -74,6 +74,8 @@ enum Command {
     Triggers,
     /// Generate RLS policy SQL
     Rls,
+    /// Generate storage schema SQL (bucket DDL + storage RLS)
+    Storage,
     /// Generate PostgREST configuration
     Postgrest,
     /// Generate admin panel configuration JSON
@@ -219,6 +221,11 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             println!("{}", supatype_engine::generator::sql::rls::generate_auth_helpers());
             println!("{}", supatype_engine::generator::sql::rls::generate(&ast)?);
+        }
+        Command::Storage => {
+            let ast = supatype_engine::parser::parse(&input)?;
+            let sql = supatype_engine::generator::sql::storage::generate(&ast)?;
+            println!("{sql}");
         }
         Command::Postgrest => {
             let ast = supatype_engine::parser::parse(&input)?;

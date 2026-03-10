@@ -1010,3 +1010,100 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
     // UPDATE uses both USING and WITH CHECK
     assert!(sql.contains("FOR UPDATE"), "must have UPDATE policy");
 }
+
+// ─── Scenario 27: image field → resolver infers storage bucket ────────────────
+
+#[test]
+fn test_storage_resolver_infers_bucket_from_image_field() {
+    // An image field with bucket "posts_avatar" should produce one StorageBucketAst.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "avatar": { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_avatar" }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    assert_eq!(ast.storage_buckets.len(), 1, "should infer one storage bucket");
+    assert_eq!(ast.storage_buckets[0].id, "posts_avatar", "bucket id must match field declaration");
+}
+
+// ─── Scenario 28: storage generator emits schema DDL + bucket upsert ─────────
+
+#[test]
+fn test_storage_generator_emits_ddl_and_bucket_upsert() {
+    use supatype_engine::generator::sql::storage;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "avatar": { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_avatar" }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let sql = storage::generate(&ast).unwrap();
+
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS storage.buckets"), "must create storage.buckets");
+    assert!(sql.contains("CREATE TABLE IF NOT EXISTS storage.objects"), "must create storage.objects");
+    assert!(sql.contains("posts_avatar"), "must upsert the bucket by id");
+    assert!(sql.contains("ON CONFLICT (id) DO UPDATE"), "upsert must handle existing bucket");
+}
+
+// ─── Scenario 29: storage RLS inherits model read access rule ────────────────
+
+#[test]
+fn test_storage_rls_inherits_model_read_access_rule() {
+    use supatype_engine::generator::sql::storage;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "avatar": { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_avatar" }
+            },
+            "access": { "read": { "type": "authenticated" } },
+            "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let sql = storage::generate(&ast).unwrap();
+
+    assert!(sql.contains("ENABLE ROW LEVEL SECURITY"), "must enable RLS on storage.objects");
+    assert!(sql.contains("auth.uid() IS NOT NULL"), "select policy must inherit authenticated rule");
+    assert!(sql.contains("posts_avatar_sel"), "select policy must be named table_bucket_sel");
+    assert!(sql.contains("posts_avatar_ins"), "insert policy must be named table_bucket_ins");
+    assert!(sql.contains("posts_avatar_del"), "delete policy must be named table_bucket_del");
+}
+
+// ─── Scenario 30: two fields with same bucket name → deduplicated ─────────────
+
+#[test]
+fn test_storage_resolver_deduplicates_same_bucket() {
+    // Two image fields pointing to the same bucket should produce only one StorageBucketAst.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":       { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "cover":    { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_images" },
+                "thumb":    { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_images" }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    assert_eq!(ast.storage_buckets.len(), 1, "duplicate bucket name must be deduplicated to one entry");
+    assert_eq!(ast.storage_buckets[0].id, "posts_images");
+}

@@ -416,31 +416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "supatype-engine"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "hex",
- "petgraph",
- "serde",
- "serde_json",
- "sha2",
- "similar",
- "sqlx",
- "strsim",
- "testcontainers",
- "testcontainers-modules",
- "thiserror",
- "tokio",
- "tokio-test",
- "tracing",
- "tracing-subscriber",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2310,6 +2285,31 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "supatype-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "hex",
+ "petgraph",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "sqlx",
+ "strsim",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "syn"
