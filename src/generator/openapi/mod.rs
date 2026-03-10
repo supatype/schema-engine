@@ -282,6 +282,13 @@ fn field_to_schema(field: &FieldAst) -> Value {
             "type": "array",
             "items": { "type": array_element_openapi_type(&a.element_type) }
         }),
+        // Custom plugin field — emit the ts_type as a description hint; fall back to string type
+        FieldAst::Custom(c) => json!({
+            "type": "string",
+            "description": format!("Custom field type '{}' from plugin '{}'", c.field_type, c.plugin),
+            "x-supatype-plugin": c.plugin,
+            "x-supatype-field-type": c.field_type,
+        }),
         _ => json!({ "type": "string" }),
     }
 }
@@ -311,6 +318,7 @@ fn field_is_required(field: &FieldAst) -> bool {
         FieldAst::Geo(f) => f.required,
         FieldAst::Vector(f) => f.required,
         FieldAst::Blocks(f) => f.required,
+        FieldAst::Custom(f) => f.required,
         _ => false,
     }
 }

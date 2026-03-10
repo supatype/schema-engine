@@ -188,6 +188,17 @@ fn field_to_json(name: &str, field: &FieldAst) -> Value {
                 "blocks": block_defs,
             })
         }
+        FieldAst::Custom(c) => json!({
+            "name": name,
+            "kind": "custom",
+            "fieldType": c.field_type,
+            "plugin": c.plugin,
+            "pgType": c.pg_type,
+            "tsType": c.ts_type,
+            "required": c.required,
+            "unique": c.unique,
+            "index": c.index,
+        }),
         FieldAst::Timestamps => json!({ "name": name, "kind": "timestamps" }),
         FieldAst::Publishable => json!({ "name": name, "kind": "publishable" }),
         FieldAst::SoftDelete => json!({ "name": name, "kind": "softDelete" }),

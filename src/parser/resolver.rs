@@ -1,11 +1,30 @@
 use anyhow::Result;
 use super::ast::{FieldAst, JunctionTableAst, RelationCardinality, SchemaAst, StorageBucketAst};
 
-/// Resolves relations, infers junction tables, and detects storage buckets.
+/// The plugin API version this engine build supports.
+pub const SUPPORTED_PLUGIN_API: u32 = 1;
+
+/// Resolves relations, infers junction tables, detects storage buckets,
+/// and checks plugin API compatibility.
 pub fn resolve(mut ast: SchemaAst) -> Result<SchemaAst> {
     resolve_junction_tables(&mut ast);
     resolve_storage_buckets(&mut ast);
+    check_plugin_versions(&mut ast);
     Ok(ast)
+}
+
+/// Emits a warning for every registered plugin whose declared pluginApi version
+/// differs from SUPPORTED_PLUGIN_API.
+fn check_plugin_versions(ast: &mut SchemaAst) {
+    for plugin in &ast.plugins {
+        if plugin.plugin_api != SUPPORTED_PLUGIN_API {
+            ast.warnings.push(format!(
+                "Plugin '{}' declares pluginApi {} but this engine supports pluginApi {}. \
+                 The plugin may not work correctly — update it or check compatibility.",
+                plugin.name, plugin.plugin_api, SUPPORTED_PLUGIN_API
+            ));
+        }
+    }
 }
 
 fn resolve_junction_tables(ast: &mut SchemaAst) {

@@ -91,6 +91,7 @@ fn ts_type_of(field: &FieldAst) -> (String, bool) {
                 (format!("Array<{union}>"), !f.required)
             }
         }
+        FieldAst::Custom(f) => (f.ts_type.clone(), !f.required),
         FieldAst::Timestamps => ("never".into(), false), // expanded inline
         FieldAst::Publishable => ("never".into(), false),
         FieldAst::SoftDelete => ("never".into(), false),

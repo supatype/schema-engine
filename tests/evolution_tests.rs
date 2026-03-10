@@ -1562,3 +1562,175 @@ fn test_openapi_schema_enum_field() {
     let required = spec["components"]["schemas"]["Post"]["required"].as_array().unwrap();
     assert!(required.iter().any(|r| r == "status"), "required enum field must be in required array");
 }
+
+// ─── Scenario 43: custom field type uses declared pgType in SQL migration ─────
+
+#[test]
+fn test_plugin_custom_field_sql() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Contact", "tableName": "contacts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "string", "required": true, "unique": false, "index": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }],
+        "plugins": [
+            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState { ..DatabaseState::default() };
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let create_op = diff.operations.iter().find(|op| matches!(op, Operation::CreateTable { table, .. } if table == "contacts"));
+    assert!(create_op.is_some(), "CreateTable for contacts must be emitted");
+
+    let sql = migration::generate(&diff, false).unwrap();
+    // Custom field uses declared pgType (TEXT), not a built-in name
+    assert!(sql.contains("\"phone\" TEXT NOT NULL"), "custom field must render with declared pgType");
+}
+
+// ─── Scenario 44: custom field type uses declared tsType in TypeScript gen ────
+
+#[test]
+fn test_plugin_custom_field_typescript() {
+    use supatype_engine::generator::typescript::types;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Contact", "tableName": "contacts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "PhoneNumber", "required": true, "unique": false, "index": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }],
+        "plugins": [
+            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let ts = types::generate(&ast).unwrap();
+
+    assert!(ts.contains("phone: PhoneNumber"), "custom field must use declared tsType in generated TypeScript");
+}
+
+// ─── Scenario 45: plugin with incompatible pluginApi emits warning ────────────
+
+#[test]
+fn test_plugin_version_mismatch_warning() {
+    use supatype_engine::parser::resolver::SUPPORTED_PLUGIN_API;
+
+    let api_version = SUPPORTED_PLUGIN_API + 1; // intentionally wrong
+    let ast_json = format!(r#"{{
+        "models": [],
+        "plugins": [
+            {{ "name": "@community/supatype-paddle", "version": "2.0.0", "pluginApi": {api_version}, "pluginType": "provider" }}
+        ]
+    }}"#);
+
+    let ast = parser::parse(&ast_json).unwrap();
+
+    assert!(!ast.warnings.is_empty(), "incompatible pluginApi must produce a warning");
+    assert!(
+        ast.warnings.iter().any(|w| w.contains("@community/supatype-paddle")),
+        "warning must reference the plugin name"
+    );
+    assert!(
+        ast.warnings.iter().any(|w| w.contains(&api_version.to_string())),
+        "warning must include the declared incompatible version"
+    );
+}
+
+// ─── Scenario 46: compatible plugin produces no version warning ───────────────
+
+#[test]
+fn test_plugin_compatible_version_no_warning() {
+    let ast_json = r#"{
+        "models": [],
+        "plugins": [
+            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+
+    let version_warnings: Vec<_> = ast.warnings.iter()
+        .filter(|w| w.contains("pluginApi"))
+        .collect();
+    assert!(version_warnings.is_empty(), "compatible plugin must not produce version warnings");
+}
+
+// ─── Scenario 47: custom field diff emits AddColumn with correct pgType ───────
+
+#[test]
+fn test_plugin_custom_field_diff() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Contact", "tableName": "contacts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "string", "required": false, "unique": false, "index": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }],
+        "plugins": [
+            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "contacts".into(),
+            columns: vec![col("id", "uuid")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let add_phone = diff.operations.iter().find(|op| matches!(op, Operation::AddColumn { column, .. } if column == "phone"));
+    assert!(add_phone.is_some(), "should emit AddColumn for custom phone field");
+    assert!(!diff.summary.is_destructive, "adding custom field is safe");
+}
+
+// ─── Scenario 48: custom field in studio metadata has kind=custom ─────────────
+
+#[test]
+fn test_plugin_custom_field_studio_metadata() {
+    use supatype_engine::generator::studio;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Contact", "tableName": "contacts",
+            "fields": {
+                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "PhoneNumber", "required": false, "unique": false, "index": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }],
+        "plugins": [
+            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let meta = studio::generate(&ast).unwrap();
+
+    let fields = meta["models"][0]["fields"].as_array().unwrap();
+    let phone_field = fields.iter().find(|f| f["name"] == "phone").unwrap();
+
+    assert_eq!(phone_field["kind"], "custom");
+    assert_eq!(phone_field["fieldType"], "phone");
+    assert_eq!(phone_field["plugin"], "@supatype/plugin-phone-field");
+    assert_eq!(phone_field["pgType"], "TEXT");
+    assert_eq!(phone_field["tsType"], "PhoneNumber");
+}

@@ -419,6 +419,15 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("\"{name}\" vector({}){req}", f.dimensions))
         }
+        // Plugin-defined custom field type — use the declared pg_type directly.
+        FieldAst::Custom(f) => {
+            let req = if f.required { " NOT NULL" } else { "" };
+            let uniq = if f.unique { " UNIQUE" } else { "" };
+            let default = f.default.as_ref()
+                .map(|d| format!(" DEFAULT {}", render_default(d)))
+                .unwrap_or_default();
+            Ok(format!("\"{name}\" {pg}{req}{uniq}{default}", pg = f.pg_type.to_uppercase()))
+        }
         // Composites are expanded at the table level, never called here individually
         FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete => {
             anyhow::bail!("composite field '{name}' must be expanded at table level")

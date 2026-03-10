@@ -35,6 +35,7 @@ fn has_index_flag(field: &FieldAst) -> bool {
         | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f)
         | FieldAst::Macaddr(f) | FieldAst::Interval(f) | FieldAst::TsQuery(f)
         | FieldAst::TsVector(f) | FieldAst::Xml(f) | FieldAst::RichText(f) => f.index,
+        FieldAst::Custom(f) => f.index,
         _ => false,
     }
 }
@@ -58,6 +59,7 @@ fn field_required(field: &FieldAst) -> Option<bool> {
         FieldAst::Vector(f) => Some(f.required),
         FieldAst::Array(f) => Some(f.required),
         FieldAst::Image(f) | FieldAst::File(f) => Some(f.required),
+        FieldAst::Custom(f) => Some(f.required),
         // Composites / relations don't map directly to a single column required flag
         _ => None,
     }

@@ -18,6 +18,9 @@ pub struct SchemaAst {
     /// The default/fallback locale. Defaults to "en" when locales is non-empty.
     #[serde(default)]
     pub default_locale: Option<String>,
+    /// Plugins registered for this schema (field type, composite, provider, widget).
+    #[serde(default)]
+    pub plugins: Vec<PluginRegistrationAst>,
     /// Warnings from parse/validation.
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -93,6 +96,8 @@ pub enum FieldAst {
     Vector(VectorFieldAst),
     // Repeatable blocks — stored as JSONB array with type discriminator.
     Blocks(BlocksFieldAst),
+    // Plugin-defined custom field type
+    Custom(CustomFieldAst),
     // Relations
     Relation(RelationFieldAst),
     // Composite fields (expanded by resolver into real columns)
@@ -332,4 +337,39 @@ pub struct StorageBucketAst {
     pub public: bool,
     pub allowed_mime_types: Option<Vec<String>>,
     pub file_size_limit: Option<u64>,
+}
+
+/// A plugin-defined custom field type. The Postgres column uses `pg_type`;
+/// the TypeScript client uses `ts_type`. The engine treats it like a scalar
+/// for all diff, migration, and type-generation purposes.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomFieldAst {
+    /// npm package name of the plugin, e.g. "@supatype/plugin-phone-field".
+    pub plugin: String,
+    /// The custom field type name declared by the plugin, e.g. "phone".
+    pub field_type: String,
+    /// Postgres column type to use, e.g. "TEXT".
+    pub pg_type: String,
+    /// TypeScript type for the generated client, e.g. "string".
+    pub ts_type: String,
+    pub required: bool,
+    pub unique: bool,
+    #[serde(default)]
+    pub index: bool,
+    pub default: Option<DefaultValueAst>,
+}
+
+/// A plugin registered for this schema via supatype.config.ts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginRegistrationAst {
+    /// npm package name, e.g. "@supatype/plugin-phone-field".
+    pub name: String,
+    /// Installed semver version, e.g. "1.0.3".
+    pub version: String,
+    /// Plugin API version declared by the plugin. Engine supports API version 1.
+    pub plugin_api: u32,
+    /// Plugin type: "fieldType" | "composite" | "provider" | "widget".
+    pub plugin_type: String,
 }
