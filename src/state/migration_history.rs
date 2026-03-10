@@ -57,6 +57,7 @@ pub async fn load_schema_state(
 
 /// List all recorded migrations ordered by applied_at ascending.
 pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(
         i32,
         String,

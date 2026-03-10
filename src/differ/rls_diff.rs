@@ -8,10 +8,10 @@ use anyhow::Result;
 /// `polcmd` column from pg_policy: r=SELECT, a=INSERT, w=UPDATE, d=DELETE, *=ALL.
 fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
     vec![
-        (format!("select"), access.read.as_ref()),
-        (format!("insert"), access.create.as_ref()),
-        (format!("update"), access.update.as_ref()),
-        (format!("delete"), access.delete.as_ref()),
+        ("select".to_string(), access.read.as_ref()),
+        ("insert".to_string(), access.create.as_ref()),
+        ("update".to_string(), access.update.as_ref()),
+        ("delete".to_string(), access.delete.as_ref()),
     ]
     .into_iter()
     .filter_map(|(suffix, rule)| rule.map(|r| (suffix, Some(r))))

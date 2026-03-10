@@ -111,7 +111,7 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
     let mut entries: Vec<BucketAccess<'_>> = Vec::new();
 
     for model in &ast.models {
-        for (_field_name, field) in &model.fields {
+        for field in model.fields.values() {
             let bucket_id = match field {
                 FieldAst::Image(s) | FieldAst::File(s) => &s.bucket,
                 _ => continue,

@@ -53,7 +53,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         }
 
         // Composite expansions always have defaults so they go in optional_lines
-        for (_, fld) in &model.fields {
+        for fld in model.fields.values() {
             match fld {
                 FieldAst::Timestamps => {
                     optional_lines.push("    created_at: Optional[datetime] = None\n".into());

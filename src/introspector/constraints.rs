@@ -55,6 +55,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
     .await?;
 
     // Group FK rows by (table, constraint_name)
+    #[allow(clippy::type_complexity)]
     let mut fk_map: std::collections::HashMap<
         (String, String),
         (Vec<String>, String, Vec<String>, Option<String>),

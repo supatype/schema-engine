@@ -44,7 +44,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         }
 
         // Composite expansions
-        for (_, fld) in &model.fields {
+        for fld in model.fields.values() {
             match fld {
                 FieldAst::Timestamps => {
                     params.push("        public readonly ?DateTime $created_at = null".into());

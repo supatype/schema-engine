@@ -14,6 +14,7 @@ pub struct DbRlsPolicy {
 }
 
 pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbRlsPolicy>> {
+    #[allow(clippy::type_complexity)]
     let rows: Vec<(String, String, String, bool, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT c.relname, p.polname, p.polcmd::text,
                     p.polpermissive,

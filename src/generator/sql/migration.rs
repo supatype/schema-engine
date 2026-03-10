@@ -302,10 +302,11 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
     }
 
     let has_soft_delete_field = model.fields.contains_key("softDelete");
-    if model.options.soft_delete && !has_soft_delete_field {
-        if !model.fields.contains_key("deleted_at") {
-            col_defs.push("    \"deleted_at\" TIMESTAMPTZ".into());
-        }
+    if model.options.soft_delete
+        && !has_soft_delete_field
+        && !model.fields.contains_key("deleted_at")
+    {
+        col_defs.push("    \"deleted_at\" TIMESTAMPTZ".into());
     }
 
     let mut statements = vec![format!(

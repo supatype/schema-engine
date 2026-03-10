@@ -29,11 +29,11 @@ fn check_plugin_versions(ast: &mut SchemaAst) {
 
 fn resolve_junction_tables(ast: &mut SchemaAst) {
     for model in &ast.models {
-        for (_field_name, field) in &model.fields {
+        for field in model.fields.values() {
             if let FieldAst::Relation(rel) = field {
                 if matches!(rel.cardinality, RelationCardinality::ManyToMany) {
                     let junction_name = rel.through.clone().unwrap_or_else(|| {
-                        let mut names = vec![model.table_name.clone(), rel.target.clone()];
+                        let mut names = [model.table_name.clone(), rel.target.clone()];
                         names.sort();
                         names.join("_")
                     });
@@ -58,7 +58,7 @@ fn resolve_junction_tables(ast: &mut SchemaAst) {
 
 fn resolve_storage_buckets(ast: &mut SchemaAst) {
     for model in &ast.models {
-        for (_field_name, field) in &model.fields {
+        for field in model.fields.values() {
             if let FieldAst::Image(storage) | FieldAst::File(storage) = field {
                 let already_exists = ast.storage_buckets.iter().any(|b| b.id == storage.bucket);
                 if !already_exists {

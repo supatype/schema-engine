@@ -213,7 +213,7 @@ fn udt_to_pg_type(udt: &str) -> &'static str {
         "interval" => "INTERVAL",
         "tsquery" => "TSQUERY",
         "tsvector" => "TSVECTOR",
-        "varchar" | "bpchar" | "text" | _ => "TEXT",
+        _ => "TEXT",
     }
 }
 

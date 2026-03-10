@@ -51,16 +51,30 @@ fn write_temp(filename: &str, content: &str) -> PathBuf {
 }
 
 /// Returns Some(binary_name) if any candidate is on PATH, or None if none found.
+///
+/// Tries several version-flag conventions so that tools with non-standard flags
+/// (e.g. `go version` instead of `go --version`) are still detected correctly.
 fn find_bin(candidates: &[&str]) -> Option<String> {
-    for name in candidates {
-        let ok = Command::new(name)
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if ok {
+    for &name in candidates {
+        // Different tools use different version flags:
+        //   go          → `go version`   (no dashes)
+        //   kotlinc     → `kotlinc -version` (single dash)
+        //   most others → `--version`
+        let version_args: &[&[&str]] = match name {
+            "go" => &[&["version"]],
+            "kotlinc" | "kotlinc-jvm" => &[&["-version"], &["--version"]],
+            _ => &[&["--version"], &["-version"]],
+        };
+        let found = version_args.iter().any(|args| {
+            Command::new(name)
+                .args(*args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        });
+        if found {
             return Some(name.to_string());
         }
     }
@@ -166,7 +180,7 @@ fn test_sdk_exec_php() {
 
 #[test]
 fn test_sdk_exec_swift() {
-    let Some(swiftc) = try_bin(&["swiftc"]) else {
+    let Some(_swiftc) = try_bin(&["swiftc"]) else {
         eprintln!(
             "[sdk_exec] SKIP swift — swiftc not found on PATH (install Xcode or Swift toolchain)"
         );
@@ -175,11 +189,29 @@ fn test_sdk_exec_swift() {
     let code = generate("swift");
     let path = write_temp("supatype_test.swift", &code);
 
+    // On macOS, plain `swiftc` cannot resolve `import Foundation` without the
+    // Xcode SDK path. Use `xcrun swiftc` which selects the correct SDK automatically.
+    // On Linux (where xcrun is absent), plain `swiftc` works fine.
+    let use_xcrun = Command::new("xcrun")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
     // -typecheck verifies type correctness without linking
-    assert_command_success(
-        Command::new(&swiftc).args(["-typecheck", path.to_str().unwrap()]),
-        "swiftc -typecheck on generated types",
-    );
+    if use_xcrun {
+        assert_command_success(
+            Command::new("xcrun").args(["swiftc", "-typecheck", path.to_str().unwrap()]),
+            "xcrun swiftc -typecheck on generated types",
+        );
+    } else {
+        assert_command_success(
+            Command::new("swiftc").args(["-typecheck", path.to_str().unwrap()]),
+            "swiftc -typecheck on generated types",
+        );
+    }
 }
 
 // ─── Kotlin ───────────────────────────────────────────────────────────────────

@@ -46,7 +46,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         }
 
         // Composite expansions always have defaults → optional
-        for (_, fld) in &model.fields {
+        for fld in model.fields.values() {
             match fld {
                 FieldAst::Timestamps => {
                     optional_params.push("    val createdAt: String? = null".into());

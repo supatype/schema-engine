@@ -58,7 +58,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         }
 
         // Composite expansions
-        for (_, fld) in &model.fields {
+        for fld in model.fields.values() {
             match fld {
                 FieldAst::Timestamps => {
                     out.push_str("\tCreatedAt *time.Time `json:\"created_at,omitempty\"`\n");

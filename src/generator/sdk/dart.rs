@@ -29,7 +29,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         }
 
         // Composite expansions
-        for (_, fld) in &model.fields {
+        for fld in model.fields.values() {
             match fld {
                 FieldAst::Timestamps => {
                     out.push_str("  final DateTime? createdAt;\n");
@@ -62,7 +62,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             let prop_name = camel_case(name);
             out.push_str(&format!("    required this.{},\n", prop_name));
         }
-        for (_, fld) in &model.fields {
+        for fld in model.fields.values() {
             match fld {
                 FieldAst::Timestamps => {
                     out.push_str("    this.createdAt,\n");
@@ -101,7 +101,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             let from = dart_from_json(name, fld);
             out.push_str(&format!("      {}: {},\n", prop_name, from));
         }
-        for (_, fld) in &model.fields {
+        for fld in model.fields.values() {
             match fld {
                 FieldAst::Timestamps => {
                     out.push_str("      createdAt: json['created_at'] != null ? DateTime.parse(json['created_at']) : null,\n");
