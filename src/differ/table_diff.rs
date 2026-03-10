@@ -35,7 +35,7 @@ pub fn diff(
         } else {
             // Existing table — diff columns
             let db_table = db.tables.iter().find(|t| t.name == model.table_name).unwrap();
-            column_diff::diff(model, db_table, ops, warnings)?;
+            column_diff::diff(model, db_table, ops, warnings, ast.effective_default_locale())?;
 
             // Also diff FK relations (add new FKs, drop removed FKs)
             emit_fk_ops_for_model(model, ast, &db_fk_names, ops);

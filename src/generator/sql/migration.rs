@@ -266,6 +266,29 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
         statements.push(create_index_sql(table, &idx)?);
     }
 
+    // GIN index for each Blocks field (enables JSONB containment queries).
+    for (field_name, field) in &model.fields {
+        if let FieldAst::Blocks(b) = field {
+            if b.index {
+                let gin_idx = IndexAst {
+                    name: Some(format!("{table}_{field_name}_gin_idx")),
+                    fields: vec![field_name.clone()],
+                    unique: false,
+                    using: IndexMethod::Gin,
+                };
+                statements.push(create_index_sql(table, &gin_idx)?);
+            }
+        }
+    }
+
+    // Singleton (global config) — enforce exactly one row via a partial unique index.
+    if model.options.singleton {
+        statements.push(format!(
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"{table}_singleton_idx\" \
+             ON \"public\".\"{table}\" ((TRUE));"
+        ));
+    }
+
     Ok(statements.join("\n\n"))
 }
 
@@ -381,6 +404,11 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             required: f.required,
             ..Default::default()
         })),
+        FieldAst::Blocks(f) => Ok(scalar_col(name, "JSONB", &ScalarFieldAst {
+            pg_type: "JSONB".into(),
+            required: f.required,
+            ..Default::default()
+        })),
         FieldAst::Geo(f) => {
             let geo_type = f.geo_type.to_uppercase();
             let srid = f.srid.unwrap_or(4326);
@@ -434,10 +462,25 @@ fn alter_column_sql(table: &str, column: &str, changes: &serde_json::Value) -> R
     if let Some(type_change) = changes.get("type") {
         let pg_type = type_change.get("to_pg").and_then(|v| v.as_str()).unwrap_or("TEXT");
         let from_udt = type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("?");
-        // Use a USING cast — Postgres handles safe widenings; for others the user must verify
+
+        // Localization-aware USING clause
+        let using_expr = if let Some(loc) = changes.get("localization") {
+            let direction = loc.get("direction").and_then(|v| v.as_str()).unwrap_or("add");
+            let locale = loc.get("default_locale").and_then(|v| v.as_str()).unwrap_or("en");
+            if direction == "add" {
+                // TEXT → JSONB: wrap existing value as default-locale translation
+                format!("jsonb_build_object('{locale}', \"{column}\"::text)")
+            } else {
+                // JSONB → TEXT: extract default-locale value
+                format!("(\"{column}\"->>'{}')::text", locale)
+            }
+        } else {
+            format!("\"{column}\"::{pg_type}")
+        };
+
         stmts.push(format!(
             "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
-             TYPE {pg_type} USING \"{column}\"::{pg_type}; \
+             TYPE {pg_type} USING {using_expr}; \
              -- was: {from_udt}"
         ));
     }

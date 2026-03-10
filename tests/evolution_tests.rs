@@ -10,6 +10,7 @@
 
 use supatype_engine::{
     differ::{self, Operation},
+    generator::typescript::admin,
     introspector::{
         constraints::{DbConstraint, DbConstraintType},
         rls::DbRlsPolicy,
@@ -1106,4 +1107,247 @@ fn test_storage_resolver_deduplicates_same_bucket() {
     let ast = parser::parse(ast_json).unwrap();
     assert_eq!(ast.storage_buckets.len(), 1, "duplicate bucket name must be deduplicated to one entry");
     assert_eq!(ast.storage_buckets[0].id, "posts_images");
+}
+
+// ─── Scenario 31: singleton model appears in globals, not models ──────────────
+
+#[test]
+fn test_admin_singleton_in_globals() {
+    let ast_json = r#"{
+        "models": [
+            {
+                "name": "Post", "tableName": "posts",
+                "fields": {
+                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                    "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false }
+                },
+                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+            },
+            {
+                "name": "SiteSettings", "tableName": "site_settings",
+                "fields": {
+                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                    "siteName": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false }
+                },
+                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": true }
+            }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let models = config["models"].as_array().unwrap();
+    let globals = config["globals"].as_array().unwrap();
+
+    assert_eq!(models.len(), 1, "only non-singleton models in models array");
+    assert_eq!(models[0]["name"], "Post");
+
+    assert_eq!(globals.len(), 1, "singleton model appears in globals array");
+    assert_eq!(globals[0]["name"], "SiteSettings");
+    assert_eq!(globals[0]["singleton"], true);
+}
+
+// ─── Scenario 32: enum field has widget "select" and enumValues ───────────────
+
+#[test]
+fn test_admin_enum_field_widget() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let status_field = fields.iter().find(|f| f["name"] == "status").unwrap();
+
+    assert_eq!(status_field["widget"], "select", "enum fields must use select widget");
+    let enum_values = status_field["enumValues"].as_array().unwrap();
+    assert_eq!(enum_values.len(), 3);
+    assert!(enum_values.iter().any(|v| v == "draft"));
+    assert!(enum_values.iter().any(|v| v == "published"));
+}
+
+// ─── Scenario 33: belongsTo relation has widget "relationPicker" with target ──
+
+#[test]
+fn test_admin_belongs_to_relation_picker() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "author": {
+                    "kind": "relation",
+                    "cardinality": "belongsTo",
+                    "target": "User",
+                    "fkColumn": "author_id",
+                    "targetPk": "id",
+                    "onDelete": "RESTRICT",
+                    "required": false,
+                    "unique": false,
+                    "uniqueFk": false
+                }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let author_field = fields.iter().find(|f| f["name"] == "author").unwrap();
+
+    assert_eq!(author_field["widget"], "relationPicker");
+    assert_eq!(author_field["target"], "User");
+    assert_eq!(author_field["cardinality"], "belongsTo");
+    assert_eq!(author_field["showInList"], true, "belongsTo should show in list");
+}
+
+// ─── Scenario 34: navigation has Content group with non-singleton models ──────
+
+#[test]
+fn test_admin_navigation_content_group() {
+    let ast_json = r#"{
+        "models": [
+            {
+                "name": "Post", "tableName": "posts",
+                "fields": {
+                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+                },
+                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+            },
+            {
+                "name": "Category", "tableName": "categories",
+                "fields": {
+                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+                },
+                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+            },
+            {
+                "name": "Config", "tableName": "config",
+                "fields": {
+                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+                },
+                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": true }
+            }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let nav = config["navigation"].as_array().unwrap();
+    let content_group = nav.iter().find(|g| g["group"] == "Content").unwrap();
+    let settings_group = nav.iter().find(|g| g["group"] == "Settings").unwrap();
+
+    let content_items = content_group["items"].as_array().unwrap();
+    assert_eq!(content_items.len(), 2, "Content group has both non-singleton models");
+    assert!(content_items.iter().any(|i| i["model"] == "posts"));
+    assert!(content_items.iter().any(|i| i["model"] == "categories"));
+
+    let settings_items = settings_group["items"].as_array().unwrap();
+    assert_eq!(settings_items.len(), 1);
+    assert_eq!(settings_items[0]["global"], "config");
+}
+
+// ─── Scenario 35: localized field appears with localized:true in admin config ─
+
+#[test]
+fn test_admin_localized_field_in_config() {
+    let ast_json = r#"{
+        "locales": ["en", "fr"],
+        "defaultLocale": "en",
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title": { "kind": "text", "pgType": "JSONB", "required": true, "unique": false, "localized": true }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    // Localization config should reflect schema locales
+    assert_eq!(config["localization"]["defaultLocale"], "en");
+    let locales = config["localization"]["locales"].as_array().unwrap();
+    assert!(locales.iter().any(|l| l == "en"));
+    assert!(locales.iter().any(|l| l == "fr"));
+
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let title_field = fields.iter().find(|f| f["name"] == "title").unwrap();
+    assert_eq!(title_field["localized"], true, "localized field must have localized:true in config");
+    assert_eq!(title_field["defaultLocale"], "en");
+}
+
+// ─── Scenario 36: blocks field has widget "blockEditor" with definitions ──────
+
+#[test]
+fn test_admin_blocks_field_widget() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Page", "tableName": "pages",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "content": {
+                    "kind": "blocks",
+                    "required": false,
+                    "index": true,
+                    "blocks": [
+                        {
+                            "name": "hero",
+                            "label": "Hero Banner",
+                            "icon": null,
+                            "fields": {
+                                "heading": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false },
+                                "subheading": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false, "localized": false }
+                            }
+                        },
+                        {
+                            "name": "richtext",
+                            "label": null,
+                            "icon": null,
+                            "fields": {
+                                "body": { "kind": "richText", "pgType": "JSONB", "required": true, "unique": false, "localized": false }
+                            }
+                        }
+                    ]
+                }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let content_field = fields.iter().find(|f| f["name"] == "content").unwrap();
+
+    assert_eq!(content_field["widget"], "blockEditor");
+    assert_eq!(content_field["showInList"], false);
+
+    let blocks = content_field["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 2, "two block definitions");
+
+    let hero = blocks.iter().find(|b| b["name"] == "hero").unwrap();
+    assert_eq!(hero["label"], "Hero Banner");
+    let hero_fields = hero["fields"].as_array().unwrap();
+    assert!(hero_fields.iter().any(|f| f["name"] == "heading"));
+
+    let richtext = blocks.iter().find(|b| b["name"] == "richtext").unwrap();
+    let rt_fields = richtext["fields"].as_array().unwrap();
+    assert!(rt_fields.iter().any(|f| f["widget"] == "richText"));
 }

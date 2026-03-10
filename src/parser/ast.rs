@@ -12,9 +12,25 @@ pub struct SchemaAst {
     /// Storage buckets inferred from image/file fields.
     #[serde(default)]
     pub storage_buckets: Vec<StorageBucketAst>,
+    /// Active locales for localized fields, e.g. ["en", "fr", "de"].
+    #[serde(default)]
+    pub locales: Vec<String>,
+    /// The default/fallback locale. Defaults to "en" when locales is non-empty.
+    #[serde(default)]
+    pub default_locale: Option<String>,
     /// Warnings from parse/validation.
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+impl SchemaAst {
+    /// Returns the effective default locale (first of `locales`, or "en").
+    pub fn effective_default_locale(&self) -> &str {
+        self.default_locale
+            .as_deref()
+            .or_else(|| self.locales.first().map(|s| s.as_str()))
+            .unwrap_or("en")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +91,8 @@ pub enum FieldAst {
     // Geo / vector
     Geo(GeoFieldAst),
     Vector(VectorFieldAst),
+    // Repeatable blocks — stored as JSONB array with type discriminator.
+    Blocks(BlocksFieldAst),
     // Relations
     Relation(RelationFieldAst),
     // Composite fields (expanded by resolver into real columns)
@@ -95,6 +113,9 @@ pub struct ScalarFieldAst {
     pub index: bool,
     pub default: Option<DefaultValueAst>,
     pub check: Option<String>,
+    /// When true the field is stored as JSONB with locale keys, e.g. {"en": "Hello", "fr": "Bonjour"}.
+    #[serde(default)]
+    pub localized: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +126,8 @@ pub struct SlugFieldAst {
     pub unique: bool,
     /// Source field name for slug generation trigger.
     pub from: String,
+    #[serde(default)]
+    pub localized: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +138,8 @@ pub struct EnumFieldAst {
     pub required: bool,
     pub unique: bool,
     pub default: Option<String>,
+    #[serde(default)]
+    pub localized: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +147,8 @@ pub struct EnumFieldAst {
 pub struct JsonFieldAst {
     pub pg_type: String,
     pub required: bool,
+    #[serde(default)]
+    pub localized: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -131,6 +158,8 @@ pub struct DecimalFieldAst {
     pub required: bool,
     pub precision: Option<u32>,
     pub scale: Option<u32>,
+    #[serde(default)]
+    pub localized: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,6 +185,36 @@ pub struct VectorFieldAst {
     pub pg_type: String,   // VECTOR(n)
     pub required: bool,
     pub dimensions: u32,
+}
+
+/// A repeatable-blocks field — stored as a JSONB array where each entry has a
+/// `"type"` discriminator key and a `"data"` object with the block's fields.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BlocksFieldAst {
+    pub required: bool,
+    /// Block type definitions. Each defines a named block with its own fields.
+    pub blocks: Vec<BlockDefinitionAst>,
+    /// When true a GIN index is automatically created (recommended for querying).
+    #[serde(default = "default_true")]
+    pub index: bool,
+}
+
+fn default_true() -> bool { true }
+
+/// Defines one block type within a `blocks` field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockDefinitionAst {
+    /// Machine-readable block type name, e.g. "hero".
+    pub name: String,
+    /// Human-readable label shown in the admin block picker.
+    pub label: Option<String>,
+    /// Icon identifier for the admin block picker, e.g. "image".
+    pub icon: Option<String>,
+    /// Fields within this block, keyed by field name.
+    #[serde(default)]
+    pub fields: HashMap<String, FieldAst>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,6 +290,9 @@ pub struct ModelOptions {
     pub timestamps: bool,
     #[serde(default)]
     pub soft_delete: bool,
+    /// When true the model is a singleton (global config) — exactly one row enforced.
+    #[serde(default)]
+    pub singleton: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

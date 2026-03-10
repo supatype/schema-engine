@@ -63,15 +63,47 @@ fn field_required(field: &FieldAst) -> Option<bool> {
     }
 }
 
+/// Returns true if a scalar field has `localized: true`.
+fn is_localized(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Email(f)
+        | FieldAst::Url(f) | FieldAst::Xml(f) | FieldAst::Bytes(f)
+        | FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::BigInt(f)
+        | FieldAst::SmallInt(f) | FieldAst::Boolean(f) | FieldAst::Datetime(f)
+        | FieldAst::Date(f) | FieldAst::Timestamp(f) | FieldAst::Uuid(f) => f.localized,
+        FieldAst::Slug(f) => f.localized,
+        FieldAst::Enum(f) => f.localized,
+        FieldAst::Json(f) => f.localized,
+        FieldAst::Decimal(f) => f.localized,
+        _ => false,
+    }
+}
+
+/// Returns true if the field is text-like (meaning a JSONB DB column is likely a localized version).
+fn is_text_like(field: &FieldAst) -> bool {
+    matches!(field,
+        FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Url(_)
+        | FieldAst::Slug(_) | FieldAst::Xml(_) | FieldAst::Enum(_)
+        | FieldAst::Integer(_) | FieldAst::Float(_) | FieldAst::BigInt(_)
+        | FieldAst::SmallInt(_) | FieldAst::Boolean(_) | FieldAst::Datetime(_)
+        | FieldAst::Date(_) | FieldAst::Decimal(_)
+    )
+}
+
 /// Returns the expected Postgres udt_name for a schema field.
 /// Returns None for fields where type comparison is not straightforward (Decimal, Money, Geo, Vector, Array).
 fn expected_udt(field: &FieldAst) -> Option<&'static str> {
+    // Localized fields are always JSONB in the DB.
+    if is_localized(field) {
+        return Some("jsonb");
+    }
     match field {
         FieldAst::Text(f) if f.pg_type.is_empty() => Some("text"),
         FieldAst::Text(_) => None, // custom pg_type — skip comparison
         FieldAst::Email(_) | FieldAst::Url(_) | FieldAst::Slug(_)
         | FieldAst::Xml(_) | FieldAst::Enum(_) => Some("text"),
-        FieldAst::RichText(_) | FieldAst::Json(_) | FieldAst::Image(_) | FieldAst::File(_) => Some("jsonb"),
+        FieldAst::RichText(_) | FieldAst::Json(_) | FieldAst::Image(_) | FieldAst::File(_)
+        | FieldAst::Blocks(_) => Some("jsonb"),
         FieldAst::Bytes(_) => Some("bytea"),
         FieldAst::Integer(_) | FieldAst::Serial(_) => Some("int4"),
         FieldAst::SmallInt(_) => Some("int2"),
@@ -95,10 +127,14 @@ fn expected_udt(field: &FieldAst) -> Option<&'static str> {
 
 /// Returns the Postgres type keyword for ALTER COLUMN TYPE ... USING casts.
 fn field_pg_type(field: &FieldAst) -> &'static str {
+    if is_localized(field) {
+        return "JSONB";
+    }
     match field {
         FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Url(_)
         | FieldAst::Slug(_) | FieldAst::Xml(_) | FieldAst::Enum(_) => "TEXT",
-        FieldAst::RichText(_) | FieldAst::Json(_) | FieldAst::Image(_) | FieldAst::File(_) => "JSONB",
+        FieldAst::RichText(_) | FieldAst::Json(_) | FieldAst::Image(_) | FieldAst::File(_)
+        | FieldAst::Blocks(_) => "JSONB",
         FieldAst::Bytes(_) => "BYTEA",
         FieldAst::Integer(_) | FieldAst::Serial(_) => "INTEGER",
         FieldAst::SmallInt(_) => "SMALLINT",
@@ -133,7 +169,7 @@ fn is_safe_widening(from_udt: &str, to_pg: &str) -> bool {
 
 /// Compares a schema field against the live DB column and returns a JSON object
 /// describing the changes needed, or serde_json::Value::Null if nothing changed.
-fn detect_changes(field: &FieldAst, db_col: &DbColumn) -> serde_json::Value {
+fn detect_changes(field: &FieldAst, db_col: &DbColumn, default_locale: &str) -> serde_json::Value {
     let mut changes = serde_json::Map::new();
 
     // Nullability change
@@ -159,6 +195,21 @@ fn detect_changes(field: &FieldAst, db_col: &DbColumn) -> serde_json::Value {
                 "to_pg": pg_type,
                 "safe_widening": safe
             }));
+
+            // Localization metadata — used by migration.rs to choose the right USING clause.
+            if is_localized(field) && actual != "jsonb" {
+                // Adding localization: text-like → JSONB
+                changes.insert("localization".into(), json!({
+                    "direction": "add",
+                    "default_locale": default_locale
+                }));
+            } else if !is_localized(field) && actual == "jsonb" && is_text_like(field) {
+                // Removing localization: JSONB → text-like (destructive — translations lost)
+                changes.insert("localization".into(), json!({
+                    "direction": "remove",
+                    "default_locale": default_locale
+                }));
+            }
         }
     }
 
@@ -179,6 +230,14 @@ fn changes_risk(changes: &serde_json::Value) -> Risk {
     }
     // Type change
     if let Some(type_change) = changes.get("type") {
+        // Removing localization (JSONB → text) is destructive — translations are lost
+        if let Some(loc) = changes.get("localization") {
+            if loc.get("direction").and_then(|v| v.as_str()) == Some("remove") {
+                return Risk::Destructive;
+            }
+            // Adding localization (text → JSONB) is cautious — data transformation
+            return Risk::Cautious;
+        }
         if type_change.get("safe_widening").and_then(|v| v.as_bool()) == Some(true) {
             return Risk::Safe;
         }
@@ -199,16 +258,33 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
         }
     }
 
-    if let Some(type_change) = changes.get("type") {
-        let from = type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("?");
-        let to = type_change.get("to_pg").and_then(|v| v.as_str()).unwrap_or("?");
-        let safe = type_change.get("safe_widening").and_then(|v| v.as_bool()).unwrap_or(false);
-        if safe {
-            parts.push(format!("{table}.{column}: safe type widening {from} → {to}"));
+    if let Some(_type_change) = changes.get("type") {
+        if let Some(loc) = changes.get("localization") {
+            let locale = loc.get("default_locale").and_then(|v| v.as_str()).unwrap_or("en");
+            let direction = loc.get("direction").and_then(|v| v.as_str()).unwrap_or("add");
+            if direction == "add" {
+                parts.push(format!(
+                    "{table}.{column}: converting to localized field — existing values will be \
+                     assigned to locale '{locale}'. No data loss (cautious)."
+                ));
+            } else {
+                parts.push(format!(
+                    "{table}.{column}: REMOVING localization — only the '{locale}' locale value \
+                     will be preserved. Translations in other locales will be permanently lost. \
+                     Use --force to proceed (destructive)."
+                ));
+            }
         } else {
-            parts.push(format!(
-                "{table}.{column}: type change {from} → {to} may be lossy — verify data before applying"
-            ));
+            let from = _type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("?");
+            let to = _type_change.get("to_pg").and_then(|v| v.as_str()).unwrap_or("?");
+            let safe = _type_change.get("safe_widening").and_then(|v| v.as_bool()).unwrap_or(false);
+            if safe {
+                parts.push(format!("{table}.{column}: safe type widening {from} → {to}"));
+            } else {
+                parts.push(format!(
+                    "{table}.{column}: type change {from} → {to} may be lossy — verify data before applying"
+                ));
+            }
         }
     }
 
@@ -220,6 +296,7 @@ pub fn diff(
     db_table: &DbTable,
     ops: &mut Vec<Operation>,
     warnings: &mut Vec<String>,
+    default_locale: &str,
 ) -> Result<()> {
     let db_col_names: std::collections::HashSet<String> =
         db_table.columns.iter().map(|c| c.name.clone()).collect();
@@ -349,7 +426,7 @@ pub fn diff(
         if !db_col_names.contains(col_name) { continue; }
 
         if let Some(db_col) = db_col_map.get(col_name.as_str()) {
-            let changes = detect_changes(field, db_col);
+            let changes = detect_changes(field, db_col, default_locale);
             if !changes.is_null() {
                 let risk = changes_risk(&changes);
                 let warning = changes_warning(&model.table_name, col_name, &changes);

@@ -67,6 +67,30 @@ fn ts_type_of(field: &FieldAst) -> (String, bool) {
         FieldAst::Image(f) | FieldAst::File(f) => ("StorageReference".into(), !f.required),
         FieldAst::Geo(f) => ("GeoJSON.Geometry".into(), !f.required),
         FieldAst::Vector(f) => (format!("number[] /* vector({}) */", f.dimensions), !f.required),
+        FieldAst::Blocks(f) => {
+            // Discriminated union: Array<{ type: "hero"; data: { ... } } | { type: "text"; ... }>
+            if f.blocks.is_empty() {
+                (
+                    "Array<{ type: string; data: Record<string, unknown> }>".into(),
+                    !f.required,
+                )
+            } else {
+                let variants: Vec<String> = f.blocks.iter().map(|b| {
+                    let field_defs: Vec<String> = b.fields.iter()
+                        .filter(|(_, f)| !matches!(f, FieldAst::Relation(_)))
+                        .map(|(fname, ffield)| {
+                            let (ts_type, nullable) = ts_type_of(ffield);
+                            let opt = if nullable { "?" } else { "" };
+                            format!("{fname}{opt}: {ts_type}")
+                        })
+                        .collect();
+                    let data_fields = field_defs.join("; ");
+                    format!("{{ type: \"{}\"; data: {{ {} }} }}", b.name, data_fields)
+                }).collect();
+                let union = variants.join(" | ");
+                (format!("Array<{union}>"), !f.required)
+            }
+        }
         FieldAst::Timestamps => ("never".into(), false), // expanded inline
         FieldAst::Publishable => ("never".into(), false),
         FieldAst::SoftDelete => ("never".into(), false),
