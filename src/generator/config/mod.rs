@@ -1,2 +1,2 @@
-pub mod postgrest;
 pub mod kong;
+pub mod postgrest;

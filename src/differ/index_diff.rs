@@ -1,11 +1,15 @@
-use anyhow::Result;
+use super::{Operation, Risk};
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
-use super::{Operation, Risk};
+use anyhow::Result;
 
 pub fn diff(ast: &SchemaAst, db: &DatabaseState, ops: &mut Vec<Operation>) -> Result<()> {
-    let db_index_names: std::collections::HashSet<&str> =
-        db.indexes.iter().filter(|i| !i.is_primary).map(|i| i.name.as_str()).collect();
+    let db_index_names: std::collections::HashSet<&str> = db
+        .indexes
+        .iter()
+        .filter(|i| !i.is_primary)
+        .map(|i| i.name.as_str())
+        .collect();
 
     for model in &ast.models {
         for index in &model.indexes {

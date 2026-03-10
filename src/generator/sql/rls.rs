@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::parser::ast::{AccessRule, SchemaAst};
+use anyhow::Result;
 
 /// Generates RLS policy SQL for all models that have access rules.
 /// Policy naming convention: `{table}_select`, `{table}_insert`, `{table}_update`, `{table}_delete`.
@@ -12,7 +12,9 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             || model.access.update.is_some()
             || model.access.delete.is_some();
 
-        if !has_rules { continue; }
+        if !has_rules {
+            continue;
+        }
 
         let table = &model.table_name;
 
@@ -141,13 +143,18 @@ pub fn access_rule_to_expr(rule: &AccessRule) -> String {
             if roles.len() == 1 {
                 format!("auth.role() = '{}'", roles[0])
             } else {
-                let arr = roles.iter().map(|r| format!("'{r}'")).collect::<Vec<_>>().join(", ");
+                let arr = roles
+                    .iter()
+                    .map(|r| format!("'{r}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!("auth.role() = ANY(ARRAY[{arr}])")
             }
         }
         AccessRule::Custom { expression } => expression.clone(),
         AccessRule::Any { rules } => {
-            let parts: Vec<String> = rules.iter()
+            let parts: Vec<String> = rules
+                .iter()
                 .map(|r| {
                     let expr = access_rule_to_expr(r);
                     // Wrap sub-expressions in parens for clarity

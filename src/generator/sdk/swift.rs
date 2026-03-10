@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::parser::ast::{FieldAst, SchemaAst};
+use anyhow::Result;
 
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     let mut out = String::new();
@@ -11,10 +11,8 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         // Emit Swift enums for enum fields
         for (fname, f) in &model.fields {
             if let FieldAst::Enum(e) = f {
-                let enum_name = format!("{}{}",
-                    pascal_case(model.name.as_str()),
-                    pascal_case(fname)
-                );
+                let enum_name =
+                    format!("{}{}", pascal_case(model.name.as_str()), pascal_case(fname));
                 out.push_str(&format!("enum {}: String, Codable {{\n", enum_name));
                 for v in &e.values {
                     out.push_str(&format!("    case {} = \"{}\"\n", to_swift_case(v), v));
@@ -26,13 +24,19 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         out.push_str(&format!("struct {}: Codable {{\n", model.name));
 
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let (swift_type, nullable) = swift_type_of(&model.name, name, fld);
             let prop_name = camel_case(name);
             if nullable {
-                out.push_str(&format!("    var {}?: {}\n", prop_name, swift_type));
+                out.push_str(&format!("    var {}: {}?\n", prop_name, swift_type));
             } else {
                 out.push_str(&format!("    var {}: {}\n", prop_name, swift_type));
             }
@@ -60,9 +64,15 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         // CodingKeys for snake_case ↔ camelCase
         out.push_str("\n    enum CodingKeys: String, CodingKey {\n");
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let prop_name = camel_case(name);
             if prop_name != *name {
                 out.push_str(&format!("        case {} = \"{}\"\n", prop_name, name));
@@ -79,18 +89,29 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
 fn swift_type_of(model: &str, name: &str, field: &FieldAst) -> (String, bool) {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Url(f)
-        | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Bytes(f) | FieldAst::Xml(f)
-        | FieldAst::TsQuery(f) | FieldAst::TsVector(f)
-        | FieldAst::Interval(f) | FieldAst::Uuid(f) => ("String".into(), !f.required),
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::Xml(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Interval(f)
+        | FieldAst::Uuid(f) => ("String".into(), !f.required),
         FieldAst::Slug(f) => ("String".into(), !f.required),
-        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => ("Int".into(), !f.required),
+        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => {
+            ("Int".into(), !f.required)
+        }
         FieldAst::Float(f) | FieldAst::Money(f) => ("Double".into(), !f.required),
         FieldAst::BigInt(f) | FieldAst::BigSerial(f) => ("Int64".into(), !f.required),
         FieldAst::Decimal(f) => ("Decimal".into(), !f.required),
         FieldAst::Boolean(f) => ("Bool".into(), !f.required),
-        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => ("Date".into(), !f.required),
+        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => {
+            ("Date".into(), !f.required)
+        }
         FieldAst::Enum(e) => {
             let enum_name = format!("{}{}", pascal_case(model), pascal_case(name));
             (enum_name, !e.required)
@@ -130,24 +151,28 @@ fn ts_to_swift(ts: &str) -> String {
 fn camel_case(s: &str) -> String {
     let mut parts = s.split('_');
     let first = parts.next().unwrap_or("").to_string();
-    let rest: String = parts.map(|p| {
-        let mut chars = p.chars();
-        match chars.next() {
-            None => String::new(),
-            Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-        }
-    }).collect();
+    let rest: String = parts
+        .map(|p| {
+            let mut chars = p.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect();
     first + &rest
 }
 
 fn pascal_case(s: &str) -> String {
-    s.split('_').map(|seg| {
-        let mut chars = seg.chars();
-        match chars.next() {
-            None => String::new(),
-            Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-        }
-    }).collect()
+    s.split('_')
+        .map(|seg| {
+            let mut chars = seg.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect()
 }
 
 fn to_swift_case(s: &str) -> String {

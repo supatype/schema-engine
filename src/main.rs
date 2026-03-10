@@ -13,7 +13,12 @@ struct Cli {
     #[arg(long, short, global = true, help = "Input file path, or '-' for stdin")]
     input: Option<String>,
 
-    #[arg(long, short, global = true, help = "Output file path, or '-' for stdout")]
+    #[arg(
+        long,
+        short,
+        global = true,
+        help = "Output file path, or '-' for stdout"
+    )]
     output: Option<String>,
 
     #[arg(long, global = true, default_value = "warn")]
@@ -65,7 +70,10 @@ enum Command {
         name: Option<String>,
         #[arg(long, help = "Skip interactive rename confirmation prompts (for CI)")]
         non_interactive: bool,
-        #[arg(long, help = "Bypass schema state cache and do a full DB introspection")]
+        #[arg(
+            long,
+            help = "Bypass schema state cache and do a full DB introspection"
+        )]
         no_cache: bool,
     },
     /// Generate typed client code (TypeScript by default; use --lang for other languages)
@@ -109,7 +117,11 @@ async fn main() -> Result<()> {
         .with_writer(io::stderr)
         .init();
 
-    info!(version = env!("ENGINE_VERSION"), target = env!("BUILD_TARGET"), "supatype-engine starting");
+    info!(
+        version = env!("ENGINE_VERSION"),
+        target = env!("BUILD_TARGET"),
+        "supatype-engine starting"
+    );
 
     let _license = supatype_engine::licensing::License::new(cli.license.as_deref());
 
@@ -120,21 +132,31 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             println!("{}", serde_json::to_string_pretty(&ast)?);
         }
-        Command::Introspect { database_url, schema } => {
+        Command::Introspect {
+            database_url,
+            schema,
+        } => {
             let pool = sqlx::PgPool::connect(&database_url)
                 .await
                 .context("Failed to connect to database")?;
             let state = supatype_engine::introspector::introspect(&pool, &schema).await?;
             println!("{}", serde_json::to_string_pretty(&state)?);
         }
-        Command::Diff { database_url, schema } => {
+        Command::Diff {
+            database_url,
+            schema,
+        } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
             let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
             let diff = supatype_engine::differ::diff(&ast, &db_state)?;
             println!("{}", serde_json::to_string_pretty(&diff)?);
         }
-        Command::Migrate { database_url, schema, force } => {
+        Command::Migrate {
+            database_url,
+            schema,
+            force,
+        } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
             let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
@@ -142,10 +164,18 @@ async fn main() -> Result<()> {
             let migration = supatype_engine::generator::sql::migration::generate(&diff, force)?;
             println!("{migration}");
         }
-        Command::Push { database_url, schema, force, name, non_interactive, no_cache } => {
+        Command::Push {
+            database_url,
+            schema,
+            force,
+            name,
+            non_interactive,
+            no_cache,
+        } => {
             use supatype_engine::state::migration_history;
             let ast = supatype_engine::parser::parse(&input)?;
-            let pool = sqlx::PgPool::connect(&database_url).await
+            let pool = sqlx::PgPool::connect(&database_url)
+                .await
                 .context("Failed to connect to database")?;
 
             // Ensure migration history schema/table exists
@@ -182,17 +212,20 @@ async fn main() -> Result<()> {
             }
 
             let migration_sql = supatype_engine::generator::sql::migration::generate(&diff, force)?;
-            let migration_name = name.unwrap_or_else(|| {
-                format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"))
-            });
+            let apply_sql = supatype_engine::generator::sql::migration::forward_sql(&diff, force)?;
+            let migration_name = name
+                .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
 
-            // Apply migration
-            sqlx::raw_sql(&migration_sql).execute(&pool).await
+            // Apply forward-only SQL (not the full file which also includes rollback)
+            sqlx::raw_sql(&apply_sql)
+                .execute(&pool)
+                .await
                 .context("Failed to apply migration")?;
 
             // Refresh and cache post-migration DB state
             let new_db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            migration_history::save_schema_state(&pool, &new_db_state).await
+            migration_history::save_schema_state(&pool, &new_db_state)
+                .await
                 .context("Failed to save schema state cache")?;
 
             // Record in history
@@ -204,7 +237,7 @@ async fn main() -> Result<()> {
             });
             sqlx::query(
                 "INSERT INTO _platform.migrations (name, hash, engine_version, schema_snapshot) \
-                 VALUES ($1, $2, $3, $4)"
+                 VALUES ($1, $2, $3, $4)",
             )
             .bind(&migration_name)
             .bind(&hash)
@@ -217,13 +250,16 @@ async fn main() -> Result<()> {
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
             println!(
                 "{{\"status\":\"applied\",\"name\":\"{}\",\"operations\":{}}}",
-                migration_name, diff.operations.len()
+                migration_name,
+                diff.operations.len()
             );
         }
         Command::Generate { lang } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let output = match lang.as_str() {
-                "typescript" | "ts" => supatype_engine::generator::typescript::types::generate(&ast)?,
+                "typescript" | "ts" => {
+                    supatype_engine::generator::typescript::types::generate(&ast)?
+                }
                 other => supatype_engine::generator::sdk::generate(&ast, other)?,
             };
             println!("{output}");
@@ -235,7 +271,10 @@ async fn main() -> Result<()> {
         }
         Command::Rls => {
             let ast = supatype_engine::parser::parse(&input)?;
-            println!("{}", supatype_engine::generator::sql::rls::generate_auth_helpers());
+            println!(
+                "{}",
+                supatype_engine::generator::sql::rls::generate_auth_helpers()
+            );
             println!("{}", supatype_engine::generator::sql::rls::generate(&ast)?);
         }
         Command::Storage => {
@@ -265,7 +304,8 @@ async fn main() -> Result<()> {
         }
         Command::Migrations { database_url } => {
             use supatype_engine::state::migration_history;
-            let pool = sqlx::PgPool::connect(&database_url).await
+            let pool = sqlx::PgPool::connect(&database_url)
+                .await
                 .context("Failed to connect to database")?;
             let migrations = migration_history::list_migrations(&pool).await?;
             println!("{}", serde_json::to_string_pretty(&migrations)?);
@@ -284,15 +324,19 @@ async fn main() -> Result<()> {
 
 /// For each RenameColumn operation, prompt the user to confirm it's a rename.
 /// If the user declines, replace the RenameColumn with DropColumn + AddColumn.
-fn confirm_renames(mut diff: supatype_engine::differ::DiffOutput) -> Result<supatype_engine::differ::DiffOutput> {
-    use supatype_engine::differ::{Operation, Risk};
+fn confirm_renames(
+    mut diff: supatype_engine::differ::DiffOutput,
+) -> Result<supatype_engine::differ::DiffOutput> {
     use std::io::{BufRead, Write};
+    use supatype_engine::differ::{Operation, Risk};
 
     let mut final_ops: Vec<Operation> = Vec::new();
 
     for op in diff.operations {
         match &op {
-            Operation::RenameColumn { table, from, to, .. } => {
+            Operation::RenameColumn {
+                table, from, to, ..
+            } => {
                 eprint!(
                     "  ? Column '{from}' removed and '{to}' added on '{table}'. \
                      Treat as rename? [Y/n] "
@@ -317,7 +361,7 @@ fn confirm_renames(mut diff: supatype_engine::differ::DiffOutput) -> Result<supa
                             supatype_engine::parser::ast::ScalarFieldAst {
                                 required: false,
                                 ..Default::default()
-                            }
+                            },
                         )),
                         risk: Risk::Safe,
                     });
@@ -329,9 +373,18 @@ fn confirm_renames(mut diff: supatype_engine::differ::DiffOutput) -> Result<supa
         }
     }
 
-    let safe = final_ops.iter().filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Safe)).count();
-    let cautious = final_ops.iter().filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Cautious)).count();
-    let destructive = final_ops.iter().filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Destructive)).count();
+    let safe = final_ops
+        .iter()
+        .filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Safe))
+        .count();
+    let cautious = final_ops
+        .iter()
+        .filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Cautious))
+        .count();
+    let destructive = final_ops
+        .iter()
+        .filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Destructive))
+        .count();
 
     diff.operations = final_ops;
     diff.summary.safe = safe;
@@ -346,7 +399,9 @@ fn read_input(path: Option<&str>) -> Result<String> {
     match path {
         None | Some("-") => {
             let mut buf = String::new();
-            io::stdin().read_to_string(&mut buf).context("Failed to read from stdin")?;
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("Failed to read from stdin")?;
             Ok(buf)
         }
         Some(p) => std::fs::read_to_string(p).with_context(|| format!("Failed to read {p}")),

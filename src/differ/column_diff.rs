@@ -1,9 +1,9 @@
+use super::{Operation, Risk};
+use crate::introspector::tables::{DbColumn, DbTable};
+use crate::parser::ast::{FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality};
 use anyhow::Result;
 use serde_json::json;
 use strsim::jaro_winkler;
-use crate::parser::ast::{FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality};
-use crate::introspector::tables::{DbColumn, DbTable};
-use super::{Operation, Risk};
 
 const RENAME_THRESHOLD: f64 = 0.7;
 
@@ -13,12 +13,19 @@ fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
     match field {
         FieldAst::Relation(rel) => match rel.cardinality {
             RelationCardinality::BelongsTo => {
-                vec![rel.foreign_key.clone().unwrap_or_else(|| format!("{field_name}_id"))]
+                vec![rel
+                    .foreign_key
+                    .clone()
+                    .unwrap_or_else(|| format!("{field_name}_id"))]
             }
             _ => vec![],
         },
         FieldAst::Timestamps => vec!["created_at".into(), "updated_at".into()],
-        FieldAst::Publishable => vec!["status".into(), "published_at".into(), "scheduled_at".into()],
+        FieldAst::Publishable => vec![
+            "status".into(),
+            "published_at".into(),
+            "scheduled_at".into(),
+        ],
         FieldAst::SoftDelete => vec!["deleted_at".into()],
         _ => vec![field_name.to_string()],
     }
@@ -27,14 +34,30 @@ fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
 /// Returns true if the field has `index: true` set.
 fn has_index_flag(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Uuid(f)
-        | FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f) | FieldAst::BigInt(f) | FieldAst::Bytes(f)
-        | FieldAst::SmallInt(f) | FieldAst::Date(f) | FieldAst::Timestamp(f)
-        | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f)
-        | FieldAst::Macaddr(f) | FieldAst::Interval(f) | FieldAst::TsQuery(f)
-        | FieldAst::TsVector(f) | FieldAst::Xml(f) | FieldAst::RichText(f) => f.index,
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f)
+        | FieldAst::RichText(f) => f.index,
         FieldAst::Custom(f) => f.index,
         _ => false,
     }
@@ -43,14 +66,30 @@ fn has_index_flag(field: &FieldAst) -> bool {
 /// Returns whether the schema field requires the DB column to be NOT NULL.
 fn field_required(field: &FieldAst) -> Option<bool> {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Url(f)
-        | FieldAst::Uuid(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::BigInt(f)
-        | FieldAst::SmallInt(f) | FieldAst::Date(f) | FieldAst::Timestamp(f)
-        | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f)
-        | FieldAst::Xml(f) | FieldAst::RichText(f) | FieldAst::Bytes(f) => Some(f.required),
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Bytes(f) => Some(f.required),
         FieldAst::Slug(f) => Some(f.required),
         FieldAst::Enum(f) => Some(f.required),
         FieldAst::Json(f) => Some(f.required),
@@ -68,11 +107,21 @@ fn field_required(field: &FieldAst) -> Option<bool> {
 /// Returns true if a scalar field has `localized: true`.
 fn is_localized(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Email(f)
-        | FieldAst::Url(f) | FieldAst::Xml(f) | FieldAst::Bytes(f)
-        | FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::BigInt(f)
-        | FieldAst::SmallInt(f) | FieldAst::Boolean(f) | FieldAst::Datetime(f)
-        | FieldAst::Date(f) | FieldAst::Timestamp(f) | FieldAst::Uuid(f) => f.localized,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Xml(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Uuid(f) => f.localized,
         FieldAst::Slug(f) => f.localized,
         FieldAst::Enum(f) => f.localized,
         FieldAst::Json(f) => f.localized,
@@ -83,12 +132,22 @@ fn is_localized(field: &FieldAst) -> bool {
 
 /// Returns true if the field is text-like (meaning a JSONB DB column is likely a localized version).
 fn is_text_like(field: &FieldAst) -> bool {
-    matches!(field,
-        FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Url(_)
-        | FieldAst::Slug(_) | FieldAst::Xml(_) | FieldAst::Enum(_)
-        | FieldAst::Integer(_) | FieldAst::Float(_) | FieldAst::BigInt(_)
-        | FieldAst::SmallInt(_) | FieldAst::Boolean(_) | FieldAst::Datetime(_)
-        | FieldAst::Date(_) | FieldAst::Decimal(_)
+    matches!(
+        field,
+        FieldAst::Text(_)
+            | FieldAst::Email(_)
+            | FieldAst::Url(_)
+            | FieldAst::Slug(_)
+            | FieldAst::Xml(_)
+            | FieldAst::Enum(_)
+            | FieldAst::Integer(_)
+            | FieldAst::Float(_)
+            | FieldAst::BigInt(_)
+            | FieldAst::SmallInt(_)
+            | FieldAst::Boolean(_)
+            | FieldAst::Datetime(_)
+            | FieldAst::Date(_)
+            | FieldAst::Decimal(_)
     )
 }
 
@@ -102,9 +161,15 @@ fn expected_udt(field: &FieldAst) -> Option<&'static str> {
     match field {
         FieldAst::Text(f) if f.pg_type.is_empty() => Some("text"),
         FieldAst::Text(_) => None, // custom pg_type — skip comparison
-        FieldAst::Email(_) | FieldAst::Url(_) | FieldAst::Slug(_)
-        | FieldAst::Xml(_) | FieldAst::Enum(_) => Some("text"),
-        FieldAst::RichText(_) | FieldAst::Json(_) | FieldAst::Image(_) | FieldAst::File(_)
+        FieldAst::Email(_)
+        | FieldAst::Url(_)
+        | FieldAst::Slug(_)
+        | FieldAst::Xml(_)
+        | FieldAst::Enum(_) => Some("text"),
+        FieldAst::RichText(_)
+        | FieldAst::Json(_)
+        | FieldAst::Image(_)
+        | FieldAst::File(_)
         | FieldAst::Blocks(_) => Some("jsonb"),
         FieldAst::Bytes(_) => Some("bytea"),
         FieldAst::Integer(_) | FieldAst::Serial(_) => Some("int4"),
@@ -133,9 +198,16 @@ fn field_pg_type(field: &FieldAst) -> &'static str {
         return "JSONB";
     }
     match field {
-        FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Url(_)
-        | FieldAst::Slug(_) | FieldAst::Xml(_) | FieldAst::Enum(_) => "TEXT",
-        FieldAst::RichText(_) | FieldAst::Json(_) | FieldAst::Image(_) | FieldAst::File(_)
+        FieldAst::Text(_)
+        | FieldAst::Email(_)
+        | FieldAst::Url(_)
+        | FieldAst::Slug(_)
+        | FieldAst::Xml(_)
+        | FieldAst::Enum(_) => "TEXT",
+        FieldAst::RichText(_)
+        | FieldAst::Json(_)
+        | FieldAst::Image(_)
+        | FieldAst::File(_)
         | FieldAst::Blocks(_) => "JSONB",
         FieldAst::Bytes(_) => "BYTEA",
         FieldAst::Integer(_) | FieldAst::Serial(_) => "INTEGER",
@@ -162,10 +234,12 @@ fn field_pg_type(field: &FieldAst) -> &'static str {
 fn is_safe_widening(from_udt: &str, to_pg: &str) -> bool {
     matches!(
         (from_udt, to_pg.to_uppercase().as_str()),
-        ("int2", "INTEGER") | ("int2", "BIGINT")
-        | ("int4", "BIGINT")
-        | ("float4", "DOUBLE PRECISION")
-        | ("varchar", "TEXT") | ("bpchar", "TEXT")
+        ("int2", "INTEGER")
+            | ("int2", "BIGINT")
+            | ("int4", "BIGINT")
+            | ("float4", "DOUBLE PRECISION")
+            | ("varchar", "TEXT")
+            | ("bpchar", "TEXT")
     )
 }
 
@@ -179,10 +253,13 @@ fn detect_changes(field: &FieldAst, db_col: &DbColumn, default_locale: &str) -> 
         let schema_nullable = !required;
         let db_nullable = db_col.nullable;
         if schema_nullable != db_nullable {
-            changes.insert("nullability".into(), json!({
-                "from": if db_nullable { "nullable" } else { "not_null" },
-                "to": if schema_nullable { "nullable" } else { "not_null" }
-            }));
+            changes.insert(
+                "nullability".into(),
+                json!({
+                    "from": if db_nullable { "nullable" } else { "not_null" },
+                    "to": if schema_nullable { "nullable" } else { "not_null" }
+                }),
+            );
         }
     }
 
@@ -192,25 +269,34 @@ fn detect_changes(field: &FieldAst, db_col: &DbColumn, default_locale: &str) -> 
         if expected != actual {
             let pg_type = field_pg_type(field);
             let safe = is_safe_widening(actual, pg_type);
-            changes.insert("type".into(), json!({
-                "from_udt": actual,
-                "to_pg": pg_type,
-                "safe_widening": safe
-            }));
+            changes.insert(
+                "type".into(),
+                json!({
+                    "from_udt": actual,
+                    "to_pg": pg_type,
+                    "safe_widening": safe
+                }),
+            );
 
             // Localization metadata — used by migration.rs to choose the right USING clause.
             if is_localized(field) && actual != "jsonb" {
                 // Adding localization: text-like → JSONB
-                changes.insert("localization".into(), json!({
-                    "direction": "add",
-                    "default_locale": default_locale
-                }));
+                changes.insert(
+                    "localization".into(),
+                    json!({
+                        "direction": "add",
+                        "default_locale": default_locale
+                    }),
+                );
             } else if !is_localized(field) && actual == "jsonb" && is_text_like(field) {
                 // Removing localization: JSONB → text-like (destructive — translations lost)
-                changes.insert("localization".into(), json!({
-                    "direction": "remove",
-                    "default_locale": default_locale
-                }));
+                changes.insert(
+                    "localization".into(),
+                    json!({
+                        "direction": "remove",
+                        "default_locale": default_locale
+                    }),
+                );
             }
         }
     }
@@ -262,8 +348,14 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
 
     if let Some(_type_change) = changes.get("type") {
         if let Some(loc) = changes.get("localization") {
-            let locale = loc.get("default_locale").and_then(|v| v.as_str()).unwrap_or("en");
-            let direction = loc.get("direction").and_then(|v| v.as_str()).unwrap_or("add");
+            let locale = loc
+                .get("default_locale")
+                .and_then(|v| v.as_str())
+                .unwrap_or("en");
+            let direction = loc
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("add");
             if direction == "add" {
                 parts.push(format!(
                     "{table}.{column}: converting to localized field — existing values will be \
@@ -277,11 +369,22 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                 ));
             }
         } else {
-            let from = _type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("?");
-            let to = _type_change.get("to_pg").and_then(|v| v.as_str()).unwrap_or("?");
-            let safe = _type_change.get("safe_widening").and_then(|v| v.as_bool()).unwrap_or(false);
+            let from = _type_change
+                .get("from_udt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let to = _type_change
+                .get("to_pg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let safe = _type_change
+                .get("safe_widening")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if safe {
-                parts.push(format!("{table}.{column}: safe type widening {from} → {to}"));
+                parts.push(format!(
+                    "{table}.{column}: safe type widening {from} → {to}"
+                ));
             } else {
                 parts.push(format!(
                     "{table}.{column}: type change {from} → {to} may be lossy — verify data before applying"
@@ -290,7 +393,11 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
         }
     }
 
-    if parts.is_empty() { None } else { Some(parts.join("; ")) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
 }
 
 pub fn diff(
@@ -417,15 +524,24 @@ pub fn diff(
     // ─── Modified columns (AlterColumn detection) ───────────────────────────
 
     // Only consider columns that exist in both schema and DB and were not renamed.
-    let db_col_map: std::collections::HashMap<&str, &DbColumn> =
-        db_table.columns.iter().map(|c| (c.name.as_str(), c)).collect();
+    let db_col_map: std::collections::HashMap<&str, &DbColumn> = db_table
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c))
+        .collect();
 
     for (col_name, (_, field)) in &schema_columns {
         // Skip composite / relation pseudo-columns and options columns
-        if options_cols.contains(col_name.as_str()) { continue; }
+        if options_cols.contains(col_name.as_str()) {
+            continue;
+        }
         // Skip if this column was renamed, added, or dropped
-        if renamed_added.contains(col_name.as_str()) { continue; }
-        if !db_col_names.contains(col_name) { continue; }
+        if renamed_added.contains(col_name.as_str()) {
+            continue;
+        }
+        if !db_col_names.contains(col_name) {
+            continue;
+        }
 
         if let Some(db_col) = db_col_map.get(col_name.as_str()) {
             let changes = detect_changes(field, db_col, default_locale);

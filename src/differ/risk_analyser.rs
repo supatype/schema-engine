@@ -1,7 +1,7 @@
+use super::DiffOutput;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use super::DiffOutput;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,5 +26,8 @@ pub async fn validate(_diff: &DiffOutput, _pool: &PgPool) -> Result<ValidationRe
     // check for duplicates before ADD UNIQUE, etc.
 
     let safe_to_apply = checks.iter().all(|c: &ValidationCheck| c.passed);
-    Ok(ValidationReport { safe_to_apply, checks })
+    Ok(ValidationReport {
+        safe_to_apply,
+        checks,
+    })
 }

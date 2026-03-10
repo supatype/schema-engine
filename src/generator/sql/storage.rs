@@ -1,6 +1,6 @@
-use anyhow::Result;
-use crate::parser::ast::{FieldAst, SchemaAst, StorageBucketAst};
 use crate::generator::sql::rls::access_rule_to_expr;
+use crate::parser::ast::{FieldAst, SchemaAst, StorageBucketAst};
+use anyhow::Result;
 
 /// Generates SQL for the storage subsystem:
 ///   1. `storage` schema + `storage.buckets` + `storage.objects` DDL (idempotent).
@@ -67,7 +67,11 @@ fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
     let public = if bucket.public { "true" } else { "false" };
     let mime = match &bucket.allowed_mime_types {
         Some(types) if !types.is_empty() => {
-            let arr = types.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ");
+            let arr = types
+                .iter()
+                .map(|t| format!("'{t}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("ARRAY[{arr}]::TEXT[]")
         }
         _ => "NULL".to_string(),
@@ -125,36 +129,45 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
                 .access
                 .read
                 .as_ref()
-                .map(|r| format!("bucket_id = '{}' AND ({})", bucket_id, access_rule_to_expr(r)))
-                .unwrap_or_else(|| {
+                .map(|r| {
                     format!(
-                        "bucket_id = '{}' AND auth.uid() IS NOT NULL",
-                        bucket_id
+                        "bucket_id = '{}' AND ({})",
+                        bucket_id,
+                        access_rule_to_expr(r)
                     )
+                })
+                .unwrap_or_else(|| {
+                    format!("bucket_id = '{}' AND auth.uid() IS NOT NULL", bucket_id)
                 });
 
             let write_expr = model
                 .access
                 .create
                 .as_ref()
-                .map(|r| format!("bucket_id = '{}' AND ({})", bucket_id, access_rule_to_expr(r)))
-                .unwrap_or_else(|| {
+                .map(|r| {
                     format!(
-                        "bucket_id = '{}' AND auth.uid() IS NOT NULL",
-                        bucket_id
+                        "bucket_id = '{}' AND ({})",
+                        bucket_id,
+                        access_rule_to_expr(r)
                     )
+                })
+                .unwrap_or_else(|| {
+                    format!("bucket_id = '{}' AND auth.uid() IS NOT NULL", bucket_id)
                 });
 
             let delete_expr = model
                 .access
                 .delete
                 .as_ref()
-                .map(|r| format!("bucket_id = '{}' AND ({})", bucket_id, access_rule_to_expr(r)))
-                .unwrap_or_else(|| {
+                .map(|r| {
                     format!(
-                        "bucket_id = '{}' AND auth.uid() IS NOT NULL",
-                        bucket_id
+                        "bucket_id = '{}' AND ({})",
+                        bucket_id,
+                        access_rule_to_expr(r)
                     )
+                })
+                .unwrap_or_else(|| {
+                    format!("bucket_id = '{}' AND auth.uid() IS NOT NULL", bucket_id)
                 });
 
             entries.push(BucketAccess {

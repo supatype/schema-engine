@@ -1,9 +1,9 @@
-use anyhow::Result;
-use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
-use crate::introspector::constraints::DbConstraintType;
-use crate::state::database_state::DatabaseState;
-use super::{Operation, Risk};
 use super::column_diff;
+use super::{Operation, Risk};
+use crate::introspector::constraints::DbConstraintType;
+use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
+use crate::state::database_state::DatabaseState;
+use anyhow::Result;
 
 pub fn diff(
     ast: &SchemaAst,
@@ -18,7 +18,9 @@ pub fn diff(
         ast.models.iter().map(|m| m.table_name.as_str()).collect();
 
     // Build a set of existing FK constraint names for fast lookup
-    let db_fk_names: std::collections::HashSet<&str> = db.constraints.iter()
+    let db_fk_names: std::collections::HashSet<&str> = db
+        .constraints
+        .iter()
         .filter(|c| c.constraint_type == DbConstraintType::ForeignKey)
         .map(|c| c.name.as_str())
         .collect();
@@ -34,8 +36,18 @@ pub fn diff(
             emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
         } else {
             // Existing table — diff columns
-            let db_table = db.tables.iter().find(|t| t.name == model.table_name).unwrap();
-            column_diff::diff(model, db_table, ops, warnings, ast.effective_default_locale())?;
+            let db_table = db
+                .tables
+                .iter()
+                .find(|t| t.name == model.table_name)
+                .unwrap();
+            column_diff::diff(
+                model,
+                db_table,
+                ops,
+                warnings,
+                ast.effective_default_locale(),
+            )?;
 
             // Also diff FK relations (add new FKs, drop removed FKs)
             emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
@@ -90,12 +102,16 @@ fn emit_fk_ops_for_model(
     for (field_name, field) in &model.fields {
         if let FieldAst::Relation(rel) = field {
             if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                let fk_col = rel.foreign_key.as_deref()
+                let fk_col = rel
+                    .foreign_key
+                    .as_deref()
                     .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
                 let constraint_name = format!("{}_{}_fkey", model.table_name, fk_col);
 
                 if !db_fk_names.contains(constraint_name.as_str()) {
-                    let ref_table = ast.models.iter()
+                    let ref_table = ast
+                        .models
+                        .iter()
                         .find(|m| m.name == rel.target)
                         .map(|m| m.table_name.clone())
                         .unwrap_or_else(|| crate::parser::resolver::to_snake_case(&rel.target));
@@ -120,11 +136,15 @@ fn drop_removed_fks(
     ops: &mut Vec<Operation>,
 ) {
     // Build the set of FK constraint names that should exist per the schema
-    let expected_fks: std::collections::HashSet<String> = model.fields.iter()
+    let expected_fks: std::collections::HashSet<String> = model
+        .fields
+        .iter()
         .filter_map(|(field_name, field)| {
             if let FieldAst::Relation(rel) = field {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                    let fk_col = rel.foreign_key.as_deref()
+                    let fk_col = rel
+                        .foreign_key
+                        .as_deref()
                         .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
                     return Some(format!("{}_{}_fkey", model.table_name, fk_col));
                 }

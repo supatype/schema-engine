@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::parser::ast::{FieldAst, SchemaAst};
+use anyhow::Result;
 
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     let mut out = String::new();
@@ -10,9 +10,15 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
         // Fields
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let (dart_type, nullable) = dart_type_of(fld);
             let prop_name = camel_case(name);
             if nullable {
@@ -44,9 +50,15 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         // Constructor
         out.push_str(&format!("\n  const {}({{\n", model.name));
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let prop_name = camel_case(name);
             out.push_str(&format!("    required this.{},\n", prop_name));
         }
@@ -70,12 +82,21 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         out.push_str("  });\n");
 
         // fromJson factory
-        out.push_str(&format!("\n  factory {}.fromJson(Map<String, dynamic> json) {{\n", model.name));
+        out.push_str(&format!(
+            "\n  factory {}.fromJson(Map<String, dynamic> json) {{\n",
+            model.name
+        ));
         out.push_str(&format!("    return {}(\n", model.name));
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let prop_name = camel_case(name);
             let from = dart_from_json(name, fld);
             out.push_str(&format!("      {}: {},\n", prop_name, from));
@@ -103,9 +124,15 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         // toJson
         out.push_str("\n  Map<String, dynamic> toJson() => {\n");
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let prop_name = camel_case(name);
             let to = dart_to_json(&prop_name, fld);
             out.push_str(&format!("        '{}': {},\n", name, to));
@@ -120,18 +147,29 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
 fn dart_type_of(field: &FieldAst) -> (String, bool) {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Url(f)
-        | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Bytes(f) | FieldAst::Xml(f)
-        | FieldAst::TsQuery(f) | FieldAst::TsVector(f)
-        | FieldAst::Interval(f) | FieldAst::Uuid(f) => ("String".into(), !f.required),
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::Xml(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Interval(f)
+        | FieldAst::Uuid(f) => ("String".into(), !f.required),
         FieldAst::Slug(f) => ("String".into(), !f.required),
-        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => ("int".into(), !f.required),
+        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => {
+            ("int".into(), !f.required)
+        }
         FieldAst::Float(f) | FieldAst::Money(f) => ("double".into(), !f.required),
         FieldAst::BigInt(f) | FieldAst::BigSerial(f) => ("int".into(), !f.required),
         FieldAst::Decimal(f) => ("double".into(), !f.required),
         FieldAst::Boolean(f) => ("bool".into(), !f.required),
-        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => ("DateTime".into(), !f.required),
+        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => {
+            ("DateTime".into(), !f.required)
+        }
         FieldAst::Enum(e) => ("String".into(), !e.required),
         FieldAst::Json(_) => ("Map<String, dynamic>".into(), true),
         FieldAst::Array(a) => {
@@ -153,7 +191,10 @@ fn dart_from_json(name: &str, field: &FieldAst) -> String {
             if f.required {
                 format!("DateTime.parse(json['{}'])", name)
             } else {
-                format!("json['{}'] != null ? DateTime.parse(json['{}']) : null", name, name)
+                format!(
+                    "json['{}'] != null ? DateTime.parse(json['{}']) : null",
+                    name, name
+                )
             }
         }
         _ => {
@@ -201,12 +242,14 @@ fn ts_to_dart(ts: &str) -> String {
 fn camel_case(s: &str) -> String {
     let mut parts = s.split('_');
     let first = parts.next().unwrap_or("").to_string();
-    let rest: String = parts.map(|p| {
-        let mut chars = p.chars();
-        match chars.next() {
-            None => String::new(),
-            Some(c) => c.to_uppercase().to_string() + chars.as_str(),
-        }
-    }).collect();
+    let rest: String = parts
+        .map(|p| {
+            let mut chars = p.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect();
     first + &rest
 }

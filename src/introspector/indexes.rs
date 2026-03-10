@@ -33,13 +33,15 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbIndex>> {
 
     Ok(rows
         .into_iter()
-        .map(|(table, name, columns, unique, method, is_primary)| DbIndex {
-            table,
-            name,
-            columns,
-            unique,
-            method,
-            is_primary,
-        })
+        .map(
+            |(table, name, columns, unique, method, is_primary)| DbIndex {
+                table,
+                name,
+                columns,
+                unique,
+                method,
+                is_primary,
+            },
+        )
         .collect())
 }

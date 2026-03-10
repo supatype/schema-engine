@@ -58,13 +58,15 @@ async fn read_columns(pool: &PgPool, schema: &str, table: &str) -> Result<Vec<Db
 
     Ok(rows
         .into_iter()
-        .map(|(name, data_type, udt_name, is_nullable, default, ordinal_position)| DbColumn {
-            name,
-            data_type,
-            udt_name,
-            nullable: is_nullable == "YES",
-            default,
-            ordinal_position,
-        })
+        .map(
+            |(name, data_type, udt_name, is_nullable, default, ordinal_position)| DbColumn {
+                name,
+                data_type,
+                udt_name,
+                nullable: is_nullable == "YES",
+                default,
+                ordinal_position,
+            },
+        )
         .collect())
 }

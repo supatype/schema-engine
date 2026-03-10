@@ -1,4 +1,6 @@
-use supatype_engine::{differ, generator::sql::migration, parser, state::database_state::DatabaseState};
+use supatype_engine::{
+    differ, generator::sql::migration, parser, state::database_state::DatabaseState,
+};
 
 #[test]
 fn test_migration_generated_for_new_schema() {
@@ -22,7 +24,10 @@ fn test_fk_action_set_null_renders_correctly() {
     let sql = migration::generate(&diff, false).unwrap();
 
     assert!(sql.contains("SET NULL"), "expected 'SET NULL' in FK action");
-    assert!(!sql.contains("SETNULL"), "must not contain 'SETNULL' (one word)");
+    assert!(
+        !sql.contains("SETNULL"),
+        "must not contain 'SETNULL' (one word)"
+    );
 }
 
 // Fix: schemas with UUID genRandomUuid defaults must emit the pgcrypto extension.
@@ -38,9 +43,14 @@ fn test_pgcrypto_extension_emitted_for_uuid_defaults() {
         "migration must emit pgcrypto for gen_random_uuid() defaults"
     );
     // Extension must appear before BEGIN so it can run outside the transaction.
-    let ext_pos = sql.find("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"").unwrap();
+    let ext_pos = sql
+        .find("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\"")
+        .unwrap();
     let begin_pos = sql.find("BEGIN;").unwrap();
-    assert!(ext_pos < begin_pos, "pgcrypto extension must appear before BEGIN");
+    assert!(
+        ext_pos < begin_pos,
+        "pgcrypto extension must appear before BEGIN"
+    );
 }
 
 // Fix: generated index SQL must not use CONCURRENTLY (cannot run inside a transaction).
@@ -94,12 +104,14 @@ fn test_fk_ops_ordered_after_create_table_ops() {
     let ast = parser::parse(input).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
 
-    let last_create = diff.operations.iter().rposition(|op| {
-        matches!(op, differ::Operation::CreateTable { .. })
-    });
-    let first_fk = diff.operations.iter().position(|op| {
-        matches!(op, differ::Operation::AddForeignKey { .. })
-    });
+    let last_create = diff
+        .operations
+        .iter()
+        .rposition(|op| matches!(op, differ::Operation::CreateTable { .. }));
+    let first_fk = diff
+        .operations
+        .iter()
+        .position(|op| matches!(op, differ::Operation::AddForeignKey { .. }));
 
     if let (Some(last_c), Some(first_fk)) = (last_create, first_fk) {
         assert!(

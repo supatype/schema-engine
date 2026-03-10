@@ -76,14 +76,9 @@ jobs:
         run: brew install php
 
       # ── Swift ───────────────────────────────────────────────────────────────
-      # Swift is pre-installed on macOS runners; install on Linux via swiftly
-      - name: Install Swift (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          curl -fsSL https://swiftlang.github.io/swiftly/swiftly-install.sh | bash -s -- --quiet
-          echo "$HOME/.local/share/swiftly/bin" >> $GITHUB_PATH
-          $HOME/.local/share/swiftly/bin/swiftly install latest
-          echo "$HOME/.local/share/swiftly/toolchains/$(ls $HOME/.local/share/swiftly/toolchains/ | sort -V | tail -1)/usr/bin" >> $GITHUB_PATH
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "5.10"
 
       # ── Kotlin ──────────────────────────────────────────────────────────────
       - uses: actions/setup-java@v4

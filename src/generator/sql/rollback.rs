@@ -4,8 +4,8 @@
 //! perfectly reversed (e.g. DropTable, DropColumn) are annotated with a warning
 //! rather than silently omitted.
 
-use anyhow::Result;
 use crate::differ::{DiffOutput, Operation};
+use anyhow::Result;
 
 pub fn generate(diff: &DiffOutput) -> Result<String> {
     let mut lines = vec![
@@ -38,8 +38,10 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // DropTable → cannot restore (need snapshot); emit a commented placeholder
         Operation::DropTable { table, .. } => {
-            format!("-- WARNING: Cannot automatically roll back DROP TABLE \"{table}\". \
-                     Restore from backup or snapshot.")
+            format!(
+                "-- WARNING: Cannot automatically roll back DROP TABLE \"{table}\". \
+                     Restore from backup or snapshot."
+            )
         }
         // AddColumn → DROP COLUMN
         Operation::AddColumn { table, column, .. } => {
@@ -47,17 +49,24 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // DropColumn → cannot restore without snapshot
         Operation::DropColumn { table, column, .. } => {
-            format!("-- WARNING: Cannot automatically roll back DROP COLUMN \"{table}\".\"{column}\". \
-                     Restore from backup or snapshot.")
+            format!(
+                "-- WARNING: Cannot automatically roll back DROP COLUMN \"{table}\".\"{column}\". \
+                     Restore from backup or snapshot."
+            )
         }
         // RenameColumn → rename back
-        Operation::RenameColumn { table, from, to, .. } => {
+        Operation::RenameColumn {
+            table, from, to, ..
+        } => {
             format!("ALTER TABLE \"public\".\"{table}\" RENAME COLUMN \"{to}\" TO \"{from}\";")
         }
         // AlterColumn → reverse each change using stored metadata
-        Operation::AlterColumn { table, column, changes, .. } => {
-            rollback_alter_column(table, column, changes)
-        }
+        Operation::AlterColumn {
+            table,
+            column,
+            changes,
+            ..
+        } => rollback_alter_column(table, column, changes),
         // AddIndex → DROP INDEX
         Operation::AddIndex { table, index, .. } => {
             let derived = format!("{}_{}_idx", table, index.fields.join("_"));
@@ -66,18 +75,25 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // DropIndex → cannot restore
         Operation::DropIndex { index_name, .. } => {
-            format!("-- WARNING: Cannot automatically roll back DROP INDEX \"{index_name}\". \
-                     Recreate the index manually.")
+            format!(
+                "-- WARNING: Cannot automatically roll back DROP INDEX \"{index_name}\". \
+                     Recreate the index manually."
+            )
         }
         // AddForeignKey → DROP CONSTRAINT
-        Operation::AddForeignKey { table, relation, .. } => {
-            let fk_col = relation.foreign_key.as_deref()
-                .unwrap_or("unknown_fk");
+        Operation::AddForeignKey {
+            table, relation, ..
+        } => {
+            let fk_col = relation.foreign_key.as_deref().unwrap_or("unknown_fk");
             let constraint = format!("{table}_{fk_col}_fkey");
-            format!("ALTER TABLE \"public\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";")
+            format!(
+                "ALTER TABLE \"public\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
+            )
         }
         // DropForeignKey → cannot restore definition
-        Operation::DropForeignKey { table, constraint, .. } => {
+        Operation::DropForeignKey {
+            table, constraint, ..
+        } => {
             format!("-- WARNING: Cannot automatically roll back DROP CONSTRAINT \"{table}\".\"{constraint}\". \
                      Restore from backup.")
         }
@@ -99,7 +115,9 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // DropRlsPolicy → cannot restore
         Operation::DropRlsPolicy { table, policy, .. } => {
-            format!("-- WARNING: Cannot automatically roll back DROP POLICY \"{table}\".\"{policy}\".")
+            format!(
+                "-- WARNING: Cannot automatically roll back DROP POLICY \"{table}\".\"{policy}\"."
+            )
         }
         // CreateTrigger → DROP TRIGGER
         Operation::CreateTrigger { table, trigger, .. } => {
@@ -115,8 +133,10 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // EnableExtension → DROP EXTENSION (risky — only emit a warning)
         Operation::EnableExtension { name, .. } => {
-            format!("-- WARNING: Rollback of CREATE EXTENSION \"{name}\" would DROP it. \
-                     Remove manually if safe to do so.")
+            format!(
+                "-- WARNING: Rollback of CREATE EXTENSION \"{name}\" would DROP it. \
+                     Remove manually if safe to do so."
+            )
         }
     };
     Ok(Some(sql))
@@ -127,7 +147,10 @@ fn rollback_alter_column(table: &str, column: &str, changes: &serde_json::Value)
 
     // Reverse type change: restore old type from from_udt
     if let Some(type_change) = changes.get("type") {
-        let from_udt = type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("text");
+        let from_udt = type_change
+            .get("from_udt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("text");
         // Map udt_name back to a castable type keyword
         let restore_type = udt_to_pg_type(from_udt);
         stmts.push(format!(
@@ -139,7 +162,10 @@ fn rollback_alter_column(table: &str, column: &str, changes: &serde_json::Value)
 
     // Reverse nullability change
     if let Some(null_change) = changes.get("nullability") {
-        let original_state = null_change.get("from").and_then(|v| v.as_str()).unwrap_or("");
+        let original_state = null_change
+            .get("from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if original_state == "not_null" {
             // Was NOT NULL, now re-apply NOT NULL constraint
             stmts.push(format!(
@@ -197,18 +223,30 @@ fn forward_description(op: &Operation) -> String {
         Operation::DropTable { table, .. } => format!("drop table {table}"),
         Operation::AddColumn { table, column, .. } => format!("add column {table}.{column}"),
         Operation::DropColumn { table, column, .. } => format!("drop column {table}.{column}"),
-        Operation::RenameColumn { table, from, to, .. } => format!("rename {table}.{from} → {to}"),
+        Operation::RenameColumn {
+            table, from, to, ..
+        } => format!("rename {table}.{from} → {to}"),
         Operation::AlterColumn { table, column, .. } => format!("alter column {table}.{column}"),
-        Operation::AddIndex { table, index, .. } => format!("add index on {table}({})", index.fields.join(",")),
+        Operation::AddIndex { table, index, .. } => {
+            format!("add index on {table}({})", index.fields.join(","))
+        }
         Operation::DropIndex { index_name, .. } => format!("drop index {index_name}"),
-        Operation::AddForeignKey { table, relation, .. } => format!("add fk {table} → {}", relation.target),
-        Operation::DropForeignKey { table, constraint, .. } => format!("drop fk {table}.{constraint}"),
+        Operation::AddForeignKey {
+            table, relation, ..
+        } => format!("add fk {table} → {}", relation.target),
+        Operation::DropForeignKey {
+            table, constraint, ..
+        } => format!("drop fk {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("create enum {name}"),
         Operation::DropEnum { name, .. } => format!("drop enum {name}"),
         Operation::EnableRls { table, .. } => format!("enable rls {table}"),
-        Operation::CreateRlsPolicy { table, policy, .. } => format!("create policy {table}.{policy}"),
+        Operation::CreateRlsPolicy { table, policy, .. } => {
+            format!("create policy {table}.{policy}")
+        }
         Operation::DropRlsPolicy { table, policy, .. } => format!("drop policy {table}.{policy}"),
-        Operation::CreateTrigger { table, trigger, .. } => format!("create trigger {table}.{trigger}"),
+        Operation::CreateTrigger { table, trigger, .. } => {
+            format!("create trigger {table}.{trigger}")
+        }
         Operation::DropTrigger { table, trigger, .. } => format!("drop trigger {table}.{trigger}"),
         Operation::CreateJunctionTable { table, .. } => format!("create junction table {table}"),
         Operation::EnableExtension { name, .. } => format!("enable extension {name}"),

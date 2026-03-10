@@ -1,8 +1,8 @@
-use anyhow::Result;
+use super::{Operation, Risk};
+use crate::generator::sql::rls::access_rule_to_expr;
 use crate::parser::ast::{AccessAst, AccessRule, SchemaAst};
 use crate::state::database_state::DatabaseState;
-use crate::generator::sql::rls::access_rule_to_expr;
-use super::{Operation, Risk};
+use anyhow::Result;
 
 /// Policy naming convention — must match generator/sql/rls.rs.
 /// `polcmd` column from pg_policy: r=SELECT, a=INSERT, w=UPDATE, d=DELETE, *=ALL.
@@ -30,10 +30,15 @@ pub fn diff(
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     // Index DB policies by table name for fast lookup.
-    let mut db_policies_by_table: std::collections::HashMap<&str, Vec<&crate::introspector::rls::DbRlsPolicy>> =
-        std::collections::HashMap::new();
+    let mut db_policies_by_table: std::collections::HashMap<
+        &str,
+        Vec<&crate::introspector::rls::DbRlsPolicy>,
+    > = std::collections::HashMap::new();
     for policy in &db.rls_policies {
-        db_policies_by_table.entry(policy.table.as_str()).or_default().push(policy);
+        db_policies_by_table
+            .entry(policy.table.as_str())
+            .or_default()
+            .push(policy);
     }
 
     // Set of tables that have ANY RLS policy in the DB (proxy for RLS being enabled).
@@ -53,8 +58,10 @@ pub fn diff(
             || model.access.update.is_some()
             || model.access.delete.is_some();
 
-        let db_policies: &[&crate::introspector::rls::DbRlsPolicy] =
-            db_policies_by_table.get(table).map(|v| v.as_slice()).unwrap_or(&[]);
+        let db_policies: &[&crate::introspector::rls::DbRlsPolicy] = db_policies_by_table
+            .get(table)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
         let rls_is_enabled = rls_enabled_tables.contains(table);
 
         if has_access_rules {
@@ -67,8 +74,10 @@ pub fn diff(
             }
 
             // Build a map of existing DB policies: name → policy.
-            let db_pol_map: std::collections::HashMap<&str, &crate::introspector::rls::DbRlsPolicy> =
-                db_policies.iter().map(|p| (p.name.as_str(), *p)).collect();
+            let db_pol_map: std::collections::HashMap<
+                &str,
+                &crate::introspector::rls::DbRlsPolicy,
+            > = db_policies.iter().map(|p| (p.name.as_str(), *p)).collect();
 
             // For each expected policy, check if it exists and if its expression matches.
             let expected = expected_policies(&model.access);

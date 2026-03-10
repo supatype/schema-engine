@@ -69,8 +69,8 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
 
     let mut constraints: Vec<DbConstraint> = fk_map
         .into_iter()
-        .map(|((table, name), (columns, foreign_table, foreign_columns, on_delete))| {
-            DbConstraint {
+        .map(
+            |((table, name), (columns, foreign_table, foreign_columns, on_delete))| DbConstraint {
                 table,
                 name,
                 constraint_type: DbConstraintType::ForeignKey,
@@ -79,8 +79,8 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
                 foreign_columns: Some(foreign_columns),
                 check_expression: None,
                 on_delete,
-            }
-        })
+            },
+        )
         .collect();
 
     // Read UNIQUE constraints
@@ -106,10 +106,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
     let mut unique_map: std::collections::HashMap<(String, String), Vec<String>> =
         std::collections::HashMap::new();
     for (table, constraint, col) in unique_rows {
-        unique_map
-            .entry((table, constraint))
-            .or_default()
-            .push(col);
+        unique_map.entry((table, constraint)).or_default().push(col);
     }
     for ((table, name), columns) in unique_map {
         constraints.push(DbConstraint {

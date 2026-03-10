@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::parser::ast::{FieldAst, SchemaAst};
+use anyhow::Result;
 
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     let mut out = String::new();
@@ -17,13 +17,30 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         let mut params: Vec<String> = Vec::new();
 
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let (php_type, nullable) = php_type_of(fld);
-            let prefix = if nullable { format!("?{}", php_type) } else { php_type };
-            let default = if nullable { " = null".to_string() } else { String::new() };
-            params.push(format!("        public readonly {} ${}{}", prefix, name, default));
+            let prefix = if nullable {
+                format!("?{}", php_type)
+            } else {
+                php_type
+            };
+            let default = if nullable {
+                " = null".to_string()
+            } else {
+                String::new()
+            };
+            params.push(format!(
+                "        public readonly {} ${}{}",
+                prefix, name, default
+            ));
         }
 
         // Composite expansions
@@ -58,18 +75,29 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
 fn php_type_of(field: &FieldAst) -> (String, bool) {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Url(f)
-        | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Bytes(f) | FieldAst::Xml(f)
-        | FieldAst::TsQuery(f) | FieldAst::TsVector(f)
-        | FieldAst::Interval(f) | FieldAst::Uuid(f) => ("string".into(), !f.required),
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::Xml(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Interval(f)
+        | FieldAst::Uuid(f) => ("string".into(), !f.required),
         FieldAst::Slug(f) => ("string".into(), !f.required),
-        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => ("int".into(), !f.required),
+        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => {
+            ("int".into(), !f.required)
+        }
         FieldAst::Float(f) | FieldAst::Money(f) => ("float".into(), !f.required),
         FieldAst::BigInt(f) | FieldAst::BigSerial(f) => ("int".into(), !f.required),
         FieldAst::Decimal(f) => ("float".into(), !f.required),
         FieldAst::Boolean(f) => ("bool".into(), !f.required),
-        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => ("DateTime".into(), !f.required),
+        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => {
+            ("DateTime".into(), !f.required)
+        }
         FieldAst::Enum(e) => ("string".into(), !e.required),
         FieldAst::Json(_) => ("mixed".into(), true),
         FieldAst::Array(_) => ("array".into(), false),

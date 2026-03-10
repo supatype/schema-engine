@@ -1,6 +1,9 @@
 use supatype_engine::{
     differ,
-    introspector::{indexes::DbIndex, tables::{DbColumn, DbTable}},
+    introspector::{
+        indexes::DbIndex,
+        tables::{DbColumn, DbTable},
+    },
     parser,
     state::database_state::DatabaseState,
 };
@@ -12,7 +15,9 @@ fn test_diff_empty_db_creates_all_tables() {
     let empty_db = DatabaseState::default();
     let diff = differ::diff(&ast, &empty_db).unwrap();
 
-    let create_ops: Vec<_> = diff.operations.iter()
+    let create_ops: Vec<_> = diff
+        .operations
+        .iter()
         .filter(|op| matches!(op, differ::Operation::CreateTable { .. }))
         .collect();
 
@@ -60,7 +65,9 @@ fn test_timestamp_option_columns_not_treated_as_dropped() {
 
     let diff = differ::diff(&ast, &db).unwrap();
 
-    let drop_ops: Vec<_> = diff.operations.iter()
+    let drop_ops: Vec<_> = diff
+        .operations
+        .iter()
         .filter(|op| matches!(op, differ::Operation::DropColumn { .. }))
         .collect();
 
@@ -123,11 +130,15 @@ fn test_existing_index_not_regenerated_when_name_matches() {
 
     // posts has an index on ["author_id"]; derived name = "posts_author_id_idx".
     let db = DatabaseState {
-        tables: ast.models.iter().map(|m| DbTable {
-            schema: "public".into(),
-            name: m.table_name.clone(),
-            columns: vec![col("id", "uuid")],
-        }).collect(),
+        tables: ast
+            .models
+            .iter()
+            .map(|m| DbTable {
+                schema: "public".into(),
+                name: m.table_name.clone(),
+                columns: vec![col("id", "uuid")],
+            })
+            .collect(),
         indexes: vec![DbIndex {
             table: "posts".into(),
             name: "posts_author_id_idx".into(),
@@ -141,7 +152,9 @@ fn test_existing_index_not_regenerated_when_name_matches() {
 
     let diff = differ::diff(&ast, &db).unwrap();
 
-    let add_index_for_posts: Vec<_> = diff.operations.iter()
+    let add_index_for_posts: Vec<_> = diff
+        .operations
+        .iter()
         .filter(|op| matches!(op, differ::Operation::AddIndex { table, .. } if table == "posts"))
         .collect();
 

@@ -1,11 +1,23 @@
-use anyhow::{bail, Result};
-use sha2::{Digest, Sha256};
+use crate::differ::{DiffOutput, Operation, Risk};
 use crate::parser::ast::{
     DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst,
 };
-use crate::differ::{DiffOutput, Operation, Risk};
+use anyhow::{bail, Result};
+use sha2::{Digest, Sha256};
 
+/// Returns only the forward (apply) SQL — suitable for execution against a live DB.
+pub fn forward_sql(diff: &DiffOutput, force: bool) -> Result<String> {
+    if diff.summary.is_destructive && !force {
+        bail!(
+            "{} destructive operation(s) detected. Use --force to proceed.",
+            diff.summary.destructive
+        );
+    }
+    render_forward(diff)
+}
+
+/// Returns the full migration file (forward + rollback) for saving to disk.
 pub fn generate(diff: &DiffOutput, force: bool) -> Result<String> {
     if diff.summary.is_destructive && !force {
         bail!(
@@ -25,17 +37,23 @@ pub fn generate(diff: &DiffOutput, force: bool) -> Result<String> {
          {forward}\n\n\
          {rollback}",
         ver = env!("ENGINE_VERSION"),
-        risk = if diff.summary.is_destructive { "destructive" }
-               else if diff.summary.cautious > 0 { "cautious" }
-               else { "safe" },
+        risk = if diff.summary.is_destructive {
+            "destructive"
+        } else if diff.summary.cautious > 0 {
+            "cautious"
+        } else {
+            "safe"
+        },
     ))
 }
 
 fn needs_pgcrypto(diff: &DiffOutput) -> bool {
     use crate::parser::ast::FieldAst;
-    let uuid_default = |f: &FieldAst| matches!(f,
-        FieldAst::Uuid(s) if matches!(&s.default, Some(DefaultValueAst::GenRandomUuid))
-    );
+    let uuid_default = |f: &FieldAst| {
+        matches!(f,
+            FieldAst::Uuid(s) if matches!(&s.default, Some(DefaultValueAst::GenRandomUuid))
+        )
+    };
     diff.operations.iter().any(|op| match op {
         Operation::CreateTable { model, .. } => model.fields.values().any(uuid_default),
         Operation::AddColumn { field, .. } => uuid_default(field),
@@ -61,15 +79,24 @@ fn render_forward(diff: &DiffOutput) -> Result<String> {
 
     for op in &diff.operations {
         let risk_label = match op {
-            Operation::CreateTable { risk, .. } | Operation::DropTable { risk, .. }
-            | Operation::AddColumn { risk, .. } | Operation::DropColumn { risk, .. }
-            | Operation::RenameColumn { risk, .. } | Operation::AlterColumn { risk, .. }
-            | Operation::AddIndex { risk, .. } | Operation::DropIndex { risk, .. }
-            | Operation::AddForeignKey { risk, .. } | Operation::DropForeignKey { risk, .. }
-            | Operation::CreateEnum { risk, .. } | Operation::DropEnum { risk, .. }
-            | Operation::EnableRls { risk, .. } | Operation::CreateRlsPolicy { risk, .. }
-            | Operation::DropRlsPolicy { risk, .. } | Operation::CreateTrigger { risk, .. }
-            | Operation::DropTrigger { risk, .. } | Operation::CreateJunctionTable { risk, .. }
+            Operation::CreateTable { risk, .. }
+            | Operation::DropTable { risk, .. }
+            | Operation::AddColumn { risk, .. }
+            | Operation::DropColumn { risk, .. }
+            | Operation::RenameColumn { risk, .. }
+            | Operation::AlterColumn { risk, .. }
+            | Operation::AddIndex { risk, .. }
+            | Operation::DropIndex { risk, .. }
+            | Operation::AddForeignKey { risk, .. }
+            | Operation::DropForeignKey { risk, .. }
+            | Operation::CreateEnum { risk, .. }
+            | Operation::DropEnum { risk, .. }
+            | Operation::EnableRls { risk, .. }
+            | Operation::CreateRlsPolicy { risk, .. }
+            | Operation::DropRlsPolicy { risk, .. }
+            | Operation::CreateTrigger { risk, .. }
+            | Operation::DropTrigger { risk, .. }
+            | Operation::CreateJunctionTable { risk, .. }
             | Operation::EnableExtension { risk, .. } => match risk {
                 Risk::Safe => "safe",
                 Risk::Cautious => "cautious",
@@ -78,7 +105,10 @@ fn render_forward(diff: &DiffOutput) -> Result<String> {
         };
 
         let sql = render_operation(op)?;
-        lines.push(format!("-- [{risk_label}] {desc}", desc = op_description(op)));
+        lines.push(format!(
+            "-- [{risk_label}] {desc}",
+            desc = op_description(op)
+        ));
         lines.push(sql);
         lines.push(String::new());
     }
@@ -93,18 +123,32 @@ fn op_description(op: &Operation) -> String {
         Operation::DropTable { table, .. } => format!("Drop table: {table}"),
         Operation::AddColumn { table, column, .. } => format!("Add column: {table}.{column}"),
         Operation::DropColumn { table, column, .. } => format!("Drop column: {table}.{column}"),
-        Operation::RenameColumn { table, from, to, .. } => format!("Rename column: {table}.{from} → {to}"),
+        Operation::RenameColumn {
+            table, from, to, ..
+        } => format!("Rename column: {table}.{from} → {to}"),
         Operation::AlterColumn { table, column, .. } => format!("Alter column: {table}.{column}"),
-        Operation::AddIndex { table, index, .. } => format!("Add index on: {table}({})", index.fields.join(", ")),
+        Operation::AddIndex { table, index, .. } => {
+            format!("Add index on: {table}({})", index.fields.join(", "))
+        }
         Operation::DropIndex { index_name, .. } => format!("Drop index: {index_name}"),
-        Operation::AddForeignKey { table, relation, .. } => format!("Add FK: {table} → {}", relation.target),
-        Operation::DropForeignKey { table, constraint, .. } => format!("Drop FK: {table}.{constraint}"),
+        Operation::AddForeignKey {
+            table, relation, ..
+        } => format!("Add FK: {table} → {}", relation.target),
+        Operation::DropForeignKey {
+            table, constraint, ..
+        } => format!("Drop FK: {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("Create enum: {name}"),
         Operation::DropEnum { name, .. } => format!("Drop enum: {name}"),
         Operation::EnableRls { table, .. } => format!("Enable RLS: {table}"),
-        Operation::CreateRlsPolicy { table, policy, .. } => format!("Create RLS policy: {table}.{policy}"),
-        Operation::DropRlsPolicy { table, policy, .. } => format!("Drop RLS policy: {table}.{policy}"),
-        Operation::CreateTrigger { table, trigger, .. } => format!("Create trigger: {table}.{trigger}"),
+        Operation::CreateRlsPolicy { table, policy, .. } => {
+            format!("Create RLS policy: {table}.{policy}")
+        }
+        Operation::DropRlsPolicy { table, policy, .. } => {
+            format!("Drop RLS policy: {table}.{policy}")
+        }
+        Operation::CreateTrigger { table, trigger, .. } => {
+            format!("Create trigger: {table}.{trigger}")
+        }
         Operation::DropTrigger { table, trigger, .. } => format!("Drop trigger: {table}.{trigger}"),
         Operation::CreateJunctionTable { table, .. } => format!("Create junction table: {table}"),
         Operation::EnableExtension { name, .. } => format!("Enable extension: {name}"),
@@ -114,51 +158,81 @@ fn op_description(op: &Operation) -> String {
 fn render_operation(op: &Operation) -> Result<String> {
     match op {
         Operation::CreateTable { model, .. } => create_table_sql(model),
-        Operation::DropTable { table, .. } => {
-            Ok(format!("DROP TABLE IF EXISTS \"public\".\"{table}\" CASCADE;"))
-        }
-        Operation::AddColumn { table, column, field, .. } => {
+        Operation::DropTable { table, .. } => Ok(format!(
+            "DROP TABLE IF EXISTS \"public\".\"{table}\" CASCADE;"
+        )),
+        Operation::AddColumn {
+            table,
+            column,
+            field,
+            ..
+        } => {
             let col_def = field_to_column_def(column, field)?;
-            Ok(format!("ALTER TABLE \"public\".\"{table}\" ADD COLUMN {col_def};"))
+            Ok(format!(
+                "ALTER TABLE \"public\".\"{table}\" ADD COLUMN {col_def};"
+            ))
         }
-        Operation::DropColumn { table, column, .. } => {
-            Ok(format!("ALTER TABLE \"public\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";"))
-        }
-        Operation::RenameColumn { table, from, to, .. } => {
-            Ok(format!("ALTER TABLE \"public\".\"{table}\" RENAME COLUMN \"{from}\" TO \"{to}\";"))
-        }
-        Operation::AlterColumn { table, column, changes, .. } => {
-            alter_column_sql(table, column, changes)
-        }
+        Operation::DropColumn { table, column, .. } => Ok(format!(
+            "ALTER TABLE \"public\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";"
+        )),
+        Operation::RenameColumn {
+            table, from, to, ..
+        } => Ok(format!(
+            "ALTER TABLE \"public\".\"{table}\" RENAME COLUMN \"{from}\" TO \"{to}\";"
+        )),
+        Operation::AlterColumn {
+            table,
+            column,
+            changes,
+            ..
+        } => alter_column_sql(table, column, changes),
         Operation::AddIndex { table, index, .. } => create_index_sql(table, index),
         Operation::DropIndex { index_name, .. } => {
             Ok(format!("DROP INDEX IF EXISTS \"{index_name}\";"))
         }
-        Operation::AddForeignKey { table, relation, ref_table, .. } => add_fk_sql(table, relation, ref_table),
-        Operation::DropForeignKey { table, constraint, .. } => {
-            Ok(format!("ALTER TABLE \"public\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"))
-        }
+        Operation::AddForeignKey {
+            table,
+            relation,
+            ref_table,
+            ..
+        } => add_fk_sql(table, relation, ref_table),
+        Operation::DropForeignKey {
+            table, constraint, ..
+        } => Ok(format!(
+            "ALTER TABLE \"public\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
+        )),
         Operation::CreateEnum { name, values, .. } => {
-            let vals = values.iter().map(|v| format!("'{v}'")).collect::<Vec<_>>().join(", ");
+            let vals = values
+                .iter()
+                .map(|v| format!("'{v}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
             Ok(format!("CREATE TYPE \"{name}\" AS ENUM ({vals});"))
         }
         Operation::DropEnum { name, .. } => Ok(format!("DROP TYPE IF EXISTS \"{name}\";")),
-        Operation::EnableRls { table, .. } => {
-            Ok(format!("ALTER TABLE \"public\".\"{table}\" ENABLE ROW LEVEL SECURITY;"))
-        }
-        Operation::CreateRlsPolicy { table, policy, .. } => {
-            Ok(format!("-- RLS policy '{policy}' on '{table}' — run: supatype-engine rls"))
-        }
-        Operation::DropRlsPolicy { table, policy, .. } => {
-            Ok(format!("DROP POLICY IF EXISTS \"{policy}\" ON \"public\".\"{table}\";"))
-        }
-        Operation::CreateTrigger { table, trigger, .. } => {
-            Ok(format!("-- Trigger '{trigger}' on '{table}' — run: supatype-engine generate (triggers)"))
-        }
-        Operation::DropTrigger { table, trigger, .. } => {
-            Ok(format!("DROP TRIGGER IF EXISTS \"{trigger}\" ON \"public\".\"{table}\";"))
-        }
-        Operation::CreateJunctionTable { table, fk_a, table_a, fk_b, table_b, .. } => {
+        Operation::EnableRls { table, .. } => Ok(format!(
+            "ALTER TABLE \"public\".\"{table}\" ENABLE ROW LEVEL SECURITY;"
+        )),
+        Operation::CreateRlsPolicy { table, policy, .. } => Ok(format!(
+            "-- RLS policy '{policy}' on '{table}' — run: supatype-engine rls"
+        )),
+        Operation::DropRlsPolicy { table, policy, .. } => Ok(format!(
+            "DROP POLICY IF EXISTS \"{policy}\" ON \"public\".\"{table}\";"
+        )),
+        Operation::CreateTrigger { table, trigger, .. } => Ok(format!(
+            "-- Trigger '{trigger}' on '{table}' — run: supatype-engine generate (triggers)"
+        )),
+        Operation::DropTrigger { table, trigger, .. } => Ok(format!(
+            "DROP TRIGGER IF EXISTS \"{trigger}\" ON \"public\".\"{table}\";"
+        )),
+        Operation::CreateJunctionTable {
+            table,
+            fk_a,
+            table_a,
+            fk_b,
+            table_b,
+            ..
+        } => {
             let table_a_snake = to_snake_case(table_a);
             let table_b_snake = to_snake_case(table_b);
             Ok(format!(
@@ -185,7 +259,9 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
         match field {
             FieldAst::Relation(rel) => {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                    let fk_col = rel.foreign_key.as_deref()
+                    let fk_col = rel
+                        .foreign_key
+                        .as_deref()
                         .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
                     let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
                     col_defs.push(format!("    \"{fk_col}\" UUID{uniq}"));
@@ -213,8 +289,10 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
 
     // Timestamps from options (if not already added as composite field)
     if model.options.timestamps && !model.fields.contains_key("timestamps") {
-        let has_created = model.fields.contains_key("created_at") || model.fields.contains_key("createdAt");
-        let has_updated = model.fields.contains_key("updated_at") || model.fields.contains_key("updatedAt");
+        let has_created =
+            model.fields.contains_key("created_at") || model.fields.contains_key("createdAt");
+        let has_updated =
+            model.fields.contains_key("updated_at") || model.fields.contains_key("updatedAt");
         if !has_created {
             col_defs.push("    \"created_at\" TIMESTAMPTZ NOT NULL DEFAULT NOW()".into());
         }
@@ -295,15 +373,35 @@ fn create_table_sql(model: &ModelAst) -> Result<String> {
 /// Returns Some(true) if the field has an `index: true` flag, None otherwise.
 fn field_index_flag(field: &FieldAst) -> Option<bool> {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Uuid(f)
-        | FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f) | FieldAst::BigInt(f) | FieldAst::Bytes(f)
-        | FieldAst::SmallInt(f) | FieldAst::Date(f) | FieldAst::Timestamp(f)
-        | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f)
-        | FieldAst::Macaddr(f) | FieldAst::Interval(f) | FieldAst::TsQuery(f)
-        | FieldAst::TsVector(f) | FieldAst::Xml(f) | FieldAst::RichText(f) => {
-            if f.index { Some(true) } else { None }
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f)
+        | FieldAst::RichText(f) => {
+            if f.index {
+                Some(true)
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -316,8 +414,14 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
         FieldAst::Uuid(f) => Ok(scalar_col(name, "UUID", f)),
         FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Bytes(f) => {
             let pg = if matches!(field, FieldAst::RichText(_) | FieldAst::Bytes(_)) {
-                if matches!(field, FieldAst::Bytes(_)) { "BYTEA" } else { "JSONB" }
-            } else { "TEXT" };
+                if matches!(field, FieldAst::Bytes(_)) {
+                    "BYTEA"
+                } else {
+                    "JSONB"
+                }
+            } else {
+                "TEXT"
+            };
             let mut def = scalar_col(name, pg, f);
             if let Some(check) = &f.check {
                 def.push_str(&format!(" CHECK ({check})"));
@@ -341,12 +445,20 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             // SERIAL is self-declaring — NOT NULL + sequence default are implicit.
             // primary_key / unique flags still apply.
             let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
-            let uniq = if f.unique && !f.primary_key { " UNIQUE" } else { "" };
+            let uniq = if f.unique && !f.primary_key {
+                " UNIQUE"
+            } else {
+                ""
+            };
             Ok(format!("\"{name}\" SERIAL{pk}{uniq}"))
         }
         FieldAst::BigSerial(f) => {
             let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
-            let uniq = if f.unique && !f.primary_key { " UNIQUE" } else { "" };
+            let uniq = if f.unique && !f.primary_key {
+                " UNIQUE"
+            } else {
+                ""
+            };
             Ok(format!("\"{name}\" BIGSERIAL{pk}{uniq}"))
         }
         FieldAst::Money(f) => Ok(scalar_col(name, "NUMERIC(19,4)", f)),
@@ -378,13 +490,22 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             Ok(format!("\"{name}\" TEXT{req}{unique}"))
         }
         FieldAst::Enum(f) => {
-            let vals = f.values.iter().map(|v| format!("'{v}'")).collect::<Vec<_>>().join(", ");
+            let vals = f
+                .values
+                .iter()
+                .map(|v| format!("'{v}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = if f.unique { " UNIQUE" } else { "" };
-            let default = f.default.as_ref()
+            let default = f
+                .default
+                .as_ref()
                 .map(|d| format!(" DEFAULT '{d}'"))
                 .unwrap_or_default();
-            Ok(format!("\"{name}\" TEXT{req}{uniq} CHECK (\"{name}\" IN ({vals})){default}"))
+            Ok(format!(
+                "\"{name}\" TEXT{req}{uniq} CHECK (\"{name}\" IN ({vals})){default}"
+            ))
         }
         FieldAst::Json(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
@@ -399,16 +520,24 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("\"{name}\" {pg}{req}"))
         }
-        FieldAst::Image(f) | FieldAst::File(f) => Ok(scalar_col(name, "JSONB", &ScalarFieldAst {
-            pg_type: "JSONB".into(),
-            required: f.required,
-            ..Default::default()
-        })),
-        FieldAst::Blocks(f) => Ok(scalar_col(name, "JSONB", &ScalarFieldAst {
-            pg_type: "JSONB".into(),
-            required: f.required,
-            ..Default::default()
-        })),
+        FieldAst::Image(f) | FieldAst::File(f) => Ok(scalar_col(
+            name,
+            "JSONB",
+            &ScalarFieldAst {
+                pg_type: "JSONB".into(),
+                required: f.required,
+                ..Default::default()
+            },
+        )),
+        FieldAst::Blocks(f) => Ok(scalar_col(
+            name,
+            "JSONB",
+            &ScalarFieldAst {
+                pg_type: "JSONB".into(),
+                required: f.required,
+                ..Default::default()
+            },
+        )),
         FieldAst::Geo(f) => {
             let geo_type = f.geo_type.to_uppercase();
             let srid = f.srid.unwrap_or(4326);
@@ -423,10 +552,15 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
         FieldAst::Custom(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = if f.unique { " UNIQUE" } else { "" };
-            let default = f.default.as_ref()
+            let default = f
+                .default
+                .as_ref()
                 .map(|d| format!(" DEFAULT {}", render_default(d)))
                 .unwrap_or_default();
-            Ok(format!("\"{name}\" {pg}{req}{uniq}{default}", pg = f.pg_type.to_uppercase()))
+            Ok(format!(
+                "\"{name}\" {pg}{req}{uniq}{default}",
+                pg = f.pg_type.to_uppercase()
+            ))
         }
         // Composites are expanded at the table level, never called here individually
         FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete => {
@@ -434,16 +568,25 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
         }
         FieldAst::Relation(_) => {
             anyhow::bail!("relation field '{name}' must be handled at table level")
-        }
-        // Array is handled above; this arm satisfies exhaustiveness if a new variant slips through
+        } // Array is handled above; this arm satisfies exhaustiveness if a new variant slips through
     }
 }
 
 fn scalar_col(name: &str, pg_type: &str, f: &ScalarFieldAst) -> String {
     let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
-    let req = if f.required && !f.primary_key { " NOT NULL" } else { "" };
-    let uniq = if f.unique && !f.primary_key { " UNIQUE" } else { "" };
-    let default = f.default.as_ref()
+    let req = if f.required && !f.primary_key {
+        " NOT NULL"
+    } else {
+        ""
+    };
+    let uniq = if f.unique && !f.primary_key {
+        " UNIQUE"
+    } else {
+        ""
+    };
+    let default = f
+        .default
+        .as_ref()
         .map(|d| format!(" DEFAULT {}", render_default(d)))
         .unwrap_or_default();
     format!("\"{name}\" {pg_type}{pk}{req}{uniq}{default}")
@@ -469,13 +612,25 @@ fn alter_column_sql(table: &str, column: &str, changes: &serde_json::Value) -> R
 
     // Type change
     if let Some(type_change) = changes.get("type") {
-        let pg_type = type_change.get("to_pg").and_then(|v| v.as_str()).unwrap_or("TEXT");
-        let from_udt = type_change.get("from_udt").and_then(|v| v.as_str()).unwrap_or("?");
+        let pg_type = type_change
+            .get("to_pg")
+            .and_then(|v| v.as_str())
+            .unwrap_or("TEXT");
+        let from_udt = type_change
+            .get("from_udt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
 
         // Localization-aware USING clause
         let using_expr = if let Some(loc) = changes.get("localization") {
-            let direction = loc.get("direction").and_then(|v| v.as_str()).unwrap_or("add");
-            let locale = loc.get("default_locale").and_then(|v| v.as_str()).unwrap_or("en");
+            let direction = loc
+                .get("direction")
+                .and_then(|v| v.as_str())
+                .unwrap_or("add");
+            let locale = loc
+                .get("default_locale")
+                .and_then(|v| v.as_str())
+                .unwrap_or("en");
             if direction == "add" {
                 // TEXT → JSONB: wrap existing value as default-locale translation
                 format!("jsonb_build_object('{locale}', \"{column}\"::text)")
@@ -530,9 +685,15 @@ fn create_index_sql(table: &str, index: &IndexAst) -> Result<String> {
         IndexMethod::Hnsw => "hnsw",
         IndexMethod::Brin => "brin",
     };
-    let cols = index.fields.iter().map(|f| format!("\"{f}\"")).collect::<Vec<_>>().join(", ");
-    let idx_name = index.name.as_deref()
-        .unwrap_or_else(|| Box::leak(format!("{table}_{}_idx", index.fields.join("_")).into_boxed_str()));
+    let cols = index
+        .fields
+        .iter()
+        .map(|f| format!("\"{f}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let idx_name = index.name.as_deref().unwrap_or_else(|| {
+        Box::leak(format!("{table}_{}_idx", index.fields.join("_")).into_boxed_str())
+    });
 
     Ok(format!(
         "CREATE {unique}INDEX IF NOT EXISTS \"{idx_name}\" ON \"public\".\"{table}\" USING {method} ({cols});"
@@ -553,7 +714,9 @@ fn normalize_fk_action(action: &str) -> &'static str {
 }
 
 fn add_fk_sql(table: &str, rel: &RelationFieldAst, ref_table: &str) -> Result<String> {
-    let fk_col = rel.foreign_key.as_deref()
+    let fk_col = rel
+        .foreign_key
+        .as_deref()
         .ok_or_else(|| anyhow::anyhow!("belongsTo relation on '{table}' missing foreignKey"))?;
     let ref_col = rel.references.as_deref().unwrap_or("id");
     let on_delete = normalize_fk_action(rel.on_delete.as_deref().unwrap_or("restrict"));
@@ -571,7 +734,9 @@ fn add_fk_sql(table: &str, rel: &RelationFieldAst, ref_table: &str) -> Result<St
 fn to_snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if c.is_uppercase() && i > 0 { out.push('_'); }
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
         out.push(c.to_lowercase().next().unwrap());
     }
     out
@@ -582,4 +747,3 @@ fn migration_hash(sql: &str) -> String {
     h.update(sql.as_bytes());
     format!("sha256:{}", hex::encode(h.finalize()))
 }
-

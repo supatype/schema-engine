@@ -42,31 +42,52 @@ CREATE TABLE IF NOT EXISTS _platform.schema_state (
 
 /// Load the cached DB state from `_platform.schema_state`.
 /// Returns None if the table doesn't exist yet or no row is stored.
-pub async fn load_schema_state(pool: &PgPool) -> Option<crate::state::database_state::DatabaseState> {
-    let row: Option<(serde_json::Value,)> = sqlx::query_as(
-        "SELECT db_state FROM _platform.schema_state WHERE id = 1"
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+pub async fn load_schema_state(
+    pool: &PgPool,
+) -> Option<crate::state::database_state::DatabaseState> {
+    let row: Option<(serde_json::Value,)> =
+        sqlx::query_as("SELECT db_state FROM _platform.schema_state WHERE id = 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
 
     row.and_then(|(val,)| serde_json::from_value(val).ok())
 }
 
 /// List all recorded migrations ordered by applied_at ascending.
 pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
-    let rows: Vec<(i32, String, String, String, bool, String, Option<serde_json::Value>)> =
-        sqlx::query_as(
-            "SELECT id, name, hash, applied_at::TEXT, rolled_back, engine_version, schema_snapshot \
-             FROM _platform.migrations ORDER BY applied_at ASC"
-        )
-        .fetch_all(pool)
-        .await?;
+    let rows: Vec<(
+        i32,
+        String,
+        String,
+        String,
+        bool,
+        String,
+        Option<serde_json::Value>,
+    )> = sqlx::query_as(
+        "SELECT id, name, hash, applied_at::TEXT, rolled_back, engine_version, schema_snapshot \
+             FROM _platform.migrations ORDER BY applied_at ASC",
+    )
+    .fetch_all(pool)
+    .await?;
 
-    Ok(rows.into_iter().map(|(id, name, hash, applied_at, rolled_back, engine_version, schema_snapshot)| {
-        MigrationRecord { id, name, hash, applied_at, rolled_back, engine_version, schema_snapshot }
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, hash, applied_at, rolled_back, engine_version, schema_snapshot)| {
+                MigrationRecord {
+                    id,
+                    name,
+                    hash,
+                    applied_at,
+                    rolled_back,
+                    engine_version,
+                    schema_snapshot,
+                }
+            },
+        )
+        .collect())
 }
 
 /// Upsert the current DB state into `_platform.schema_state`.
@@ -78,7 +99,7 @@ pub async fn save_schema_state(
         "INSERT INTO _platform.schema_state (id, db_state, engine_version)
          VALUES (1, $1, $2)
          ON CONFLICT (id) DO UPDATE SET db_state = EXCLUDED.db_state,
-             captured_at = NOW(), engine_version = EXCLUDED.engine_version"
+             captured_at = NOW(), engine_version = EXCLUDED.engine_version",
     )
     .bind(serde_json::to_value(state)?)
     .bind(env!("ENGINE_VERSION"))

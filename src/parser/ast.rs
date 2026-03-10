@@ -72,7 +72,7 @@ pub enum FieldAst {
     // Extended numeric / date types
     SmallInt(ScalarFieldAst),
     Date(ScalarFieldAst),
-    Timestamp(ScalarFieldAst),  // TIMESTAMP (without time zone)
+    Timestamp(ScalarFieldAst), // TIMESTAMP (without time zone)
     Serial(ScalarFieldAst),
     BigSerial(ScalarFieldAst),
     Money(ScalarFieldAst),
@@ -170,7 +170,7 @@ pub struct DecimalFieldAst {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageFieldAst {
-    pub pg_type: String,   // JSONB — stores storage reference
+    pub pg_type: String, // JSONB — stores storage reference
     pub required: bool,
     pub bucket: String,
 }
@@ -178,16 +178,16 @@ pub struct StorageFieldAst {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeoFieldAst {
-    pub pg_type: String,   // GEOGRAPHY(...)
+    pub pg_type: String, // GEOGRAPHY(...)
     pub required: bool,
-    pub geo_type: String,  // point | polygon | linestring
+    pub geo_type: String, // point | polygon | linestring
     pub srid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VectorFieldAst {
-    pub pg_type: String,   // VECTOR(n)
+    pub pg_type: String, // VECTOR(n)
     pub required: bool,
     pub dimensions: u32,
 }
@@ -205,7 +205,9 @@ pub struct BlocksFieldAst {
     pub index: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Defines one block type within a `blocks` field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,8 +230,8 @@ pub struct RelationFieldAst {
     pub cardinality: RelationCardinality,
     pub target: String,
     pub foreign_key: Option<String>,
-    pub references: Option<String>,  // referenced column, default "id"
-    pub through: Option<String>,     // junction table for manyToMany
+    pub references: Option<String>, // referenced column, default "id"
+    pub through: Option<String>,    // junction table for manyToMany
     pub on_delete: Option<String>,
     pub on_update: Option<String>,
     /// True when the corresponding hasOne on the other side requires the FK to be UNIQUE.
@@ -281,11 +283,19 @@ pub enum AccessRule {
     Public,
     Private,
     Authenticated,
-    Owner { field: String },
-    Role { roles: Vec<String> },
-    Custom { expression: String },
+    Owner {
+        field: String,
+    },
+    Role {
+        roles: Vec<String>,
+    },
+    Custom {
+        expression: String,
+    },
     /// OR-join of multiple rules — any one matching grants access.
-    Any { rules: Vec<AccessRule> },
+    Any {
+        rules: Vec<AccessRule>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

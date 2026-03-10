@@ -1,5 +1,5 @@
-use anyhow::Result;
 use super::ast::{FieldAst, JunctionTableAst, RelationCardinality, SchemaAst, StorageBucketAst};
+use anyhow::Result;
 
 /// The plugin API version this engine build supports.
 pub const SUPPORTED_PLUGIN_API: u32 = 1;
@@ -38,10 +38,8 @@ fn resolve_junction_tables(ast: &mut SchemaAst) {
                         names.join("_")
                     });
 
-                    let already_exists = ast
-                        .junction_tables
-                        .iter()
-                        .any(|j| j.name == junction_name);
+                    let already_exists =
+                        ast.junction_tables.iter().any(|j| j.name == junction_name);
 
                     if !already_exists {
                         ast.junction_tables.push(JunctionTableAst {
@@ -62,10 +60,7 @@ fn resolve_storage_buckets(ast: &mut SchemaAst) {
     for model in &ast.models {
         for (_field_name, field) in &model.fields {
             if let FieldAst::Image(storage) | FieldAst::File(storage) = field {
-                let already_exists = ast
-                    .storage_buckets
-                    .iter()
-                    .any(|b| b.id == storage.bucket);
+                let already_exists = ast.storage_buckets.iter().any(|b| b.id == storage.bucket);
                 if !already_exists {
                     ast.storage_buckets.push(StorageBucketAst {
                         id: storage.bucket.clone(),

@@ -1,5 +1,5 @@
-use anyhow::{bail, Result};
 use super::ast::SchemaAst;
+use anyhow::{bail, Result};
 
 pub fn validate(ast: SchemaAst) -> Result<SchemaAst> {
     let _model_names: std::collections::HashSet<&str> =

@@ -10,8 +10,8 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+use crate::generator::{openapi, sdk, typescript};
 use crate::parser::parse;
-use crate::generator::{typescript, openapi, sdk};
 
 /// Parse a JSON SchemaAst and return the resolved AST back as JSON.
 /// Returns an error JSON string `{"error": "..."}` on failure.
@@ -27,8 +27,7 @@ pub fn wasm_parse(input: &str) -> String {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn wasm_generate_typescript(input: &str) -> String {
     match parse(input) {
-        Ok(ast) => typescript::types::generate(&ast)
-            .unwrap_or_else(|e| error_json(&e.to_string())),
+        Ok(ast) => typescript::types::generate(&ast).unwrap_or_else(|e| error_json(&e.to_string())),
         Err(e) => error_json(&e.to_string()),
     }
 }
@@ -49,8 +48,7 @@ pub fn wasm_generate_openapi(input: &str) -> String {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn wasm_generate_sdk(input: &str, lang: &str) -> String {
     match parse(input) {
-        Ok(ast) => sdk::generate(&ast, lang)
-            .unwrap_or_else(|e| error_json(&e.to_string())),
+        Ok(ast) => sdk::generate(&ast, lang).unwrap_or_else(|e| error_json(&e.to_string())),
         Err(e) => error_json(&e.to_string()),
     }
 }
@@ -58,5 +56,8 @@ pub fn wasm_generate_sdk(input: &str, lang: &str) -> String {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 fn error_json(msg: &str) -> String {
-    format!("{{\"error\":{}}}", serde_json::to_string(msg).unwrap_or_else(|_| "\"unknown error\"".into()))
+    format!(
+        "{{\"error\":{}}}",
+        serde_json::to_string(msg).unwrap_or_else(|_| "\"unknown error\"".into())
+    )
 }

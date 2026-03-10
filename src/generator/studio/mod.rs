@@ -1,6 +1,6 @@
+use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
 use anyhow::Result;
 use serde_json::{json, Value};
-use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
 
 /// Generate Studio metadata JSON consumed by the Studio frontend.
 ///
@@ -16,51 +16,63 @@ use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
 /// }
 /// ```
 pub fn generate(ast: &SchemaAst) -> Result<Value> {
-    let models: Vec<Value> = ast.models.iter().map(|model| {
-        let mut fields: Vec<Value> = Vec::new();
+    let models: Vec<Value> = ast
+        .models
+        .iter()
+        .map(|model| {
+            let mut fields: Vec<Value> = Vec::new();
 
-        for (name, field) in &model.fields {
-            let entry = field_to_json(name, field);
-            fields.push(entry);
-        }
+            for (name, field) in &model.fields {
+                let entry = field_to_json(name, field);
+                fields.push(entry);
+            }
 
-        json!({
-            "name": model.name,
-            "tableName": model.table_name,
-            "singleton": model.options.singleton,
-            "softDelete": model.options.soft_delete,
-            "timestamps": model.options.timestamps,
-            "access": model.access,
-            "indexes": model.indexes,
-            "fields": fields,
+            json!({
+                "name": model.name,
+                "tableName": model.table_name,
+                "singleton": model.options.singleton,
+                "softDelete": model.options.soft_delete,
+                "timestamps": model.options.timestamps,
+                "access": model.access,
+                "indexes": model.indexes,
+                "fields": fields,
+            })
         })
-    }).collect();
+        .collect();
 
-    let junction_tables: Vec<Value> = ast.junction_tables.iter().map(|jt| {
-        json!({
-            "name": jt.name,
-            "modelA": jt.model_a,
-            "modelB": jt.model_b,
-            "fkA": jt.fk_a,
-            "fkB": jt.fk_b,
+    let junction_tables: Vec<Value> = ast
+        .junction_tables
+        .iter()
+        .map(|jt| {
+            json!({
+                "name": jt.name,
+                "modelA": jt.model_a,
+                "modelB": jt.model_b,
+                "fkA": jt.fk_a,
+                "fkB": jt.fk_b,
+            })
         })
-    }).collect();
+        .collect();
 
-    let storage_buckets: Vec<Value> = ast.storage_buckets.iter().map(|b| {
-        json!({
-            "id": b.id,
-            "public": b.public,
-            "allowedMimeTypes": b.allowed_mime_types,
-            "fileSizeLimit": b.file_size_limit,
+    let storage_buckets: Vec<Value> = ast
+        .storage_buckets
+        .iter()
+        .map(|b| {
+            json!({
+                "id": b.id,
+                "public": b.public,
+                "allowedMimeTypes": b.allowed_mime_types,
+                "fileSizeLimit": b.file_size_limit,
+            })
         })
-    }).collect();
+        .collect();
 
     // ─── Stats ────────────────────────────────────────────────────────────────
     let model_count = ast.models.len();
-    let field_count: usize = ast.models.iter()
-        .map(|m| m.fields.len())
-        .sum();
-    let relation_count: usize = ast.models.iter()
+    let field_count: usize = ast.models.iter().map(|m| m.fields.len()).sum();
+    let relation_count: usize = ast
+        .models
+        .iter()
         .flat_map(|m| m.fields.values())
         .filter(|f| matches!(f, FieldAst::Relation(_)))
         .count();
@@ -141,7 +153,11 @@ fn field_to_json(name: &str, field: &FieldAst) -> Value {
             "scale": d.scale,
         }),
         FieldAst::Image(s) | FieldAst::File(s) => {
-            let kind = if matches!(field, FieldAst::Image(_)) { "image" } else { "file" };
+            let kind = if matches!(field, FieldAst::Image(_)) {
+                "image"
+            } else {
+                "file"
+            };
             json!({
                 "name": name,
                 "kind": kind,
@@ -173,13 +189,17 @@ fn field_to_json(name: &str, field: &FieldAst) -> Value {
             "unique": a.unique,
         }),
         FieldAst::Blocks(b) => {
-            let block_defs: Vec<Value> = b.blocks.iter().map(|bd| {
-                json!({
-                    "name": bd.name,
-                    "label": bd.label,
-                    "icon": bd.icon,
+            let block_defs: Vec<Value> = b
+                .blocks
+                .iter()
+                .map(|bd| {
+                    json!({
+                        "name": bd.name,
+                        "label": bd.label,
+                        "icon": bd.icon,
+                    })
                 })
-            }).collect();
+                .collect();
             json!({
                 "name": name,
                 "kind": "blocks",
@@ -259,86 +279,210 @@ fn scalar_kind(field: &FieldAst) -> &'static str {
 
 fn scalar_pg_type(field: &FieldAst) -> &str {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => &f.pg_type,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => &f.pg_type,
         _ => "",
     }
 }
 
 fn scalar_required(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => f.required,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.required,
         _ => false,
     }
 }
 
 fn scalar_unique(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => f.unique,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.unique,
         _ => false,
     }
 }
 
 fn scalar_primary_key(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => f.primary_key,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.primary_key,
         _ => false,
     }
 }
 
 fn scalar_index(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => f.index,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.index,
         _ => false,
     }
 }
 
 fn scalar_localized(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => f.localized,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.localized,
         _ => false,
     }
 }
 
 fn scalar_default(field: &FieldAst) -> Value {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => {
-            serde_json::to_value(&f.default).unwrap_or(Value::Null)
-        }
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => serde_json::to_value(&f.default).unwrap_or(Value::Null),
         _ => Value::Null,
     }
 }

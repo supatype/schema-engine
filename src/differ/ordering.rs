@@ -1,5 +1,5 @@
-use anyhow::Result;
 use super::Operation;
+use anyhow::Result;
 
 /// Topologically sort operations so dependencies are satisfied:
 /// CREATE TABLE before FKs, DROP FK before DROP TABLE, etc.

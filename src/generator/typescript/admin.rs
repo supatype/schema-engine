@@ -1,6 +1,6 @@
+use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, SchemaAst};
 use anyhow::Result;
 use serde_json::{json, Value};
-use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, SchemaAst};
 
 /// Generate admin panel configuration JSON consumed by the admin panel React app.
 ///
@@ -29,13 +29,15 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
         ast.models.iter().partition(|m| m.options.singleton);
 
     // ─── Navigation ───────────────────────────────────────────────────────────
-    let content_items: Vec<Value> = collections.iter().map(|m| {
-        json!({ "label": m.name.clone(), "model": m.table_name.clone() })
-    }).collect();
+    let content_items: Vec<Value> = collections
+        .iter()
+        .map(|m| json!({ "label": m.name.clone(), "model": m.table_name.clone() }))
+        .collect();
 
-    let settings_items: Vec<Value> = singletons.iter().map(|m| {
-        json!({ "label": m.name.clone(), "global": m.table_name.clone() })
-    }).collect();
+    let settings_items: Vec<Value> = singletons
+        .iter()
+        .map(|m| json!({ "label": m.name.clone(), "global": m.table_name.clone() }))
+        .collect();
 
     let mut navigation: Vec<Value> = Vec::new();
     if !content_items.is_empty() {
@@ -46,14 +48,16 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
     }
 
     // ─── Models ───────────────────────────────────────────────────────────────
-    let models: Vec<Value> = collections.iter().map(|model| {
-        build_model_config(model, &default_locale)
-    }).collect();
+    let models: Vec<Value> = collections
+        .iter()
+        .map(|model| build_model_config(model, &default_locale))
+        .collect();
 
     // ─── Globals ──────────────────────────────────────────────────────────────
-    let globals: Vec<Value> = singletons.iter().map(|model| {
-        build_model_config(model, &default_locale)
-    }).collect();
+    let globals: Vec<Value> = singletons
+        .iter()
+        .map(|model| build_model_config(model, &default_locale))
+        .collect();
 
     Ok(json!({
         "version": 1,
@@ -98,12 +102,19 @@ fn has_composite(model: &ModelAst, key: &str) -> bool {
     model.fields.contains_key(key)
 }
 
-fn derive_list_columns(model: &ModelAst, has_publishing: bool, has_timestamps: bool) -> Vec<String> {
+fn derive_list_columns(
+    model: &ModelAst,
+    has_publishing: bool,
+    has_timestamps: bool,
+) -> Vec<String> {
     let mut cols: Vec<String> = Vec::new();
 
     // First text-like field (name, title, slug, email)
     for (name, field) in &model.fields {
-        if matches!(field, FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_)) {
+        if matches!(
+            field,
+            FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_)
+        ) {
             cols.push(name.clone());
             break;
         }
@@ -133,12 +144,12 @@ fn derive_list_columns(model: &ModelAst, has_publishing: bool, has_timestamps: b
 }
 
 fn derive_search_fields(model: &ModelAst) -> Vec<String> {
-    model.fields.iter()
-        .filter_map(|(name, field)| {
-            match field {
-                FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_) => Some(name.clone()),
-                _ => None,
-            }
+    model
+        .fields
+        .iter()
+        .filter_map(|(name, field)| match field {
+            FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_) => Some(name.clone()),
+            _ => None,
         })
         .collect()
 }
@@ -200,21 +211,29 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
                 }));
             }
             FieldAst::Blocks(b) => {
-                let block_defs: Vec<Value> = b.blocks.iter().map(|bd| {
-                    let block_fields: Vec<Value> = bd.fields.iter().map(|(fname, ffield)| {
+                let block_defs: Vec<Value> = b
+                    .blocks
+                    .iter()
+                    .map(|bd| {
+                        let block_fields: Vec<Value> = bd
+                            .fields
+                            .iter()
+                            .map(|(fname, ffield)| {
+                                json!({
+                                    "name": fname,
+                                    "label": to_label(fname),
+                                    "widget": field_widget(ffield),
+                                })
+                            })
+                            .collect();
                         json!({
-                            "name": fname,
-                            "label": to_label(fname),
-                            "widget": field_widget(ffield),
+                            "name": bd.name,
+                            "label": bd.label.as_deref().unwrap_or(&to_label(&bd.name)),
+                            "icon": bd.icon,
+                            "fields": block_fields,
                         })
-                    }).collect();
-                    json!({
-                        "name": bd.name,
-                        "label": bd.label.as_deref().unwrap_or(&to_label(&bd.name)),
-                        "icon": bd.icon,
-                        "fields": block_fields,
                     })
-                }).collect();
+                    .collect();
                 fields.push(json!({
                     "name": name,
                     "label": to_label(name),
@@ -282,8 +301,12 @@ fn field_widget(field: &FieldAst) -> &'static str {
     match field {
         FieldAst::Text(_) => "text",
         FieldAst::RichText(_) => "richText",
-        FieldAst::Integer(_) | FieldAst::Float(_) | FieldAst::BigInt(_)
-        | FieldAst::SmallInt(_) | FieldAst::Decimal(_) | FieldAst::Money(_) => "number",
+        FieldAst::Integer(_)
+        | FieldAst::Float(_)
+        | FieldAst::BigInt(_)
+        | FieldAst::SmallInt(_)
+        | FieldAst::Decimal(_)
+        | FieldAst::Money(_) => "number",
         FieldAst::Boolean(_) => "boolean",
         FieldAst::Datetime(_) => "datetime",
         FieldAst::Date(_) => "date",
@@ -300,7 +323,9 @@ fn field_widget(field: &FieldAst) -> &'static str {
         FieldAst::Blocks(_) => "blockEditor",
         FieldAst::Url(_) => "url",
         FieldAst::Ip(_) | FieldAst::Cidr(_) | FieldAst::Macaddr(_) => "text",
-        FieldAst::Interval(_) | FieldAst::TsQuery(_) | FieldAst::TsVector(_) | FieldAst::Xml(_) => "text",
+        FieldAst::Interval(_) | FieldAst::TsQuery(_) | FieldAst::TsVector(_) | FieldAst::Xml(_) => {
+            "text"
+        }
         FieldAst::Array(_) => "json",
         FieldAst::BigSerial(_) | FieldAst::Serial(_) => "number",
         FieldAst::Bytes(_) => "text",
@@ -309,46 +334,92 @@ fn field_widget(field: &FieldAst) -> &'static str {
 }
 
 fn field_show_in_list(field: &FieldAst) -> bool {
-    matches!(field,
-        FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_)
-        | FieldAst::Enum(_) | FieldAst::Boolean(_) | FieldAst::Integer(_)
-        | FieldAst::Float(_) | FieldAst::Datetime(_) | FieldAst::Date(_)
-        | FieldAst::SmallInt(_) | FieldAst::BigInt(_) | FieldAst::Money(_)
-        | FieldAst::Url(_)
+    matches!(
+        field,
+        FieldAst::Text(_)
+            | FieldAst::Email(_)
+            | FieldAst::Slug(_)
+            | FieldAst::Enum(_)
+            | FieldAst::Boolean(_)
+            | FieldAst::Integer(_)
+            | FieldAst::Float(_)
+            | FieldAst::Datetime(_)
+            | FieldAst::Date(_)
+            | FieldAst::SmallInt(_)
+            | FieldAst::BigInt(_)
+            | FieldAst::Money(_)
+            | FieldAst::Url(_)
     )
 }
 
 fn field_filterable(field: &FieldAst) -> bool {
-    matches!(field,
-        FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_)
-        | FieldAst::Enum(_) | FieldAst::Boolean(_) | FieldAst::Integer(_)
-        | FieldAst::Float(_) | FieldAst::Datetime(_) | FieldAst::Date(_)
-        | FieldAst::Uuid(_) | FieldAst::SmallInt(_) | FieldAst::BigInt(_)
-        | FieldAst::Decimal(_) | FieldAst::Money(_)
+    matches!(
+        field,
+        FieldAst::Text(_)
+            | FieldAst::Email(_)
+            | FieldAst::Slug(_)
+            | FieldAst::Enum(_)
+            | FieldAst::Boolean(_)
+            | FieldAst::Integer(_)
+            | FieldAst::Float(_)
+            | FieldAst::Datetime(_)
+            | FieldAst::Date(_)
+            | FieldAst::Uuid(_)
+            | FieldAst::SmallInt(_)
+            | FieldAst::BigInt(_)
+            | FieldAst::Decimal(_)
+            | FieldAst::Money(_)
     )
 }
 
 fn field_sortable(field: &FieldAst) -> bool {
-    matches!(field,
-        FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_)
-        | FieldAst::Enum(_) | FieldAst::Boolean(_) | FieldAst::Integer(_)
-        | FieldAst::Float(_) | FieldAst::Datetime(_) | FieldAst::Date(_)
-        | FieldAst::Uuid(_) | FieldAst::SmallInt(_) | FieldAst::BigInt(_)
-        | FieldAst::Decimal(_) | FieldAst::Money(_)
-        | FieldAst::Serial(_) | FieldAst::BigSerial(_)
+    matches!(
+        field,
+        FieldAst::Text(_)
+            | FieldAst::Email(_)
+            | FieldAst::Slug(_)
+            | FieldAst::Enum(_)
+            | FieldAst::Boolean(_)
+            | FieldAst::Integer(_)
+            | FieldAst::Float(_)
+            | FieldAst::Datetime(_)
+            | FieldAst::Date(_)
+            | FieldAst::Uuid(_)
+            | FieldAst::SmallInt(_)
+            | FieldAst::BigInt(_)
+            | FieldAst::Decimal(_)
+            | FieldAst::Money(_)
+            | FieldAst::Serial(_)
+            | FieldAst::BigSerial(_)
     )
 }
 
 fn field_required_flag(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Bytes(f)
-        | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::BigInt(f) | FieldAst::Boolean(f) | FieldAst::Datetime(f)
-        | FieldAst::Uuid(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f)
-        | FieldAst::Money(f) | FieldAst::Url(f) | FieldAst::Ip(f)
-        | FieldAst::Cidr(f) | FieldAst::Macaddr(f) | FieldAst::Interval(f)
-        | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => f.required,
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.required,
         FieldAst::Slug(f) => f.required,
         FieldAst::Enum(f) => f.required,
         FieldAst::Json(f) => f.required,
@@ -363,11 +434,21 @@ fn field_required_flag(field: &FieldAst) -> bool {
 
 fn field_is_localized(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Email(f)
-        | FieldAst::Url(f) | FieldAst::Xml(f) | FieldAst::Bytes(f)
-        | FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::BigInt(f)
-        | FieldAst::SmallInt(f) | FieldAst::Boolean(f) | FieldAst::Datetime(f)
-        | FieldAst::Date(f) | FieldAst::Timestamp(f) | FieldAst::Uuid(f) => f.localized,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Xml(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Uuid(f) => f.localized,
         FieldAst::Slug(f) => f.localized,
         FieldAst::Enum(f) => f.localized,
         FieldAst::Json(f) => f.localized,
@@ -396,8 +477,11 @@ pub fn to_label(name: &str) -> String {
             }
             current.push(ch.to_lowercase().next().unwrap());
         }
-        if !current.is_empty() { parts.push(current); }
-        parts.iter()
+        if !current.is_empty() {
+            parts.push(current);
+        }
+        parts
+            .iter()
             .enumerate()
             .map(|(i, w)| if i == 0 { capitalise(w) } else { w.clone() })
             .collect::<Vec<_>>()

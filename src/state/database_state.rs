@@ -1,11 +1,8 @@
-use serde::{Deserialize, Serialize};
 use crate::introspector::{
-    tables::DbTable,
-    indexes::DbIndex,
-    constraints::DbConstraint,
-    rls::DbRlsPolicy,
+    constraints::DbConstraint, indexes::DbIndex, rls::DbRlsPolicy, tables::DbTable,
     triggers::DbTrigger,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

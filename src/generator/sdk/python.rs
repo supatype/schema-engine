@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::parser::ast::{FieldAst, SchemaAst};
+use anyhow::Result;
 
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     let mut out = String::new();
@@ -16,7 +16,9 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         for (fname, f) in &model.fields {
             if let FieldAst::Enum(e) = f {
                 let type_name = enum_type_name(&model.name, fname);
-                let variants = e.values.iter()
+                let variants = e
+                    .values
+                    .iter()
                     .map(|v| format!("\"{}\"", v))
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -33,9 +35,15 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         let mut optional_lines: Vec<String> = Vec::new();
 
         for (name, fld) in &model.fields {
-            if matches!(fld, FieldAst::Relation(_)
-                | FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete)
-            { continue; }
+            if matches!(
+                fld,
+                FieldAst::Relation(_)
+                    | FieldAst::Timestamps
+                    | FieldAst::Publishable
+                    | FieldAst::SoftDelete
+            ) {
+                continue;
+            }
             let (py_type, nullable) = py_type_of(&model.name, name, fld);
             if nullable {
                 optional_lines.push(format!("    {}: Optional[{}] = None\n", name, py_type));
@@ -78,22 +86,37 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 }
 
 fn enum_type_name(model: &str, field: &str) -> String {
-    let cap = field.chars().next()
+    let cap = field
+        .chars()
+        .next()
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_default();
-    let rest = &field[field.char_indices().nth(1).map(|(i, _)| i).unwrap_or(field.len())..];
+    let rest = &field[field
+        .char_indices()
+        .nth(1)
+        .map(|(i, _)| i)
+        .unwrap_or(field.len())..];
     format!("{}{}Enum", model, cap + rest)
 }
 
 fn py_type_of(model: &str, name: &str, field: &FieldAst) -> (String, bool) {
     match field {
-        FieldAst::Text(f) | FieldAst::Email(f) | FieldAst::Url(f)
-        | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Bytes(f) | FieldAst::Xml(f)
-        | FieldAst::TsQuery(f) | FieldAst::TsVector(f)
-        | FieldAst::Interval(f) | FieldAst::Uuid(f) => ("str".into(), !f.required),
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::Xml(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Interval(f)
+        | FieldAst::Uuid(f) => ("str".into(), !f.required),
         FieldAst::Slug(f) => ("str".into(), !f.required),
-        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => ("int".into(), !f.required),
+        FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => {
+            ("int".into(), !f.required)
+        }
         FieldAst::Float(f) | FieldAst::Money(f) => ("float".into(), !f.required),
         FieldAst::BigInt(f) | FieldAst::BigSerial(f) => ("int".into(), !f.required),
         FieldAst::Decimal(f) => ("Decimal".into(), !f.required),

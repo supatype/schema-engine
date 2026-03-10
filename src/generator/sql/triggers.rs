@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::parser::ast::{FieldAst, SchemaAst};
+use anyhow::Result;
 
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     let mut out = String::new();

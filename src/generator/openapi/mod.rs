@@ -1,6 +1,6 @@
+use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
 use anyhow::Result;
 use serde_json::{json, Value};
-use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
 
 /// Generate an OpenAPI 3.0 specification from the schema AST.
 ///
@@ -171,21 +171,39 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
         // Skip composite/virtual fields that expand at SQL level
         match field {
             FieldAst::Timestamps => {
-                properties.insert("created_at".into(), json!({ "type": "string", "format": "date-time", "readOnly": true }));
-                properties.insert("updated_at".into(), json!({ "type": "string", "format": "date-time", "readOnly": true }));
+                properties.insert(
+                    "created_at".into(),
+                    json!({ "type": "string", "format": "date-time", "readOnly": true }),
+                );
+                properties.insert(
+                    "updated_at".into(),
+                    json!({ "type": "string", "format": "date-time", "readOnly": true }),
+                );
                 continue;
             }
             FieldAst::Publishable => {
-                properties.insert("status".into(), json!({
-                    "type": "string",
-                    "enum": ["draft", "published", "scheduled", "archived"]
-                }));
-                properties.insert("published_at".into(), json!({ "type": "string", "format": "date-time", "nullable": true }));
-                properties.insert("scheduled_at".into(), json!({ "type": "string", "format": "date-time", "nullable": true }));
+                properties.insert(
+                    "status".into(),
+                    json!({
+                        "type": "string",
+                        "enum": ["draft", "published", "scheduled", "archived"]
+                    }),
+                );
+                properties.insert(
+                    "published_at".into(),
+                    json!({ "type": "string", "format": "date-time", "nullable": true }),
+                );
+                properties.insert(
+                    "scheduled_at".into(),
+                    json!({ "type": "string", "format": "date-time", "nullable": true }),
+                );
                 continue;
             }
             FieldAst::SoftDelete => {
-                properties.insert("deleted_at".into(), json!({ "type": "string", "format": "date-time", "nullable": true }));
+                properties.insert(
+                    "deleted_at".into(),
+                    json!({ "type": "string", "format": "date-time", "nullable": true }),
+                );
                 continue;
             }
             FieldAst::Relation(rel) => {
@@ -194,12 +212,15 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
                     RelationCardinality::BelongsTo | RelationCardinality::HasOne => {
                         let fk_default = format!("{name}_id");
                         let fk_col = rel.foreign_key.as_deref().unwrap_or(&fk_default);
-                        properties.insert(fk_col.to_string(), json!({
-                            "type": "string",
-                            "format": "uuid",
-                            "nullable": true,
-                            "description": format!("FK → {}", rel.target)
-                        }));
+                        properties.insert(
+                            fk_col.to_string(),
+                            json!({
+                                "type": "string",
+                                "format": "uuid",
+                                "nullable": true,
+                                "description": format!("FK → {}", rel.target)
+                            }),
+                        );
                     }
                     _ => {} // HasMany / ManyToMany are virtual
                 }
@@ -230,9 +251,17 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
 
 fn field_to_schema(field: &FieldAst) -> Value {
     match field {
-        FieldAst::Text(_) | FieldAst::RichText(_) | FieldAst::Url(_) | FieldAst::Xml(_)
-        | FieldAst::Ip(_) | FieldAst::Cidr(_) | FieldAst::Macaddr(_) | FieldAst::Interval(_)
-        | FieldAst::TsQuery(_) | FieldAst::TsVector(_) | FieldAst::Bytes(_) => {
+        FieldAst::Text(_)
+        | FieldAst::RichText(_)
+        | FieldAst::Url(_)
+        | FieldAst::Xml(_)
+        | FieldAst::Ip(_)
+        | FieldAst::Cidr(_)
+        | FieldAst::Macaddr(_)
+        | FieldAst::Interval(_)
+        | FieldAst::TsQuery(_)
+        | FieldAst::TsVector(_)
+        | FieldAst::Bytes(_) => {
             json!({ "type": "string" })
         }
         FieldAst::Email(_) => json!({ "type": "string", "format": "email" }),
@@ -304,12 +333,30 @@ fn array_element_openapi_type(element_type: &str) -> &'static str {
 
 fn field_is_required(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Integer(f) | FieldAst::Float(f)
-        | FieldAst::Boolean(f) | FieldAst::Datetime(f) | FieldAst::Uuid(f) | FieldAst::Email(f)
-        | FieldAst::BigInt(f) | FieldAst::Bytes(f) | FieldAst::SmallInt(f) | FieldAst::Date(f)
-        | FieldAst::Timestamp(f) | FieldAst::Serial(f) | FieldAst::BigSerial(f) | FieldAst::Money(f)
-        | FieldAst::Url(f) | FieldAst::Ip(f) | FieldAst::Cidr(f) | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f) | FieldAst::TsQuery(f) | FieldAst::TsVector(f) | FieldAst::Xml(f) => f.required,
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.required,
         FieldAst::Slug(f) => f.required,
         FieldAst::Enum(f) => f.required,
         FieldAst::Json(f) => f.required,

@@ -86,7 +86,9 @@ fn try_bin(candidates: &[&str]) -> Option<String> {
 }
 
 fn assert_command_success(cmd: &mut Command, description: &str) {
-    let output = cmd.output().unwrap_or_else(|e| panic!("{} failed to spawn: {}", description, e));
+    let output = cmd
+        .output()
+        .unwrap_or_else(|e| panic!("{} failed to spawn: {}", description, e));
     if !output.status.success() {
         panic!(
             "{} exited with {}\nstdout:\n{}\nstderr:\n{}",
@@ -165,7 +167,9 @@ fn test_sdk_exec_php() {
 #[test]
 fn test_sdk_exec_swift() {
     let Some(swiftc) = try_bin(&["swiftc"]) else {
-        eprintln!("[sdk_exec] SKIP swift — swiftc not found on PATH (install Xcode or Swift toolchain)");
+        eprintln!(
+            "[sdk_exec] SKIP swift — swiftc not found on PATH (install Xcode or Swift toolchain)"
+        );
         return;
     };
     let code = generate("swift");

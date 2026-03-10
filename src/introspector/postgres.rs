@@ -1,7 +1,7 @@
+use super::{constraints, extensions, indexes, rls, tables, triggers};
+use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 use sqlx::PgPool;
-use crate::state::database_state::DatabaseState;
-use super::{tables, indexes, constraints, rls, triggers, extensions};
 
 pub async fn introspect(pool: &PgPool, schema: &str) -> Result<DatabaseState> {
     let db_tables = tables::read(pool, schema).await?;

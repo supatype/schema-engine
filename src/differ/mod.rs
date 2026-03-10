@@ -1,16 +1,16 @@
-pub mod table_diff;
 pub mod column_diff;
-pub mod index_diff;
 pub mod constraint_diff;
-pub mod rls_diff;
-pub mod trigger_diff;
-pub mod risk_analyser;
+pub mod index_diff;
 pub mod ordering;
+pub mod risk_analyser;
+pub mod rls_diff;
+pub mod table_diff;
+pub mod trigger_diff;
 
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use crate::parser::ast::{FieldAst, IndexAst, ModelAst, RelationFieldAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,9 +154,18 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState) -> Result<DiffOutput> {
 
     let ordered_ops = ordering::topological_sort(ops)?;
 
-    let safe = ordered_ops.iter().filter(|o| matches!(risk_of(o), Risk::Safe)).count();
-    let cautious = ordered_ops.iter().filter(|o| matches!(risk_of(o), Risk::Cautious)).count();
-    let destructive = ordered_ops.iter().filter(|o| matches!(risk_of(o), Risk::Destructive)).count();
+    let safe = ordered_ops
+        .iter()
+        .filter(|o| matches!(risk_of(o), Risk::Safe))
+        .count();
+    let cautious = ordered_ops
+        .iter()
+        .filter(|o| matches!(risk_of(o), Risk::Cautious))
+        .count();
+    let destructive = ordered_ops
+        .iter()
+        .filter(|o| matches!(risk_of(o), Risk::Destructive))
+        .count();
 
     Ok(DiffOutput {
         operations: ordered_ops,
