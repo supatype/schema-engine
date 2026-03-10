@@ -54,6 +54,21 @@ pub async fn load_schema_state(pool: &PgPool) -> Option<crate::state::database_s
     row.and_then(|(val,)| serde_json::from_value(val).ok())
 }
 
+/// List all recorded migrations ordered by applied_at ascending.
+pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
+    let rows: Vec<(i32, String, String, String, bool, String, Option<serde_json::Value>)> =
+        sqlx::query_as(
+            "SELECT id, name, hash, applied_at::TEXT, rolled_back, engine_version, schema_snapshot \
+             FROM _platform.migrations ORDER BY applied_at ASC"
+        )
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows.into_iter().map(|(id, name, hash, applied_at, rolled_back, engine_version, schema_snapshot)| {
+        MigrationRecord { id, name, hash, applied_at, rolled_back, engine_version, schema_snapshot }
+    }).collect())
+}
+
 /// Upsert the current DB state into `_platform.schema_state`.
 pub async fn save_schema_state(
     pool: &PgPool,

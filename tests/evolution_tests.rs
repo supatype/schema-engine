@@ -1351,3 +1351,214 @@ fn test_admin_blocks_field_widget() {
     let rt_fields = richtext["fields"].as_array().unwrap();
     assert!(rt_fields.iter().any(|f| f["widget"] == "richText"));
 }
+
+// ─── Scenario 37: studio metadata basic model ────────────────────────────────
+
+#[test]
+fn test_studio_metadata_basic_model() {
+    use supatype_engine::generator::studio;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":    { "kind": "uuid",  "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title": { "kind": "text",  "pgType": "TEXT", "required": true, "unique": false, "localized": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let meta = studio::generate(&ast).unwrap();
+
+    assert_eq!(meta["version"], 1);
+
+    let models = meta["models"].as_array().unwrap();
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0]["name"], "Post");
+    assert_eq!(models[0]["tableName"], "posts");
+    assert_eq!(models[0]["singleton"], false);
+
+    let fields = models[0]["fields"].as_array().unwrap();
+    let id_field = fields.iter().find(|f| f["name"] == "id").unwrap();
+    assert_eq!(id_field["kind"], "uuid");
+    assert_eq!(id_field["primaryKey"], true);
+    assert_eq!(id_field["required"], true);
+}
+
+// ─── Scenario 38: studio metadata stats ──────────────────────────────────────
+
+#[test]
+fn test_studio_metadata_stats() {
+    use supatype_engine::generator::studio;
+
+    let ast_json = r#"{
+        "models": [
+            {
+                "name": "Post", "tableName": "posts",
+                "fields": {
+                    "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                    "title":  { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false },
+                    "author": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "uniqueFk": false }
+                },
+                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+            },
+            {
+                "name": "User", "tableName": "users",
+                "fields": {
+                    "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                    "email": { "kind": "email", "pgType": "TEXT", "required": true, "unique": true, "localized": false }
+                },
+                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+            }
+        ]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let meta = studio::generate(&ast).unwrap();
+
+    let stats = &meta["stats"];
+    assert_eq!(stats["modelCount"], 2, "two models");
+    assert_eq!(stats["fieldCount"], 5, "total field count across all models");
+    assert_eq!(stats["relationCount"], 1, "one relation field");
+    assert_eq!(stats["junctionTableCount"], 0);
+    assert_eq!(stats["bucketCount"], 0);
+}
+
+// ─── Scenario 39: studio metadata relation field ──────────────────────────────
+
+#[test]
+fn test_studio_metadata_relation_field() {
+    use supatype_engine::generator::studio;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "author": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "uniqueFk": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let meta = studio::generate(&ast).unwrap();
+
+    let fields = meta["models"][0]["fields"].as_array().unwrap();
+    let author = fields.iter().find(|f| f["name"] == "author").unwrap();
+
+    assert_eq!(author["kind"], "relation");
+    assert_eq!(author["cardinality"], "belongsTo");
+    assert_eq!(author["target"], "User");
+}
+
+// ─── Scenario 40: OpenAPI paths for basic model ───────────────────────────────
+
+#[test]
+fn test_openapi_paths_for_model() {
+    use supatype_engine::generator::openapi;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let spec = openapi::generate(&ast).unwrap();
+
+    assert_eq!(spec["openapi"], "3.0.0");
+
+    let paths = spec["paths"].as_object().unwrap();
+    assert!(paths.contains_key("/posts"), "collection path /posts must exist");
+    assert!(paths.contains_key("/posts/{id}"), "item path /posts/{{id}} must exist");
+
+    let collection = &spec["paths"]["/posts"];
+    assert!(collection["get"].is_object(), "GET /posts must exist");
+    assert!(collection["post"].is_object(), "POST /posts must exist");
+
+    let item = &spec["paths"]["/posts/{id}"];
+    assert!(item["get"].is_object(), "GET /posts/{{id}} must exist");
+    assert!(item["patch"].is_object(), "PATCH /posts/{{id}} must exist");
+    assert!(item["delete"].is_object(), "DELETE /posts/{{id}} must exist");
+}
+
+// ─── Scenario 41: OpenAPI schema field type mapping ──────────────────────────
+
+#[test]
+fn test_openapi_schema_field_types() {
+    use supatype_engine::generator::openapi;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":        { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true,  "unique": false, "default": { "kind": "genRandomUuid" } },
+                "title":     { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false, "localized": false },
+                "views":     { "kind": "integer", "pgType": "INTEGER", "required": false, "unique": false, "localized": false },
+                "active":    { "kind": "boolean", "pgType": "BOOLEAN", "required": false, "unique": false, "localized": false },
+                "createdAt": { "kind": "datetime","pgType": "TIMESTAMPTZ","required": false,"unique": false,"localized": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let spec = openapi::generate(&ast).unwrap();
+
+    let schema_props = &spec["components"]["schemas"]["Post"]["properties"];
+
+    assert_eq!(schema_props["id"]["type"], "string");
+    assert_eq!(schema_props["id"]["format"], "uuid");
+
+    assert_eq!(schema_props["title"]["type"], "string");
+
+    assert_eq!(schema_props["views"]["type"], "integer");
+    assert_eq!(schema_props["views"]["format"], "int32");
+
+    assert_eq!(schema_props["active"]["type"], "boolean");
+
+    assert_eq!(schema_props["createdAt"]["type"], "string");
+    assert_eq!(schema_props["createdAt"]["format"], "date-time");
+}
+
+// ─── Scenario 42: OpenAPI schema enum field ───────────────────────────────────
+
+#[test]
+fn test_openapi_schema_enum_field() {
+    use supatype_engine::generator::openapi;
+
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let spec = openapi::generate(&ast).unwrap();
+
+    let schema_props = &spec["components"]["schemas"]["Post"]["properties"];
+
+    assert_eq!(schema_props["status"]["type"], "string", "enum field must be type string");
+
+    let enum_values = schema_props["status"]["enum"].as_array().unwrap();
+    assert_eq!(enum_values.len(), 3);
+    assert!(enum_values.iter().any(|v| v == "draft"));
+    assert!(enum_values.iter().any(|v| v == "published"));
+    assert!(enum_values.iter().any(|v| v == "archived"));
+
+    // status is required → must appear in required array
+    let required = spec["components"]["schemas"]["Post"]["required"].as_array().unwrap();
+    assert!(required.iter().any(|r| r == "status"), "required enum field must be in required array");
+}

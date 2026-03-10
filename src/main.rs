@@ -80,6 +80,15 @@ enum Command {
     Postgrest,
     /// Generate admin panel configuration JSON
     Admin,
+    /// Generate Studio metadata JSON for the Visual Schema Designer
+    Studio,
+    /// Generate OpenAPI 3.0 specification from the schema
+    Openapi,
+    /// List all recorded migrations from the database
+    Migrations {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+    },
     /// Validate a migration is safe to apply
     Validate {
         #[arg(long, env = "DATABASE_URL")]
@@ -236,6 +245,23 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             let config = supatype_engine::generator::typescript::admin::generate(&ast)?;
             println!("{}", serde_json::to_string_pretty(&config)?);
+        }
+        Command::Studio => {
+            let ast = supatype_engine::parser::parse(&input)?;
+            let metadata = supatype_engine::generator::studio::generate(&ast)?;
+            println!("{}", serde_json::to_string_pretty(&metadata)?);
+        }
+        Command::Openapi => {
+            let ast = supatype_engine::parser::parse(&input)?;
+            let spec = supatype_engine::generator::openapi::generate(&ast)?;
+            println!("{}", serde_json::to_string_pretty(&spec)?);
+        }
+        Command::Migrations { database_url } => {
+            use supatype_engine::state::migration_history;
+            let pool = sqlx::PgPool::connect(&database_url).await
+                .context("Failed to connect to database")?;
+            let migrations = migration_history::list_migrations(&pool).await?;
+            println!("{}", serde_json::to_string_pretty(&migrations)?);
         }
         Command::Validate { database_url } => {
             let diff: supatype_engine::differ::DiffOutput =
