@@ -95,22 +95,27 @@ Both checks are mandatory. If either fails, the binary is deleted and the CLI sh
 ### Generating a new key pair
 
 ```sh
+# Generate password-protected key pair (for offline backup)
 minisign -G -s minisign.key -p minisign.pub
+
+# Generate unencrypted key for CI (minisign has no non-interactive password input)
+minisign -G -W -s minisign-ci.key -p minisign.pub
 ```
+
+Use the `-W` flag to generate an unencrypted key for CI. Keep the password-protected copy offline as a backup.
 
 ### Storage
 
 | Key | Location |
 |-----|----------|
-| Private key | GitHub Actions secret `MINISIGN_PRIVATE_KEY` |
-| Private key password | GitHub Actions secret `MINISIGN_PASSWORD` |
-| Private key backup | Offline encrypted storage (USB/paper, in a safe) |
-| Public key | Embedded in CLI source: `cli/engine/verify.ts` |
+| Private key (unencrypted) | GitHub Actions secret `MINISIGN_PRIVATE_KEY` |
+| Private key (password-protected) | Offline encrypted storage (USB/paper, in a safe) |
+| Public key | Embedded in CLI source |
 
 ### Key Rotation (in case of compromise)
 
 1. Generate a new key pair: `minisign -G`
-2. Update `MINISIGN_PRIVATE_KEY` and `MINISIGN_PASSWORD` in GitHub Actions secrets
+2. Update `MINISIGN_PRIVATE_KEY` in GitHub Actions secrets
 3. Update `MINISIGN_PUBLIC_KEY` in `cli/engine/verify.ts`
 4. Publish a new CLI version with the updated public key
 5. Sign a transition notice with both old and new keys
@@ -121,7 +126,6 @@ minisign -G -s minisign.key -p minisign.pub
 | Secret | Purpose |
 |--------|---------|
 | `MINISIGN_PRIVATE_KEY` | Minisign private key for signing checksums |
-| `MINISIGN_PASSWORD` | Password for the minisign private key |
 | `HETZNER_S3_ACCESS_KEY` | Hetzner Object Storage access key |
 | `HETZNER_S3_SECRET_KEY` | Hetzner Object Storage secret key |
 | `HETZNER_S3_ENDPOINT` | Hetzner S3 endpoint URL |

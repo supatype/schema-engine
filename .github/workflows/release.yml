@@ -221,15 +221,18 @@ jobs:
         working-directory: artifacts
         env:
           MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
-          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
-          # Write the private key to a temporary file
+          # Write the private key to a temporary file.
+          # The key stored in CI secrets must be unencrypted (no password)
+          # since minisign has no non-interactive password input.
+          # The password-protected copy is kept offline as a backup.
           echo "$MINISIGN_PRIVATE_KEY" > /tmp/minisign.key
 
           # Sign the checksum file
-          echo "$MINISIGN_PASSWORD" | minisign -S -s /tmp/minisign.key \
+          minisign -S -s /tmp/minisign.key \
             -m checksums.sha256 \
-            -t "supatype-engine v${{ steps.version.outputs.version }}"
+            -t "supatype-engine v${{ steps.version.outputs.version }}" \
+            -W
 
           # Clean up the key
           rm -f /tmp/minisign.key
