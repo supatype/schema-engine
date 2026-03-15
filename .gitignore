@@ -3,6 +3,3 @@ target/
 .env
 .env.local
 Cargo.lock   # binaries commit their lock file — remove this line once ready for production
-
-# Node.js (CLI engine module)
-node_modules/
