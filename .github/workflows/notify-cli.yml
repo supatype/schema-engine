@@ -1,0 +1,33 @@
+name: Notify CLI of Engine Release
+
+# After a successful engine release, trigger a PR in the CLI repo
+# to update the pinned engine version.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  notify-cli:
+    name: Update CLI Engine Version
+    runs-on: ubuntu-latest
+    if: "!github.event.release.prerelease || contains(github.event.release.tag_name, 'alpha') || contains(github.event.release.tag_name, 'beta')"
+    steps:
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger CLI update workflow
+        env:
+          GH_TOKEN: ${{ secrets.CLI_REPO_TOKEN }}
+        run: |
+          # Skip if token is not configured
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::CLI_REPO_TOKEN not set, skipping CLI notification"
+            exit 0
+          fi
+
+          gh workflow run update-engine-version.yml \
+            --repo supatype/cli \
+            --field engine_version="${{ steps.version.outputs.version }}" \
+            || echo "::warning::Failed to trigger CLI update (non-fatal)"
