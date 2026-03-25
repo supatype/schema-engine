@@ -141,10 +141,7 @@ fn test_add_multiple_enum_values_all_safe() {
 
     for op in &add_ops {
         if let Operation::AddEnumValue { risk, .. } = op {
-            assert!(
-                matches!(risk, Risk::Safe),
-                "all additions should be Safe"
-            );
+            assert!(matches!(risk, Risk::Safe), "all additions should be Safe");
         }
     }
 
@@ -217,18 +214,20 @@ fn test_remove_enum_value_produces_warning() {
     let diff = differ::diff(&ast, &db).unwrap();
 
     // Warnings should mention the removed value
-    let has_removal_warning = diff.warnings.iter().any(|w| {
-        w.contains("archived") && (w.contains("Removing") || w.contains("removing"))
-    });
+    let has_removal_warning = diff
+        .warnings
+        .iter()
+        .any(|w| w.contains("archived") && (w.contains("Removing") || w.contains("removing")));
     assert!(
         has_removal_warning,
         "should produce a warning mentioning the removed enum value 'archived'"
     );
 
     // Warning should mention that rows need updating
-    let mentions_rows = diff.warnings.iter().any(|w| {
-        w.contains("Rows") || w.contains("rows") || w.contains("--force")
-    });
+    let mentions_rows = diff
+        .warnings
+        .iter()
+        .any(|w| w.contains("Rows") || w.contains("rows") || w.contains("--force"));
     assert!(
         mentions_rows,
         "warning should mention that existing rows need updating or --force is required"
@@ -414,16 +413,10 @@ fn test_rename_enum_value_detected() {
     );
 
     if rename_ops.len() == 1 {
-        if let Operation::RenameEnumValue {
-            from, to, risk, ..
-        } = &rename_ops[0]
-        {
+        if let Operation::RenameEnumValue { from, to, risk, .. } = &rename_ops[0] {
             assert_eq!(from, "published");
             assert_eq!(to, "publish");
-            assert!(
-                matches!(risk, Risk::Cautious),
-                "rename should be Cautious"
-            );
+            assert!(matches!(risk, Risk::Cautious), "rename should be Cautious");
         }
     }
 }

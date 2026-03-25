@@ -147,9 +147,7 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
             stmts.push(format!(
                 "ALTER TYPE \"{enum_name}\" RENAME TO \"{old_name}\";"
             ));
-            stmts.push(format!(
-                "CREATE TYPE \"{enum_name}\" AS ENUM ({vals});"
-            ));
+            stmts.push(format!("CREATE TYPE \"{enum_name}\" AS ENUM ({vals});"));
             for (table, column) in affected_columns {
                 stmts.push(format!(
                     "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \

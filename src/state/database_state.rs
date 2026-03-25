@@ -1,6 +1,6 @@
 use crate::introspector::{
-    constraints::DbConstraint, enums::DbEnum, indexes::DbIndex, rls::DbRlsPolicy,
-    tables::DbTable, triggers::DbTrigger,
+    constraints::DbConstraint, enums::DbEnum, indexes::DbIndex, rls::DbRlsPolicy, tables::DbTable,
+    triggers::DbTrigger,
 };
 use serde::{Deserialize, Serialize};
 

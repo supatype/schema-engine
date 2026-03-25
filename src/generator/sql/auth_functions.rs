@@ -40,7 +40,10 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
 
     sql.push_str(&generate_uid_function(&config.auth_schema));
     sql.push_str("\n\n");
-    sql.push_str(&generate_role_function(&config.auth_schema, &config.project_ref));
+    sql.push_str(&generate_role_function(
+        &config.auth_schema,
+        &config.project_ref,
+    ));
     sql.push_str("\n\n");
     sql.push_str(&generate_email_function(&config.auth_schema));
     sql.push_str("\n\n");

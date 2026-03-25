@@ -2696,10 +2696,7 @@ fn test_enum_remove_value_requires_force() {
 
     // Without --force, migration generation should fail
     let result = supatype_engine::generator::sql::migration::forward_sql(&diff, false);
-    assert!(
-        result.is_err(),
-        "enum value removal must require --force"
-    );
+    assert!(result.is_err(), "enum value removal must require --force");
 
     // With --force, it should succeed
     let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, true).unwrap();
@@ -2742,7 +2739,9 @@ fn test_enum_remove_value_warning_message() {
 
     let diff = differ::diff(&ast, &db).unwrap();
     assert!(
-        diff.warnings.iter().any(|w| w.contains("archived") && w.contains("posts_status")),
+        diff.warnings
+            .iter()
+            .any(|w| w.contains("archived") && w.contains("posts_status")),
         "should warn about removing enum value 'archived' from 'posts_status'"
     );
 }

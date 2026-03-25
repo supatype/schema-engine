@@ -232,9 +232,7 @@ fn render_operation(op: &Operation) -> Result<String> {
         // Task 67: Add enum value — Postgres 12+ supports this inside transactions.
         Operation::AddEnumValue {
             enum_name, value, ..
-        } => Ok(format!(
-            "ALTER TYPE \"{enum_name}\" ADD VALUE '{value}';"
-        )),
+        } => Ok(format!("ALTER TYPE \"{enum_name}\" ADD VALUE '{value}';")),
         // Task 68: Remove enum value — Postgres has no ALTER TYPE ... REMOVE VALUE.
         // Strategy: rename old type → create new type without value → alter columns → drop old.
         Operation::RemoveEnumValue {
@@ -325,9 +323,7 @@ fn render_operation(op: &Operation) -> Result<String> {
             ));
 
             // 2. Create new type with desired order
-            stmts.push(format!(
-                "CREATE TYPE \"{enum_name}\" AS ENUM ({vals});"
-            ));
+            stmts.push(format!("CREATE TYPE \"{enum_name}\" AS ENUM ({vals});"));
 
             // 3. Alter all columns to use the new type
             for (table, column) in affected_columns {

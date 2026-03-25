@@ -94,9 +94,17 @@ enum Command {
     Admin,
     /// Generate auth helper SQL functions (auth.uid, auth.role, auth.email, auth.jwt)
     AuthFunctions {
-        #[arg(long, default_value = "", help = "Project reference for cloud mode (e.g., kxv4m2np)")]
+        #[arg(
+            long,
+            default_value = "",
+            help = "Project reference for cloud mode (e.g., kxv4m2np)"
+        )]
         project_ref: String,
-        #[arg(long, default_value = "auth", help = "Schema where auth functions are created")]
+        #[arg(
+            long,
+            default_value = "auth",
+            help = "Schema where auth functions are created"
+        )]
         auth_schema: String,
     },
     /// Generate SSO / OIDC provider schema SQL (_sso schema + oauth_* tables + RLS)
@@ -304,7 +312,8 @@ async fn main() -> Result<()> {
                 project_ref,
                 auth_schema,
             };
-            let sql = supatype_engine::generator::sql::auth_functions::generate_auth_functions(&config);
+            let sql =
+                supatype_engine::generator::sql::auth_functions::generate_auth_functions(&config);
             println!("{sql}");
         }
         Command::Sso => {

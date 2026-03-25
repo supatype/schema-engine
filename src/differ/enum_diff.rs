@@ -60,8 +60,11 @@ pub fn diff(
     }
 
     // Build a map of existing DB enums: name → ordered values
-    let db_enums: std::collections::HashMap<&str, &Vec<String>> =
-        db.enums.iter().map(|e| (e.name.as_str(), &e.values)).collect();
+    let db_enums: std::collections::HashMap<&str, &Vec<String>> = db
+        .enums
+        .iter()
+        .map(|e| (e.name.as_str(), &e.values))
+        .collect();
 
     let schema_enum_names: std::collections::HashSet<&str> =
         schema_enums.keys().map(|s| s.as_str()).collect();

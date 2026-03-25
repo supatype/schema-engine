@@ -59,8 +59,7 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
         .await
         .map_err(engine_error)?;
     let diff = crate::differ::diff(&ast, &db_state).map_err(engine_error)?;
-    let sql = crate::generator::sql::migration::generate(&diff, req.force)
-        .map_err(engine_error)?;
+    let sql = crate::generator::sql::migration::generate(&diff, req.force).map_err(engine_error)?;
     Ok(Json(SqlResponse { sql }))
 }
 
@@ -105,18 +104,13 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     }
 
     let migration_sql =
-        crate::generator::sql::migration::generate(&diff, req.force)
-            .map_err(engine_error)?;
+        crate::generator::sql::migration::generate(&diff, req.force).map_err(engine_error)?;
     let apply_sql =
-        crate::generator::sql::migration::forward_sql(&diff, req.force)
-            .map_err(engine_error)?;
+        crate::generator::sql::migration::forward_sql(&diff, req.force).map_err(engine_error)?;
 
-    let migration_name = req.name.unwrap_or_else(|| {
-        format!(
-            "push_{}",
-            chrono::Utc::now().format("%Y%m%d_%H%M%S")
-        )
-    });
+    let migration_name = req
+        .name
+        .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
 
     // Apply forward-only SQL
     sqlx::raw_sql(&apply_sql)
@@ -168,9 +162,7 @@ pub async fn generate(Json(req): Json<GenerateRequest>) -> EngineResponse<CodeRe
         "typescript" | "ts" => {
             crate::generator::typescript::types::generate(&ast).map_err(engine_error)?
         }
-        other => {
-            crate::generator::sdk::generate(&ast, other).map_err(engine_error)?
-        }
+        other => crate::generator::sdk::generate(&ast, other).map_err(engine_error)?,
     };
     Ok(Json(CodeResponse { code }))
 }
@@ -209,8 +201,7 @@ pub async fn storage(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse>
 pub async fn postgrest(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Value> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
-    let config =
-        crate::generator::config::postgrest::generate(&ast).map_err(engine_error)?;
+    let config = crate::generator::config::postgrest::generate(&ast).map_err(engine_error)?;
     Ok(Json(config))
 }
 
@@ -231,9 +222,7 @@ pub async fn sso(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
     let sql = match &ast.sso {
-        Some(sso_cfg) => {
-            crate::generator::sql::sso::generate(sso_cfg).map_err(engine_error)?
-        }
+        Some(sso_cfg) => crate::generator::sql::sso::generate(sso_cfg).map_err(engine_error)?,
         None => "-- SSO not configured in this schema.".to_string(),
     };
     Ok(Json(SqlResponse { sql }))
@@ -244,8 +233,7 @@ pub async fn sso(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse> {
 pub async fn admin(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Value> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
-    let config =
-        crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
+    let config = crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
     Ok(Json(config))
 }
 
@@ -320,9 +308,7 @@ fn parse_ast(
     crate::parser::parse(input).map_err(engine_error)
 }
 
-async fn connect_db(
-    url: &str,
-) -> Result<PgPool, (StatusCode, Json<ErrorResponse>)> {
+async fn connect_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse>)> {
     PgPool::connect(url)
         .await
         .map_err(|e| engine_error(anyhow::anyhow!("Failed to connect to database: {e}")))
