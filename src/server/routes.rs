@@ -76,7 +76,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     sqlx::raw_sql(migration_history::create_migrations_table_sql())
         .execute(&pool)
         .await
-        .map_err(|e| engine_error(e))?;
+        .map_err(engine_error)?;
 
     // Load DB state: from cache unless no_cache
     let db_state = if !req.no_cache {
@@ -116,7 +116,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     sqlx::raw_sql(&apply_sql)
         .execute(&pool)
         .await
-        .map_err(|e| engine_error(e))?;
+        .map_err(engine_error)?;
 
     // Refresh and cache post-migration DB state
     let new_db_state = crate::introspector::introspect(&pool, &req.schema)
@@ -143,7 +143,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     .bind(serde_json::to_value(&ast).ok())
     .execute(&pool)
     .await
-    .map_err(|e| engine_error(e))?;
+    .map_err(engine_error)?;
 
     info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
     Ok(Json(serde_json::json!({
@@ -268,8 +268,7 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
 // ── Validate (DB) ───────────────────────────────────────────────────────────
 
 pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_json::Value> {
-    let diff: crate::differ::DiffOutput =
-        serde_json::from_value(req.diff).map_err(|e| engine_error(e))?;
+    let diff: crate::differ::DiffOutput = serde_json::from_value(req.diff).map_err(engine_error)?;
     let pool = connect_db(&req.database_url).await?;
     let report = crate::differ::risk_analyser::validate(&diff, &pool)
         .await

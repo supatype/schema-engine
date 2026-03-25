@@ -226,7 +226,7 @@ fn diff_enum_values(
             enum_name: enum_name.to_string(),
             old_values: db_vals.to_vec(),
             new_values: schema_vals.to_vec(),
-            affected_columns: affected_columns,
+            affected_columns,
             risk: Risk::Cautious,
         });
         warnings.push(format!(
