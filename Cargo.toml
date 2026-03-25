@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [[bin]]
 name = "supatype-engine-server"
-path = "src/server.rs"
+path = "src/server_main.rs"
 
 [lib]
 name = "supatype_engine"

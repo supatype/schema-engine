@@ -9,7 +9,7 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && \
     echo "pub mod generator; pub mod licensing; pub mod parser; pub mod wasm;" > src/lib.rs && \
     echo "fn main() {}" > src/main.rs && \
-    echo "fn main() {}" > src/server.rs && \
+    echo "fn main() {}" > src/server_main.rs && \
     mkdir -p src/generator src/licensing src/parser src/server && \
     touch src/generator/mod.rs src/licensing/mod.rs src/parser/mod.rs src/wasm.rs src/server/mod.rs && \
     cargo build --release --bin supatype-engine-server 2>/dev/null || true

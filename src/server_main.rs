@@ -1,4 +1,4 @@
-mod server;
+use supatype_engine::server;
 
 use axum::{
     routing::{get, post},
