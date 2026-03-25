@@ -105,6 +105,60 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         Operation::DropEnum { name, .. } => {
             format!("-- WARNING: Cannot automatically roll back DROP TYPE \"{name}\".")
         }
+        // AddEnumValue → cannot remove a value from an enum directly; warn.
+        Operation::AddEnumValue {
+            enum_name, value, ..
+        } => {
+            format!(
+                "-- WARNING: Cannot automatically roll back ADD VALUE '{value}' on \"{enum_name}\". \
+                 Postgres does not support removing enum values without recreating the type."
+            )
+        }
+        // RemoveEnumValue → re-add the removed value
+        Operation::RemoveEnumValue {
+            enum_name, value, ..
+        } => {
+            format!("ALTER TYPE \"{enum_name}\" ADD VALUE '{value}';")
+        }
+        // RenameEnumValue → rename back
+        Operation::RenameEnumValue {
+            enum_name,
+            from,
+            to,
+            ..
+        } => {
+            format!("ALTER TYPE \"{enum_name}\" RENAME VALUE '{to}' TO '{from}';")
+        }
+        // ReorderEnumValues → recreate with old order
+        Operation::ReorderEnumValues {
+            enum_name,
+            old_values,
+            affected_columns,
+            ..
+        } => {
+            let old_name = format!("{enum_name}_old");
+            let vals = old_values
+                .iter()
+                .map(|v| format!("'{v}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let mut stmts = Vec::new();
+            stmts.push(format!(
+                "ALTER TYPE \"{enum_name}\" RENAME TO \"{old_name}\";"
+            ));
+            stmts.push(format!(
+                "CREATE TYPE \"{enum_name}\" AS ENUM ({vals});"
+            ));
+            for (table, column) in affected_columns {
+                stmts.push(format!(
+                    "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
+                     TYPE \"{enum_name}\" USING \"{column}\"::text::\"{enum_name}\";"
+                ));
+            }
+            stmts.push(format!("DROP TYPE \"{old_name}\";"));
+            stmts.join("\n")
+        }
         // EnableRls → DISABLE ROW LEVEL SECURITY
         Operation::EnableRls { table, .. } => {
             format!("ALTER TABLE \"public\".\"{table}\" DISABLE ROW LEVEL SECURITY;")
@@ -239,6 +293,21 @@ fn forward_description(op: &Operation) -> String {
         } => format!("drop fk {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("create enum {name}"),
         Operation::DropEnum { name, .. } => format!("drop enum {name}"),
+        Operation::AddEnumValue {
+            enum_name, value, ..
+        } => format!("add enum value {enum_name}.'{value}'"),
+        Operation::RemoveEnumValue {
+            enum_name, value, ..
+        } => format!("remove enum value {enum_name}.'{value}'"),
+        Operation::RenameEnumValue {
+            enum_name,
+            from,
+            to,
+            ..
+        } => format!("rename enum value {enum_name}.'{from}' -> '{to}'"),
+        Operation::ReorderEnumValues { enum_name, .. } => {
+            format!("reorder enum values {enum_name}")
+        }
         Operation::EnableRls { table, .. } => format!("enable rls {table}"),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("create policy {table}.{policy}")

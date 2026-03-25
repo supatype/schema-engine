@@ -92,6 +92,15 @@ enum Command {
     Postgrest,
     /// Generate admin panel configuration JSON
     Admin,
+    /// Generate auth helper SQL functions (auth.uid, auth.role, auth.email, auth.jwt)
+    AuthFunctions {
+        #[arg(long, default_value = "", help = "Project reference for cloud mode (e.g., kxv4m2np)")]
+        project_ref: String,
+        #[arg(long, default_value = "auth", help = "Schema where auth functions are created")]
+        auth_schema: String,
+    },
+    /// Generate SSO / OIDC provider schema SQL (_sso schema + oauth_* tables + RLS)
+    Sso,
     /// Generate Studio metadata JSON for the Visual Schema Designer
     Studio,
     /// Generate OpenAPI 3.0 specification from the schema
@@ -286,6 +295,29 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             let config = supatype_engine::generator::config::postgrest::generate(&ast)?;
             println!("{}", serde_json::to_string_pretty(&config)?);
+        }
+        Command::AuthFunctions {
+            project_ref,
+            auth_schema,
+        } => {
+            let config = supatype_engine::generator::sql::auth_functions::AuthFunctionConfig {
+                project_ref,
+                auth_schema,
+            };
+            let sql = supatype_engine::generator::sql::auth_functions::generate_auth_functions(&config);
+            println!("{sql}");
+        }
+        Command::Sso => {
+            let ast = supatype_engine::parser::parse(&input)?;
+            match &ast.sso {
+                Some(sso_cfg) => {
+                    let sql = supatype_engine::generator::sql::sso::generate(sso_cfg)?;
+                    println!("{sql}");
+                }
+                None => {
+                    println!("-- SSO not configured in this schema.");
+                }
+            }
         }
         Command::Admin => {
             let ast = supatype_engine::parser::parse(&input)?;

@@ -9,10 +9,11 @@
 //! These are pure unit tests — no DB required.
 
 use supatype_engine::{
-    differ::{self, Operation},
+    differ::{self, Operation, Risk},
     generator::typescript::admin,
     introspector::{
         constraints::{DbConstraint, DbConstraintType},
+        enums::DbEnum,
         rls::DbRlsPolicy,
         tables::{DbColumn, DbTable},
     },
@@ -2370,5 +2371,623 @@ fn test_wasm_generate_typescript_interface() {
     assert!(
         result.contains("title: string"),
         "must include the title field typed as string"
+    );
+}
+
+// ─── Scenario 58: SSO disabled → empty output ────────────────────────────────
+
+#[test]
+fn test_sso_disabled_produces_empty_output() {
+    use supatype_engine::generator::sql::sso;
+    use supatype_engine::parser::ast::SsoConfigAst;
+
+    let cfg = SsoConfigAst {
+        enabled: false,
+        access_token_expiry_secs: 3600,
+        refresh_token_expiry_days: 30,
+        key_rotation_days: 90,
+    };
+    let sql = sso::generate(&cfg).unwrap();
+    assert!(sql.is_empty(), "disabled SSO must produce no SQL");
+}
+
+// ─── Scenario 59: SSO enabled → creates _sso schema ─────────────────────────
+
+#[test]
+fn test_sso_enabled_creates_schema() {
+    use supatype_engine::generator::sql::sso;
+    use supatype_engine::parser::ast::SsoConfigAst;
+
+    let cfg = SsoConfigAst {
+        enabled: true,
+        access_token_expiry_secs: 3600,
+        refresh_token_expiry_days: 30,
+        key_rotation_days: 90,
+    };
+    let sql = sso::generate(&cfg).unwrap();
+    assert!(
+        sql.contains("CREATE SCHEMA IF NOT EXISTS _sso"),
+        "must create the _sso schema"
+    );
+}
+
+// ─── Scenario 60: SSO enabled → creates oauth_clients table ──────────────────
+
+#[test]
+fn test_sso_enabled_creates_oauth_clients() {
+    use supatype_engine::generator::sql::sso;
+    use supatype_engine::parser::ast::SsoConfigAst;
+
+    let cfg = SsoConfigAst {
+        enabled: true,
+        access_token_expiry_secs: 3600,
+        refresh_token_expiry_days: 30,
+        key_rotation_days: 90,
+    };
+    let sql = sso::generate(&cfg).unwrap();
+    assert!(
+        sql.contains("CREATE TABLE IF NOT EXISTS _sso.oauth_clients"),
+        "must create oauth_clients table"
+    );
+    assert!(
+        sql.contains("client_secret"),
+        "oauth_clients must have client_secret column"
+    );
+    assert!(
+        sql.contains("redirect_uris"),
+        "oauth_clients must have redirect_uris column"
+    );
+    assert!(
+        sql.contains("eligible_rules"),
+        "oauth_clients must have eligible_rules JSONB column"
+    );
+}
+
+// ─── Scenario 61: SSO enabled → creates oauth_consents table ─────────────────
+
+#[test]
+fn test_sso_enabled_creates_oauth_consents() {
+    use supatype_engine::generator::sql::sso;
+    use supatype_engine::parser::ast::SsoConfigAst;
+
+    let cfg = SsoConfigAst {
+        enabled: true,
+        access_token_expiry_secs: 3600,
+        refresh_token_expiry_days: 30,
+        key_rotation_days: 90,
+    };
+    let sql = sso::generate(&cfg).unwrap();
+    assert!(
+        sql.contains("CREATE TABLE IF NOT EXISTS _sso.oauth_consents"),
+        "must create oauth_consents table"
+    );
+    assert!(
+        sql.contains("granted_at"),
+        "oauth_consents must have granted_at column"
+    );
+    assert!(
+        sql.contains("oauth_consents_user_client_unique"),
+        "oauth_consents must have (user_id, client_id) unique constraint"
+    );
+}
+
+// ─── Scenario 62: SSO enabled → RLS policies for user token ownership ────────
+
+#[test]
+fn test_sso_enabled_rls_policies() {
+    use supatype_engine::generator::sql::sso;
+    use supatype_engine::parser::ast::SsoConfigAst;
+
+    let cfg = SsoConfigAst {
+        enabled: true,
+        access_token_expiry_secs: 3600,
+        refresh_token_expiry_days: 30,
+        key_rotation_days: 90,
+    };
+    let sql = sso::generate(&cfg).unwrap();
+    assert!(
+        sql.contains("ENABLE ROW LEVEL SECURITY"),
+        "must enable RLS on user-facing tables"
+    );
+    assert!(
+        sql.contains("oauth_access_tokens_select"),
+        "must create select policy for access tokens"
+    );
+    assert!(
+        sql.contains("oauth_consents_delete"),
+        "must create delete policy for consents (revocation)"
+    );
+    assert!(
+        sql.contains("user_id = auth.uid()"),
+        "RLS policies must scope to the authenticated user"
+    );
+}
+
+// ─── Scenario 63: SSO config round-trips through JSON parse ──────────────────
+
+#[test]
+fn test_sso_config_parses_from_schema_json() {
+    let ast_json = r#"{
+        "models": [],
+        "sso": {
+            "enabled": true,
+            "accessTokenExpirySecs": 1800,
+            "refreshTokenExpiryDays": 14,
+            "keyRotationDays": 60
+        }
+    }"#;
+
+    let ast = parser::parse(ast_json).expect("schema with sso block must parse");
+    let sso = ast.sso.expect("sso field must be present");
+    assert!(sso.enabled, "sso.enabled must be true");
+    assert_eq!(sso.access_token_expiry_secs, 1800);
+    assert_eq!(sso.refresh_token_expiry_days, 14);
+    assert_eq!(sso.key_rotation_days, 60);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Enum migration strategy (Gap Appendices tasks 67–70) ───────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Task 67: Add enum value ─────────────────────────────────────────────────
+
+#[test]
+fn test_enum_add_value_safe() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published", "archived"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let add_ops: Vec<_> = diff
+        .operations
+        .iter()
+        .filter(|op| matches!(op, Operation::AddEnumValue { value, .. } if value == "archived"))
+        .collect();
+    assert_eq!(add_ops.len(), 1, "should emit AddEnumValue for 'archived'");
+
+    // AddEnumValue must be classified as safe
+    if let Operation::AddEnumValue { risk, .. } = &add_ops[0] {
+        assert!(matches!(risk, Risk::Safe), "AddEnumValue must be safe");
+    }
+}
+
+#[test]
+fn test_enum_add_value_generates_alter_type_sql() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published", "archived"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false).unwrap();
+    assert!(
+        sql.contains("ALTER TYPE \"posts_status\" ADD VALUE 'archived'"),
+        "forward SQL must contain ALTER TYPE ... ADD VALUE; got:\n{sql}"
+    );
+}
+
+// ─── Task 68: Remove enum value ─────────────────────────────────────────────
+
+#[test]
+fn test_enum_remove_value_destructive() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into(), "archived".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let remove_ops: Vec<_> = diff
+        .operations
+        .iter()
+        .filter(|op| matches!(op, Operation::RemoveEnumValue { value, .. } if value == "archived"))
+        .collect();
+    assert_eq!(
+        remove_ops.len(),
+        1,
+        "should emit RemoveEnumValue for 'archived'"
+    );
+
+    // Must be destructive
+    if let Operation::RemoveEnumValue { risk, .. } = &remove_ops[0] {
+        assert!(
+            matches!(risk, Risk::Destructive),
+            "RemoveEnumValue must be destructive"
+        );
+    }
+
+    // Must require --force
+    assert!(
+        diff.summary.is_destructive,
+        "removing an enum value must flag the migration as destructive"
+    );
+}
+
+#[test]
+fn test_enum_remove_value_requires_force() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into(), "archived".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    // Without --force, migration generation should fail
+    let result = supatype_engine::generator::sql::migration::forward_sql(&diff, false);
+    assert!(
+        result.is_err(),
+        "enum value removal must require --force"
+    );
+
+    // With --force, it should succeed
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, true).unwrap();
+    assert!(
+        sql.contains("RENAME TO \"posts_status_old\""),
+        "remove enum value SQL must rename old type; got:\n{sql}"
+    );
+    assert!(
+        sql.contains("DROP TYPE \"posts_status_old\""),
+        "remove enum value SQL must drop old type; got:\n{sql}"
+    );
+}
+
+#[test]
+fn test_enum_remove_value_warning_message() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into(), "archived".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    assert!(
+        diff.warnings.iter().any(|w| w.contains("archived") && w.contains("posts_status")),
+        "should warn about removing enum value 'archived' from 'posts_status'"
+    );
+}
+
+// ─── Task 69: Rename enum value ─────────────────────────────────────────────
+
+#[test]
+fn test_enum_rename_value_detected_via_similarity() {
+    // "draft" → "drft" looks like a rename (high similarity).
+    // "published" stays the same.
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["drafts", "published"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let rename_ops: Vec<_> = diff
+        .operations
+        .iter()
+        .filter(|op| matches!(op, Operation::RenameEnumValue { .. }))
+        .collect();
+    assert_eq!(rename_ops.len(), 1, "should detect one enum value rename");
+
+    if let Operation::RenameEnumValue {
+        enum_name,
+        from,
+        to,
+        risk,
+    } = &rename_ops[0]
+    {
+        assert_eq!(enum_name, "posts_status");
+        assert_eq!(from, "draft");
+        assert_eq!(to, "drafts");
+        assert!(
+            matches!(risk, Risk::Cautious),
+            "RenameEnumValue must be cautious"
+        );
+    }
+}
+
+#[test]
+fn test_enum_rename_value_generates_alter_type_rename_sql() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["drafts", "published"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false).unwrap();
+    assert!(
+        sql.contains("ALTER TYPE \"posts_status\" RENAME VALUE 'draft' TO 'drafts'"),
+        "forward SQL must contain RENAME VALUE; got:\n{sql}"
+    );
+}
+
+// ─── Task 70: Reorder enum values ───────────────────────────────────────────
+
+#[test]
+fn test_enum_reorder_values_detected() {
+    // Same values, different order: schema says [published, draft], DB has [draft, published].
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["published", "draft"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let reorder_ops: Vec<_> = diff
+        .operations
+        .iter()
+        .filter(|op| matches!(op, Operation::ReorderEnumValues { .. }))
+        .collect();
+    assert_eq!(
+        reorder_ops.len(),
+        1,
+        "should detect reorder when values are the same but order differs"
+    );
+
+    if let Operation::ReorderEnumValues {
+        enum_name, risk, ..
+    } = &reorder_ops[0]
+    {
+        assert_eq!(enum_name, "posts_status");
+        assert!(
+            matches!(risk, Risk::Cautious),
+            "ReorderEnumValues must be cautious"
+        );
+    }
+}
+
+#[test]
+fn test_enum_reorder_values_generates_recreate_sql() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["published", "draft"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false).unwrap();
+
+    // Must rename old → create new → alter columns → drop old
+    assert!(
+        sql.contains("RENAME TO \"posts_status_old\""),
+        "reorder SQL must rename old type; got:\n{sql}"
+    );
+    assert!(
+        sql.contains("CREATE TYPE \"posts_status\" AS ENUM ('published', 'draft')"),
+        "reorder SQL must create type with new order; got:\n{sql}"
+    );
+    assert!(
+        sql.contains("DROP TYPE \"posts_status_old\""),
+        "reorder SQL must drop old type; got:\n{sql}"
+    );
+}
+
+// ─── No-op: unchanged enum produces no operations ───────────────────────────
+
+#[test]
+fn test_enum_no_change_produces_no_ops() {
+    let ast_json = r#"{
+        "models": [{
+            "name": "Post", "tableName": "posts",
+            "fields": {
+                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+        }]
+    }"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("status", "text")],
+        }],
+        enums: vec![DbEnum {
+            name: "posts_status".into(),
+            values: vec!["draft".into(), "published".into()],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    let enum_ops: Vec<_> = diff
+        .operations
+        .iter()
+        .filter(|op| {
+            matches!(
+                op,
+                Operation::CreateEnum { .. }
+                    | Operation::DropEnum { .. }
+                    | Operation::AddEnumValue { .. }
+                    | Operation::RemoveEnumValue { .. }
+                    | Operation::RenameEnumValue { .. }
+                    | Operation::ReorderEnumValues { .. }
+            )
+        })
+        .collect();
+
+    assert!(
+        enum_ops.is_empty(),
+        "unchanged enum should produce no enum operations; got: {enum_ops:?}"
     );
 }

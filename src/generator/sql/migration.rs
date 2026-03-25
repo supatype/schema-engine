@@ -91,6 +91,10 @@ fn render_forward(diff: &DiffOutput) -> Result<String> {
             | Operation::DropForeignKey { risk, .. }
             | Operation::CreateEnum { risk, .. }
             | Operation::DropEnum { risk, .. }
+            | Operation::AddEnumValue { risk, .. }
+            | Operation::RemoveEnumValue { risk, .. }
+            | Operation::RenameEnumValue { risk, .. }
+            | Operation::ReorderEnumValues { risk, .. }
             | Operation::EnableRls { risk, .. }
             | Operation::CreateRlsPolicy { risk, .. }
             | Operation::DropRlsPolicy { risk, .. }
@@ -139,6 +143,21 @@ fn op_description(op: &Operation) -> String {
         } => format!("Drop FK: {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("Create enum: {name}"),
         Operation::DropEnum { name, .. } => format!("Drop enum: {name}"),
+        Operation::AddEnumValue {
+            enum_name, value, ..
+        } => format!("Add enum value: {enum_name}.'{value}'"),
+        Operation::RemoveEnumValue {
+            enum_name, value, ..
+        } => format!("Remove enum value: {enum_name}.'{value}'"),
+        Operation::RenameEnumValue {
+            enum_name,
+            from,
+            to,
+            ..
+        } => format!("Rename enum value: {enum_name}.'{from}' \u{2192} '{to}'"),
+        Operation::ReorderEnumValues { enum_name, .. } => {
+            format!("Reorder enum values: {enum_name}")
+        }
         Operation::EnableRls { table, .. } => format!("Enable RLS: {table}"),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("Create RLS policy: {table}.{policy}")
@@ -210,6 +229,119 @@ fn render_operation(op: &Operation) -> Result<String> {
             Ok(format!("CREATE TYPE \"{name}\" AS ENUM ({vals});"))
         }
         Operation::DropEnum { name, .. } => Ok(format!("DROP TYPE IF EXISTS \"{name}\";")),
+        // Task 67: Add enum value — Postgres 12+ supports this inside transactions.
+        Operation::AddEnumValue {
+            enum_name, value, ..
+        } => Ok(format!(
+            "ALTER TYPE \"{enum_name}\" ADD VALUE '{value}';"
+        )),
+        // Task 68: Remove enum value — Postgres has no ALTER TYPE ... REMOVE VALUE.
+        // Strategy: rename old type → create new type without value → alter columns → drop old.
+        Operation::RemoveEnumValue {
+            enum_name,
+            value,
+            affected_columns,
+            ..
+        } => {
+            let old_name = format!("{enum_name}_old");
+            let mut stmts = Vec::new();
+
+            // 1. Pre-flight check: warn/fail if rows use this value
+            for (table, column) in affected_columns {
+                stmts.push(format!(
+                    "DO $$ BEGIN\n  \
+                     IF EXISTS (SELECT 1 FROM \"public\".\"{table}\" WHERE \"{column}\"::text = '{value}') THEN\n    \
+                     RAISE WARNING 'Rows in {table}.{column} still use enum value ''{value}''. Update them before applying.';\n  \
+                     END IF;\n\
+                     END $$;"
+                ));
+            }
+
+            // 2. Rename old type
+            stmts.push(format!(
+                "ALTER TYPE \"{enum_name}\" RENAME TO \"{old_name}\";"
+            ));
+
+            // 3. We need the new values — they are all old values minus the removed one.
+            //    Since we don't carry the full old values list in RemoveEnumValue,
+            //    we build the new type dynamically from pg_enum.
+            stmts.push(format!(
+                "DO $$ \n\
+                 DECLARE\n  \
+                   _vals text;\n\
+                 BEGIN\n  \
+                   SELECT string_agg(quote_literal(enumlabel), ', ' ORDER BY enumsortorder)\n  \
+                     INTO _vals\n  \
+                     FROM pg_enum\n  \
+                     JOIN pg_type ON pg_type.oid = pg_enum.enumtypid\n  \
+                    WHERE pg_type.typname = '{old_name}'\n  \
+                      AND enumlabel != '{value}';\n  \
+                   EXECUTE format('CREATE TYPE \"{enum_name}\" AS ENUM (%s)', _vals);\n\
+                 END $$;"
+            ));
+
+            // 4. Alter columns to use the new type
+            for (table, column) in affected_columns {
+                stmts.push(format!(
+                    "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
+                     TYPE \"{enum_name}\" USING \"{column}\"::text::\"{enum_name}\";"
+                ));
+            }
+
+            // 5. Drop the old type
+            stmts.push(format!("DROP TYPE \"{old_name}\";"));
+
+            Ok(stmts.join("\n"))
+        }
+        // Task 69: Rename enum value — Postgres 10+ native support.
+        Operation::RenameEnumValue {
+            enum_name,
+            from,
+            to,
+            ..
+        } => Ok(format!(
+            "ALTER TYPE \"{enum_name}\" RENAME VALUE '{from}' TO '{to}';"
+        )),
+        // Task 70: Reorder enum values — must recreate the type since Postgres
+        // enum ordering is determined by creation order.
+        Operation::ReorderEnumValues {
+            enum_name,
+            new_values,
+            affected_columns,
+            ..
+        } => {
+            let old_name = format!("{enum_name}_old");
+            let vals = new_values
+                .iter()
+                .map(|v| format!("'{v}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let mut stmts = Vec::new();
+
+            // 1. Rename old type
+            stmts.push(format!(
+                "ALTER TYPE \"{enum_name}\" RENAME TO \"{old_name}\";"
+            ));
+
+            // 2. Create new type with desired order
+            stmts.push(format!(
+                "CREATE TYPE \"{enum_name}\" AS ENUM ({vals});"
+            ));
+
+            // 3. Alter all columns to use the new type
+            for (table, column) in affected_columns {
+                stmts.push(format!(
+                    "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
+                     TYPE \"{enum_name}\" USING \"{column}\"::text::\"{enum_name}\";"
+                ));
+            }
+
+            // 4. Drop old type
+            stmts.push(format!("DROP TYPE \"{old_name}\";"));
+
+            Ok(stmts.join("\n"))
+        }
         Operation::EnableRls { table, .. } => Ok(format!(
             "ALTER TABLE \"public\".\"{table}\" ENABLE ROW LEVEL SECURITY;"
         )),

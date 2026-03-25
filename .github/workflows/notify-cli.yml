@@ -1,0 +1,46 @@
+name: Notify CLI of Engine Release
+
+# After a successful engine release, create a PR on the CLI repo
+# to update the pinned engine version.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-cli:
+    name: Update CLI engine version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout CLI repo
+        uses: actions/checkout@v4
+        with:
+          repository: supatype/supatype
+          token: ${{ secrets.CLI_REPO_PAT }}
+
+      - name: Update engine version in CLI
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Update engine-version.ts
+          sed -i "s/export const ENGINE_VERSION = \".*\"/export const ENGINE_VERSION = \"${VERSION}\"/" \
+            packages/cli/src/engine-version.ts
+
+          echo "Updated ENGINE_VERSION to ${VERSION}"
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.CLI_REPO_PAT }}
+          commit-message: "chore(cli): bump engine version to ${{ steps.version.outputs.version }}"
+          title: "chore(cli): bump engine version to ${{ steps.version.outputs.version }}"
+          body: |
+            Automated PR to update the pinned engine version after release.
+
+            Engine release: https://github.com/supatype/supatype-schema-engine/releases/tag/${{ github.ref_name }}
+          branch: "engine-bump/${{ steps.version.outputs.version }}"
+          base: main

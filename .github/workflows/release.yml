@@ -7,108 +7,50 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: supatype-engine
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macOS — native builds
-          - target: aarch64-apple-darwin
-            os: macos-14          # M1 runner
-            artifact: supatype-engine-macos-arm64
-          - target: x86_64-apple-darwin
-            os: macos-13          # Intel runner
-            artifact: supatype-engine-macos-x64
-
-          # Linux — cross-compiled via cross-rs
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
-            artifact: supatype-engine-linux-x64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            use_cross: true
-            artifact: supatype-engine-linux-arm64
-
-          # Windows
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            artifact: supatype-engine-windows-x64.exe
-
+  # ─── Test before releasing ──────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
+      - name: Run tests
+        run: cargo test --workspace
 
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build (native)
-        if: "!matrix.use_cross"
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build (cross)
-        if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Prepare artifact (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} ${{ matrix.artifact }}
-          chmod +x ${{ matrix.artifact }}
-
-      - name: Prepare artifact (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe ${{ matrix.artifact }}
-
-      - name: Generate checksum (Unix)
-        if: runner.os != 'Windows'
-        run: sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
-
-      - name: Generate checksum (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          $hash = (Get-FileHash ${{ matrix.artifact }} -Algorithm SHA256).Hash.ToLower()
-          "$hash  ${{ matrix.artifact }}" | Out-File -Encoding ascii ${{ matrix.artifact }}.sha256
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: |
-            ${{ matrix.artifact }}
-            ${{ matrix.artifact }}.sha256
-
+  # ─── Extract version & create GitHub Release ────────────────────────
   release:
-    name: Create GitHub Release
-    needs: build
+    name: Create Release
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION"
 
-      - name: Create release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # ─── Publish Docker image to Docker Hub ─────────────────────────────
+  publish-docker:
+    name: Publish Docker Image
+    needs: release
+    uses: ./.github/workflows/publish-docker.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.release.outputs.version }}

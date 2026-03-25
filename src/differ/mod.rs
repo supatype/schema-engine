@@ -1,5 +1,6 @@
 pub mod column_diff;
 pub mod constraint_diff;
+pub mod enum_diff;
 pub mod index_diff;
 pub mod ordering;
 pub mod risk_analyser;
@@ -88,6 +89,32 @@ pub enum Operation {
         name: String,
         risk: Risk,
     },
+    AddEnumValue {
+        enum_name: String,
+        value: String,
+        risk: Risk,
+    },
+    RemoveEnumValue {
+        enum_name: String,
+        value: String,
+        /// All table.column pairs that use this enum type.
+        affected_columns: Vec<(String, String)>,
+        risk: Risk,
+    },
+    RenameEnumValue {
+        enum_name: String,
+        from: String,
+        to: String,
+        risk: Risk,
+    },
+    ReorderEnumValues {
+        enum_name: String,
+        old_values: Vec<String>,
+        new_values: Vec<String>,
+        /// All table.column pairs that use this enum type.
+        affected_columns: Vec<(String, String)>,
+        risk: Risk,
+    },
     EnableRls {
         table: String,
         risk: Risk,
@@ -147,6 +174,7 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState) -> Result<DiffOutput> {
     let mut ops: Vec<Operation> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
+    enum_diff::diff(ast, db, &mut ops, &mut warnings)?;
     table_diff::diff(ast, db, &mut ops, &mut warnings)?;
     index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
@@ -193,6 +221,10 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::DropForeignKey { risk, .. }
         | Operation::CreateEnum { risk, .. }
         | Operation::DropEnum { risk, .. }
+        | Operation::AddEnumValue { risk, .. }
+        | Operation::RemoveEnumValue { risk, .. }
+        | Operation::RenameEnumValue { risk, .. }
+        | Operation::ReorderEnumValues { risk, .. }
         | Operation::EnableRls { risk, .. }
         | Operation::CreateRlsPolicy { risk, .. }
         | Operation::DropRlsPolicy { risk, .. }

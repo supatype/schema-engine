@@ -1,6 +1,6 @@
 use crate::introspector::{
-    constraints::DbConstraint, indexes::DbIndex, rls::DbRlsPolicy, tables::DbTable,
-    triggers::DbTrigger,
+    constraints::DbConstraint, enums::DbEnum, indexes::DbIndex, rls::DbRlsPolicy,
+    tables::DbTable, triggers::DbTrigger,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,4 +14,7 @@ pub struct DatabaseState {
     pub rls_policies: Vec<DbRlsPolicy>,
     pub triggers: Vec<DbTrigger>,
     pub extensions: Vec<String>,
+    /// Postgres enum types discovered in this schema.
+    #[serde(default)]
+    pub enums: Vec<DbEnum>,
 }

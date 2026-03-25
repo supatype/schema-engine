@@ -10,6 +10,10 @@ description = "Supatype schema engine — closed source binary"
 name = "supatype-engine"
 path = "src/main.rs"
 
+[[bin]]
+name = "supatype-engine-server"
+path = "src/server.rs"
+
 [lib]
 name = "supatype_engine"
 path = "src/lib.rs"
@@ -45,6 +49,10 @@ tokio = { version = "1", features = ["full"] }
 
 # Database
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-native-tls", "macros"] }
+
+# HTTP server (used by supatype-engine-server binary)
+axum = { version = "0.7", features = ["json"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Logging/tracing
 tracing = "0.1"

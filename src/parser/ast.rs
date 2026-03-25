@@ -21,6 +21,10 @@ pub struct SchemaAst {
     /// Plugins registered for this schema (field type, composite, provider, widget).
     #[serde(default)]
     pub plugins: Vec<PluginRegistrationAst>,
+    /// SSO / OIDC provider configuration. When present and enabled, the engine
+    /// creates the `_sso` schema and all `oauth_*` tables.
+    #[serde(default)]
+    pub sso: Option<SsoConfigAst>,
     /// Warnings from parse/validation.
     #[serde(default)]
     pub warnings: Vec<String>,
@@ -382,4 +386,34 @@ pub struct PluginRegistrationAst {
     pub plugin_api: u32,
     /// Plugin type: "fieldType" | "composite" | "provider" | "widget".
     pub plugin_type: String,
+}
+
+/// SSO / OIDC provider configuration (Phase 11).
+/// When `enabled` is true the engine creates the `_sso` schema and all
+/// `oauth_*` tables on the next `push`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SsoConfigAst {
+    pub enabled: bool,
+    /// Lifetime of access tokens in seconds (default 3600 = 1 hour).
+    #[serde(default = "SsoConfigAst::default_access_token_expiry_secs")]
+    pub access_token_expiry_secs: u32,
+    /// Lifetime of refresh tokens in days (default 30).
+    #[serde(default = "SsoConfigAst::default_refresh_token_expiry_days")]
+    pub refresh_token_expiry_days: u32,
+    /// RSA signing key rotation interval in days (default 90).
+    #[serde(default = "SsoConfigAst::default_key_rotation_days")]
+    pub key_rotation_days: u32,
+}
+
+impl SsoConfigAst {
+    fn default_access_token_expiry_secs() -> u32 {
+        3600
+    }
+    fn default_refresh_token_expiry_days() -> u32 {
+        30
+    }
+    fn default_key_rotation_days() -> u32 {
+        90
+    }
 }

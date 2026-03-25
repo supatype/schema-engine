@@ -16,3 +16,7 @@ pub mod differ;
 pub mod introspector;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod state;
+
+// HTTP server module — only used by the server binary, not WASM
+#[cfg(not(target_arch = "wasm32"))]
+pub mod server;

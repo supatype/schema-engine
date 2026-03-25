@@ -1,4 +1,5 @@
 pub mod constraints;
+pub mod enums;
 pub mod extensions;
 pub mod indexes;
 pub mod postgres;
