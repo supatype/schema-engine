@@ -1,4 +1,4 @@
-use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, SchemaAst};
+use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst};
 use anyhow::Result;
 use serde_json::{json, Value};
 
@@ -50,14 +50,16 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
     // ─── Models ───────────────────────────────────────────────────────────────
     let models: Vec<Value> = collections
         .iter()
-        .map(|model| build_model_config(model, &default_locale))
+        .map(|model| build_model_config(model, &default_locale, &ast))
         .collect();
 
     // ─── Globals ──────────────────────────────────────────────────────────────
     let globals: Vec<Value> = singletons
         .iter()
-        .map(|model| build_model_config(model, &default_locale))
+        .map(|model| build_model_config(model, &default_locale, &ast))
         .collect();
+
+    let storage_buckets = serde_json::to_value(&ast.storage_buckets).unwrap_or_else(|_| json!([]));
 
     Ok(json!({
         "version": 1,
@@ -65,17 +67,18 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
         "navigation": navigation,
         "models": models,
         "globals": globals,
+        "storageBuckets": storage_buckets,
     }))
 }
 
 // ─── Model config builder ─────────────────────────────────────────────────────
 
-fn build_model_config(model: &ModelAst, default_locale: &str) -> Value {
+fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -> Value {
     let has_timestamps = has_composite(model, "timestamps") || model.options.timestamps;
     let has_publishing = has_composite(model, "publishable");
     let has_soft_delete = has_composite(model, "softDelete") || model.options.soft_delete;
 
-    let fields = build_fields_config(model, default_locale);
+    let fields = build_fields_config(model, default_locale, ast);
     let list_columns = derive_list_columns(model, has_publishing, has_timestamps);
     let search_fields = derive_search_fields(model);
     let default_sort = if has_timestamps {
@@ -156,7 +159,7 @@ fn derive_search_fields(model: &ModelAst) -> Vec<String> {
 
 // ─── Field config builders ────────────────────────────────────────────────────
 
-fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
+fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -> Vec<Value> {
     let mut fields: Vec<Value> = Vec::new();
 
     for (name, field) in &model.fields {
@@ -169,7 +172,7 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
                 fields.push(json!({
                     "name": "status",
                     "label": "Status",
-                    "widget": "publishStatus",
+                    "widget": "publish",
                     "required": true,
                     "showInList": true,
                     "filterable": true,
@@ -185,10 +188,10 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
             FieldAst::Relation(rel) => {
                 let (widget, show_in_list) = match rel.cardinality {
                     RelationCardinality::BelongsTo | RelationCardinality::HasOne => {
-                        ("relationPicker", true)
+                        ("relation", true)
                     }
                     RelationCardinality::HasMany | RelationCardinality::ManyToMany => {
-                        ("multiRelationPicker", false)
+                        ("multirelation", false)
                     }
                 };
                 let cardinality = match rel.cardinality {
@@ -197,17 +200,37 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
                     RelationCardinality::HasMany => "hasMany",
                     RelationCardinality::ManyToMany => "manyToMany",
                 };
+                let target_table = resolve_relation_target(rel, ast);
+                let mut options = json!({
+                    "target": target_table,
+                    "cardinality": cardinality,
+                });
+                // For manyToMany, include junction table metadata for the relation widget.
+                if matches!(rel.cardinality, RelationCardinality::ManyToMany) {
+                    if let Some(jt) = ast.junction_tables.iter().find(|jt| {
+                        (jt.model_a == model.name && jt.model_b == rel.target)
+                            || (jt.model_b == model.name && jt.model_a == rel.target)
+                    }) {
+                        let (local_key, foreign_key) = if jt.model_a == model.name {
+                            (jt.fk_a.as_str(), jt.fk_b.as_str())
+                        } else {
+                            (jt.fk_b.as_str(), jt.fk_a.as_str())
+                        };
+                        options["junctionTable"] = json!(jt.name);
+                        options["localKey"] = json!(local_key);
+                        options["foreignKey"] = json!(foreign_key);
+                    }
+                }
                 fields.push(json!({
                     "name": name,
                     "label": to_label(name),
                     "widget": widget,
-                    "target": rel.target,
-                    "cardinality": cardinality,
                     "required": false,
                     "showInList": show_in_list,
                     "filterable": show_in_list,
                     "sortable": false,
                     "localized": false,
+                    "options": options,
                 }));
             }
             FieldAst::Blocks(b) => {
@@ -219,11 +242,26 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
                             .fields
                             .iter()
                             .map(|(fname, ffield)| {
-                                json!({
+                                let mut field = json!({
                                     "name": fname,
                                     "label": to_label(fname),
-                                    "widget": field_widget(ffield),
-                                })
+                                    "widget": field_widget_named(ffield, fname),
+                                    "required": false,
+                                    "localized": false,
+                                });
+                                let options: Option<Value> = match ffield {
+                                    FieldAst::Image(s) | FieldAst::File(s) => {
+                                        Some(json!({ "bucket": s.bucket }))
+                                    }
+                                    FieldAst::Enum(e) => Some(json!({ "values": e.values })),
+                                    FieldAst::Money(_) => Some(json!({ "currency": true, "step": "0.01" })),
+                                    FieldAst::Vector(v) => Some(json!({ "dimensions": v.dimensions })),
+                                    _ => None,
+                                };
+                                if let Some(opts) = options {
+                                    field["options"] = opts;
+                                }
+                                field
                             })
                             .collect();
                         json!({
@@ -237,13 +275,13 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
                 fields.push(json!({
                     "name": name,
                     "label": to_label(name),
-                    "widget": "blockEditor",
+                    "widget": "blocks",
                     "required": b.required,
-                    "blocks": block_defs,
                     "showInList": false,
                     "filterable": false,
                     "sortable": false,
                     "localized": false,
+                    "options": { "blockTypes": block_defs },
                 }));
             }
             other => {
@@ -251,7 +289,13 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
                 let show_in_list = field_show_in_list(other);
                 let filterable = field_filterable(other);
                 let sortable = field_sortable(other);
-                let widget = field_widget(other);
+                let widget = field_widget_named(other, name);
+
+                // Fields that store computed/binary data are read-only in the UI.
+                let read_only = matches!(
+                    other,
+                    FieldAst::Vector(_) | FieldAst::TsVector(_) | FieldAst::TsQuery(_)
+                );
 
                 let mut entry = json!({
                     "name": name,
@@ -264,12 +308,24 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
                     "localized": localized,
                 });
 
-                if let FieldAst::Enum(e) = other {
-                    entry["enumValues"] = json!(e.values);
+                if read_only {
+                    entry["readOnly"] = json!(true);
                 }
-                if let FieldAst::Image(s) | FieldAst::File(s) = other {
-                    entry["bucket"] = json!(s.bucket);
+
+                // Build per-kind options object (all field-specific data lives here so the
+                // studio widget can read it from config.options without knowing the root keys).
+                let options: Option<Value> = match other {
+                    FieldAst::Enum(e) => Some(json!({ "values": e.values })),
+                    FieldAst::Image(s) | FieldAst::File(s) => Some(json!({ "bucket": s.bucket })),
+                    FieldAst::Slug(s) => Some(json!({ "from": s.from })),
+                    FieldAst::Money(_) => Some(json!({ "currency": true, "step": "0.01" })),
+                    FieldAst::Vector(v) => Some(json!({ "dimensions": v.dimensions })),
+                    _ => None,
+                };
+                if let Some(opts) = options {
+                    entry["options"] = opts;
                 }
+
                 if localized {
                     entry["defaultLocale"] = json!(default_locale);
                 }
@@ -280,6 +336,21 @@ fn build_fields_config(model: &ModelAst, default_locale: &str) -> Vec<Value> {
     }
 
     fields
+}
+
+/// Resolve a relation's target to the PostgREST table name (public schema).
+/// System refs like "supatype:user" resolve to their canonical table names.
+fn resolve_relation_target(rel: &RelationFieldAst, ast: &SchemaAst) -> String {
+    if let Some((_sys_schema, sys_table)) =
+        crate::parser::resolver::resolve_system_ref(&rel.target)
+    {
+        return sys_table.to_string();
+    }
+    ast.models
+        .iter()
+        .find(|m| m.name == rel.target)
+        .map(|m| m.table_name.clone())
+        .unwrap_or_else(|| crate::parser::resolver::to_snake_case(&rel.target))
 }
 
 fn datetime_field(name: &str, required: bool, show_in_list: bool, filterable: bool) -> Value {
@@ -300,13 +371,14 @@ fn datetime_field(name: &str, required: bool, show_in_list: bool, filterable: bo
 fn field_widget(field: &FieldAst) -> &'static str {
     match field {
         FieldAst::Text(_) => "text",
-        FieldAst::RichText(_) => "richText",
+        FieldAst::Color(_) => "color",
+        FieldAst::RichText(_) => "richtext",
         FieldAst::Integer(_)
         | FieldAst::Float(_)
         | FieldAst::BigInt(_)
         | FieldAst::SmallInt(_)
-        | FieldAst::Decimal(_)
-        | FieldAst::Money(_) => "number",
+        | FieldAst::Decimal(_) => "number",
+        FieldAst::Money(_) => "number",
         FieldAst::Boolean(_) => "boolean",
         FieldAst::Datetime(_) => "datetime",
         FieldAst::Date(_) => "date",
@@ -318,14 +390,13 @@ fn field_widget(field: &FieldAst) -> &'static str {
         FieldAst::Json(_) => "json",
         FieldAst::Image(_) => "image",
         FieldAst::File(_) => "file",
-        FieldAst::Geo(_) => "geo",
-        FieldAst::Vector(_) => "vector",
-        FieldAst::Blocks(_) => "blockEditor",
+        FieldAst::Geo(_) => "text",
+        FieldAst::Vector(_) => "text",
+        FieldAst::Blocks(_) => "blocks",
         FieldAst::Url(_) => "url",
         FieldAst::Ip(_) | FieldAst::Cidr(_) | FieldAst::Macaddr(_) => "text",
-        FieldAst::Interval(_) | FieldAst::TsQuery(_) | FieldAst::TsVector(_) | FieldAst::Xml(_) => {
-            "text"
-        }
+        FieldAst::Interval(_) | FieldAst::TsQuery(_) | FieldAst::TsVector(_) => "text",
+        FieldAst::Xml(_) => "xml",
         FieldAst::Array(_) => "json",
         FieldAst::BigSerial(_) | FieldAst::Serial(_) => "number",
         FieldAst::Bytes(_) => "text",
@@ -333,10 +404,22 @@ fn field_widget(field: &FieldAst) -> &'static str {
     }
 }
 
+/// Like `field_widget` but also applies name-based heuristics (e.g. colour picker).
+fn field_widget_named(field: &FieldAst, name: &str) -> &'static str {
+    if let FieldAst::Text(_) | FieldAst::Color(_) = field {
+        let lower = name.to_lowercase();
+        if lower.contains("color") || lower.contains("colour") {
+            return "color";
+        }
+    }
+    field_widget(field)
+}
+
 fn field_show_in_list(field: &FieldAst) -> bool {
     matches!(
         field,
         FieldAst::Text(_)
+            | FieldAst::Color(_)
             | FieldAst::Email(_)
             | FieldAst::Slug(_)
             | FieldAst::Enum(_)
@@ -356,6 +439,7 @@ fn field_filterable(field: &FieldAst) -> bool {
     matches!(
         field,
         FieldAst::Text(_)
+            | FieldAst::Color(_)
             | FieldAst::Email(_)
             | FieldAst::Slug(_)
             | FieldAst::Enum(_)
@@ -376,6 +460,7 @@ fn field_sortable(field: &FieldAst) -> bool {
     matches!(
         field,
         FieldAst::Text(_)
+            | FieldAst::Color(_)
             | FieldAst::Email(_)
             | FieldAst::Slug(_)
             | FieldAst::Enum(_)
@@ -397,6 +482,7 @@ fn field_sortable(field: &FieldAst) -> bool {
 fn field_required_flag(field: &FieldAst) -> bool {
     match field {
         FieldAst::Text(f)
+        | FieldAst::Color(f)
         | FieldAst::Email(f)
         | FieldAst::Bytes(f)
         | FieldAst::RichText(f)
@@ -435,6 +521,7 @@ fn field_required_flag(field: &FieldAst) -> bool {
 fn field_is_localized(field: &FieldAst) -> bool {
     match field {
         FieldAst::Text(f)
+        | FieldAst::Color(f)
         | FieldAst::RichText(f)
         | FieldAst::Email(f)
         | FieldAst::Url(f)
@@ -453,6 +540,7 @@ fn field_is_localized(field: &FieldAst) -> bool {
         FieldAst::Enum(f) => f.localized,
         FieldAst::Json(f) => f.localized,
         FieldAst::Decimal(f) => f.localized,
+        FieldAst::Money(f) => f.localized,
         _ => false,
     }
 }

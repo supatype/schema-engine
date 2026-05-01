@@ -1,5 +1,5 @@
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Top-level schema AST as produced by @supatype/schema and consumed by the engine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +46,7 @@ pub struct ModelAst {
     pub name: String,
     pub table_name: String,
     /// Fields keyed by field name.
-    pub fields: HashMap<String, FieldAst>,
+    pub fields: IndexMap<String, FieldAst>,
     #[serde(default)]
     pub access: AccessAst,
     #[serde(default)]
@@ -90,6 +90,8 @@ pub enum FieldAst {
     TsQuery(ScalarFieldAst),
     TsVector(ScalarFieldAst),
     Xml(ScalarFieldAst),
+    // Color (stored as TEXT hex string)
+    Color(ScalarFieldAst),
     // Array
     Array(ArrayFieldAst),
     // Storage fields
@@ -171,12 +173,22 @@ pub struct DecimalFieldAst {
     pub localized: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StorageAccessMode {
+    Public,
+    Private,
+    Custom,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageFieldAst {
     pub pg_type: String, // JSONB — stores storage reference
     pub required: bool,
     pub bucket: String,
+    #[serde(default)]
+    pub access_mode: Option<StorageAccessMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,7 +237,7 @@ pub struct BlockDefinitionAst {
     pub icon: Option<String>,
     /// Fields within this block, keyed by field name.
     #[serde(default)]
-    pub fields: HashMap<String, FieldAst>,
+    pub fields: IndexMap<String, FieldAst>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -351,6 +363,15 @@ pub struct StorageBucketAst {
     pub public: bool,
     pub allowed_mime_types: Option<Vec<String>>,
     pub file_size_limit: Option<u64>,
+    /// Correlates with `storage.buckets.access_mode` and S3 provisioning (`public` | `private` | `custom`).
+    #[serde(default)]
+    pub access_mode: Option<StorageAccessMode>,
+    /// Bucket-scoped RLS on `storage.objects`; when set, overrides model-derived policies for this bucket id.
+    #[serde(default)]
+    pub access: Option<AccessAst>,
+    /// Raw S3 bucket policy JSON; overrides default public-read policy when supplied.
+    #[serde(default)]
+    pub s3_bucket_policy: Option<String>,
 }
 
 /// A plugin-defined custom field type. The Postgres column uses `pg_type`;
