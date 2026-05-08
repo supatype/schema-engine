@@ -4,7 +4,11 @@
       "Bash(cargo check)",
       "Bash(cargo build)",
       "Bash(cargo test --lib)",
-      "Bash(cargo test --test evolution_tests)"
+      "Bash(cargo test --test evolution_tests)",
+      "Bash(cargo test --lib --test parser_tests --test differ_tests --test migration_tests --test evolution_tests)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)"
     ]
   }
 }

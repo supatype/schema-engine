@@ -15,6 +15,7 @@ pub fn resolve(mut ast: SchemaAst) -> Result<SchemaAst> {
     resolve_storage_buckets(&mut ast)?;
     check_plugin_versions(&mut ast);
     validate_slug_source_fields(&ast)?;
+    validate_computed_from_source_fields(&ast)?;
     Ok(ast)
 }
 
@@ -30,6 +31,35 @@ fn validate_slug_source_fields(ast: &SchemaAst) -> Result<()> {
                         field_name,
                         slug.from
                     );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `FieldAst::Text` with `sources` or `template` (`ComputedFrom`) must reference fields on the same model.
+fn validate_computed_from_source_fields(ast: &SchemaAst) -> Result<()> {
+    for model in &ast.models {
+        for (field_name, field) in &model.fields {
+            if let FieldAst::Text(t) = field {
+                let has_preview = !t.sources.is_empty() || t.template.as_ref().is_some_and(|s| !s.is_empty());
+                if !has_preview {
+                    continue;
+                }
+                for src in &t.sources {
+                    if !model.fields.contains_key(src) {
+                        bail!(
+                            "Model '{}': field '{}' (ComputedFrom) references unknown source field '{}'",
+                            model.name, field_name, src
+                        );
+                    }
+                    if src == field_name {
+                        bail!(
+                            "Model '{}': field '{}' lists itself in `sources`",
+                            model.name, field_name
+                        );
+                    }
                 }
             }
         }

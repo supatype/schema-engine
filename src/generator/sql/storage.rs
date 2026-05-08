@@ -1,5 +1,5 @@
 use crate::generator::sql::rls::access_rule_to_expr;
-use crate::parser::ast::{FieldAst, SchemaAst, StorageAccessMode, StorageBucketAst};
+use crate::parser::ast::{AccessRule, FieldAst, SchemaAst, StorageAccessMode, StorageBucketAst};
 use crate::parser::resolver::{bucket_uses_declared_storage_rls, storage_policy_label};
 use anyhow::Result;
 
@@ -17,7 +17,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
     out.push_str(storage_schema_ddl());
     out.push('\n');
 
-    out.push_str("-- ─── Bucket registrations ──────────────────────────────────────────\n\n");
+    out.push_str("-- Bucket registrations\n\n");
     for bucket in &ast.storage_buckets {
         out.push_str(&bucket_upsert_sql(bucket));
         out.push('\n');
@@ -34,7 +34,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 /// DDL that sets up the storage schema and tables.
 /// Safe to run repeatedly — uses IF NOT EXISTS throughout.
 pub fn storage_schema_ddl() -> &'static str {
-    r#"-- ─── Storage schema ────────────────────────────────────────────────────────
+    r#"-- Storage schema
 -- Safe to run repeatedly (IF NOT EXISTS / CREATE OR REPLACE).
 
 CREATE SCHEMA IF NOT EXISTS storage;
@@ -118,22 +118,43 @@ fn sql_quote_bucket_id(bucket_id: &str) -> String {
     bucket_id.replace('\'', "''")
 }
 
+/// Storage policies run on storage.objects, so owner checks must reference the
+/// objects.owner column rather than model-specific FK columns.
+fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
+    match rule {
+        AccessRule::Owner { .. } => "auth.uid() = owner".to_string(),
+        AccessRule::Any { rules } => rules
+            .iter()
+            .map(|r| {
+                let expr = access_rule_to_storage_expr(r);
+                if matches!(r, AccessRule::Any { .. }) {
+                    format!("({expr})")
+                } else {
+                    expr
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n    OR\n    "),
+        _ => access_rule_to_expr(rule),
+    }
+}
+
 fn access_exprs_for_bucket(bucket_id: &str, access: &crate::parser::ast::AccessAst) -> (String, String, String) {
     let b = sql_quote_bucket_id(bucket_id);
     let read_expr = access
         .read
         .as_ref()
-        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_expr(r)))
+        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_storage_expr(r)))
         .unwrap_or_else(|| format!("bucket_id = '{b}' AND auth.uid() IS NOT NULL"));
     let write_expr = access
         .create
         .as_ref()
-        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_expr(r)))
+        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_storage_expr(r)))
         .unwrap_or_else(|| format!("bucket_id = '{b}' AND auth.uid() IS NOT NULL"));
     let delete_expr = access
         .delete
         .as_ref()
-        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_expr(r)))
+        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_storage_expr(r)))
         .unwrap_or_else(|| format!("bucket_id = '{b}' AND auth.uid() IS NOT NULL"));
     (read_expr, write_expr, delete_expr)
 }
@@ -197,21 +218,21 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
                 .access
                 .read
                 .as_ref()
-                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_expr(r)))
+                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_storage_expr(r)))
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             let write_expr = model
                 .access
                 .create
                 .as_ref()
-                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_expr(r)))
+                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_storage_expr(r)))
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             let delete_expr = model
                 .access
                 .delete
                 .as_ref()
-                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_expr(r)))
+                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_storage_expr(r)))
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             model_entries.push(ModelBucketAccess {
@@ -228,7 +249,7 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
         return out;
     }
 
-    out.push_str("-- ─── Storage RLS ────────────────────────────────────────────────────────\n\n");
+    out.push_str("-- Storage RLS\n\n");
     out.push_str("ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;\n\n");
 
     for (label, _bq, read_expr, write_expr, delete_expr) in &bucket_level {

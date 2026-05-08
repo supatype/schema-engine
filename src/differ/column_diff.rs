@@ -57,7 +57,8 @@ fn has_index_flag(field: &FieldAst) -> bool {
         | FieldAst::TsQuery(f)
         | FieldAst::TsVector(f)
         | FieldAst::Xml(f)
-        | FieldAst::RichText(f) => f.index,
+        | FieldAst::RichText(f)
+        | FieldAst::Color(f) => f.index,
         FieldAst::Custom(f) => f.index,
         _ => false,
     }
@@ -89,7 +90,8 @@ fn field_required(field: &FieldAst) -> Option<bool> {
         | FieldAst::TsVector(f)
         | FieldAst::Xml(f)
         | FieldAst::RichText(f)
-        | FieldAst::Bytes(f) => Some(f.required),
+        | FieldAst::Bytes(f)
+        | FieldAst::Color(f) => Some(f.required),
         FieldAst::Slug(f) => Some(f.required),
         FieldAst::Enum(f) => Some(f.required),
         FieldAst::Json(f) => Some(f.required),
@@ -121,11 +123,13 @@ fn is_localized(field: &FieldAst) -> bool {
         | FieldAst::Datetime(f)
         | FieldAst::Date(f)
         | FieldAst::Timestamp(f)
-        | FieldAst::Uuid(f) => f.localized,
+        | FieldAst::Uuid(f)
+        | FieldAst::Color(f) => f.localized,
         FieldAst::Slug(f) => f.localized,
         FieldAst::Enum(f) => f.localized,
         FieldAst::Json(f) => f.localized,
         FieldAst::Decimal(f) => f.localized,
+        FieldAst::Money(f) => f.localized,
         _ => false,
     }
 }
@@ -135,6 +139,7 @@ fn is_text_like(field: &FieldAst) -> bool {
     matches!(
         field,
         FieldAst::Text(_)
+            | FieldAst::Color(_)
             | FieldAst::Email(_)
             | FieldAst::Url(_)
             | FieldAst::Slug(_)
@@ -161,7 +166,8 @@ fn expected_udt(field: &FieldAst) -> Option<&'static str> {
     match field {
         FieldAst::Text(f) if f.pg_type.is_empty() => Some("text"),
         FieldAst::Text(_) => None, // custom pg_type — skip comparison
-        FieldAst::Email(_)
+        FieldAst::Color(_)
+        | FieldAst::Email(_)
         | FieldAst::Url(_)
         | FieldAst::Slug(_)
         | FieldAst::Xml(_)
@@ -199,6 +205,7 @@ fn field_pg_type(field: &FieldAst) -> &'static str {
     }
     match field {
         FieldAst::Text(_)
+        | FieldAst::Color(_)
         | FieldAst::Email(_)
         | FieldAst::Url(_)
         | FieldAst::Slug(_)

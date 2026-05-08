@@ -1,4 +1,6 @@
-use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst};
+use crate::parser::ast::{
+    DefaultValueAst, FieldAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst,
+};
 use anyhow::Result;
 use serde_json::{json, Value};
 
@@ -165,8 +167,8 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
     for (name, field) in &model.fields {
         match field {
             FieldAst::Timestamps => {
-                fields.push(datetime_field("created_at", false, true, false));
-                fields.push(datetime_field("updated_at", false, true, false));
+                fields.push(datetime_field("created_at", false, true, false, true));
+                fields.push(datetime_field("updated_at", false, true, false, true));
             }
             FieldAst::Publishable => {
                 fields.push(json!({
@@ -179,11 +181,11 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     "sortable": false,
                     "localized": false,
                 }));
-                fields.push(datetime_field("published_at", false, false, true));
-                fields.push(datetime_field("scheduled_at", false, false, false));
+                fields.push(datetime_field("published_at", false, false, true, false));
+                fields.push(datetime_field("scheduled_at", false, false, false, false));
             }
             FieldAst::SoftDelete => {
-                fields.push(datetime_field("deleted_at", false, false, false));
+                fields.push(datetime_field("deleted_at", false, false, false, false));
             }
             FieldAst::Relation(rel) => {
                 let (widget, show_in_list) = match rel.cardinality {
@@ -221,7 +223,7 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                         options["foreignKey"] = json!(foreign_key);
                     }
                 }
-                fields.push(json!({
+                let mut entry = json!({
                     "name": name,
                     "label": to_label(name),
                     "widget": widget,
@@ -231,7 +233,11 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     "sortable": false,
                     "localized": false,
                     "options": options,
-                }));
+                });
+                if rel.read_only {
+                    entry["readOnly"] = json!(true);
+                }
+                fields.push(entry);
             }
             FieldAst::Blocks(b) => {
                 let block_defs: Vec<Value> = b
@@ -292,10 +298,11 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                 let widget = field_widget_named(other, name);
 
                 // Fields that store computed/binary data are read-only in the UI.
-                let read_only = matches!(
-                    other,
-                    FieldAst::Vector(_) | FieldAst::TsVector(_) | FieldAst::TsQuery(_)
-                );
+                let read_only = field_is_read_only(other)
+                    || matches!(
+                        other,
+                        FieldAst::Vector(_) | FieldAst::TsVector(_) | FieldAst::TsQuery(_)
+                    );
 
                 let mut entry = json!({
                     "name": name,
@@ -318,6 +325,30 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     FieldAst::Enum(e) => Some(json!({ "values": e.values })),
                     FieldAst::Image(s) | FieldAst::File(s) => Some(json!({ "bucket": s.bucket })),
                     FieldAst::Slug(s) => Some(json!({ "from": s.from })),
+                    FieldAst::Text(t) if !t.sources.is_empty() || t.template.is_some() => {
+                        let multiline = name.to_ascii_lowercase().contains("excerpt")
+                            || name.to_ascii_lowercase().contains("summary")
+                            || t
+                                .template
+                                .as_deref()
+                                .is_some_and(|tpl| tpl.contains('\n'));
+                        let mut m = serde_json::Map::new();
+                        if !t.sources.is_empty() {
+                            m.insert("sources".into(), json!(t.sources));
+                        }
+                        m.insert("multiline".into(), json!(multiline));
+                        if let Some(ref tpl) = t.template {
+                            m.insert("template".into(), json!(tpl));
+                        }
+                        Some(Value::Object(m))
+                    }
+                    FieldAst::Datetime(f)
+                    | FieldAst::Timestamp(f)
+                    | FieldAst::Date(f)
+                        if matches!(&f.default, Some(DefaultValueAst::Now)) =>
+                    {
+                        Some(json!({ "studioTimestampDefault": "now" }))
+                    }
                     FieldAst::Money(_) => Some(json!({ "currency": true, "step": "0.01" })),
                     FieldAst::Vector(v) => Some(json!({ "dimensions": v.dimensions })),
                     _ => None,
@@ -353,23 +384,36 @@ fn resolve_relation_target(rel: &RelationFieldAst, ast: &SchemaAst) -> String {
         .unwrap_or_else(|| crate::parser::resolver::to_snake_case(&rel.target))
 }
 
-fn datetime_field(name: &str, required: bool, show_in_list: bool, filterable: bool) -> Value {
-    json!({
-        "name": name,
-        "label": to_label(name),
-        "widget": "datetime",
-        "required": required,
-        "showInList": show_in_list,
-        "filterable": filterable,
-        "sortable": true,
-        "localized": false,
-    })
+fn datetime_field(
+    name: &str,
+    required: bool,
+    show_in_list: bool,
+    filterable: bool,
+    server_now_studio: bool,
+) -> Value {
+    let mut m = serde_json::Map::new();
+    m.insert("name".into(), json!(name));
+    m.insert("label".into(), json!(to_label(name)));
+    m.insert("widget".into(), json!("datetime"));
+    m.insert("required".into(), json!(required));
+    m.insert("showInList".into(), json!(show_in_list));
+    m.insert("filterable".into(), json!(filterable));
+    m.insert("sortable".into(), json!(true));
+    m.insert("localized".into(), json!(false));
+    if server_now_studio {
+        m.insert(
+            "options".into(),
+            json!({ "studioTimestampDefault": "now" }),
+        );
+    }
+    Value::Object(m)
 }
 
 // ─── Field attribute helpers ──────────────────────────────────────────────────
 
 fn field_widget(field: &FieldAst) -> &'static str {
     match field {
+        FieldAst::Text(s) if !s.sources.is_empty() || s.template.is_some() => "derivedText",
         FieldAst::Text(_) => "text",
         FieldAst::Color(_) => "color",
         FieldAst::RichText(_) => "richtext",
@@ -406,6 +450,11 @@ fn field_widget(field: &FieldAst) -> &'static str {
 
 /// Like `field_widget` but also applies name-based heuristics (e.g. colour picker).
 fn field_widget_named(field: &FieldAst, name: &str) -> &'static str {
+    if let FieldAst::Text(s) = field {
+        if !s.sources.is_empty() || s.template.is_some() {
+            return "derivedText";
+        }
+    }
     if let FieldAst::Text(_) | FieldAst::Color(_) = field {
         let lower = name.to_lowercase();
         if lower.contains("color") || lower.contains("colour") {
@@ -481,6 +530,13 @@ fn field_sortable(field: &FieldAst) -> bool {
 
 fn field_required_flag(field: &FieldAst) -> bool {
     match field {
+        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => {
+            if matches!(&f.default, Some(DefaultValueAst::Now)) {
+                // DB fills NOT NULL timestamps; Studio skips required + can pre-fill preview.
+                return false;
+            }
+            f.required
+        }
         FieldAst::Text(f)
         | FieldAst::Color(f)
         | FieldAst::Email(f)
@@ -490,11 +546,8 @@ fn field_required_flag(field: &FieldAst) -> bool {
         | FieldAst::Float(f)
         | FieldAst::BigInt(f)
         | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f)
         | FieldAst::Uuid(f)
         | FieldAst::SmallInt(f)
-        | FieldAst::Date(f)
-        | FieldAst::Timestamp(f)
         | FieldAst::Serial(f)
         | FieldAst::BigSerial(f)
         | FieldAst::Money(f)
@@ -541,6 +594,48 @@ fn field_is_localized(field: &FieldAst) -> bool {
         FieldAst::Json(f) => f.localized,
         FieldAst::Decimal(f) => f.localized,
         FieldAst::Money(f) => f.localized,
+        _ => false,
+    }
+}
+
+fn field_is_read_only(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(f)
+        | FieldAst::Color(f)
+        | FieldAst::Email(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f) => f.read_only,
+        FieldAst::Slug(f) => f.read_only,
+        FieldAst::Enum(f) => f.read_only,
+        FieldAst::Json(f) => f.read_only,
+        FieldAst::Decimal(f) => f.read_only,
+        FieldAst::Image(f) | FieldAst::File(f) => f.read_only,
+        FieldAst::Geo(f) => f.read_only,
+        FieldAst::Vector(f) => f.read_only,
+        FieldAst::Blocks(f) => f.read_only,
+        FieldAst::Relation(f) => f.read_only,
+        FieldAst::Array(f) => f.read_only,
+        FieldAst::Custom(f) => f.read_only,
         _ => false,
     }
 }

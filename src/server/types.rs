@@ -62,6 +62,24 @@ fn default_auth_schema() -> String {
     "auth".to_string()
 }
 
+/// Studio reads persisted AdminConfig from the DB (single-tenant: URL from env or body).
+#[derive(Deserialize)]
+pub struct StudioConfigRequest {
+    #[serde(default)]
+    pub database_url: Option<String>,
+    #[serde(default = "default_schema")]
+    pub schema: String,
+}
+
+/// Arbitrary SQL for dev/self-host Studio tools. `database_url` should be omitted in production
+/// (set `DATABASE_URL` on the engine); never pass untrusted URLs from browsers.
+#[derive(Deserialize)]
+pub struct SqlExecRequest {
+    pub query: String,
+    #[serde(default)]
+    pub database_url: Option<String>,
+}
+
 // ── Response types ──────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -83,4 +101,11 @@ pub struct SqlResponse {
 #[derive(Serialize)]
 pub struct CodeResponse {
     pub code: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlExecResponse {
+    pub rows: Vec<serde_json::Value>,
+    pub row_count: i64,
 }

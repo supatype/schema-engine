@@ -36,6 +36,11 @@ pub enum Operation {
         table: String,
         risk: Risk,
     },
+    RenameTable {
+        from: String,
+        to: String,
+        risk: Risk,
+    },
     AddColumn {
         table: String,
         column: String,
@@ -71,8 +76,13 @@ pub enum Operation {
     },
     AddForeignKey {
         table: String,
+        /// Schema field name (e.g. "author") — used to derive FK column when `relation.foreign_key` is absent.
+        field_name: String,
         relation: Box<RelationFieldAst>,
         ref_table: String,
+        /// Override schema for cross-schema refs (e.g. `Some("auth")` for `supatype:user`).
+        /// When `None`, the migration schema is used.
+        ref_schema: Option<String>,
         risk: Risk,
     },
     DropForeignKey {
@@ -211,6 +221,7 @@ pub fn risk_of(op: &Operation) -> &Risk {
     match op {
         Operation::CreateTable { risk, .. }
         | Operation::DropTable { risk, .. }
+        | Operation::RenameTable { risk, .. }
         | Operation::AddColumn { risk, .. }
         | Operation::DropColumn { risk, .. }
         | Operation::RenameColumn { risk, .. }

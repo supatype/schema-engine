@@ -25,7 +25,7 @@ fn make_enum_schema(values: &[&str]) -> String {
             "fields": {{
                 "id": {{ "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": {{ "kind": "genRandomUuid" }} }},
                 "title": {{ "kind": "text", "pgType": "TEXT", "required": true, "unique": false }},
-                "status": {{ "kind": "enum", "pgType": "TEXT", "required": true, "unique": false, "values": [{}], "localized": false }}
+                "status": {{ "kind": "enum", "pgType": "ENUM", "required": true, "unique": false, "values": [{}], "localized": false }}
             }},
             "access": {{}}, "indexes": [], "options": {{ "timestamps": false, "softDelete": false }}
         }}]

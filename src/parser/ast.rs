@@ -127,6 +127,14 @@ pub struct ScalarFieldAst {
     /// When true the field is stored as JSONB with locale keys, e.g. {"en": "Hello", "fr": "Bonjour"}.
     #[serde(default)]
     pub localized: bool,
+    #[serde(default)]
+    pub read_only: bool,
+    /// When non-empty (`ComputedFrom` in `@supatype/types`), Studio derives a TEXT preview from these fields until the author edits (create UX).
+    #[serde(default)]
+    pub sources: Vec<String>,
+    /// Optional `ComputedFrom` template: `{field}` and `{truncate(field, max)}` (see `@supatype/types` JSDoc).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +147,8 @@ pub struct SlugFieldAst {
     pub from: String,
     #[serde(default)]
     pub localized: bool,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +161,8 @@ pub struct EnumFieldAst {
     pub default: Option<String>,
     #[serde(default)]
     pub localized: bool,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +172,8 @@ pub struct JsonFieldAst {
     pub required: bool,
     #[serde(default)]
     pub localized: bool,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +185,8 @@ pub struct DecimalFieldAst {
     pub scale: Option<u32>,
     #[serde(default)]
     pub localized: bool,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -189,6 +205,8 @@ pub struct StorageFieldAst {
     pub bucket: String,
     #[serde(default)]
     pub access_mode: Option<StorageAccessMode>,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +216,8 @@ pub struct GeoFieldAst {
     pub required: bool,
     pub geo_type: String, // point | polygon | linestring
     pub srid: Option<u32>,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -206,6 +226,8 @@ pub struct VectorFieldAst {
     pub pg_type: String, // VECTOR(n)
     pub required: bool,
     pub dimensions: u32,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// A repeatable-blocks field — stored as a JSONB array where each entry has a
@@ -219,6 +241,8 @@ pub struct BlocksFieldAst {
     /// When true a GIN index is automatically created (recommended for querying).
     #[serde(default = "default_true")]
     pub index: bool,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 fn default_true() -> bool {
@@ -253,6 +277,8 @@ pub struct RelationFieldAst {
     /// True when the corresponding hasOne on the other side requires the FK to be UNIQUE.
     #[serde(default)]
     pub unique_fk: bool,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -264,6 +290,8 @@ pub struct ArrayFieldAst {
     #[serde(default)]
     pub unique: bool,
     pub default: Option<DefaultValueAst>,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -393,6 +421,8 @@ pub struct CustomFieldAst {
     #[serde(default)]
     pub index: bool,
     pub default: Option<DefaultValueAst>,
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// A plugin registered for this schema via supatype.config.ts.

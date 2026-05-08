@@ -2,6 +2,24 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
+const TABLES_QUERY: &str = "SELECT t.table_name
+         FROM information_schema.tables t
+         JOIN pg_catalog.pg_namespace n
+           ON n.nspname = t.table_schema
+         JOIN pg_catalog.pg_class c
+           ON c.relname = t.table_name
+          AND c.relnamespace = n.oid
+          AND c.relkind = 'r'
+         LEFT JOIN pg_catalog.pg_depend d
+           ON d.classid = 'pg_class'::regclass
+          AND d.objid = c.oid
+          AND d.deptype = 'e'
+         WHERE t.table_schema = $1
+           AND t.table_type = 'BASE TABLE'
+           AND t.table_name NOT LIKE '\\_platform%'
+           AND d.objid IS NULL
+         ORDER BY t.table_name";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbTable {
@@ -22,12 +40,7 @@ pub struct DbColumn {
 }
 
 pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbTable>> {
-    let table_rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT table_name FROM information_schema.tables
-         WHERE table_schema = $1 AND table_type = 'BASE TABLE'
-           AND table_name NOT LIKE '\\_platform%'
-         ORDER BY table_name",
-    )
+    let table_rows: Vec<(String,)> = sqlx::query_as(TABLES_QUERY)
     .bind(schema)
     .fetch_all(pool)
     .await?;
@@ -69,4 +82,16 @@ async fn read_columns(pool: &PgPool, schema: &str, table: &str) -> Result<Vec<Db
             },
         )
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TABLES_QUERY;
+
+    #[test]
+    fn table_query_excludes_extension_owned_tables() {
+        assert!(TABLES_QUERY.contains("LEFT JOIN pg_catalog.pg_depend d"));
+        assert!(TABLES_QUERY.contains("d.deptype = 'e'"));
+        assert!(TABLES_QUERY.contains("d.objid IS NULL"));
+    }
 }

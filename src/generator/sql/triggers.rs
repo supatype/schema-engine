@@ -68,14 +68,56 @@ fn updated_at_trigger(table: &str) -> String {
     )
 }
 
+/// Generate a LISTEN/NOTIFY trigger function and trigger for realtime subscriptions.
+///
+/// The Postgres function fires after any INSERT, UPDATE, or DELETE on `table_name`
+/// and sends a JSON payload on the `supatype_{table_name}` channel via pg_notify.
+/// The payload is `{"table": "...", "event": "INSERT|UPDATE|DELETE", "id": <row id>}`.
+///
+/// This is called for every table unconditionally (all tables are subscription-enabled
+/// until a per-model subscription flag is added to the AST).
+pub fn generate_realtime_triggers(table_name: &str) -> String {
+    format!(
+        r#"CREATE OR REPLACE FUNCTION notify_{table_name}_changes() RETURNS trigger AS $$
+BEGIN
+  PERFORM pg_notify('supatype_{table_name}',
+    json_build_object('table', '{table_name}', 'event', TG_OP, 'id',
+      CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END)::text);
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER {table_name}_changes_trigger
+AFTER INSERT OR UPDATE OR DELETE ON {table_name}
+FOR EACH ROW EXECUTE FUNCTION notify_{table_name}_changes();
+
+"#
+    )
+}
+
+/// Generate DROP statements to remove the realtime trigger and function for `table_name`.
+pub fn generate_realtime_trigger_drop(table_name: &str) -> String {
+    format!(
+        "DROP TRIGGER IF EXISTS {table_name}_changes_trigger ON {table_name};\n\
+         DROP FUNCTION IF EXISTS notify_{table_name}_changes();\n\n"
+    )
+}
+
 fn slug_trigger(table: &str, slug_field: &str, source_field: &str) -> String {
     let fn_name = format!("_platform.set_{table}_{slug_field}");
     format!(
         r#"CREATE OR REPLACE FUNCTION {fn_name}()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' OR NEW."{source_field}" IS DISTINCT FROM OLD."{source_field}" THEN
-    NEW."{slug_field}" = _platform.slugify(NEW."{source_field}"::TEXT);
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."{slug_field}" IS NULL OR BTRIM(NEW."{slug_field}"::TEXT) = '' THEN
+      NEW."{slug_field}" = _platform.slugify(NEW."{source_field}"::TEXT);
+    END IF;
+  ELSIF TG_OP = 'UPDATE' THEN
+    IF NEW."{source_field}" IS DISTINCT FROM OLD."{source_field}" THEN
+      IF OLD."{slug_field}" IS NOT DISTINCT FROM _platform.slugify(OLD."{source_field}"::TEXT) THEN
+        NEW."{slug_field}" = _platform.slugify(NEW."{source_field}"::TEXT);
+      END IF;
+    END IF;
   END IF;
   RETURN NEW;
 END;

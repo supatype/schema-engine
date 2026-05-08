@@ -644,7 +644,7 @@ fn test_rollback_reverses_create_table() {
 
     let ast = parser::parse(ast_json).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let rollback_sql = rollback::generate(&diff).unwrap();
+    let rollback_sql = rollback::generate(&diff, "public").unwrap();
 
     assert!(
         rollback_sql.contains("DROP TABLE IF EXISTS"),
@@ -696,7 +696,7 @@ fn test_rollback_reverses_add_fk() {
 
     let ast = parser::parse(ast_json).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let rollback_sql = rollback::generate(&diff).unwrap();
+    let rollback_sql = rollback::generate(&diff, "public").unwrap();
 
     assert!(
         rollback_sql.contains("DROP CONSTRAINT"),
@@ -957,7 +957,7 @@ fn test_alter_column_not_null_sql_has_preflight_guard() {
 
     let diff = differ::diff(&ast, &db).unwrap();
     // Use force=true so the cautious op passes the guard in migration::generate
-    let sql = migration::generate(&diff, true).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
 
     assert!(
         sql.contains("RAISE EXCEPTION"),
@@ -998,7 +998,7 @@ fn test_alter_column_rollback_reverses_nullability() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let rollback_sql = rollback::generate(&diff).unwrap();
+    let rollback_sql = rollback::generate(&diff, "public").unwrap();
 
     // Rollback of NOT NULL should emit DROP NOT NULL
     assert!(
@@ -1429,7 +1429,7 @@ fn test_admin_enum_field_widget() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
         }]
@@ -1445,7 +1445,7 @@ fn test_admin_enum_field_widget() {
         status_field["widget"], "select",
         "enum fields must use select widget"
     );
-    let enum_values = status_field["enumValues"].as_array().unwrap();
+    let enum_values = status_field["options"]["values"].as_array().unwrap();
     assert_eq!(enum_values.len(), 3);
     assert!(enum_values.iter().any(|v| v == "draft"));
     assert!(enum_values.iter().any(|v| v == "published"));
@@ -1457,6 +1457,12 @@ fn test_admin_enum_field_widget() {
 fn test_admin_belongs_to_relation_picker() {
     let ast_json = r#"{
         "models": [{
+            "name": "User", "tableName": "users",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }, {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
@@ -1479,12 +1485,18 @@ fn test_admin_belongs_to_relation_picker() {
     let ast = parser::parse(ast_json).unwrap();
     let config = admin::generate(&ast).unwrap();
 
-    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let post_model = config["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "Post")
+        .unwrap();
+    let fields = post_model["fields"].as_array().unwrap();
     let author_field = fields.iter().find(|f| f["name"] == "author").unwrap();
 
-    assert_eq!(author_field["widget"], "relationPicker");
-    assert_eq!(author_field["target"], "User");
-    assert_eq!(author_field["cardinality"], "belongsTo");
+    assert_eq!(author_field["widget"], "relation");
+    assert_eq!(author_field["options"]["target"], "users");
+    assert_eq!(author_field["options"]["cardinality"], "belongsTo");
     assert_eq!(
         author_field["showInList"], true,
         "belongsTo should show in list"
@@ -1577,7 +1589,7 @@ fn test_admin_localized_field_in_config() {
     assert_eq!(title_field["defaultLocale"], "en");
 }
 
-// ─── Scenario 36: blocks field has widget "blockEditor" with definitions ──────
+// ─── Scenario 36: blocks field has widget "blocks" with definitions ──────
 
 #[test]
 fn test_admin_blocks_field_widget() {
@@ -1621,10 +1633,10 @@ fn test_admin_blocks_field_widget() {
     let fields = config["models"][0]["fields"].as_array().unwrap();
     let content_field = fields.iter().find(|f| f["name"] == "content").unwrap();
 
-    assert_eq!(content_field["widget"], "blockEditor");
+    assert_eq!(content_field["widget"], "blocks");
     assert_eq!(content_field["showInList"], false);
 
-    let blocks = content_field["blocks"].as_array().unwrap();
+    let blocks = content_field["options"]["blockTypes"].as_array().unwrap();
     assert_eq!(blocks.len(), 2, "two block definitions");
 
     let hero = blocks.iter().find(|b| b["name"] == "hero").unwrap();
@@ -1634,7 +1646,7 @@ fn test_admin_blocks_field_widget() {
 
     let richtext = blocks.iter().find(|b| b["name"] == "richtext").unwrap();
     let rt_fields = richtext["fields"].as_array().unwrap();
-    assert!(rt_fields.iter().any(|f| f["widget"] == "richText"));
+    assert!(rt_fields.iter().any(|f| f["widget"] == "richtext"));
 }
 
 // ─── Scenario 37: studio metadata basic model ────────────────────────────────
@@ -1722,6 +1734,12 @@ fn test_studio_metadata_relation_field() {
 
     let ast_json = r#"{
         "models": [{
+            "name": "User", "tableName": "users",
+            "fields": {
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+            },
+            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+        }, {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
@@ -1734,7 +1752,13 @@ fn test_studio_metadata_relation_field() {
     let ast = parser::parse(ast_json).unwrap();
     let meta = studio::generate(&ast).unwrap();
 
-    let fields = meta["models"][0]["fields"].as_array().unwrap();
+    let post_model = meta["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "Post")
+        .unwrap();
+    let fields = post_model["fields"].as_array().unwrap();
     let author = fields.iter().find(|f| f["name"] == "author").unwrap();
 
     assert_eq!(author["kind"], "relation");
@@ -1836,7 +1860,7 @@ fn test_openapi_schema_enum_field() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
         }]
@@ -1903,7 +1927,7 @@ fn test_plugin_custom_field_sql() {
         "CreateTable for contacts must be emitted"
     );
 
-    let sql = migration::generate(&diff, false).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
     // Custom field uses declared pgType (TEXT), not a built-in name
     assert!(
         sql.contains("\"phone\" TEXT NOT NULL"),
@@ -2365,8 +2389,8 @@ fn test_wasm_generate_typescript_interface() {
         "wasm_generate_typescript must not return an error JSON"
     );
     assert!(
-        result.contains("interface PostRow"),
-        "wasm_generate_typescript must emit PostRow interface"
+        result.contains("export type Database"),
+        "wasm_generate_typescript must emit Database root type"
     );
     assert!(
         result.contains("title: string"),
@@ -2538,7 +2562,7 @@ fn test_enum_add_value_safe() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published", "archived"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published", "archived"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2580,7 +2604,7 @@ fn test_enum_add_value_generates_alter_type_sql() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published", "archived"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published", "archived"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2601,7 +2625,7 @@ fn test_enum_add_value_generates_alter_type_sql() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast).unwrap();
     assert!(
         sql.contains("ALTER TYPE \"posts_status\" ADD VALUE 'archived'"),
         "forward SQL must contain ALTER TYPE ... ADD VALUE; got:\n{sql}"
@@ -2617,7 +2641,7 @@ fn test_enum_remove_value_destructive() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2672,7 +2696,7 @@ fn test_enum_remove_value_requires_force() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2695,11 +2719,11 @@ fn test_enum_remove_value_requires_force() {
     let diff = differ::diff(&ast, &db).unwrap();
 
     // Without --force, migration generation should fail
-    let result = supatype_engine::generator::sql::migration::forward_sql(&diff, false);
+    let result = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast);
     assert!(result.is_err(), "enum value removal must require --force");
 
     // With --force, it should succeed
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, true).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, true, "public", &ast).unwrap();
     assert!(
         sql.contains("RENAME TO \"posts_status_old\""),
         "remove enum value SQL must rename old type; got:\n{sql}"
@@ -2717,7 +2741,7 @@ fn test_enum_remove_value_warning_message() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2757,7 +2781,7 @@ fn test_enum_rename_value_detected_via_similarity() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["drafts", "published"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["drafts", "published"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2810,7 +2834,7 @@ fn test_enum_rename_value_generates_alter_type_rename_sql() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["drafts", "published"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["drafts", "published"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2831,7 +2855,7 @@ fn test_enum_rename_value_generates_alter_type_rename_sql() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast).unwrap();
     assert!(
         sql.contains("ALTER TYPE \"posts_status\" RENAME VALUE 'draft' TO 'drafts'"),
         "forward SQL must contain RENAME VALUE; got:\n{sql}"
@@ -2848,7 +2872,7 @@ fn test_enum_reorder_values_detected() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["published", "draft"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["published", "draft"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2900,7 +2924,7 @@ fn test_enum_reorder_values_generates_recreate_sql() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["published", "draft"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["published", "draft"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]
@@ -2921,7 +2945,7 @@ fn test_enum_reorder_values_generates_recreate_sql() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast).unwrap();
 
     // Must rename old → create new → alter columns → drop old
     assert!(
@@ -2947,7 +2971,7 @@ fn test_enum_no_change_produces_no_ops() {
             "name": "Post", "tableName": "posts",
             "fields": {
                 "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "TEXT", "values": ["draft", "published"], "required": true, "unique": false }
+                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
             },
             "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
         }]

@@ -25,7 +25,10 @@ fn columns_using_enum(ast: &SchemaAst, enum_name: &str) -> Vec<(String, String)>
     let mut cols = Vec::new();
     for model in &ast.models {
         for (field_name, field) in &model.fields {
-            if let FieldAst::Enum(_) = field {
+            if let FieldAst::Enum(ef) = field {
+                if ef.pg_type.to_uppercase() == "TEXT" {
+                    continue; // TEXT+CHECK enum — no native Postgres type
+                }
                 let name = enum_type_name(&model.table_name, field_name);
                 if name == enum_name {
                     cols.push((model.table_name.clone(), field_name.clone()));
@@ -53,6 +56,11 @@ pub fn diff(
     for model in &ast.models {
         for (field_name, field) in &model.fields {
             if let FieldAst::Enum(ef) = field {
+                // TEXT+CHECK enums don't create a Postgres type — skip them.
+                // Only native enums (pg_type != "TEXT") need type management.
+                if ef.pg_type.to_uppercase() == "TEXT" {
+                    continue;
+                }
                 let name = enum_type_name(&model.table_name, field_name);
                 schema_enums.insert(name, ef.values.clone());
             }

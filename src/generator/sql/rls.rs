@@ -23,25 +23,26 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             model.name
         ));
 
+        let schema = "public";
         // Enable and force RLS so that even table owners are subject to policies.
         out.push_str(&format!(
-            "ALTER TABLE \"public\".\"{table}\" ENABLE ROW LEVEL SECURITY;\n"
+            "ALTER TABLE \"{schema}\".\"{table}\" ENABLE ROW LEVEL SECURITY;\n"
         ));
         out.push_str(&format!(
-            "ALTER TABLE \"public\".\"{table}\" FORCE ROW LEVEL SECURITY;\n\n"
+            "ALTER TABLE \"{schema}\".\"{table}\" FORCE ROW LEVEL SECURITY;\n\n"
         ));
 
         if let Some(rule) = &model.access.read {
-            out.push_str(&render_select_policy(table, rule));
+            out.push_str(&render_select_policy_sql(schema, table, rule));
         }
         if let Some(rule) = &model.access.create {
-            out.push_str(&render_insert_policy(table, rule));
+            out.push_str(&render_insert_policy_sql(schema, table, rule));
         }
         if let Some(rule) = &model.access.update {
-            out.push_str(&render_update_policy(table, rule));
+            out.push_str(&render_update_policy_sql(schema, table, rule));
         }
         if let Some(rule) = &model.access.delete {
-            out.push_str(&render_delete_policy(table, rule));
+            out.push_str(&render_delete_policy_sql(schema, table, rule));
         }
     }
 
@@ -89,43 +90,54 @@ CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
 
 // ─── Policy rendering ─────────────────────────────────────────────────────────
 
-fn render_select_policy(table: &str, rule: &AccessRule) -> String {
+/// `suffix`: `select` | `insert` | `update` | `delete` — must match differ policy naming.
+pub fn render_policy_migration_sql(schema: &str, table: &str, suffix: &str, rule: &AccessRule) -> String {
+    match suffix {
+        "select" => render_select_policy_sql(schema, table, rule),
+        "insert" => render_insert_policy_sql(schema, table, rule),
+        "update" => render_update_policy_sql(schema, table, rule),
+        "delete" => render_delete_policy_sql(schema, table, rule),
+        other => format!("-- unknown RLS policy suffix: {other}\n"),
+    }
+}
+
+pub(crate) fn render_select_policy_sql(schema: &str, table: &str, rule: &AccessRule) -> String {
     let expr = access_rule_to_expr(rule);
     let name = format!("{table}_select");
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"public\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"public\".\"{table}\"\n\
+        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
+         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR SELECT USING (\n    {expr}\n  );\n\n"
     )
 }
 
-fn render_insert_policy(table: &str, rule: &AccessRule) -> String {
+pub(crate) fn render_insert_policy_sql(schema: &str, table: &str, rule: &AccessRule) -> String {
     let expr = access_rule_to_expr(rule);
     let name = format!("{table}_insert");
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"public\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"public\".\"{table}\"\n\
+        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
+         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR INSERT WITH CHECK (\n    {expr}\n  );\n\n"
     )
 }
 
-fn render_update_policy(table: &str, rule: &AccessRule) -> String {
+pub(crate) fn render_update_policy_sql(schema: &str, table: &str, rule: &AccessRule) -> String {
     let expr = access_rule_to_expr(rule);
     let name = format!("{table}_update");
     // UPDATE policies benefit from both USING (filter rows) and WITH CHECK (validate new values)
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"public\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"public\".\"{table}\"\n\
+        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
+         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR UPDATE USING (\n    {expr}\n  ) WITH CHECK (\n    {expr}\n  );\n\n"
     )
 }
 
-fn render_delete_policy(table: &str, rule: &AccessRule) -> String {
+pub(crate) fn render_delete_policy_sql(schema: &str, table: &str, rule: &AccessRule) -> String {
     let expr = access_rule_to_expr(rule);
     let name = format!("{table}_delete");
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"public\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"public\".\"{table}\"\n\
+        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
+         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR DELETE USING (\n    {expr}\n  );\n\n"
     )
 }

@@ -49,8 +49,8 @@ async fn test_fresh_five_model_blog_schema() {
     assert_eq!(create_table_count, 5, "should create 5 tables");
 
     // Generate SQL (full file = forward + rollback; apply_sql = forward only)
-    let sql = migration::generate(&diff, false).unwrap();
-    let apply_sql = migration::forward_sql(&diff, false).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
+    let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
     assert!(
         sql.contains("BEGIN;"),
         "migration must be wrapped in transaction"
@@ -135,7 +135,7 @@ async fn test_idempotency_no_diff_after_apply() {
     // Apply once (forward SQL only — the full generate() output also contains rollback drops)
     let empty = introspector::introspect(&pool, "public").await.unwrap();
     let diff = differ::diff(&ast, &empty).unwrap();
-    let apply_sql = migration::forward_sql(&diff, false).unwrap();
+    let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
     sqlx::raw_sql(&apply_sql).execute(&pool).await.unwrap();
 
     // Diff again — should be empty

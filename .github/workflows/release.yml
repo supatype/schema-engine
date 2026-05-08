@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ─── Test before releasing ──────────────────────────────────────────
+  # ─── Run tests before building release artefacts ────────────────────────────
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -17,40 +17,183 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test --workspace
+      - run: cargo test --workspace
 
-  # ─── Extract version & create GitHub Release ────────────────────────
-  release:
-    name: Create Release
+  # ─── Cross-platform build matrix ────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.target }})
     needs: test
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            runner: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            cross: false
+          - target: linux-arm64
+            runner: ubuntu-22.04
+            rust_target: aarch64-unknown-linux-gnu
+            cross: true
+          - target: darwin-arm64
+            runner: macos-14
+            rust_target: aarch64-apple-darwin
+            cross: false
+          - target: darwin-amd64
+            runner: macos-13
+            rust_target: x86_64-apple-darwin
+            cross: false
+          - target: windows-amd64
+            runner: windows-2022
+            rust_target: x86_64-pc-windows-msvc
+            cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (linux-arm64)
+        if: matrix.cross == true
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build (native)
+        if: matrix.cross == false
+        run: cargo build --release --target ${{ matrix.rust_target }}
+
+      - name: Build (cross-compiled)
+        if: matrix.cross == true
+        run: cross build --release --target ${{ matrix.rust_target }}
+
+      - name: Prepare binary
+        id: prep
+        shell: bash
+        run: |
+          EXT=""
+          if [[ "${{ matrix.runner }}" == "windows-2022" ]]; then EXT=".exe"; fi
+          BIN_NAME="supatype-engine-${{ matrix.target }}${EXT}"
+          cp "target/${{ matrix.rust_target }}/release/supatype-engine${EXT}" "${BIN_NAME}"
+          echo "bin_name=${BIN_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Strip binary (Unix)
+        if: runner.os != 'Windows'
+        run: strip "${{ steps.prep.outputs.bin_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: ${{ steps.prep.outputs.bin_name }}
+          retention-days: 1
+
+  # ─── Sign, upload to CDN, and create GitHub Release ─────────────────────────
+  publish:
+    name: Sign, Upload & Release
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract version from tag
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          merge-multiple: true
+
+      - name: Extract version
         id: version
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Release version: $VERSION"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Generate checksums.sha256
+        run: |
+          sha256sum supatype-engine-* > checksums.sha256
+          echo "=== checksums.sha256 ==="
+          cat checksums.sha256
+
+      - name: Install minisign
+        run: sudo apt-get install -y minisign
+
+      - name: Sign checksums.sha256
+        env:
+          MINISIGN_PRIVATE_KEY: ${{ secrets.MINISIGN_PRIVATE_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          printf '%s' "$MINISIGN_PRIVATE_KEY" > /tmp/minisign.key
+          echo "$MINISIGN_PASSWORD" | minisign \
+            -S -s /tmp/minisign.key \
+            -m checksums.sha256 \
+            -t "supatype engine releases v${VERSION}"
+          rm -f /tmp/minisign.key
+
+      - name: Configure AWS credentials (Hetzner Object Storage)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.CDN_AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.CDN_AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.CDN_AWS_REGION }}
+
+      - name: Upload binaries + checksums to CDN
+        run: |
+          BASE="s3://${{ secrets.CDN_BUCKET }}/engine/v${VERSION}"
+          EP="${{ secrets.CDN_ENDPOINT }}"
+
+          for f in supatype-engine-*; do
+            aws s3 cp "$f" "${BASE}/${f}" \
+              --endpoint-url "${EP}" \
+              --cache-control "public, max-age=31536000, immutable"
+          done
+
+          aws s3 cp checksums.sha256 "${BASE}/checksums.sha256" \
+            --endpoint-url "${EP}" \
+            --cache-control "public, max-age=31536000, immutable"
+
+          aws s3 cp checksums.sha256.minisig "${BASE}/checksums.sha256.minisig" \
+            --endpoint-url "${EP}" \
+            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Update engine/latest.json
+        run: |
+          EP="${{ secrets.CDN_ENDPOINT }}"
+          printf '{"version":"%s","date":"%s","checksums_url":"https://releases.supatype.io/engine/v%s/checksums.sha256"}\n' \
+            "${VERSION}" "$(date -u +%Y-%m-%d)" "${VERSION}" > latest.json
+          aws s3 cp latest.json \
+            "s3://${{ secrets.CDN_BUCKET }}/engine/latest.json" \
+            --endpoint-url "${EP}" \
+            --cache-control "no-cache, no-store, must-revalidate"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-          draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            supatype-engine-*
+            checksums.sha256
+            checksums.sha256.minisig
 
-  # ─── Publish Docker image to Docker Hub ─────────────────────────────
+  # ─── Publish Docker image (reuses existing workflow) ────────────────────────
   publish-docker:
     name: Publish Docker Image
-    needs: release
+    needs: publish
     uses: ./.github/workflows/publish-docker.yml
     secrets: inherit
     with:
-      version: ${{ needs.release.outputs.version }}
+      version: ${{ needs.publish.outputs.version }}

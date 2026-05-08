@@ -8,11 +8,28 @@ fn test_migration_generated_for_new_schema() {
     let ast = parser::parse(input).unwrap();
     let empty_db = DatabaseState::default();
     let diff = differ::diff(&ast, &empty_db).unwrap();
-    let sql = migration::generate(&diff, false).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
 
     assert!(sql.contains("BEGIN;"));
     assert!(sql.contains("COMMIT;"));
     assert!(sql.contains("FORWARD MIGRATION"));
+}
+
+#[test]
+fn test_forward_sql_emits_create_policy_for_access_rules() {
+    // basic_blog has access rules; five_model_blog uses empty access {} (no RLS ops).
+    let input = include_str!("fixtures/basic_blog.json");
+    let ast = parser::parse(input).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    assert!(
+        forward.contains("CREATE POLICY"),
+        "CreateRlsPolicy ops must render as CREATE POLICY DDL; got:\n{forward}"
+    );
+    assert!(
+        forward.contains("DROP POLICY IF EXISTS"),
+        "expected DROP POLICY IF EXISTS before each CREATE POLICY"
+    );
 }
 
 // Fix: "setNull" must render as "SET NULL", not "SETNULL".
@@ -21,7 +38,7 @@ fn test_fk_action_set_null_renders_correctly() {
     let input = include_str!("fixtures/five_model_blog.json");
     let ast = parser::parse(input).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let sql = migration::generate(&diff, false).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
 
     assert!(sql.contains("SET NULL"), "expected 'SET NULL' in FK action");
     assert!(
@@ -36,7 +53,7 @@ fn test_pgcrypto_extension_emitted_for_uuid_defaults() {
     let input = include_str!("fixtures/five_model_blog.json");
     let ast = parser::parse(input).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let sql = migration::generate(&diff, false).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
 
     assert!(
         sql.contains("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\""),
@@ -59,7 +76,7 @@ fn test_index_sql_has_no_concurrently() {
     let input = include_str!("fixtures/five_model_blog.json");
     let ast = parser::parse(input).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let sql = migration::generate(&diff, false).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
 
     assert!(
         !sql.contains("CONCURRENTLY"),
@@ -74,7 +91,7 @@ fn test_fk_references_correct_table_name() {
     let input = include_str!("fixtures/five_model_blog.json");
     let ast = parser::parse(input).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let sql = migration::generate(&diff, false).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
 
     // posts.author_id → users (tableName), not user (snake_case of "User")
     assert!(
@@ -119,4 +136,46 @@ fn test_fk_ops_ordered_after_create_table_ops() {
             "all CreateTable ops must come before any AddForeignKey op"
         );
     }
+}
+
+#[test]
+fn test_postgis_extension_emitted_for_geo_fields() {
+    let input = include_str!("fixtures/geospatial.json");
+    let ast = parser::parse(input).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("CREATE EXTENSION IF NOT EXISTS \"postgis\""),
+        "migration must emit postgis for GEOGRAPHY columns"
+    );
+    let ext_pos = sql
+        .find("CREATE EXTENSION IF NOT EXISTS \"postgis\"")
+        .unwrap();
+    let begin_pos = sql.find("BEGIN;").unwrap();
+    assert!(
+        ext_pos < begin_pos,
+        "postgis extension must appear before BEGIN"
+    );
+}
+
+#[test]
+fn test_vector_extension_emitted_for_vector_fields() {
+    let input = include_str!("fixtures/vector_search.json");
+    let ast = parser::parse(input).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("CREATE EXTENSION IF NOT EXISTS \"vector\""),
+        "migration must emit vector for pgvector columns"
+    );
+    let ext_pos = sql
+        .find("CREATE EXTENSION IF NOT EXISTS \"vector\"")
+        .unwrap();
+    let begin_pos = sql.find("BEGIN;").unwrap();
+    assert!(
+        ext_pos < begin_pos,
+        "vector extension must appear before BEGIN"
+    );
 }

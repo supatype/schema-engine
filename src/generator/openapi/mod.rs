@@ -218,7 +218,7 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
                                 "type": "string",
                                 "format": "uuid",
                                 "nullable": true,
-                                "description": format!("FK → {}", rel.target)
+                                "description": format!("FK -> {}", rel.target)
                             }),
                         );
                     }

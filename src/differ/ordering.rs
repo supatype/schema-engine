@@ -20,6 +20,7 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         // so they run early but after additions.
         Operation::RemoveEnumValue { .. } => 3,
         Operation::ReorderEnumValues { .. } => 3,
+        Operation::RenameTable { .. } => 4,
         Operation::CreateTable { .. } => 4,
         Operation::CreateJunctionTable { .. } => 5,
         Operation::AddColumn { .. } => 6,

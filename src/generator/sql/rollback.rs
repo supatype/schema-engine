@@ -7,7 +7,7 @@
 use crate::differ::{DiffOutput, Operation};
 use anyhow::Result;
 
-pub fn generate(diff: &DiffOutput) -> Result<String> {
+pub fn generate(diff: &DiffOutput, schema: &str) -> Result<String> {
     let mut lines = vec![
         "-- ============================================================".into(),
         "-- ROLLBACK MIGRATION".into(),
@@ -19,7 +19,7 @@ pub fn generate(diff: &DiffOutput) -> Result<String> {
 
     // Apply rollback ops in reverse order of the forward migration
     for op in diff.operations.iter().rev() {
-        if let Some(sql) = rollback_op(op)? {
+        if let Some(sql) = rollback_op(op, schema)? {
             lines.push(format!("-- rollback: {}", forward_description(op)));
             lines.push(sql);
             lines.push(String::new());
@@ -30,11 +30,15 @@ pub fn generate(diff: &DiffOutput) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-fn rollback_op(op: &Operation) -> Result<Option<String>> {
+fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
     let sql = match op {
         // CreateTable → DROP TABLE
         Operation::CreateTable { table, .. } => {
-            format!("DROP TABLE IF EXISTS \"public\".\"{table}\" CASCADE;")
+            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;")
+        }
+        // RenameTable → rename back
+        Operation::RenameTable { from, to, .. } => {
+            format!("ALTER TABLE \"{schema}\".\"{to}\" RENAME TO \"{from}\";")
         }
         // DropTable → cannot restore (need snapshot); emit a commented placeholder
         Operation::DropTable { table, .. } => {
@@ -45,7 +49,7 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // AddColumn → DROP COLUMN
         Operation::AddColumn { table, column, .. } => {
-            format!("ALTER TABLE \"public\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";")
+            format!("ALTER TABLE \"{schema}\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";")
         }
         // DropColumn → cannot restore without snapshot
         Operation::DropColumn { table, column, .. } => {
@@ -58,7 +62,7 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         Operation::RenameColumn {
             table, from, to, ..
         } => {
-            format!("ALTER TABLE \"public\".\"{table}\" RENAME COLUMN \"{to}\" TO \"{from}\";")
+            format!("ALTER TABLE \"{schema}\".\"{table}\" RENAME COLUMN \"{to}\" TO \"{from}\";")
         }
         // AlterColumn → reverse each change using stored metadata
         Operation::AlterColumn {
@@ -66,7 +70,7 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
             column,
             changes,
             ..
-        } => rollback_alter_column(table, column, changes),
+        } => rollback_alter_column(table, column, changes, schema),
         // AddIndex → DROP INDEX
         Operation::AddIndex { table, index, .. } => {
             let derived = format!("{}_{}_idx", table, index.fields.join("_"));
@@ -82,12 +86,22 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // AddForeignKey → DROP CONSTRAINT
         Operation::AddForeignKey {
-            table, relation, ..
+            table,
+            field_name,
+            relation,
+            ..
         } => {
-            let fk_col = relation.foreign_key.as_deref().unwrap_or("unknown_fk");
+            let derived;
+            let fk_col = match relation.foreign_key.as_deref() {
+                Some(fk) => fk,
+                None => {
+                    derived = format!("{field_name}_id");
+                    &derived
+                }
+            };
             let constraint = format!("{table}_{fk_col}_fkey");
             format!(
-                "ALTER TABLE \"public\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
+                "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
             )
         }
         // DropForeignKey → cannot restore definition
@@ -150,7 +164,7 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
             stmts.push(format!("CREATE TYPE \"{enum_name}\" AS ENUM ({vals});"));
             for (table, column) in affected_columns {
                 stmts.push(format!(
-                    "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
+                    "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" \
                      TYPE \"{enum_name}\" USING \"{column}\"::text::\"{enum_name}\";"
                 ));
             }
@@ -159,11 +173,11 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // EnableRls → DISABLE ROW LEVEL SECURITY
         Operation::EnableRls { table, .. } => {
-            format!("ALTER TABLE \"public\".\"{table}\" DISABLE ROW LEVEL SECURITY;")
+            format!("ALTER TABLE \"{schema}\".\"{table}\" DISABLE ROW LEVEL SECURITY;")
         }
         // CreateRlsPolicy → DROP POLICY
         Operation::CreateRlsPolicy { table, policy, .. } => {
-            format!("DROP POLICY IF EXISTS \"{table}_{policy}\" ON \"public\".\"{table}\";")
+            format!("DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";")
         }
         // DropRlsPolicy → cannot restore
         Operation::DropRlsPolicy { table, policy, .. } => {
@@ -173,7 +187,7 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // CreateTrigger → DROP TRIGGER
         Operation::CreateTrigger { table, trigger, .. } => {
-            format!("DROP TRIGGER IF EXISTS \"{trigger}\" ON \"public\".\"{table}\";")
+            format!("DROP TRIGGER IF EXISTS \"{trigger}\" ON \"{schema}\".\"{table}\";")
         }
         // DropTrigger → cannot restore
         Operation::DropTrigger { table, trigger, .. } => {
@@ -181,7 +195,7 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
         }
         // CreateJunctionTable → DROP TABLE
         Operation::CreateJunctionTable { table, .. } => {
-            format!("DROP TABLE IF EXISTS \"public\".\"{table}\" CASCADE;")
+            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;")
         }
         // EnableExtension → DROP EXTENSION (risky — only emit a warning)
         Operation::EnableExtension { name, .. } => {
@@ -194,7 +208,12 @@ fn rollback_op(op: &Operation) -> Result<Option<String>> {
     Ok(Some(sql))
 }
 
-fn rollback_alter_column(table: &str, column: &str, changes: &serde_json::Value) -> String {
+fn rollback_alter_column(
+    table: &str,
+    column: &str,
+    changes: &serde_json::Value,
+    schema: &str,
+) -> String {
     let mut stmts: Vec<String> = Vec::new();
 
     // Reverse type change: restore old type from from_udt
@@ -206,7 +225,7 @@ fn rollback_alter_column(table: &str, column: &str, changes: &serde_json::Value)
         // Map udt_name back to a castable type keyword
         let restore_type = udt_to_pg_type(from_udt);
         stmts.push(format!(
-            "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" \
+            "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" \
              TYPE {restore_type} USING \"{column}\"::{restore_type}; \
              -- restoring from {from_udt}"
         ));
@@ -222,18 +241,18 @@ fn rollback_alter_column(table: &str, column: &str, changes: &serde_json::Value)
             // Was NOT NULL, now re-apply NOT NULL constraint
             stmts.push(format!(
                 "DO $$ BEGIN\n  \
-                 IF EXISTS (SELECT 1 FROM \"public\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
+                 IF EXISTS (SELECT 1 FROM \"{schema}\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
                  RAISE EXCEPTION 'Cannot restore NOT NULL on {table}.{column}: NULL values exist.';\n  \
                  END IF;\n\
                  END $$;"
             ));
             stmts.push(format!(
-                "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
+                "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
             ));
         } else {
             // Was nullable — restore by dropping not null
             stmts.push(format!(
-                "ALTER TABLE \"public\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
+                "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
             ));
         }
     }
@@ -273,11 +292,12 @@ fn forward_description(op: &Operation) -> String {
     match op {
         Operation::CreateTable { table, .. } => format!("create table {table}"),
         Operation::DropTable { table, .. } => format!("drop table {table}"),
+        Operation::RenameTable { from, to, .. } => format!("rename table {from} -> {to}"),
         Operation::AddColumn { table, column, .. } => format!("add column {table}.{column}"),
         Operation::DropColumn { table, column, .. } => format!("drop column {table}.{column}"),
         Operation::RenameColumn {
             table, from, to, ..
-        } => format!("rename {table}.{from} → {to}"),
+        } => format!("rename {table}.{from} -> {to}"),
         Operation::AlterColumn { table, column, .. } => format!("alter column {table}.{column}"),
         Operation::AddIndex { table, index, .. } => {
             format!("add index on {table}({})", index.fields.join(","))
@@ -285,7 +305,7 @@ fn forward_description(op: &Operation) -> String {
         Operation::DropIndex { index_name, .. } => format!("drop index {index_name}"),
         Operation::AddForeignKey {
             table, relation, ..
-        } => format!("add fk {table} → {}", relation.target),
+        } => format!("add fk {table} -> {}", relation.target),
         Operation::DropForeignKey {
             table, constraint, ..
         } => format!("drop fk {table}.{constraint}"),

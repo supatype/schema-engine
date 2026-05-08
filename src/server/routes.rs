@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::Json;
-use sqlx::PgPool;
+use sqlx::{Column, PgPool, Row, TypeInfo};
 use tracing::{error, info};
 
 use super::types::*;
@@ -59,21 +59,68 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
         .await
         .map_err(engine_error)?;
     let diff = crate::differ::diff(&ast, &db_state).map_err(engine_error)?;
-    let sql = crate::generator::sql::migration::generate(&diff, req.force).map_err(engine_error)?;
+    let sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
+        .map_err(engine_error)?;
     Ok(Json(SqlResponse { sql }))
 }
 
 // ── Push (DB — diff + apply + record in history) ────────────────────────────
 
 pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
-    use crate::state::migration_history;
+    use crate::state::{migration_history, studio_state};
 
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let pool = connect_db(&req.database_url).await?;
 
-    // Ensure migration history schema/table exists
-    sqlx::raw_sql(migration_history::create_migrations_table_sql())
+    // Ensure _supatype schema and internal tables exist
+    sqlx::raw_sql(migration_history::create_internal_schema_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::create_migrations_table_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::ensure_migrations_admin_config_column_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::ensure_migrations_sql_up_column_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+
+    // Ensure supatype schema and studio tables exist
+    sqlx::raw_sql(studio_state::create_studio_schema_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(studio_state::grant_studio_schema_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&studio_state::create_dashboard_views_table_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&studio_state::create_storage_stats_function_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&studio_state::create_db_stats_function_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&studio_state::create_daily_signups_function_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&studio_state::create_daily_content_creates_function_sql())
         .execute(&pool)
         .await
         .map_err(engine_error)?;
@@ -97,16 +144,45 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let diff = crate::differ::diff(&ast, &db_state).map_err(engine_error)?;
 
     if diff.operations.is_empty() {
+        info!("Schema is up to date — refreshing admin_config on latest migration record.");
+        let admin_cfg = crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
+        let schema_snap = serde_json::to_value(&ast).map_err(engine_error)?;
+        let n = migration_history::update_latest_migration_admin(&pool, &admin_cfg, &schema_snap)
+            .await
+            .map_err(engine_error)?;
+        if n == 0 {
+            let migration_name = format!(
+                "admin_refresh_{}",
+                chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")
+            );
+            let hash = {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(schema_snap.to_string().as_bytes());
+                format!("sha256:{}", hex::encode(h.finalize()))
+            };
+            sqlx::query(&migration_history::insert_migration_sql())
+                .bind(&migration_name)
+                .bind(&hash)
+                .bind(env!("ENGINE_VERSION"))
+                .bind(&schema_snap)
+                .bind(&admin_cfg)
+                .bind(None::<String>)
+                .execute(&pool)
+                .await
+                .map_err(engine_error)?;
+        }
         return Ok(Json(serde_json::json!({
             "status": "up_to_date",
-            "operations": 0
+            "operations": 0,
+            "admin_refreshed": true
         })));
     }
 
-    let migration_sql =
-        crate::generator::sql::migration::generate(&diff, req.force).map_err(engine_error)?;
-    let apply_sql =
-        crate::generator::sql::migration::forward_sql(&diff, req.force).map_err(engine_error)?;
+    let migration_sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
+        .map_err(engine_error)?;
+    let apply_sql = crate::generator::sql::migration::forward_sql(&diff, req.force, &req.schema, &ast)
+        .map_err(engine_error)?;
 
     let migration_name = req
         .name
@@ -133,14 +209,16 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         h.update(migration_sql.as_bytes());
         format!("sha256:{}", hex::encode(h.finalize()))
     };
-    sqlx::query(
-        "INSERT INTO _platform.migrations (name, hash, engine_version, schema_snapshot) \
-         VALUES ($1, $2, $3, $4)",
-    )
+    let admin_cfg = crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
+    let admin_json = serde_json::to_value(&admin_cfg).map_err(engine_error)?;
+    let insert_sql = migration_history::insert_migration_sql();
+    sqlx::query(&insert_sql)
     .bind(&migration_name)
     .bind(&hash)
     .bind(env!("ENGINE_VERSION"))
     .bind(serde_json::to_value(&ast).ok())
+    .bind(&admin_json)
+    .bind(&apply_sql)
     .execute(&pool)
     .await
     .map_err(engine_error)?;
@@ -265,6 +343,54 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
     Ok(Json(serde_json::to_value(&list).unwrap()))
 }
 
+// ── Studio config (DB) — latest persisted AdminConfig ─────────────────────
+
+/// Returns the AdminConfig JSON stored at last successful `push`.
+/// Single-tenant: resolve `DATABASE_URL` from the engine environment (or optional body for CLI).
+pub async fn studio_config(Json(req): Json<StudioConfigRequest>) -> EngineResponse<serde_json::Value> {
+    let url = resolve_database_url(req.database_url)?;
+    let pool = connect_db(&url).await?;
+    let schema_ident = sanitize_schema_identifier(&req.schema)?;
+    let studio_sql = format!(
+        "SELECT admin_config FROM {}.migrations WHERE admin_config IS NOT NULL ORDER BY applied_at DESC LIMIT 1",
+        schema_ident
+    );
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(&studio_sql)
+    .fetch_optional(&pool)
+    .await
+    .map_err(engine_error)?;
+
+    match row {
+        Some((config,)) => Ok(Json(config)),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "No schema pushed yet. Run: supatype push".to_string(),
+            }),
+        )),
+    }
+}
+
+// ── SQL execution (DB) — dev / self-host Studio only ────────────────────────
+//
+// Multi-tenant deployments should route SQL through the cloud control plane (org-scoped proxy with
+// SET LOCAL ROLE), not this endpoint. Here, `DATABASE_URL` is the single project database.
+
+pub async fn execute_sql(Json(req): Json<SqlExecRequest>) -> EngineResponse<SqlExecResponse> {
+    let url = resolve_database_url(req.database_url)?;
+    let pool = connect_db(&url).await?;
+    let rows = sqlx::query(&req.query)
+        .fetch_all(&pool)
+        .await
+        .map_err(engine_error)?;
+    let json_rows: Vec<serde_json::Value> = rows.iter().map(pg_row_to_json).collect();
+    let row_count = json_rows.len() as i64;
+    Ok(Json(SqlExecResponse {
+        rows: json_rows,
+        row_count,
+    }))
+}
+
 // ── Validate (DB) ───────────────────────────────────────────────────────────
 
 pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_json::Value> {
@@ -301,6 +427,34 @@ fn require_ast(
     }
 }
 
+fn sanitize_schema_identifier(
+    schema: &str,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    if schema.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Schema must not be empty".to_string(),
+            }),
+        ));
+    }
+
+    let mut chars = schema.chars();
+    let first = chars.next().unwrap_or('_');
+    let valid_start = first.is_ascii_alphabetic() || first == '_';
+    let valid_rest = chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if !valid_start || !valid_rest {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "Invalid schema identifier".to_string(),
+            }),
+        ));
+    }
+
+    Ok(format!("\"{}\"", schema))
+}
+
 fn parse_ast(
     input: &str,
 ) -> Result<crate::parser::ast::SchemaAst, (StatusCode, Json<ErrorResponse>)> {
@@ -311,4 +465,92 @@ async fn connect_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse
     PgPool::connect(url)
         .await
         .map_err(|e| engine_error(anyhow::anyhow!("Failed to connect to database: {e}")))
+}
+
+fn resolve_database_url(
+    explicit: Option<String>,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    if let Some(url) = explicit {
+        if !url.is_empty() {
+            return Ok(url);
+        }
+    }
+    std::env::var("DATABASE_URL").map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "DATABASE_URL is not set on the schema engine. Configure it for the engine service (or pass database_url from a trusted proxy)."
+                    .to_string(),
+            }),
+        )
+    })
+}
+
+fn pg_row_to_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for i in 0..row.len() {
+        let col = row.column(i);
+        let key = col.name().to_string();
+        map.insert(key, pg_cell_to_json(row, i));
+    }
+    serde_json::Value::Object(map)
+}
+
+fn pg_cell_to_json(row: &sqlx::postgres::PgRow, i: usize) -> serde_json::Value {
+    use serde_json::json;
+    if let Ok(v) = row.try_get::<Option<serde_json::Value>, _>(i) {
+        return v.unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<bool>, _>(i) {
+        return v.map(serde_json::Value::Bool).unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<i16>, _>(i) {
+        return v.map(|n| json!(n)).unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<i32>, _>(i) {
+        return v.map(|n| json!(n)).unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<i64>, _>(i) {
+        return v
+            .map(|n| serde_json::Value::Number(n.into()))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<f32>, _>(i) {
+        return v
+            .and_then(|f| serde_json::Number::from_f64(f as f64).map(serde_json::Value::Number))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<f64>, _>(i) {
+        return v
+            .and_then(|f| serde_json::Number::from_f64(f).map(serde_json::Value::Number))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<String>, _>(i) {
+        return v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null);
+    }
+    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(i) {
+        return v.map(|b| serde_json::Value::String(hex::encode(b)))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    serde_json::Value::String(format!("<unserializable:{}>", row.column(i).type_info().name()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_schema_identifier;
+
+    #[test]
+    fn accepts_valid_schema_identifier() {
+        let result = sanitize_schema_identifier("public_schema1");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap_or_default(), "\"public_schema1\"");
+    }
+
+    #[test]
+    fn rejects_invalid_schema_identifier() {
+        assert!(sanitize_schema_identifier("").is_err());
+        assert!(sanitize_schema_identifier("public;DROP").is_err());
+        assert!(sanitize_schema_identifier("1public").is_err());
+        assert!(sanitize_schema_identifier("public-schema").is_err());
+    }
 }
