@@ -153,11 +153,14 @@ The release profile enables LTO, single codegen unit, and symbol stripping for a
 # Unit and library tests
 cargo test --lib
 
-# Integration tests (requires Docker for testcontainers)
+# Integration tests
+# - If **DATABASE_URL** is set (e.g. local Postgres or CI): creates an ephemeral database
+#   per test (`CREATE DATABASE` / `DROP DATABASE`); user must be able to create DBs.
+# - Otherwise: **Docker** + testcontainers (Postgres 16 image).
 cargo test --test integration_test
 ```
 
-Integration tests spin up Postgres (14, 15, 16) via testcontainers, apply a multi-model blog schema, and verify the full parse → diff → migrate → introspect → idempotency pipeline.
+Integration tests verify parse → diff → migrate → introspect → idempotency, plus that a **`BEGIN` … `COMMIT`** batch executed via **`sqlx::raw_sql`** rolls back entirely when a statement fails (same pattern as **`migration::forward_sql`**). CI sets **`DATABASE_URL`** to the matrix Postgres service (14 / 15 / 16), so the ephemeral-database path runs there without Docker.
 
 ## CI / CD
 
