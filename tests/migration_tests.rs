@@ -70,6 +70,27 @@ fn test_pgcrypto_extension_emitted_for_uuid_defaults() {
     );
 }
 
+#[test]
+fn test_push_storage_and_model_batch_single_begin_commit() {
+    let input = include_str!("fixtures/five_model_blog.json");
+    let ast = parser::parse(input).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let batch = migration::push_storage_and_model_batch_sql(
+        "-- storage preamble\n",
+        &diff,
+        false,
+        "public",
+        &ast,
+    )
+    .unwrap();
+    assert_eq!(
+        batch.matches("BEGIN;").count(),
+        1,
+        "expected exactly one outer BEGIN;\ngot:\n{batch}"
+    );
+    assert_eq!(batch.matches("COMMIT;").count(), 1);
+}
+
 // Fix: generated index SQL must not use CONCURRENTLY (cannot run inside a transaction).
 #[test]
 fn test_index_sql_has_no_concurrently() {

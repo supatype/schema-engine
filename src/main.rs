@@ -254,13 +254,6 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to create supatype.daily_content_creates function")?;
 
-            // Ensure storage schema/tables/bucket registrations/policies are always
-            // materialized from the resolved schema, even when model diff is empty.
-            sqlx::raw_sql(&storage_sql)
-                .execute(&pool)
-                .await
-                .context("Failed to apply storage schema/policies")?;
-
             // Load DB state: from cache unless --no-cache
             let db_state = if !no_cache {
                 migration_history::load_schema_state(&pool).await
@@ -284,6 +277,13 @@ async fn main() -> Result<()> {
             }
 
             if diff.operations.is_empty() {
+                // Storage materialization is not part of the model diff; apply it before the
+                // admin-only migration refresh path.
+                sqlx::raw_sql(&storage_sql)
+                    .execute(&pool)
+                    .await
+                    .context("Failed to apply storage schema/policies")?;
+
                 // AST-only changes (widgets, labels, etc.) still need admin_config / snapshot
                 // so Studio and tooling see the latest schema without a DDL migration.
                 info!("Schema is up to date — refreshing admin_config on latest migration record.");
@@ -322,8 +322,14 @@ async fn main() -> Result<()> {
 
             let migration_sql =
                 supatype_engine::generator::sql::migration::generate(&diff, force, &schema, &ast)?;
-            let apply_sql =
-                supatype_engine::generator::sql::migration::forward_sql(&diff, force, &schema, &ast)?;
+            let apply_batch =
+                supatype_engine::generator::sql::migration::push_storage_and_model_batch_sql(
+                    &storage_sql,
+                    &diff,
+                    force,
+                    &schema,
+                    &ast,
+                )?;
             // Use millisecond precision so rapid retries don't collide on name.
             let migration_name = name
                 .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
@@ -339,13 +345,13 @@ async fn main() -> Result<()> {
             // Apply forward-only SQL (not the full file which also includes rollback).
             // On error: record the failure in history before propagating so the user
             // can see what was attempted via `supatype migrations list`.
-            if let Err(apply_err) = sqlx::raw_sql(&apply_sql).execute(&pool).await {
+            if let Err(apply_err) = sqlx::raw_sql(&apply_batch).execute(&pool).await {
                 let err_str = apply_err.to_string();
                 if let Err(record_err) = migration_history::record_failed_migration(
                     &pool,
                     &migration_name,
                     &hash,
-                    &apply_sql,
+                    &apply_batch,
                     &err_str,
                 )
                 .await
@@ -370,7 +376,7 @@ async fn main() -> Result<()> {
             .bind(env!("ENGINE_VERSION"))
             .bind(serde_json::to_value(&ast).ok())
             .bind(admin_cfg)
-            .bind(&apply_sql)
+            .bind(&apply_batch)
             .execute(&pool)
             .await
             .context("Failed to record migration in history")?;

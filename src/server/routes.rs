@@ -71,6 +71,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
 
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
+    let storage_sql = crate::generator::sql::storage::generate(&ast).map_err(engine_error)?;
     let pool = connect_db(&req.database_url).await?;
 
     // Ensure _supatype schema and internal tables exist
@@ -91,6 +92,10 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         .await
         .map_err(engine_error)?;
     sqlx::raw_sql(&migration_history::ensure_migrations_sql_up_column_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::ensure_migrations_status_columns_sql())
         .execute(&pool)
         .await
         .map_err(engine_error)?;
@@ -144,6 +149,10 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let diff = crate::differ::diff(&ast, &db_state).map_err(engine_error)?;
 
     if diff.operations.is_empty() {
+        sqlx::raw_sql(&storage_sql)
+            .execute(&pool)
+            .await
+            .map_err(engine_error)?;
         info!("Schema is up to date — refreshing admin_config on latest migration record.");
         let admin_cfg = crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
         let schema_snap = serde_json::to_value(&ast).map_err(engine_error)?;
@@ -179,20 +188,40 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         })));
     }
 
-    let migration_sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
-        .map_err(engine_error)?;
-    let apply_sql = crate::generator::sql::migration::forward_sql(&diff, req.force, &req.schema, &ast)
-        .map_err(engine_error)?;
-
     let migration_name = req
         .name
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
 
-    // Apply forward-only SQL
-    sqlx::raw_sql(&apply_sql)
-        .execute(&pool)
-        .await
+    let migration_sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
         .map_err(engine_error)?;
+    let hash = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(migration_sql.as_bytes());
+        format!("sha256:{}", hex::encode(h.finalize()))
+    };
+
+    let apply_batch = crate::generator::sql::migration::push_storage_and_model_batch_sql(
+        &storage_sql,
+        &diff,
+        req.force,
+        &req.schema,
+        &ast,
+    )
+    .map_err(engine_error)?;
+
+    if let Err(apply_err) = sqlx::raw_sql(&apply_batch).execute(&pool).await {
+        let err_str = apply_err.to_string();
+        let _ = migration_history::record_failed_migration(
+            &pool,
+            &migration_name,
+            &hash,
+            &apply_batch,
+            &err_str,
+        )
+        .await;
+        return Err(engine_error(apply_err));
+    }
 
     // Refresh and cache post-migration DB state
     let new_db_state = crate::introspector::introspect(&pool, &req.schema)
@@ -203,12 +232,6 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         .map_err(engine_error)?;
 
     // Record in history
-    let hash = {
-        use sha2::{Digest, Sha256};
-        let mut h = Sha256::new();
-        h.update(migration_sql.as_bytes());
-        format!("sha256:{}", hex::encode(h.finalize()))
-    };
     let admin_cfg = crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
     let admin_json = serde_json::to_value(&admin_cfg).map_err(engine_error)?;
     let insert_sql = migration_history::insert_migration_sql();
@@ -218,7 +241,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     .bind(env!("ENGINE_VERSION"))
     .bind(serde_json::to_value(&ast).ok())
     .bind(&admin_json)
-    .bind(&apply_sql)
+    .bind(&apply_batch)
     .execute(&pool)
     .await
     .map_err(engine_error)?;

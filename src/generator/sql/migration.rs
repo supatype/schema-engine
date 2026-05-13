@@ -6,15 +6,53 @@ use crate::parser::ast::{
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 
-/// Returns only the forward (apply) SQL — suitable for execution against a live DB.
-pub fn forward_sql(diff: &DiffOutput, force: bool, schema: &str, ast: &SchemaAst) -> Result<String> {
+fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
     if diff.summary.is_destructive && !force {
         bail!(
             "{} destructive operation(s) detected. Use --force to proceed.",
             diff.summary.destructive
         );
     }
-    render_forward(diff, schema, ast)
+    Ok(())
+}
+
+/// Returns only the forward (apply) SQL — suitable for execution against a live DB.
+///
+/// Layout: preamble (header + optional `CREATE EXTENSION`), then `BEGIN`, model DDL, `COMMIT`.
+/// Extension lines are emitted **before** the explicit `BEGIN` (legacy layout; still one
+/// `sqlx::raw_sql` batch).
+pub fn forward_sql(diff: &DiffOutput, force: bool, schema: &str, ast: &SchemaAst) -> Result<String> {
+    assert_forward_allowed(diff, force)?;
+    render_forward_wrapped(diff, schema, ast)
+}
+
+/// Preamble + model DDL **without** surrounding `BEGIN`/`COMMIT`, for embedding inside a
+/// larger transaction (e.g. `storage` materialization + model migration in one `BEGIN`…`COMMIT`).
+pub fn forward_sql_outer_body(
+    diff: &DiffOutput,
+    force: bool,
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<String> {
+    assert_forward_allowed(diff, force)?;
+    render_forward_outer_body(diff, schema, ast)
+}
+
+/// Single `BEGIN`…`COMMIT` script: `storage` SQL, then [`forward_sql_outer_body`].
+pub fn push_storage_and_model_batch_sql(
+    storage_sql: &str,
+    diff: &DiffOutput,
+    force: bool,
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<String> {
+    assert_forward_allowed(diff, force)?;
+    let body = render_forward_outer_body(diff, schema, ast)?;
+    Ok(format!(
+        "-- supatype-engine: storage + model migration (single transaction)\nBEGIN;\n{}\n{}\nCOMMIT;",
+        storage_sql.trim(),
+        body.trim_end()
+    ))
 }
 
 /// Returns the full migration file (forward + rollback) for saving to disk.
@@ -26,7 +64,7 @@ pub fn generate(diff: &DiffOutput, force: bool, schema: &str, ast: &SchemaAst) -
         );
     }
 
-    let forward = render_forward(diff, schema, ast)?;
+    let forward = render_forward_wrapped(diff, schema, ast)?;
     let rollback = super::rollback::generate(diff, schema)?;
     let hash = migration_hash(&forward);
 
@@ -81,9 +119,9 @@ fn needs_postgis(diff: &DiffOutput) -> bool {
     })
 }
 
-// Optional extensions before `BEGIN`: pgcrypto (uuid gen_random_uuid), vector (pgvector),
+// Optional extensions before inner `BEGIN`: pgcrypto (uuid gen_random_uuid), vector (pgvector),
 // postgis (GEOGRAPHY). `FieldAst::Custom` is not analysed here.
-fn render_forward(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
+fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
     let mut lines = vec![
         "-- ============================================================".into(),
         "-- FORWARD MIGRATION".into(),
@@ -106,8 +144,15 @@ fn render_forward(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<St
         lines.push(String::new());
     }
 
-    lines.push("BEGIN;".into());
-    lines.push(String::new());
+    lines
+}
+
+fn render_forward_operation_lines(
+    diff: &DiffOutput,
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
 
     for op in &diff.operations {
         let risk_label = match op {
@@ -150,6 +195,20 @@ fn render_forward(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<St
         lines.push(String::new());
     }
 
+    Ok(lines)
+}
+
+fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
+    let mut lines = render_forward_preamble(diff);
+    lines.extend(render_forward_operation_lines(diff, schema, ast)?);
+    Ok(lines.join("\n"))
+}
+
+fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
+    let mut lines = render_forward_preamble(diff);
+    lines.push("BEGIN;".into());
+    lines.push(String::new());
+    lines.extend(render_forward_operation_lines(diff, schema, ast)?);
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }
