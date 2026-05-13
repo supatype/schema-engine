@@ -1,16 +1,16 @@
 use super::{constraints, enums, extensions, indexes, rls, tables, triggers};
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
-pub async fn introspect(pool: &PgPool, schema: &str) -> Result<DatabaseState> {
-    let db_tables = tables::read(pool, schema).await?;
-    let db_indexes = indexes::read(pool, schema).await?;
-    let db_constraints = constraints::read(pool, schema).await?;
-    let db_rls = rls::read(pool, schema).await?;
-    let db_triggers = triggers::read(pool, schema).await?;
-    let db_extensions = extensions::read(pool).await?;
-    let db_enums = enums::read(pool, schema).await?;
+pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<DatabaseState> {
+    let db_tables = tables::read(conn, schema).await?;
+    let db_indexes = indexes::read(conn, schema).await?;
+    let db_constraints = constraints::read(conn, schema).await?;
+    let db_rls = rls::read(conn, schema).await?;
+    let db_triggers = triggers::read(conn, schema).await?;
+    let db_extensions = extensions::read(conn).await?;
+    let db_enums = enums::read(conn, schema).await?;
 
     Ok(DatabaseState {
         schema: schema.to_string(),

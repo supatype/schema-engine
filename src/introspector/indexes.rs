@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,7 +13,7 @@ pub struct DbIndex {
     pub is_primary: bool,
 }
 
-pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbIndex>> {
+pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbIndex>> {
     let rows: Vec<(String, String, Vec<String>, bool, String, bool)> = sqlx::query_as(
         "SELECT t.relname, i.relname,
                 array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)),
@@ -28,7 +28,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbIndex>> {
          GROUP BY t.relname, i.relname, ix.indisunique, am.amname, ix.indisprimary",
     )
     .bind(schema)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows

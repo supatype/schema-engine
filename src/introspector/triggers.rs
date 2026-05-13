@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12,7 +12,7 @@ pub struct DbTrigger {
     pub function_name: String,
 }
 
-pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbTrigger>> {
+pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTrigger>> {
     let rows: Vec<(String, String, String, String, String)> = sqlx::query_as(
         "SELECT event_object_table, trigger_name, event_manipulation,
                 action_timing, action_statement
@@ -21,7 +21,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbTrigger>> {
          ORDER BY event_object_table, trigger_name",
     )
     .bind(schema)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows

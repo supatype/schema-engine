@@ -38,8 +38,9 @@ pub fn forward_sql_outer_body(
     render_forward_outer_body(diff, schema, ast)
 }
 
-/// Single `BEGIN`…`COMMIT` script: `storage` SQL, then [`forward_sql_outer_body`].
-pub fn push_storage_and_model_batch_sql(
+/// `storage` SQL followed by [`forward_sql_outer_body`], for execution inside an existing
+/// `sqlx::Transaction` (no surrounding `BEGIN`/`COMMIT` — the transaction provides atomicity).
+pub fn push_storage_and_model_apply_body(
     storage_sql: &str,
     diff: &DiffOutput,
     force: bool,
@@ -48,10 +49,21 @@ pub fn push_storage_and_model_batch_sql(
 ) -> Result<String> {
     assert_forward_allowed(diff, force)?;
     let body = render_forward_outer_body(diff, schema, ast)?;
+    Ok(format!("{}\n{}", storage_sql.trim(), body.trim_end()))
+}
+
+/// Single `BEGIN`…`COMMIT` script: `storage` SQL, then [`forward_sql_outer_body`].
+pub fn push_storage_and_model_batch_sql(
+    storage_sql: &str,
+    diff: &DiffOutput,
+    force: bool,
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<String> {
+    let inner = push_storage_and_model_apply_body(storage_sql, diff, force, schema, ast)?;
     Ok(format!(
-        "-- supatype-engine: storage + model migration (single transaction)\nBEGIN;\n{}\n{}\nCOMMIT;",
-        storage_sql.trim(),
-        body.trim_end()
+        "-- supatype-engine: storage + model migration (single transaction)\nBEGIN;\n{}\nCOMMIT;",
+        inner.trim_end()
     ))
 }
 

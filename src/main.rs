@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
+use sqlx::Executor;
 use std::io::{self, Read};
 use tracing::info;
 
@@ -322,14 +323,6 @@ async fn main() -> Result<()> {
 
             let migration_sql =
                 supatype_engine::generator::sql::migration::generate(&diff, force, &schema, &ast)?;
-            let apply_batch =
-                supatype_engine::generator::sql::migration::push_storage_and_model_batch_sql(
-                    &storage_sql,
-                    &diff,
-                    force,
-                    &schema,
-                    &ast,
-                )?;
             // Use millisecond precision so rapid retries don't collide on name.
             let migration_name = name
                 .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
@@ -342,44 +335,100 @@ async fn main() -> Result<()> {
                 hex::encode(h.finalize())
             });
 
-            // Apply forward-only SQL (not the full file which also includes rollback).
-            // On error: record the failure in history before propagating so the user
-            // can see what was attempted via `supatype migrations list`.
-            if let Err(apply_err) = sqlx::raw_sql(&apply_batch).execute(&pool).await {
-                let err_str = apply_err.to_string();
-                if let Err(record_err) = migration_history::record_failed_migration(
+            let apply_body =
+                supatype_engine::generator::sql::migration::push_storage_and_model_apply_body(
+                    &storage_sql,
+                    &diff,
+                    force,
+                    &schema,
+                    &ast,
+                )?;
+            let apply_batch =
+                supatype_engine::generator::sql::migration::push_storage_and_model_batch_sql(
+                    &storage_sql,
+                    &diff,
+                    force,
+                    &schema,
+                    &ast,
+                )?;
+
+            let mut tx = pool
+                .begin()
+                .await
+                .context("begin migration transaction")?;
+
+            if let Err(e) = (&mut *tx)
+                .execute(sqlx::raw_sql(&apply_body))
+                .await
+                .map_err(anyhow::Error::from)
+            {
+                migration_history::rollback_push_tx(
+                    tx,
                     &pool,
                     &migration_name,
                     &hash,
                     &apply_batch,
-                    &err_str,
+                    &e.to_string(),
                 )
-                .await
-                {
-                    // Non-fatal — log but don't mask the original error.
-                    eprintln!("Warning: could not record failed migration: {record_err}");
-                }
-                return Err(apply_err).context("Failed to apply migration");
+                .await;
+                return Err(e.context("Failed to apply migration"));
             }
 
-            // Refresh and cache post-migration DB state
-            let new_db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            migration_history::save_schema_state(&pool, &new_db_state)
-                .await
-                .context("Failed to save schema state cache")?;
+            let new_db_state = match supatype_engine::introspector::introspect_connection(&mut *tx, &schema).await {
+                Ok(s) => s,
+                Err(e) => {
+                    migration_history::rollback_push_tx(
+                        tx,
+                        &pool,
+                        &migration_name,
+                        &hash,
+                        &apply_batch,
+                        &e.to_string(),
+                    )
+                    .await;
+                    return Err(e.context("Failed to introspect after migration"));
+                }
+            };
 
-            // Record success in history
+            if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
+                migration_history::rollback_push_tx(
+                    tx,
+                    &pool,
+                    &migration_name,
+                    &hash,
+                    &apply_batch,
+                    &e.to_string(),
+                )
+                .await;
+                return Err(e.context("Failed to save schema state cache"));
+            }
+
             let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
-            sqlx::query(&migration_history::insert_migration_sql())
-            .bind(&migration_name)
-            .bind(&hash)
-            .bind(env!("ENGINE_VERSION"))
-            .bind(serde_json::to_value(&ast).ok())
-            .bind(admin_cfg)
-            .bind(&apply_batch)
-            .execute(&pool)
+            if let Err(e) = migration_history::insert_applied_migration(
+                &mut *tx,
+                &migration_name,
+                &hash,
+                serde_json::to_value(&ast).ok(),
+                admin_cfg,
+                &apply_batch,
+            )
             .await
-            .context("Failed to record migration in history")?;
+            {
+                migration_history::rollback_push_tx(
+                    tx,
+                    &pool,
+                    &migration_name,
+                    &hash,
+                    &apply_batch,
+                    &e.to_string(),
+                )
+                .await;
+                return Err(e.context("Failed to record migration in history"));
+            }
+
+            tx.commit()
+                .await
+                .context("commit migration transaction")?;
 
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
             println!(

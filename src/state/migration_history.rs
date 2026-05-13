@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres, Transaction};
 
 // Internal bookkeeping lives in a dedicated schema so it never appears in the
 // user's `public` schema and is never touched by introspection or diffs.
@@ -121,10 +121,13 @@ pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
         .collect())
 }
 
-pub async fn save_schema_state(
-    pool: &PgPool,
+pub async fn save_schema_state<'e, E>(
+    executor: E,
     state: &crate::state::database_state::DatabaseState,
-) -> Result<()> {
+) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
     let sql = format!(
         "INSERT INTO {SCHEMA}.schema_state (id, db_state, engine_version)
          VALUES (1, $1, $2)
@@ -134,7 +137,7 @@ pub async fn save_schema_state(
     sqlx::query(&sql)
         .bind(serde_json::to_value(state)?)
         .bind(env!("ENGINE_VERSION"))
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
@@ -145,6 +148,31 @@ pub fn insert_migration_sql() -> String {
          (name, hash, engine_version, schema_snapshot, admin_config, sql_up) \
          VALUES ($1, $2, $3, $4, $5, $6)"
     )
+}
+
+/// Record a successful migration row (same shape as [`insert_migration_sql`]).
+pub async fn insert_applied_migration<'e, E>(
+    executor: E,
+    name: &str,
+    hash: &str,
+    schema_snapshot: Option<serde_json::Value>,
+    admin_config: Option<serde_json::Value>,
+    sql_up: &str,
+) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let sql = insert_migration_sql();
+    sqlx::query(&sql)
+        .bind(name)
+        .bind(hash)
+        .bind(env!("ENGINE_VERSION"))
+        .bind(schema_snapshot)
+        .bind(admin_config)
+        .bind(sql_up)
+        .execute(executor)
+        .await?;
+    Ok(())
 }
 
 /// Updates `admin_config` and `schema_snapshot` on the latest non-rolled-back migration row.
@@ -191,4 +219,21 @@ pub async fn record_failed_migration(
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Roll back an in-flight push transaction and best-effort record a failed migration row.
+pub async fn rollback_push_tx(
+    tx: Transaction<'_, Postgres>,
+    pool: &PgPool,
+    migration_name: &str,
+    hash: &str,
+    apply_batch: &str,
+    err: &str,
+) {
+    let _ = tx.rollback().await;
+    if let Err(record_err) =
+        record_failed_migration(pool, migration_name, hash, apply_batch, err).await
+    {
+        eprintln!("Warning: could not record failed migration: {record_err}");
+    }
 }

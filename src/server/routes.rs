@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::Json;
-use sqlx::{Column, PgPool, Row, TypeInfo};
+use sqlx::{Column, Executor, PgPool, Row, TypeInfo};
 use tracing::{error, info};
 
 use super::types::*;
@@ -190,6 +190,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
 
     let migration_name = req
         .name
+        .clone()
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
 
     let migration_sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
@@ -201,6 +202,14 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         format!("sha256:{}", hex::encode(h.finalize()))
     };
 
+    let apply_body = crate::generator::sql::migration::push_storage_and_model_apply_body(
+        &storage_sql,
+        &diff,
+        req.force,
+        &req.schema,
+        &ast,
+    )
+    .map_err(engine_error)?;
     let apply_batch = crate::generator::sql::migration::push_storage_and_model_batch_sql(
         &storage_sql,
         &diff,
@@ -210,41 +219,77 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     )
     .map_err(engine_error)?;
 
-    if let Err(apply_err) = sqlx::raw_sql(&apply_batch).execute(&pool).await {
-        let err_str = apply_err.to_string();
-        let _ = migration_history::record_failed_migration(
+    let mut tx = pool.begin().await.map_err(engine_error)?;
+
+    if let Err(e) = (&mut *tx)
+        .execute(sqlx::raw_sql(apply_body.as_str()))
+        .await
+    {
+        migration_history::rollback_push_tx(
+            tx,
             &pool,
             &migration_name,
             &hash,
             &apply_batch,
-            &err_str,
+            &e.to_string(),
         )
         .await;
-        return Err(engine_error(apply_err));
+        return Err(engine_error(e));
     }
 
-    // Refresh and cache post-migration DB state
-    let new_db_state = crate::introspector::introspect(&pool, &req.schema)
-        .await
-        .map_err(engine_error)?;
-    migration_history::save_schema_state(&pool, &new_db_state)
-        .await
-        .map_err(engine_error)?;
+    let new_db_state = match crate::introspector::introspect_connection(&mut *tx, &req.schema).await {
+        Ok(s) => s,
+        Err(e) => {
+            migration_history::rollback_push_tx(
+                tx,
+                &pool,
+                &migration_name,
+                &hash,
+                &apply_batch,
+                &e.to_string(),
+            )
+            .await;
+            return Err(engine_error(e));
+        }
+    };
 
-    // Record in history
-    let admin_cfg = crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
-    let admin_json = serde_json::to_value(&admin_cfg).map_err(engine_error)?;
-    let insert_sql = migration_history::insert_migration_sql();
-    sqlx::query(&insert_sql)
-    .bind(&migration_name)
-    .bind(&hash)
-    .bind(env!("ENGINE_VERSION"))
-    .bind(serde_json::to_value(&ast).ok())
-    .bind(&admin_json)
-    .bind(&apply_batch)
-    .execute(&pool)
+    if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
+        migration_history::rollback_push_tx(
+            tx,
+            &pool,
+            &migration_name,
+            &hash,
+            &apply_batch,
+            &e.to_string(),
+        )
+        .await;
+        return Err(engine_error(e));
+    }
+
+    let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
+    if let Err(e) = migration_history::insert_applied_migration(
+        &mut *tx,
+        &migration_name,
+        &hash,
+        serde_json::to_value(&ast).ok(),
+        admin_cfg,
+        &apply_batch,
+    )
     .await
-    .map_err(engine_error)?;
+    {
+        migration_history::rollback_push_tx(
+            tx,
+            &pool,
+            &migration_name,
+            &hash,
+            &apply_batch,
+            &e.to_string(),
+        )
+        .await;
+        return Err(engine_error(e));
+    }
+
+    tx.commit().await.map_err(engine_error)?;
 
     info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
     Ok(Json(serde_json::json!({

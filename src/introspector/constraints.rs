@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,7 +24,7 @@ pub enum DbConstraintType {
     Check,
 }
 
-pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
+pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstraint>> {
     // Read all FK constraints
     let fk_rows: Vec<(String, String, String, String, String, Option<String>)> = sqlx::query_as(
         r#"
@@ -51,7 +51,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
         "#,
     )
     .bind(schema)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // Group FK rows by (table, constraint_name)
@@ -101,7 +101,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
         "#,
     )
     .bind(schema)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     let mut unique_map: std::collections::HashMap<(String, String), Vec<String>> =
@@ -140,7 +140,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbConstraint>> {
         "#,
     )
     .bind(schema)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     for (table, name, check_clause) in check_rows {

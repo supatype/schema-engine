@@ -1199,10 +1199,25 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
     use supatype_engine::generator::sql::rls;
 
     let ast_json = r#"{
-        "models": [{
+        "models": [
+            {
+                "name": "User", "tableName": "users",
+                "fields": {
+                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+                },
+                "access": {
+                    "read": { "type": "authenticated" },
+                    "create": { "type": "authenticated" },
+                    "update": { "type": "authenticated" },
+                    "delete": { "type": "authenticated" }
+                },
+                "indexes": [], "options": { "timestamps": false, "softDelete": false }
+            },
+            {
             "name": "Post", "tableName": "posts",
             "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
+                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
+                "userId": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "foreignKey": "user_id", "onDelete": "cascade" }
             },
             "access": {
                 "read":   { "type": "authenticated" },
@@ -1211,7 +1226,8 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
                 "delete": { "type": "owner", "field": "user_id" }
             },
             "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
+            }
+        ]
     }"#;
 
     let ast = parser::parse(ast_json).unwrap();

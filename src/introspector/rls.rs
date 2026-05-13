@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,7 +13,7 @@ pub struct DbRlsPolicy {
     pub check_expr: Option<String>,
 }
 
-pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbRlsPolicy>> {
+pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbRlsPolicy>> {
     #[allow(clippy::type_complexity)]
     let rows: Vec<(String, String, String, bool, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT c.relname, p.polname, p.polcmd::text,
@@ -26,7 +26,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbRlsPolicy>> {
              WHERE n.nspname = $1",
     )
     .bind(schema)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     Ok(rows

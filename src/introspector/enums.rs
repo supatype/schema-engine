@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::PgConnection;
 
 /// A Postgres enum type discovered in the database.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,7 +13,7 @@ pub struct DbEnum {
 }
 
 /// Read all user-defined enum types in the given schema.
-pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbEnum>> {
+pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbEnum>> {
     // pg_type + pg_enum gives us enum values in sort order (enumsortorder).
     let rows: Vec<(String, String)> = sqlx::query_as(
         "SELECT t.typname AS enum_name, e.enumlabel AS enum_value
@@ -24,7 +24,7 @@ pub async fn read(pool: &PgPool, schema: &str) -> Result<Vec<DbEnum>> {
          ORDER BY t.typname, e.enumsortorder",
     )
     .bind(schema)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
 
     // Group rows by enum name, preserving order.
