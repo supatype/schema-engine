@@ -102,6 +102,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # Hetzner Object Storage — do not use configure-aws-credentials (it calls AWS STS).
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.CDN_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.CDN_AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.CDN_AWS_REGION }}
     outputs:
       version: ${{ steps.version.outputs.version }}
 
@@ -141,13 +146,6 @@ jobs:
             -m checksums.sha256 \
             -t "supatype engine releases v${VERSION}"
           rm -f /tmp/minisign.key
-
-      - name: Configure AWS credentials (Hetzner Object Storage)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.CDN_AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.CDN_AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.CDN_AWS_REGION }}
 
       - name: Upload binaries + checksums to CDN
         run: |
