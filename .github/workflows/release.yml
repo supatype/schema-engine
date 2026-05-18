@@ -41,7 +41,7 @@ jobs:
             rust_target: aarch64-apple-darwin
             cross: false
           - target: darwin-amd64
-            runner: macos-13
+            runner: macos-15-intel
             rust_target: x86_64-apple-darwin
             cross: false
           - target: windows-amd64
@@ -66,6 +66,10 @@ jobs:
         with:
           tool: cross
 
+      - name: Install aarch64 strip (linux-arm64 cross-build)
+        if: matrix.cross == true
+        run: sudo apt-get update -qq && sudo apt-get install -y binutils-aarch64-linux-gnu
+
       - name: Build (native)
         if: matrix.cross == false
         run: cargo build --release --target ${{ matrix.rust_target }}
@@ -86,7 +90,13 @@ jobs:
 
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
-        run: strip "${{ steps.prep.outputs.bin_name }}"
+        run: |
+          BIN="${{ steps.prep.outputs.bin_name }}"
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            aarch64-linux-gnu-strip "$BIN"
+          else
+            strip "$BIN" || true
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
