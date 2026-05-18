@@ -56,7 +56,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 /// Convert a snake_case or camelCase identifier to PascalCase for use as a
 /// TypeScript class name, e.g. "blog_post" → "BlogPost", "post" → "Post".
 fn pascal_case(s: &str) -> String {
-    s.split(|c: char| c == '_' || c == '-')
+    s.split(['_', '-'])
         .filter(|part| !part.is_empty())
         .map(|part| {
             let mut chars = part.chars();

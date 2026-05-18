@@ -52,13 +52,13 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
     // ─── Models ───────────────────────────────────────────────────────────────
     let models: Vec<Value> = collections
         .iter()
-        .map(|model| build_model_config(model, &default_locale, &ast))
+        .map(|model| build_model_config(model, &default_locale, ast))
         .collect();
 
     // ─── Globals ──────────────────────────────────────────────────────────────
     let globals: Vec<Value> = singletons
         .iter()
-        .map(|model| build_model_config(model, &default_locale, &ast))
+        .map(|model| build_model_config(model, &default_locale, ast))
         .collect();
 
     let storage_buckets = serde_json::to_value(&ast.storage_buckets).unwrap_or_else(|_| json!([]));

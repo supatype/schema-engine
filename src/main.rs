@@ -374,23 +374,25 @@ async fn main() -> Result<()> {
                 return Err(e.context("Failed to apply migration"));
             }
 
-            let new_db_state =
-                match supatype_engine::introspector::introspect_connection(&mut *tx, &schema).await
-                {
-                    Ok(s) => s,
-                    Err(e) => {
-                        migration_history::rollback_push_tx(
-                            tx,
-                            &pool,
-                            &migration_name,
-                            &hash,
-                            &apply_batch,
-                            &e.to_string(),
-                        )
-                        .await;
-                        return Err(e.context("Failed to introspect after migration"));
-                    }
-                };
+            let new_db_state = match supatype_engine::introspector::introspect_connection(
+                &mut tx, &schema,
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    migration_history::rollback_push_tx(
+                        tx,
+                        &pool,
+                        &migration_name,
+                        &hash,
+                        &apply_batch,
+                        &e.to_string(),
+                    )
+                    .await;
+                    return Err(e.context("Failed to introspect after migration"));
+                }
+            };
 
             if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
                 migration_history::rollback_push_tx(

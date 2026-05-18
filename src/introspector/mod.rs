@@ -13,7 +13,7 @@ use sqlx::{PgConnection, PgPool};
 
 pub async fn introspect(pool: &PgPool, schema: &str) -> Result<DatabaseState> {
     let mut conn = pool.acquire().await?;
-    introspect_connection(&mut *conn, schema).await
+    introspect_connection(&mut conn, schema).await
 }
 
 /// Introspect using an existing Postgres connection (e.g. inside a transaction).

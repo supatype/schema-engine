@@ -215,7 +215,7 @@ pub(crate) fn bucket_uses_declared_storage_rls(bucket: &StorageBucketAst) -> boo
     bucket
         .access
         .as_ref()
-        .map_or(false, bucket_has_explicit_storage_access)
+        .is_some_and(bucket_has_explicit_storage_access)
 }
 
 pub(crate) fn storage_policy_label(bucket_id: &str) -> String {

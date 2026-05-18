@@ -236,7 +236,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         return Err(engine_error(e));
     }
 
-    let new_db_state = match crate::introspector::introspect_connection(&mut *tx, &req.schema).await
+    let new_db_state = match crate::introspector::introspect_connection(&mut tx, &req.schema).await
     {
         Ok(s) => s,
         Err(e) => {
