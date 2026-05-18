@@ -290,9 +290,13 @@ async fn main() -> Result<()> {
                 info!("Schema is up to date — refreshing admin_config on latest migration record.");
                 let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast)?;
                 let schema_snap = serde_json::to_value(&ast)?;
-                let n = migration_history::update_latest_migration_admin(&pool, &admin_cfg, &schema_snap)
-                    .await
-                    .context("Failed to update admin_config on latest migration")?;
+                let n = migration_history::update_latest_migration_admin(
+                    &pool,
+                    &admin_cfg,
+                    &schema_snap,
+                )
+                .await
+                .context("Failed to update admin_config on latest migration")?;
                 if n == 0 {
                     let migration_name = format!(
                         "admin_refresh_{}",
@@ -315,17 +319,16 @@ async fn main() -> Result<()> {
                         .await
                         .context("Failed to insert admin-only migration record")?;
                 }
-                println!(
-                    "{{\"status\":\"up_to_date\",\"operations\":0,\"admin_refreshed\":true}}"
-                );
+                println!("{{\"status\":\"up_to_date\",\"operations\":0,\"admin_refreshed\":true}}");
                 return Ok(());
             }
 
             let migration_sql =
                 supatype_engine::generator::sql::migration::generate(&diff, force, &schema, &ast)?;
             // Use millisecond precision so rapid retries don't collide on name.
-            let migration_name = name
-                .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
+            let migration_name = name.unwrap_or_else(|| {
+                format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f"))
+            });
 
             // Pre-compute hash so it's available for the failure record too.
             let hash = format!("sha256:{}", {
@@ -352,10 +355,7 @@ async fn main() -> Result<()> {
                     &ast,
                 )?;
 
-            let mut tx = pool
-                .begin()
-                .await
-                .context("begin migration transaction")?;
+            let mut tx = pool.begin().await.context("begin migration transaction")?;
 
             if let Err(e) = (&mut *tx)
                 .execute(sqlx::raw_sql(&apply_body))
@@ -374,21 +374,23 @@ async fn main() -> Result<()> {
                 return Err(e.context("Failed to apply migration"));
             }
 
-            let new_db_state = match supatype_engine::introspector::introspect_connection(&mut *tx, &schema).await {
-                Ok(s) => s,
-                Err(e) => {
-                    migration_history::rollback_push_tx(
-                        tx,
-                        &pool,
-                        &migration_name,
-                        &hash,
-                        &apply_batch,
-                        &e.to_string(),
-                    )
-                    .await;
-                    return Err(e.context("Failed to introspect after migration"));
-                }
-            };
+            let new_db_state =
+                match supatype_engine::introspector::introspect_connection(&mut *tx, &schema).await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        migration_history::rollback_push_tx(
+                            tx,
+                            &pool,
+                            &migration_name,
+                            &hash,
+                            &apply_batch,
+                            &e.to_string(),
+                        )
+                        .await;
+                        return Err(e.context("Failed to introspect after migration"));
+                    }
+                };
 
             if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
                 migration_history::rollback_push_tx(
@@ -426,9 +428,7 @@ async fn main() -> Result<()> {
                 return Err(e.context("Failed to record migration in history"));
             }
 
-            tx.commit()
-                .await
-                .context("commit migration transaction")?;
+            tx.commit().await.context("commit migration transaction")?;
 
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
             println!(
@@ -641,11 +641,7 @@ fn prompt_rename(subject: &str, hint: &str) -> Result<()> {
         " INPUT REQUIRED ".on_yellow().black().bold(),
         subject,
     );
-    eprintln!(
-        "  {}  {}",
-        "↳".yellow(),
-        hint.dimmed(),
-    );
+    eprintln!("  {}  {}", "↳".yellow(), hint.dimmed(),);
     eprint!(
         "  {} Treat as rename? {} ",
         "›".yellow().bold(),

@@ -100,5 +100,8 @@ fn owner_rule_allows_self_id_without_relations() {
         .iter()
         .find(|m| m.name == "Todo")
         .expect("Todo model must exist");
-    assert!(todo.access.update.is_some(), "update rule should be preserved");
+    assert!(
+        todo.access.update.is_some(),
+        "update rule should be preserved"
+    );
 }

@@ -2641,7 +2641,8 @@ fn test_enum_add_value_generates_alter_type_sql() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast)
+        .unwrap();
     assert!(
         sql.contains("ALTER TYPE \"posts_status\" ADD VALUE 'archived'"),
         "forward SQL must contain ALTER TYPE ... ADD VALUE; got:\n{sql}"
@@ -2735,11 +2736,13 @@ fn test_enum_remove_value_requires_force() {
     let diff = differ::diff(&ast, &db).unwrap();
 
     // Without --force, migration generation should fail
-    let result = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast);
+    let result =
+        supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast);
     assert!(result.is_err(), "enum value removal must require --force");
 
     // With --force, it should succeed
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, true, "public", &ast).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, true, "public", &ast)
+        .unwrap();
     assert!(
         sql.contains("RENAME TO \"posts_status_old\""),
         "remove enum value SQL must rename old type; got:\n{sql}"
@@ -2871,7 +2874,8 @@ fn test_enum_rename_value_generates_alter_type_rename_sql() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast)
+        .unwrap();
     assert!(
         sql.contains("ALTER TYPE \"posts_status\" RENAME VALUE 'draft' TO 'drafts'"),
         "forward SQL must contain RENAME VALUE; got:\n{sql}"
@@ -2961,7 +2965,8 @@ fn test_enum_reorder_values_generates_recreate_sql() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    let sql = supatype_engine::generator::sql::migration::forward_sql(&diff, false, "public", &ast)
+        .unwrap();
 
     // Must rename old → create new → alter columns → drop old
     assert!(

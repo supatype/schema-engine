@@ -91,7 +91,12 @@ CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
 // ─── Policy rendering ─────────────────────────────────────────────────────────
 
 /// `suffix`: `select` | `insert` | `update` | `delete` — must match differ policy naming.
-pub fn render_policy_migration_sql(schema: &str, table: &str, suffix: &str, rule: &AccessRule) -> String {
+pub fn render_policy_migration_sql(
+    schema: &str,
+    table: &str,
+    suffix: &str,
+    rule: &AccessRule,
+) -> String {
     match suffix {
         "select" => render_select_policy_sql(schema, table, rule),
         "insert" => render_insert_policy_sql(schema, table, rule),

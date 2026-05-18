@@ -54,35 +54,17 @@ fn validate_owner_rules(model: &mut super::ast::ModelAst) -> Result<()> {
                 RelationCardinality::BelongsTo | RelationCardinality::ManyToMany
             );
             if is_owning {
-                relation_fk_columns.insert(
-                    rel.foreign_key
-                        .clone()
-                        .unwrap_or_else(|| format!("{}_id", super::resolver::to_snake_case(field_name))),
-                );
+                relation_fk_columns.insert(rel.foreign_key.clone().unwrap_or_else(|| {
+                    format!("{}_id", super::resolver::to_snake_case(field_name))
+                }));
             }
         }
     }
 
-    normalize_and_validate_rule(
-        &mut model.access.read,
-        &model.name,
-        &relation_fk_columns,
-    )?;
-    normalize_and_validate_rule(
-        &mut model.access.create,
-        &model.name,
-        &relation_fk_columns,
-    )?;
-    normalize_and_validate_rule(
-        &mut model.access.update,
-        &model.name,
-        &relation_fk_columns,
-    )?;
-    normalize_and_validate_rule(
-        &mut model.access.delete,
-        &model.name,
-        &relation_fk_columns,
-    )?;
+    normalize_and_validate_rule(&mut model.access.read, &model.name, &relation_fk_columns)?;
+    normalize_and_validate_rule(&mut model.access.create, &model.name, &relation_fk_columns)?;
+    normalize_and_validate_rule(&mut model.access.update, &model.name, &relation_fk_columns)?;
+    normalize_and_validate_rule(&mut model.access.delete, &model.name, &relation_fk_columns)?;
 
     Ok(())
 }

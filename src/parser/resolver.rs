@@ -43,7 +43,8 @@ fn validate_computed_from_source_fields(ast: &SchemaAst) -> Result<()> {
     for model in &ast.models {
         for (field_name, field) in &model.fields {
             if let FieldAst::Text(t) = field {
-                let has_preview = !t.sources.is_empty() || t.template.as_ref().is_some_and(|s| !s.is_empty());
+                let has_preview =
+                    !t.sources.is_empty() || t.template.as_ref().is_some_and(|s| !s.is_empty());
                 if !has_preview {
                     continue;
                 }
@@ -57,7 +58,8 @@ fn validate_computed_from_source_fields(ast: &SchemaAst) -> Result<()> {
                     if src == field_name {
                         bail!(
                             "Model '{}': field '{}' lists itself in `sources`",
-                            model.name, field_name
+                            model.name,
+                            field_name
                         );
                     }
                 }
@@ -219,13 +221,7 @@ pub(crate) fn bucket_uses_declared_storage_rls(bucket: &StorageBucketAst) -> boo
 pub(crate) fn storage_policy_label(bucket_id: &str) -> String {
     bucket_id
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c
-            } else {
-                '_'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect()
 }
 

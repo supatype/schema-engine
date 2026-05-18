@@ -154,7 +154,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
             .await
             .map_err(engine_error)?;
         info!("Schema is up to date — refreshing admin_config on latest migration record.");
-        let admin_cfg = crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
+        let admin_cfg =
+            crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
         let schema_snap = serde_json::to_value(&ast).map_err(engine_error)?;
         let n = migration_history::update_latest_migration_admin(&pool, &admin_cfg, &schema_snap)
             .await
@@ -193,8 +194,9 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         .clone()
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
 
-    let migration_sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
-        .map_err(engine_error)?;
+    let migration_sql =
+        crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
+            .map_err(engine_error)?;
     let hash = {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -221,10 +223,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
 
     let mut tx = pool.begin().await.map_err(engine_error)?;
 
-    if let Err(e) = (&mut *tx)
-        .execute(sqlx::raw_sql(apply_body.as_str()))
-        .await
-    {
+    if let Err(e) = (&mut *tx).execute(sqlx::raw_sql(apply_body.as_str())).await {
         migration_history::rollback_push_tx(
             tx,
             &pool,
@@ -237,7 +236,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         return Err(engine_error(e));
     }
 
-    let new_db_state = match crate::introspector::introspect_connection(&mut *tx, &req.schema).await {
+    let new_db_state = match crate::introspector::introspect_connection(&mut *tx, &req.schema).await
+    {
         Ok(s) => s,
         Err(e) => {
             migration_history::rollback_push_tx(
@@ -415,7 +415,9 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
 
 /// Returns the AdminConfig JSON stored at last successful `push`.
 /// Single-tenant: resolve `DATABASE_URL` from the engine environment (or optional body for CLI).
-pub async fn studio_config(Json(req): Json<StudioConfigRequest>) -> EngineResponse<serde_json::Value> {
+pub async fn studio_config(
+    Json(req): Json<StudioConfigRequest>,
+) -> EngineResponse<serde_json::Value> {
     let url = resolve_database_url(req.database_url)?;
     let pool = connect_db(&url).await?;
     let schema_ident = sanitize_schema_identifier(&req.schema)?;
@@ -424,9 +426,9 @@ pub async fn studio_config(Json(req): Json<StudioConfigRequest>) -> EngineRespon
         schema_ident
     );
     let row: Option<(serde_json::Value,)> = sqlx::query_as(&studio_sql)
-    .fetch_optional(&pool)
-    .await
-    .map_err(engine_error)?;
+        .fetch_optional(&pool)
+        .await
+        .map_err(engine_error)?;
 
     match row {
         Some((config,)) => Ok(Json(config)),
@@ -495,9 +497,7 @@ fn require_ast(
     }
 }
 
-fn sanitize_schema_identifier(
-    schema: &str,
-) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+fn sanitize_schema_identifier(schema: &str) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     if schema.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -570,7 +570,9 @@ fn pg_cell_to_json(row: &sqlx::postgres::PgRow, i: usize) -> serde_json::Value {
         return v.unwrap_or(serde_json::Value::Null);
     }
     if let Ok(v) = row.try_get::<Option<bool>, _>(i) {
-        return v.map(serde_json::Value::Bool).unwrap_or(serde_json::Value::Null);
+        return v
+            .map(serde_json::Value::Bool)
+            .unwrap_or(serde_json::Value::Null);
     }
     if let Ok(v) = row.try_get::<Option<i16>, _>(i) {
         return v.map(|n| json!(n)).unwrap_or(serde_json::Value::Null);
@@ -594,13 +596,19 @@ fn pg_cell_to_json(row: &sqlx::postgres::PgRow, i: usize) -> serde_json::Value {
             .unwrap_or(serde_json::Value::Null);
     }
     if let Ok(v) = row.try_get::<Option<String>, _>(i) {
-        return v.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null);
-    }
-    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(i) {
-        return v.map(|b| serde_json::Value::String(hex::encode(b)))
+        return v
+            .map(serde_json::Value::String)
             .unwrap_or(serde_json::Value::Null);
     }
-    serde_json::Value::String(format!("<unserializable:{}>", row.column(i).type_info().name()))
+    if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(i) {
+        return v
+            .map(|b| serde_json::Value::String(hex::encode(b)))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    serde_json::Value::String(format!(
+        "<unserializable:{}>",
+        row.column(i).type_info().name()
+    ))
 }
 
 #[cfg(test)]

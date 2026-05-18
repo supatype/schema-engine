@@ -260,8 +260,12 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                                         Some(json!({ "bucket": s.bucket }))
                                     }
                                     FieldAst::Enum(e) => Some(json!({ "values": e.values })),
-                                    FieldAst::Money(_) => Some(json!({ "currency": true, "step": "0.01" })),
-                                    FieldAst::Vector(v) => Some(json!({ "dimensions": v.dimensions })),
+                                    FieldAst::Money(_) => {
+                                        Some(json!({ "currency": true, "step": "0.01" }))
+                                    }
+                                    FieldAst::Vector(v) => {
+                                        Some(json!({ "dimensions": v.dimensions }))
+                                    }
                                     _ => None,
                                 };
                                 if let Some(opts) = options {
@@ -328,10 +332,7 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     FieldAst::Text(t) if !t.sources.is_empty() || t.template.is_some() => {
                         let multiline = name.to_ascii_lowercase().contains("excerpt")
                             || name.to_ascii_lowercase().contains("summary")
-                            || t
-                                .template
-                                .as_deref()
-                                .is_some_and(|tpl| tpl.contains('\n'));
+                            || t.template.as_deref().is_some_and(|tpl| tpl.contains('\n'));
                         let mut m = serde_json::Map::new();
                         if !t.sources.is_empty() {
                             m.insert("sources".into(), json!(t.sources));
@@ -342,9 +343,7 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                         }
                         Some(Value::Object(m))
                     }
-                    FieldAst::Datetime(f)
-                    | FieldAst::Timestamp(f)
-                    | FieldAst::Date(f)
+                    FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f)
                         if matches!(&f.default, Some(DefaultValueAst::Now)) =>
                     {
                         Some(json!({ "studioTimestampDefault": "now" }))
@@ -372,8 +371,7 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
 /// Resolve a relation's target to the PostgREST table name (public schema).
 /// System refs like "supatype:user" resolve to their canonical table names.
 fn resolve_relation_target(rel: &RelationFieldAst, ast: &SchemaAst) -> String {
-    if let Some((_sys_schema, sys_table)) =
-        crate::parser::resolver::resolve_system_ref(&rel.target)
+    if let Some((_sys_schema, sys_table)) = crate::parser::resolver::resolve_system_ref(&rel.target)
     {
         return sys_table.to_string();
     }
@@ -401,10 +399,7 @@ fn datetime_field(
     m.insert("sortable".into(), json!(true));
     m.insert("localized".into(), json!(false));
     if server_now_studio {
-        m.insert(
-            "options".into(),
-            json!({ "studioTimestampDefault": "now" }),
-        );
+        m.insert("options".into(), json!({ "studioTimestampDefault": "now" }));
     }
     Value::Object(m)
 }

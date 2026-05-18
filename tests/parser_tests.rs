@@ -43,8 +43,15 @@ fn test_storage_buckets_merge_and_declarative_rls() {
     }"#;
 
     let ast = parser::parse(input).unwrap();
-    let b = ast.storage_buckets.iter().find(|x| x.id == "docs").expect("docs bucket");
-    assert_eq!(b.allowed_mime_types.as_ref().map(|v| v.as_slice()), Some(&["application/pdf".to_string()][..]));
+    let b = ast
+        .storage_buckets
+        .iter()
+        .find(|x| x.id == "docs")
+        .expect("docs bucket");
+    assert_eq!(
+        b.allowed_mime_types.as_ref().map(|v| v.as_slice()),
+        Some(&["application/pdf".to_string()][..])
+    );
     assert_eq!(b.file_size_limit, Some(52428800));
     assert!(b.access.is_some());
 
@@ -82,7 +89,10 @@ fn test_storage_custom_mode_and_s3_policy_roundtrip() {
         .iter()
         .find(|x| x.id == "private_docs")
         .expect("private_docs bucket");
-    assert_eq!(b.access_mode.as_ref().map(|m| format!("{m:?}")), Some("Custom".to_string()));
+    assert_eq!(
+        b.access_mode.as_ref().map(|m| format!("{m:?}")),
+        Some("Custom".to_string())
+    );
     assert_eq!(
         b.s3_bucket_policy.as_deref(),
         Some("{\"Version\":\"2012-10-17\"}")

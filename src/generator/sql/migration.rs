@@ -21,7 +21,12 @@ fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
 /// Layout: preamble (header + optional `CREATE EXTENSION`), then `BEGIN`, model DDL, `COMMIT`.
 /// Extension lines are emitted **before** the explicit `BEGIN` (legacy layout; still one
 /// `sqlx::raw_sql` batch).
-pub fn forward_sql(diff: &DiffOutput, force: bool, schema: &str, ast: &SchemaAst) -> Result<String> {
+pub fn forward_sql(
+    diff: &DiffOutput,
+    force: bool,
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<String> {
     assert_forward_allowed(diff, force)?;
     render_forward_wrapped(diff, schema, ast)
 }
@@ -292,9 +297,7 @@ fn render_create_rls_policy_sql(
         .ok_or_else(|| anyhow!("CreateRlsPolicy: unknown table {table}"))?;
     let prefix = format!("{table}_");
     if !policy.starts_with(&prefix) {
-        bail!(
-            "CreateRlsPolicy: policy name {policy} does not start with expected prefix {prefix}"
-        );
+        bail!("CreateRlsPolicy: policy name {policy} does not start with expected prefix {prefix}");
     }
     let suffix = &policy[prefix.len()..];
     let rule = match suffix {
@@ -304,7 +307,8 @@ fn render_create_rls_policy_sql(
         "delete" => model.access.delete.as_ref(),
         _ => bail!("CreateRlsPolicy: unknown policy suffix {suffix}"),
     };
-    let rule = rule.ok_or_else(|| anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}"))?;
+    let rule = rule
+        .ok_or_else(|| anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}"))?;
     Ok(crate::generator::sql::rls::render_policy_migration_sql(
         schema, table, suffix, rule,
     ))

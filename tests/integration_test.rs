@@ -47,13 +47,10 @@ where
         return with_ephemeral_database(f).await;
     }
 
-    let container = Postgres::default()
-        .start()
-        .await
-        .expect(
-            "Docker must be running for testcontainers, or set DATABASE_URL \
+    let container = Postgres::default().start().await.expect(
+        "Docker must be running for testcontainers, or set DATABASE_URL \
              (ephemeral CREATE DATABASE on that server — see README / CI)",
-        );
+    );
     let port = container.get_host_port_ipv4(5432).await.unwrap();
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     let pool = sqlx::PgPool::connect(&url)
@@ -76,11 +73,7 @@ where
         .await
         .expect("DATABASE_URL: connect admin pool");
     let n = EPHEMERAL_SEQ.fetch_add(1, Ordering::SeqCst);
-    let db_name = format!(
-        "st_engine_it_{}_{}",
-        std::process::id(),
-        n
-    );
+    let db_name = format!("st_engine_it_{}_{}", std::process::id(), n);
     assert!(
         db_name
             .chars()

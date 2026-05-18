@@ -139,7 +139,10 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
     }
 }
 
-fn access_exprs_for_bucket(bucket_id: &str, access: &crate::parser::ast::AccessAst) -> (String, String, String) {
+fn access_exprs_for_bucket(
+    bucket_id: &str,
+    access: &crate::parser::ast::AccessAst,
+) -> (String, String, String) {
     let b = sql_quote_bucket_id(bucket_id);
     let read_expr = access
         .read
@@ -218,21 +221,36 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
                 .access
                 .read
                 .as_ref()
-                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_storage_expr(r)))
+                .map(|r| {
+                    format!(
+                        "bucket_id = '{bq}' AND ({})",
+                        access_rule_to_storage_expr(r)
+                    )
+                })
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             let write_expr = model
                 .access
                 .create
                 .as_ref()
-                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_storage_expr(r)))
+                .map(|r| {
+                    format!(
+                        "bucket_id = '{bq}' AND ({})",
+                        access_rule_to_storage_expr(r)
+                    )
+                })
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             let delete_expr = model
                 .access
                 .delete
                 .as_ref()
-                .map(|r| format!("bucket_id = '{bq}' AND ({})", access_rule_to_storage_expr(r)))
+                .map(|r| {
+                    format!(
+                        "bucket_id = '{bq}' AND ({})",
+                        access_rule_to_storage_expr(r)
+                    )
+                })
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             model_entries.push(ModelBucketAccess {

@@ -1,7 +1,7 @@
 use super::ast::{DefaultValueAst, FieldAst, ScalarFieldAst, SchemaAst};
+use super::resolver::to_snake_case;
 #[allow(unused_imports)]
 use indexmap::IndexMap;
-use super::resolver::to_snake_case;
 
 /// Apply naming conventions and fill in defaults.
 pub fn normalise(mut ast: SchemaAst) -> SchemaAst {

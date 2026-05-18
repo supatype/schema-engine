@@ -120,13 +120,28 @@ pub async fn list_dashboard_views(pool: &PgPool) -> Result<Vec<DashboardView>> {
          created_at::TEXT, updated_at::TEXT \
          FROM {SCHEMA}.dashboard_views ORDER BY created_at ASC"
     );
-    let rows: Vec<(String, String, bool, serde_json::Value, Option<String>, String, String)> =
-        sqlx::query_as(&sql).fetch_all(pool).await?;
+    let rows: Vec<(
+        String,
+        String,
+        bool,
+        serde_json::Value,
+        Option<String>,
+        String,
+        String,
+    )> = sqlx::query_as(&sql).fetch_all(pool).await?;
 
     Ok(rows
         .into_iter()
-        .map(|(id, name, is_default, layout, created_by, created_at, updated_at)| {
-            DashboardView { id, name, is_default, layout, created_by, created_at, updated_at }
-        })
+        .map(
+            |(id, name, is_default, layout, created_by, created_at, updated_at)| DashboardView {
+                id,
+                name,
+                is_default,
+                layout,
+                created_by,
+                created_at,
+                updated_at,
+            },
+        )
         .collect())
 }

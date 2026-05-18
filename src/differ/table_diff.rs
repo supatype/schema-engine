@@ -45,7 +45,8 @@ pub fn diff(
         .tables
         .iter()
         .filter(|t| {
-            !schema_table_names.contains(t.name.as_str()) && !is_extension_managed_table(t.name.as_str())
+            !schema_table_names.contains(t.name.as_str())
+                && !is_extension_managed_table(t.name.as_str())
         })
         .map(|t| t.name.as_str())
         .collect();
@@ -85,9 +86,7 @@ pub fn diff(
                 let from_name = ops
                     .iter()
                     .find_map(|op| match op {
-                        Operation::RenameTable { from, to, .. }
-                            if to == &model.table_name =>
-                        {
+                        Operation::RenameTable { from, to, .. } if to == &model.table_name => {
                             Some(from.clone())
                         }
                         _ => None,
@@ -200,22 +199,19 @@ fn emit_fk_ops_for_model(
                 let constraint_name = format!("{}_{}_fkey", model.table_name, fk_col);
 
                 if !db_fk_names.contains(constraint_name.as_str()) {
-                    let (ref_table, ref_schema) =
-                        if let Some((sys_schema, sys_table)) =
-                            crate::parser::resolver::resolve_system_ref(&rel.target)
-                        {
-                            (sys_table.to_string(), Some(sys_schema.to_string()))
-                        } else {
-                            let t = ast
-                                .models
-                                .iter()
-                                .find(|m| m.name == rel.target)
-                                .map(|m| m.table_name.clone())
-                                .unwrap_or_else(|| {
-                                    crate::parser::resolver::to_snake_case(&rel.target)
-                                });
-                            (t, None)
-                        };
+                    let (ref_table, ref_schema) = if let Some((sys_schema, sys_table)) =
+                        crate::parser::resolver::resolve_system_ref(&rel.target)
+                    {
+                        (sys_table.to_string(), Some(sys_schema.to_string()))
+                    } else {
+                        let t = ast
+                            .models
+                            .iter()
+                            .find(|m| m.name == rel.target)
+                            .map(|m| m.table_name.clone())
+                            .unwrap_or_else(|| crate::parser::resolver::to_snake_case(&rel.target));
+                        (t, None)
+                    };
 
                     ops.push(Operation::AddForeignKey {
                         table: model.table_name.clone(),

@@ -41,9 +41,9 @@ pub struct DbColumn {
 
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTable>> {
     let table_rows: Vec<(String,)> = sqlx::query_as(TABLES_QUERY)
-    .bind(schema)
-    .fetch_all(&mut *conn)
-    .await?;
+        .bind(schema)
+        .fetch_all(&mut *conn)
+        .await?;
 
     let mut tables = Vec::new();
     for (name,) in table_rows {

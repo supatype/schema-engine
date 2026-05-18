@@ -27,7 +27,11 @@ async fn require_admin_token(req: Request, next: Next) -> Response {
         return next.run(req).await;
     }
 
-    (StatusCode::UNAUTHORIZED, "Missing or invalid X-Engine-Admin-Token").into_response()
+    (
+        StatusCode::UNAUTHORIZED,
+        "Missing or invalid X-Engine-Admin-Token",
+    )
+        .into_response()
 }
 
 fn has_valid_admin_token(headers: &HeaderMap, expected: &str) -> bool {
@@ -92,7 +96,10 @@ mod tests {
     #[test]
     fn validates_expected_engine_admin_token() {
         let mut headers = HeaderMap::new();
-        headers.insert("X-Engine-Admin-Token", HeaderValue::from_static("expected-token"));
+        headers.insert(
+            "X-Engine-Admin-Token",
+            HeaderValue::from_static("expected-token"),
+        );
         assert!(has_valid_admin_token(&headers, "expected-token"));
     }
 
@@ -102,7 +109,10 @@ mod tests {
         assert!(!has_valid_admin_token(&headers, "expected-token"));
 
         let mut wrong_headers = HeaderMap::new();
-        wrong_headers.insert("X-Engine-Admin-Token", HeaderValue::from_static("wrong-token"));
+        wrong_headers.insert(
+            "X-Engine-Admin-Token",
+            HeaderValue::from_static("wrong-token"),
+        );
         assert!(!has_valid_admin_token(&wrong_headers, "expected-token"));
     }
 }

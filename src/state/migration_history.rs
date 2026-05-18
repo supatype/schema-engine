@@ -104,7 +104,17 @@ pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
     Ok(rows
         .into_iter()
         .map(
-            |(id, name, hash, applied_at, rolled_back, engine_version, schema_snapshot, status, error_message)| {
+            |(
+                id,
+                name,
+                hash,
+                applied_at,
+                rolled_back,
+                engine_version,
+                schema_snapshot,
+                status,
+                error_message,
+            )| {
                 MigrationRecord {
                     id,
                     name,
