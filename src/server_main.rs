@@ -81,7 +81,11 @@ async fn main() {
         .route("/sql", post(server::routes::execute_sql))
         .route_layer(from_fn(require_admin_token));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let bind_host = std::env::var("ENGINE_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let bind_ip: std::net::IpAddr = bind_host.parse().unwrap_or(std::net::IpAddr::V4(
+        std::net::Ipv4Addr::new(127, 0, 0, 1),
+    ));
+    let addr = SocketAddr::from((bind_ip, port));
     info!(%addr, version = env!("ENGINE_VERSION"), "Schema engine server starting");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

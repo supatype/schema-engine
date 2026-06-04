@@ -18,9 +18,20 @@ fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
     .collect()
 }
 
-/// Normalise an expression for comparison: trim and collapse consecutive whitespace.
+/// Canonicalise an RLS expression for comparison.
+///
+/// Postgres rewrites expressions when it stores a policy: it wraps them in
+/// parentheses, drops the `auth.` schema prefix (since `auth` is in the search
+/// path), and may quote identifiers. A naive string compare against the engine's
+/// generated SQL therefore always differs, so every policy looks "changed" and is
+/// needlessly dropped/recreated on every push. We strip those incidental
+/// differences (schema prefix, parentheses, quotes, whitespace) so an unchanged
+/// policy compares equal and is left untouched. The same transform is applied to
+/// both sides, so it only ever collapses incidental formatting, never semantics.
 fn normalise(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut out = s.replace("auth.", "");
+    out.retain(|c| c != '(' && c != ')' && c != '"');
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn diff(
@@ -99,12 +110,11 @@ pub fn diff(
                     let db_expr_norm = normalise(db_expr);
 
                     if db_expr_norm != expected_expr {
-                        // Expression changed — drop and recreate.
-                        ops.push(Operation::DropRlsPolicy {
-                            table: table.to_string(),
-                            policy: policy_name.clone(),
-                            risk: Risk::Safe,
-                        });
+                        // Expression changed — recreate. CreateRlsPolicy already renders
+                        // idempotent SQL (DROP POLICY IF EXISTS + CREATE POLICY), so we must
+                        // NOT also emit a separate DropRlsPolicy here: operation ordering runs
+                        // CreateRlsPolicy before DropRlsPolicy, so a separate drop would delete
+                        // the freshly recreated policy and leave the table with no policy at all.
                         ops.push(Operation::CreateRlsPolicy {
                             table: table.to_string(),
                             policy: policy_name,

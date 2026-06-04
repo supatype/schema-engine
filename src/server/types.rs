@@ -25,7 +25,9 @@ fn default_lang() -> String {
 pub struct DbRequest {
     #[serde(default)]
     pub ast: Option<serde_json::Value>,
-    pub database_url: String,
+    /// Ignored when `DATABASE_URL` is set on the engine process (trusted-proxy mode).
+    #[serde(default)]
+    pub database_url: Option<String>,
     #[serde(default = "default_schema")]
     pub schema: String,
     #[serde(default)]
@@ -46,7 +48,8 @@ fn default_schema() -> String {
 #[derive(Deserialize)]
 pub struct ValidateRequest {
     pub diff: serde_json::Value,
-    pub database_url: String,
+    #[serde(default)]
+    pub database_url: Option<String>,
 }
 
 /// Request body for /auth-functions endpoint.

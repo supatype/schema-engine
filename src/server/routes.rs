@@ -29,7 +29,8 @@ pub async fn parse(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Va
 // ── Introspect (DB) ─────────────────────────────────────────────────────────
 
 pub async fn introspect(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
-    let pool = connect_db(&req.database_url).await?;
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
     match crate::introspector::introspect(&pool, &req.schema).await {
         Ok(state) => Ok(Json(serde_json::to_value(&state).unwrap())),
         Err(e) => Err(engine_error(e)),
@@ -41,7 +42,8 @@ pub async fn introspect(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
 pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
-    let pool = connect_db(&req.database_url).await?;
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
@@ -54,7 +56,8 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
 pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> {
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
-    let pool = connect_db(&req.database_url).await?;
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
@@ -72,7 +75,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let storage_sql = crate::generator::sql::storage::generate(&ast).map_err(engine_error)?;
-    let pool = connect_db(&req.database_url).await?;
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
 
     // Ensure _supatype schema and internal tables exist
     sqlx::raw_sql(migration_history::create_internal_schema_sql())
@@ -404,7 +408,8 @@ pub async fn openapi(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::
 // ── Migrations list (DB) ────────────────────────────────────────────────────
 
 pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
-    let pool = connect_db(&req.database_url).await?;
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
     let list = crate::state::migration_history::list_migrations(&pool)
         .await
         .map_err(engine_error)?;
@@ -465,7 +470,8 @@ pub async fn execute_sql(Json(req): Json<SqlExecRequest>) -> EngineResponse<SqlE
 
 pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_json::Value> {
     let diff: crate::differ::DiffOutput = serde_json::from_value(req.diff).map_err(engine_error)?;
-    let pool = connect_db(&req.database_url).await?;
+    let url = resolve_database_url(req.database_url)?;
+    let pool = connect_db(&url).await?;
     let report = crate::differ::risk_analyser::validate(&diff, &pool)
         .await
         .map_err(engine_error)?;
@@ -535,15 +541,35 @@ async fn connect_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse
         .map_err(|e| engine_error(anyhow::anyhow!("Failed to connect to database: {e}")))
 }
 
+fn resolve_db_request_url(
+    req: &DbRequest,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    resolve_database_url(req.database_url.clone())
+}
+
 fn resolve_database_url(
     explicit: Option<String>,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    if let Some(url) = explicit {
-        if !url.is_empty() {
-            return Ok(url);
+    let env_url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
+
+    if let Some(env) = env_url {
+        if let Some(body) = explicit {
+            if !body.is_empty() && body != env {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse {
+                        error: "database_url in request body is not allowed when DATABASE_URL is configured on the engine"
+                            .to_string(),
+                    }),
+                ));
+            }
         }
+        return Ok(env);
     }
-    std::env::var("DATABASE_URL").map_err(|_| {
+
+    explicit.filter(|s| !s.is_empty()).ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {
