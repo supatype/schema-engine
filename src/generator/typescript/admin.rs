@@ -203,10 +203,17 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     RelationCardinality::ManyToMany => "manyToMany",
                 };
                 let target_table = resolve_relation_target(rel, ast);
+                let fk_col = rel
+                    .foreign_key
+                    .clone()
+                    .unwrap_or_else(|| format!("{}_id", crate::parser::resolver::to_snake_case(name)));
                 let mut options = json!({
                     "target": target_table,
                     "cardinality": cardinality,
                 });
+                if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
+                    options["foreignKey"] = json!(fk_col);
+                }
                 // For manyToMany, include junction table metadata for the relation widget.
                 if matches!(rel.cardinality, RelationCardinality::ManyToMany) {
                     if let Some(jt) = ast.junction_tables.iter().find(|jt| {
@@ -223,8 +230,13 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                         options["foreignKey"] = json!(foreign_key);
                     }
                 }
+                let column_name = if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
+                    fk_col.as_str()
+                } else {
+                    name
+                };
                 let mut entry = json!({
-                    "name": name,
+                    "name": column_name,
                     "label": to_label(name),
                     "widget": widget,
                     "required": false,
