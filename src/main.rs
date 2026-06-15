@@ -224,6 +224,10 @@ async fn main() -> Result<()> {
                 .execute(&pool)
                 .await
                 .context("Failed to ensure status/error_message columns")?;
+            sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
+                .execute(&pool)
+                .await
+                .context("Failed to ensure schema_state studio columns")?;
 
             // Ensure supatype schema and studio tables exist
             sqlx::raw_sql(studio_state::create_studio_schema_sql())
@@ -269,12 +273,21 @@ async fn main() -> Result<()> {
                 None => supatype_engine::introspector::introspect(&pool, &schema).await?,
             };
 
-            let mut diff = supatype_engine::differ::diff(&ast, &db_state)?;
+            let previous_ast = if !no_cache {
+                migration_history::load_latest_schema_snapshot(&pool)
+                    .await
+                    .and_then(|v| serde_json::from_value(v).ok())
+            } else {
+                None
+            };
+
+            let mut diff =
+                supatype_engine::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())?;
 
             // Interactive rename confirmation (skipped in CI with --non-interactive)
             if !non_interactive {
-                diff = confirm_renames(diff)?;
-                confirm_destructive_changes(&diff)?;
+                diff =             confirm_renames(diff)?;
+                confirm_risky_changes(&diff)?;
             }
 
             if diff.operations.is_empty() {
@@ -287,38 +300,16 @@ async fn main() -> Result<()> {
 
                 // AST-only changes (widgets, labels, etc.) still need admin_config / snapshot
                 // so Studio and tooling see the latest schema without a DDL migration.
-                info!("Schema is up to date — refreshing admin_config on latest migration record.");
+                info!("Schema is up to date — refreshing Studio metadata.");
                 let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast)?;
                 let schema_snap = serde_json::to_value(&ast)?;
-                let n = migration_history::update_latest_migration_admin(
+                migration_history::refresh_metadata_on_up_to_date_push(
                     &pool,
                     &admin_cfg,
                     &schema_snap,
                 )
                 .await
-                .context("Failed to update admin_config on latest migration")?;
-                if n == 0 {
-                    let migration_name = format!(
-                        "admin_refresh_{}",
-                        chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")
-                    );
-                    let hash = format!("sha256:{}", {
-                        use sha2::{Digest, Sha256};
-                        let mut h = Sha256::new();
-                        h.update(schema_snap.to_string().as_bytes());
-                        hex::encode(h.finalize())
-                    });
-                    sqlx::query(&migration_history::insert_migration_sql())
-                        .bind(&migration_name)
-                        .bind(&hash)
-                        .bind(env!("ENGINE_VERSION"))
-                        .bind(&schema_snap)
-                        .bind(&admin_cfg)
-                        .bind(None::<String>)
-                        .execute(&pool)
-                        .await
-                        .context("Failed to insert admin-only migration record")?;
-                }
+                .context("Failed to refresh Studio metadata on up-to-date push")?;
                 println!("{{\"status\":\"up_to_date\",\"operations\":0,\"admin_refreshed\":true}}");
                 return Ok(());
             }
@@ -371,7 +362,10 @@ async fn main() -> Result<()> {
                     &e.to_string(),
                 )
                 .await;
-                return Err(e.context("Failed to apply migration"));
+                let msg = supatype_engine::generator::sql::migration_errors::enrich_migration_error(
+                    &e.to_string(),
+                );
+                return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
             }
 
             let new_db_state = match supatype_engine::introspector::introspect_connection(
@@ -653,39 +647,41 @@ fn prompt_rename(subject: &str, hint: &str) -> Result<()> {
     Ok(())
 }
 
-/// Prompt once before applying any destructive operations in interactive mode.
-/// This runs even when --force is set, so users get a last safety check in `push`.
-fn confirm_destructive_changes(diff: &supatype_engine::differ::DiffOutput) -> Result<()> {
+/// Prompt once before applying risky column conversions or destructive operations.
+fn confirm_risky_changes(diff: &supatype_engine::differ::DiffOutput) -> Result<()> {
     use std::io::BufRead;
     use std::io::Write;
-    use supatype_engine::differ::{risk_of, Risk};
 
-    if !has_destructive_ops(diff) {
+    let risky_summaries: Vec<String> = diff
+        .operations
+        .iter()
+        .filter_map(risky_op_summary)
+        .collect();
+
+    if risky_summaries.is_empty() {
         return Ok(());
     }
 
-    let destructive_summaries: Vec<String> = diff
-        .operations
-        .iter()
-        .filter(|op| matches!(risk_of(op), Risk::Destructive))
-        .map(destructive_op_summary)
-        .collect();
+    let cautious = diff.summary.cautious;
+    let destructive = diff.summary.destructive;
 
     eprintln!(
-        "\n  {} {} destructive operation(s) detected in this push.",
+        "\n  {} {} risky operation(s) detected in this push ({} cautious, {} destructive).",
         " INPUT REQUIRED ".on_yellow().black().bold(),
-        diff.summary.destructive.to_string().bold()
+        (cautious + destructive).to_string().bold(),
+        cautious,
+        destructive,
     );
     eprintln!(
         "  {}  {}",
         "↳".yellow(),
-        "These can remove data or schema objects.".dimmed()
+        "Column type/kind changes may transform or discard existing data.".dimmed()
     );
-    for item in &destructive_summaries {
+    for item in &risky_summaries {
         eprintln!("    - {}", item);
     }
     eprint!(
-        "  {} Continue and apply destructive changes? {} ",
+        "  {} Continue and apply these changes? {} ",
         "›".yellow().bold(),
         "[y/N]:".bold(),
     );
@@ -694,12 +690,49 @@ fn confirm_destructive_changes(diff: &supatype_engine::differ::DiffOutput) -> Re
     let mut line = String::new();
     io::stdin().lock().read_line(&mut line)?;
     if !destructive_confirmed(line.trim()) {
-        anyhow::bail!("Aborted: destructive changes were not confirmed");
+        anyhow::bail!("Aborted: risky changes were not confirmed");
     }
 
     Ok(())
 }
 
+fn risky_op_summary(op: &supatype_engine::differ::Operation) -> Option<String> {
+    use supatype_engine::differ::{risk_of, Operation, Risk};
+    match risk_of(op) {
+        Risk::Safe => None,
+        Risk::Cautious | Risk::Destructive => match op {
+            Operation::AlterColumn {
+                table,
+                column,
+                warning,
+                ..
+            } => Some(
+                warning.clone().unwrap_or_else(|| {
+                    format!("Alter column '{table}.{column}' (lossy conversion)")
+                }),
+            ),
+            Operation::RecreateColumn {
+                table,
+                column,
+                warning,
+                ..
+            } => Some(
+                warning.clone().unwrap_or_else(|| {
+                    format!("Recreate column '{table}.{column}' (data loss)")
+                }),
+            ),
+            other => Some(destructive_op_summary(other)),
+        },
+    }
+}
+
+/// Prompt once before applying any destructive operations in interactive mode.
+#[allow(dead_code)]
+fn confirm_destructive_changes(diff: &supatype_engine::differ::DiffOutput) -> Result<()> {
+    confirm_risky_changes(diff)
+}
+
+#[allow(dead_code)]
 fn has_destructive_ops(diff: &supatype_engine::differ::DiffOutput) -> bool {
     use supatype_engine::differ::{risk_of, Risk};
     diff.operations
@@ -725,6 +758,14 @@ fn destructive_op_summary(op: &supatype_engine::differ::Operation) -> String {
         Operation::RemoveEnumValue {
             enum_name, value, ..
         } => format!("Remove enum value '{}' from '{}'", value, enum_name),
+        Operation::RecreateColumn { table, column, .. } => {
+            format!("Recreate column (data loss): '{table}.{column}'")
+        }
+        Operation::AlterColumn {
+            table, column, warning, ..
+        } => warning
+            .clone()
+            .unwrap_or_else(|| format!("Alter column '{table}.{column}'")),
         other => format!("Destructive change: {:?}", other),
     }
 }

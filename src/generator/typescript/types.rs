@@ -28,6 +28,11 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         .iter()
         .any(|m| m.fields.values().any(field_is_richtext));
 
+    let has_button = ast
+        .models
+        .iter()
+        .any(|m| m.fields.values().any(|f| matches!(f, FieldAst::Button(_))));
+
     // RichText columns store a Lexical document; type them as SerializedEditorState
     // rather than generic Json so editors/clients get the real shape.
     if has_richtext {
@@ -46,6 +51,18 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
     if has_richtext {
         out.push_str("export type RichText = SerializedEditorState\n\n");
+    }
+
+    if has_button {
+        out.push_str(
+            "export type ButtonTarget = \"_self\" | \"_blank\"\n\n\
+             export type Button = {\n  \
+             label: string\n  \
+             href: string\n  \
+             ariaLabel?: string\n  \
+             target?: ButtonTarget\n\
+             }\n\n",
+        );
     }
 
     if has_storage {
@@ -77,7 +94,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 // ─── Per-table emitter ───────────────────────────────────────────────────────
 
 fn emit_table(model: &ModelAst, out: &mut String) {
-    let table = &model.table_name;
+    let table = &model.table_name();
     out.push_str(&format!("      {table}: {{\n"));
 
     out.push_str("        Row: {\n");
@@ -289,6 +306,7 @@ fn ts_type_of(field: &FieldAst) -> (String, bool) {
             (union, !f.required)
         }
         FieldAst::Json(f) => ("Json".into(), !f.required),
+        FieldAst::Button(f) => ("Button".into(), !f.required),
         FieldAst::Array(f) => {
             let elem = match f.element_type.to_lowercase().as_str() {
                 "integer" | "int4" | "int" | "smallint" | "int2" | "bigint" | "int8" | "float"

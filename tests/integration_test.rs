@@ -38,34 +38,40 @@ async fn terminate_db_sessions(admin: &sqlx::PgPool, db_name: &str) {
 }
 
 /// Runs `f` against an isolated Postgres (ephemeral DB or testcontainers).
-async fn with_integration_pool<F, Fut, T>(f: F) -> T
+/// Skips the test when `DATABASE_URL` is unset and Docker/testcontainers is unavailable.
+async fn with_integration_pool<F, Fut>(f: F)
 where
     F: FnOnce(sqlx::PgPool) -> Fut,
-    Fut: Future<Output = T>,
+    Fut: Future<Output = ()>,
 {
     if std::env::var("DATABASE_URL").is_ok() {
-        return with_ephemeral_database(f).await;
+        with_ephemeral_database(f).await;
+        return;
     }
 
-    let container = Postgres::default().start().await.expect(
-        "Docker must be running for testcontainers, or set DATABASE_URL \
-             (ephemeral CREATE DATABASE on that server — see README / CI)",
-    );
+    let container = match Postgres::default().start().await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "SKIP integration_test: DATABASE_URL not set and Docker unavailable ({e})"
+            );
+            return;
+        }
+    };
     let port = container.get_host_port_ipv4(5432).await.unwrap();
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     let pool = sqlx::PgPool::connect(&url)
         .await
         .expect("connect testcontainers postgres");
-    let out = f(pool.clone()).await;
+    f(pool.clone()).await;
     pool.close().await;
     drop(container);
-    out
 }
 
-async fn with_ephemeral_database<F, Fut, T>(f: F) -> T
+async fn with_ephemeral_database<F, Fut>(f: F)
 where
     F: FnOnce(sqlx::PgPool) -> Fut,
-    Fut: Future<Output = T>,
+    Fut: Future<Output = ()>,
 {
     let admin_url =
         std::env::var("DATABASE_URL").expect("with_ephemeral_database requires DATABASE_URL");
@@ -96,7 +102,7 @@ where
         .await
         .unwrap_or_else(|e| panic!("connect ephemeral database {db_name}: {e}"));
 
-    let out = f(pool.clone()).await;
+    f(pool.clone()).await;
     pool.close().await;
 
     terminate_db_sessions(&admin, &db_name).await;
@@ -104,7 +110,6 @@ where
         .execute(&admin)
         .await;
     admin.close().await;
-    out
 }
 
 // ─── Phase 1: Fresh schema application ───────────────────────────────────────
@@ -253,6 +258,78 @@ async fn test_idempotency_no_diff_after_apply() {
             0,
             "second push should produce zero operations (idempotency)"
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_up_to_date_push_records_initial_baseline_once() {
+    use supatype_engine::generator::typescript::admin;
+    use supatype_engine::state::migration_history;
+
+    with_integration_pool(|pool| async move {
+        let input = include_str!("fixtures/five_model_blog.json");
+        let ast = parser::parse(input).unwrap();
+
+        let empty = introspector::introspect(&pool, "public").await.unwrap();
+        let diff = differ::diff(&ast, &empty).unwrap();
+        let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&apply_sql).execute(&pool).await.unwrap();
+
+        sqlx::raw_sql(migration_history::create_internal_schema_sql())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(&migration_history::create_migrations_table_sql())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let admin_cfg = admin::generate(&ast).unwrap();
+        let schema_snap = serde_json::to_value(&ast).unwrap();
+
+        migration_history::refresh_metadata_on_up_to_date_push(&pool, &admin_cfg, &schema_snap)
+            .await
+            .unwrap();
+        migration_history::refresh_metadata_on_up_to_date_push(&pool, &admin_cfg, &schema_snap)
+            .await
+            .unwrap();
+
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*)::BIGINT FROM _supatype.migrations WHERE rolled_back = false",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count.0, 1, "noop push must not spam migration rows");
+
+        let name: (String,) = sqlx::query_as(
+            "SELECT name FROM _supatype.migrations WHERE rolled_back = false LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            name.0.starts_with("initial_"),
+            "first noop push should record initial baseline, got {}",
+            name.0
+        );
+
+        let admin_refresh_count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*)::BIGINT FROM _supatype.migrations WHERE name LIKE 'admin_refresh_%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(admin_refresh_count.0, 0);
     })
     .await;
 }

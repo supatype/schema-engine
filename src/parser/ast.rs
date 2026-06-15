@@ -1,32 +1,25 @@
+use super::annotations::{FieldAnnotations, ModelAnnotations};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 /// Top-level schema AST as produced by @supatype/schema and consumed by the engine.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub struct SchemaAst {
+    pub ast_version: u32,
     pub models: Vec<ModelAst>,
     /// Junction tables inferred by the resolver (not present in user input).
-    #[serde(default)]
     pub junction_tables: Vec<JunctionTableAst>,
     /// Storage buckets inferred from image/file fields.
-    #[serde(default)]
     pub storage_buckets: Vec<StorageBucketAst>,
     /// Active locales for localized fields, e.g. ["en", "fr", "de"].
-    #[serde(default)]
     pub locales: Vec<String>,
     /// The default/fallback locale. Defaults to "en" when locales is non-empty.
-    #[serde(default)]
     pub default_locale: Option<String>,
     /// Plugins registered for this schema (field type, composite, provider, widget).
-    #[serde(default)]
     pub plugins: Vec<PluginRegistrationAst>,
-    /// SSO / OIDC provider configuration. When present and enabled, the engine
-    /// creates the `_sso` schema and all `oauth_*` tables.
-    #[serde(default)]
+    /// SSO / OIDC provider configuration.
     pub sso: Option<SsoConfigAst>,
     /// Warnings from parse/validation.
-    #[serde(default)]
     pub warnings: Vec<String>,
 }
 
@@ -40,19 +33,61 @@ impl SchemaAst {
     }
 }
 
+impl serde::Serialize for SchemaAst {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        super::v2::serialize_schema(self).serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SchemaAst {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        super::v2::deserialize_schema(&value).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelAst {
     pub name: String,
-    pub table_name: String,
     /// Fields keyed by field name.
     pub fields: IndexMap<String, FieldAst>,
     #[serde(default)]
-    pub access: AccessAst,
-    #[serde(default)]
-    pub indexes: Vec<IndexAst>,
-    #[serde(default)]
     pub options: ModelOptions,
+    #[serde(default)]
+    pub annotations: ModelAnnotations,
+}
+
+impl ModelAst {
+    pub fn table_name(&self) -> &str {
+        &self.annotations.db.table_name
+    }
+
+    pub fn table_name_mut(&mut self) -> &mut String {
+        &mut self.annotations.db.table_name
+    }
+
+    pub fn access(&self) -> &AccessAst {
+        &self.annotations.platform.access
+    }
+
+    pub fn access_mut(&mut self) -> &mut AccessAst {
+        &mut self.annotations.platform.access
+    }
+
+    pub fn indexes(&self) -> &[IndexAst] {
+        &self.annotations.db.indexes
+    }
+
+    pub fn indexes_mut(&mut self) -> &mut Vec<IndexAst> {
+        &mut self.annotations.db.indexes
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +105,7 @@ pub enum FieldAst {
     Slug(SlugFieldAst),
     Enum(EnumFieldAst),
     Json(JsonFieldAst),
+    Button(JsonFieldAst),
     Decimal(DecimalFieldAst),
     BigInt(ScalarFieldAst),
     Bytes(ScalarFieldAst),
@@ -135,6 +171,8 @@ pub struct ScalarFieldAst {
     /// Optional `ComputedFrom` template: `{field}` and `{truncate(field, max)}` (see `@supatype/types` JSDoc).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +187,8 @@ pub struct SlugFieldAst {
     pub localized: bool,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +203,8 @@ pub struct EnumFieldAst {
     pub localized: bool,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +216,8 @@ pub struct JsonFieldAst {
     pub localized: bool,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +231,8 @@ pub struct DecimalFieldAst {
     pub localized: bool,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -207,6 +253,11 @@ pub struct StorageFieldAst {
     pub access_mode: Option<StorageAccessMode>,
     #[serde(default)]
     pub read_only: bool,
+    /// When true, column stores locale-keyed storage refs, e.g. `{"en":"path/a.jpg","de":"path/b.jpg"}`.
+    #[serde(default)]
+    pub localized: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +269,8 @@ pub struct GeoFieldAst {
     pub srid: Option<u32>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +281,8 @@ pub struct VectorFieldAst {
     pub dimensions: u32,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 /// A repeatable-blocks field — stored as a JSONB array where each entry has a
@@ -243,6 +298,11 @@ pub struct BlocksFieldAst {
     pub index: bool,
     #[serde(default)]
     pub read_only: bool,
+    /// When true, the whole blocks array is stored per locale: `{"en":[...],"de":[...]}`.
+    #[serde(default)]
+    pub localized: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 fn default_true() -> bool {
@@ -279,6 +339,8 @@ pub struct RelationFieldAst {
     pub unique_fk: bool,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -292,6 +354,8 @@ pub struct ArrayFieldAst {
     pub default: Option<DefaultValueAst>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -423,6 +487,8 @@ pub struct CustomFieldAst {
     pub default: Option<DefaultValueAst>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub annotations: FieldAnnotations,
 }
 
 /// A plugin registered for this schema via supatype.config.ts.

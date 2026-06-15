@@ -1,3 +1,4 @@
+use super::accessors::{db_foreign_key, platform_access_mut};
 use super::ast::{AccessRule, FieldAst, RelationCardinality, SchemaAst};
 use anyhow::{bail, Result};
 use std::collections::HashSet;
@@ -10,14 +11,10 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
         if model.name.is_empty() {
             bail!("Model name cannot be empty");
         }
-        if model.table_name.is_empty() {
+        if model.annotations.db.table_name.is_empty() {
             bail!("Model '{}' has an empty table name", model.name);
         }
 
-        // Validate that all relation targets reference a known model name.
-        // A dangling target (e.g. after a model rename) would silently fall
-        // back to using the target string as a raw table name and fail at the
-        // database with a confusing "relation does not exist" error.
         for (field_name, field) in &model.fields {
             if let FieldAst::Relation(rel) = field {
                 let is_owning = matches!(
@@ -46,7 +43,10 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
 }
 
 fn validate_owner_rules(model: &mut super::ast::ModelAst) -> Result<()> {
-    let mut relation_fk_columns: HashSet<String> = HashSet::new();
+    let model_name = model.name.clone();
+    let mut owner_eligible: HashSet<String> = HashSet::new();
+    owner_eligible.insert("id".to_string());
+
     for (field_name, field) in &model.fields {
         if let FieldAst::Relation(rel) = field {
             let is_owning = matches!(
@@ -54,17 +54,16 @@ fn validate_owner_rules(model: &mut super::ast::ModelAst) -> Result<()> {
                 RelationCardinality::BelongsTo | RelationCardinality::ManyToMany
             );
             if is_owning {
-                relation_fk_columns.insert(rel.foreign_key.clone().unwrap_or_else(|| {
-                    format!("{}_id", super::resolver::to_snake_case(field_name))
-                }));
+                owner_eligible.insert(field_name.clone());
             }
         }
     }
 
-    normalize_and_validate_rule(&mut model.access.read, &model.name, &relation_fk_columns)?;
-    normalize_and_validate_rule(&mut model.access.create, &model.name, &relation_fk_columns)?;
-    normalize_and_validate_rule(&mut model.access.update, &model.name, &relation_fk_columns)?;
-    normalize_and_validate_rule(&mut model.access.delete, &model.name, &relation_fk_columns)?;
+    let access = platform_access_mut(model);
+    normalize_and_validate_rule(&mut access.read, &model_name, &owner_eligible)?;
+    normalize_and_validate_rule(&mut access.create, &model_name, &owner_eligible)?;
+    normalize_and_validate_rule(&mut access.update, &model_name, &owner_eligible)?;
+    normalize_and_validate_rule(&mut access.delete, &model_name, &owner_eligible)?;
 
     Ok(())
 }
@@ -72,46 +71,61 @@ fn validate_owner_rules(model: &mut super::ast::ModelAst) -> Result<()> {
 fn normalize_and_validate_rule(
     rule: &mut Option<AccessRule>,
     model_name: &str,
-    relation_fk_columns: &HashSet<String>,
+    owner_eligible: &HashSet<String>,
 ) -> Result<()> {
     let Some(rule) = rule else { return Ok(()) };
-    normalize_and_validate_rule_inner(rule, model_name, relation_fk_columns)
+    normalize_and_validate_rule_inner(rule, model_name, owner_eligible)
 }
 
 fn normalize_and_validate_rule_inner(
     rule: &mut AccessRule,
     model_name: &str,
-    relation_fk_columns: &HashSet<String>,
+    owner_eligible: &HashSet<String>,
 ) -> Result<()> {
     match rule {
         AccessRule::Owner { field } => {
-            let normalized = super::resolver::to_snake_case(field);
-            if normalized == "id" {
-                *field = normalized;
+            if field == "id" {
                 return Ok(());
             }
-            if !relation_fk_columns.contains(&normalized) {
-                let mut candidates: Vec<String> = relation_fk_columns.iter().cloned().collect();
-                candidates.push("id".to_string());
+            if !owner_eligible.contains(field) {
+                let mut candidates: Vec<String> = owner_eligible.iter().cloned().collect();
                 candidates.sort();
-                candidates.dedup();
                 bail!(
-                    "Model '{}': Owner<\"{}\"> is invalid. Owner fields must reference relation foreign keys. \
-                     Use one of: [{}]",
+                    "Model '{}': Owner<\"{}\"> is invalid. Owner fields must reference kernel field names \
+                     (model fields or \"id\"). Use one of: [{}]",
                     model_name,
                     field,
                     candidates.join(", ")
                 );
             }
-            *field = normalized;
             Ok(())
         }
         AccessRule::Any { rules } => {
             for r in rules {
-                normalize_and_validate_rule_inner(r, model_name, relation_fk_columns)?;
+                normalize_and_validate_rule_inner(r, model_name, owner_eligible)?;
             }
             Ok(())
         }
         _ => Ok(()),
     }
+}
+
+/// Collect relation FK column names for a model (db layer).
+pub fn relation_fk_columns(model: &super::ast::ModelAst) -> HashSet<String> {
+    let mut cols = HashSet::new();
+    for (field_name, field) in &model.fields {
+        if let FieldAst::Relation(rel) = field {
+            let is_owning = matches!(
+                rel.cardinality,
+                RelationCardinality::BelongsTo | RelationCardinality::ManyToMany
+            );
+            if is_owning {
+                cols.insert(
+                    db_foreign_key(field, field_name)
+                        .unwrap_or_else(|| super::accessors::default_foreign_key_column(field_name)),
+                );
+            }
+        }
+    }
+    cols
 }

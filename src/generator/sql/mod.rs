@@ -1,5 +1,7 @@
 pub mod auth_functions;
+pub mod column_conversion;
 pub mod migration;
+pub mod migration_errors;
 pub mod rls;
 pub mod rollback;
 pub mod sso;

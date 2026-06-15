@@ -17,7 +17,7 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
     let mut schemas: serde_json::Map<String, Value> = serde_json::Map::new();
 
     for model in &ast.models {
-        let table = &model.table_name;
+        let table = &model.table_name();
         let schema_name = &model.name;
 
         // ─── Component schema ─────────────────────────────────────────────────

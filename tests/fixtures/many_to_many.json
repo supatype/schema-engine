@@ -1,43 +1,184 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "Student",
-      "tableName": "students",
       "fields": {
-        "id":    { "kind": "uuid",  "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":  { "kind": "text",  "pgType": "TEXT", "required": true, "unique": false },
-        "email": { "kind": "email", "pgType": "TEXT", "required": true, "unique": true  },
-        "courses": { "kind": "relation", "cardinality": "manyToMany", "target": "Course", "through": "enrollments" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "email": {
+          "kind": "email",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "courses": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Course",
+          "through": "enrollments"
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "students",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "Course",
-      "tableName": "courses",
       "fields": {
-        "id":       { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "title":    { "kind": "text", "pgType": "TEXT", "required": true, "unique": false },
-        "slug":     { "kind": "slug", "pgType": "TEXT", "required": true, "unique": true, "from": "title" },
-        "credits":  { "kind": "smallInt", "pgType": "SMALLINT", "required": true, "unique": false, "default": { "kind": "value", "value": 3 } },
-        "students": { "kind": "relation", "cardinality": "manyToMany", "target": "Student", "through": "enrollments" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "title",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "credits": {
+          "kind": "smallInt",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": 3
+          },
+          "annotations": {
+            "db": {
+              "pgType": "SMALLINT",
+              "unique": false
+            }
+          }
+        },
+        "students": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Student",
+          "through": "enrollments"
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "courses",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "Tag",
-      "tableName": "tags",
       "fields": {
-        "id":       { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":     { "kind": "text", "pgType": "TEXT", "required": true, "unique": true  },
-        "courses":  { "kind": "relation", "cardinality": "manyToMany", "target": "Course", "through": "course_tags" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "courses": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Course",
+          "through": "course_tags"
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": false, "softDelete": false }
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "tags",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     }
   ]
 }

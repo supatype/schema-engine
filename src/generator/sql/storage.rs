@@ -1,4 +1,3 @@
-use crate::generator::sql::rls::access_rule_to_expr;
 use crate::parser::ast::{AccessRule, FieldAst, SchemaAst, StorageAccessMode, StorageBucketAst};
 use crate::parser::resolver::{bucket_uses_declared_storage_rls, storage_policy_label};
 use anyhow::Result;
@@ -135,7 +134,22 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
             })
             .collect::<Vec<_>>()
             .join("\n    OR\n    "),
-        _ => access_rule_to_expr(rule),
+        AccessRule::Public => "TRUE".to_string(),
+        AccessRule::Private => "FALSE".to_string(),
+        AccessRule::Authenticated => "auth.uid() IS NOT NULL".to_string(),
+        AccessRule::Role { roles } => {
+            if roles.len() == 1 {
+                format!("auth.role() = '{}'", roles[0])
+            } else {
+                let arr = roles
+                    .iter()
+                    .map(|r| format!("'{r}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("auth.role() = ANY(ARRAY[{arr}])")
+            }
+        }
+        AccessRule::Custom { expression } => expression.clone(),
     }
 }
 
@@ -211,14 +225,14 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
 
             let already = model_entries
                 .iter()
-                .any(|e| e.table == model.table_name && e.bucket_id == bucket_id.as_str());
+                .any(|e| e.table == model.table_name() && e.bucket_id == bucket_id.as_str());
             if already {
                 continue;
             }
 
             let bq = sql_quote_bucket_id(bucket_id);
             let read_expr = model
-                .access
+                .access()
                 .read
                 .as_ref()
                 .map(|r| {
@@ -230,7 +244,7 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             let write_expr = model
-                .access
+                .access()
                 .create
                 .as_ref()
                 .map(|r| {
@@ -242,7 +256,7 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             let delete_expr = model
-                .access
+                .access()
                 .delete
                 .as_ref()
                 .map(|r| {
@@ -254,7 +268,7 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             model_entries.push(ModelBucketAccess {
-                table: &model.table_name,
+                table: &model.table_name(),
                 bucket_id,
                 read_expr,
                 write_expr,

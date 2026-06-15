@@ -16,6 +16,7 @@ fn is_extension_managed_table(name: &str) -> bool {
 pub fn diff(
     ast: &SchemaAst,
     db: &DatabaseState,
+    previous: Option<&SchemaAst>,
     ops: &mut Vec<Operation>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
@@ -23,7 +24,7 @@ pub fn diff(
         db.tables.iter().map(|t| t.name.as_str()).collect();
 
     let schema_table_names: std::collections::HashSet<&str> =
-        ast.models.iter().map(|m| m.table_name.as_str()).collect();
+        ast.models.iter().map(|m| m.table_name()).collect();
 
     // Build a set of existing FK constraint names for fast lookup
     let db_fk_names: std::collections::HashSet<&str> = db
@@ -37,8 +38,8 @@ pub fn diff(
     let new_tables: Vec<&str> = ast
         .models
         .iter()
-        .filter(|m| !db_table_names.contains(m.table_name.as_str()))
-        .map(|m| m.table_name.as_str())
+        .filter(|m| !db_table_names.contains(m.table_name()))
+        .map(|m| m.table_name())
         .collect();
 
     let removed_tables: Vec<&str> = db
@@ -80,31 +81,34 @@ pub fn diff(
     }
 
     for model in &ast.models {
-        if !db_table_names.contains(model.table_name.as_str()) {
-            if renamed_to.contains(model.table_name.as_str()) {
+        if !db_table_names.contains(model.table_name()) {
+            if renamed_to.contains(model.table_name()) {
                 // This table is the target of a rename — diff columns against the source table
                 let from_name = ops
                     .iter()
                     .find_map(|op| match op {
-                        Operation::RenameTable { from, to, .. } if to == &model.table_name => {
+                        Operation::RenameTable { from, to, .. } if to == &model.table_name() => {
                             Some(from.clone())
                         }
                         _ => None,
                     })
                     .unwrap();
                 let db_table = db.tables.iter().find(|t| t.name == from_name).unwrap();
+                let prev_model = previous_model(previous, model.table_name());
                 column_diff::diff(
                     model,
                     db_table,
+                    db,
                     ops,
                     warnings,
                     ast.effective_default_locale(),
+                    prev_model,
                 )?;
                 emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
             } else {
                 // Genuinely new table — create it + FK constraints
                 ops.push(Operation::CreateTable {
-                    table: model.table_name.clone(),
+                    table: model.table_name().to_string(),
                     model: Box::new(model.clone()),
                     risk: Risk::Safe,
                 });
@@ -115,14 +119,17 @@ pub fn diff(
             let db_table = db
                 .tables
                 .iter()
-                .find(|t| t.name == model.table_name)
+                .find(|t| t.name == model.table_name())
                 .unwrap();
+            let prev_model = previous_model(previous, model.table_name());
             column_diff::diff(
                 model,
                 db_table,
+                db,
                 ops,
                 warnings,
                 ast.effective_default_locale(),
+                prev_model,
             )?;
 
             // Also diff FK relations (add new FKs, drop removed FKs)
@@ -171,6 +178,13 @@ pub fn diff(
     Ok(())
 }
 
+fn previous_model<'a>(previous: Option<&'a SchemaAst>, table_name: &str) -> Option<&'a crate::parser::ast::ModelAst> {
+    previous?
+        .models
+        .iter()
+        .find(|m| m.table_name() == table_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_extension_managed_table;
@@ -196,7 +210,7 @@ fn emit_fk_ops_for_model(
                     .foreign_key
                     .as_deref()
                     .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                let constraint_name = format!("{}_{}_fkey", model.table_name, fk_col);
+                let constraint_name = format!("{}_{}_fkey", model.table_name(), fk_col);
 
                 if !db_fk_names.contains(constraint_name.as_str()) {
                     let (ref_table, ref_schema) = if let Some((sys_schema, sys_table)) =
@@ -208,13 +222,13 @@ fn emit_fk_ops_for_model(
                             .models
                             .iter()
                             .find(|m| m.name == rel.target)
-                            .map(|m| m.table_name.clone())
+                            .map(|m| m.table_name().to_string())
                             .unwrap_or_else(|| crate::parser::resolver::to_snake_case(&rel.target));
                         (t, None)
                     };
 
                     ops.push(Operation::AddForeignKey {
-                        table: model.table_name.clone(),
+                        table: model.table_name().to_string(),
                         field_name: field_name.clone(),
                         relation: Box::new(rel.clone()),
                         ref_table,
@@ -245,7 +259,7 @@ fn drop_removed_fks(
                         .foreign_key
                         .as_deref()
                         .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                    return Some(format!("{}_{}_fkey", model.table_name, fk_col));
+                    return Some(format!("{}_{}_fkey", model.table_name(), fk_col));
                 }
             }
             None
@@ -253,12 +267,12 @@ fn drop_removed_fks(
         .collect();
 
     for constraint in &db.constraints {
-        if constraint.table == model.table_name
+        if constraint.table == model.table_name()
             && constraint.constraint_type == DbConstraintType::ForeignKey
             && !expected_fks.contains(&constraint.name)
         {
             ops.push(Operation::DropForeignKey {
-                table: model.table_name.clone(),
+                table: model.table_name().to_string(),
                 constraint: constraint.name.clone(),
                 risk: Risk::Safe,
             });

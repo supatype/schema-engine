@@ -1,4 +1,8 @@
-use crate::differ::{DiffOutput, Operation, Risk};
+use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
+use crate::generator::sql::column_conversion::{
+    add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
+    using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
+};
 use crate::parser::ast::{
     DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst, SchemaAst,
@@ -179,7 +183,8 @@ fn render_forward_operation_lines(
             | Operation::AddColumn { risk, .. }
             | Operation::DropColumn { risk, .. }
             | Operation::RenameColumn { risk, .. }
-            | Operation::AlterColumn { risk, .. }
+            |         Operation::AlterColumn { risk, .. }
+            | Operation::RecreateColumn { risk, .. }
             | Operation::AddIndex { risk, .. }
             | Operation::DropIndex { risk, .. }
             | Operation::AddForeignKey { risk, .. }
@@ -241,6 +246,9 @@ fn op_description(op: &Operation) -> String {
             table, from, to, ..
         } => format!("Rename column: {table}.{from} -> {to}"),
         Operation::AlterColumn { table, column, .. } => format!("Alter column: {table}.{column}"),
+        Operation::RecreateColumn { table, column, .. } => {
+            format!("Recreate column (data loss): {table}.{column}")
+        }
         Operation::AddIndex { table, index, .. } => {
             format!("Add index on: {table}({})", index.fields.join(", "))
         }
@@ -293,7 +301,7 @@ fn render_create_rls_policy_sql(
     let model = ast
         .models
         .iter()
-        .find(|m| m.table_name == table)
+        .find(|m| m.table_name() == table)
         .ok_or_else(|| anyhow!("CreateRlsPolicy: unknown table {table}"))?;
     let prefix = format!("{table}_");
     if !policy.starts_with(&prefix) {
@@ -301,16 +309,16 @@ fn render_create_rls_policy_sql(
     }
     let suffix = &policy[prefix.len()..];
     let rule = match suffix {
-        "select" => model.access.read.as_ref(),
-        "insert" => model.access.create.as_ref(),
-        "update" => model.access.update.as_ref(),
-        "delete" => model.access.delete.as_ref(),
+        "select" => model.access().read.as_ref(),
+        "insert" => model.access().create.as_ref(),
+        "update" => model.access().update.as_ref(),
+        "delete" => model.access().delete.as_ref(),
         _ => bail!("CreateRlsPolicy: unknown policy suffix {suffix}"),
     };
     let rule = rule
         .ok_or_else(|| anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}"))?;
     Ok(crate::generator::sql::rls::render_policy_migration_sql(
-        schema, table, suffix, rule,
+        schema, table, suffix, model, rule,
     ))
 }
 
@@ -373,6 +381,12 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
                 return Ok(sql);
             }
             let col_def = field_to_column_def(column, field)?;
+            if let Some(backfill) = add_column_backfill_default(field) {
+                return Ok(format!(
+                    "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN {col_def} DEFAULT {backfill};\n\
+                     ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" DROP DEFAULT;"
+                ));
+            }
             Ok(format!(
                 "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN {col_def};"
             ))
@@ -388,9 +402,17 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
         Operation::AlterColumn {
             table,
             column,
+            field,
             changes,
             ..
-        } => alter_column_sql(table, column, changes, schema),
+        } => alter_column_sql(table, column, field.as_ref(), changes, schema),
+        Operation::RecreateColumn {
+            table,
+            column,
+            field,
+            dependencies,
+            ..
+        } => recreate_column_sql(table, column, field.as_ref(), dependencies, schema),
         Operation::AddIndex { table, index, .. } => create_index_sql(table, index, schema),
         Operation::DropIndex { index_name, .. } => {
             Ok(format!("DROP INDEX IF EXISTS \"{index_name}\";"))
@@ -575,7 +597,7 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
 // ─── CREATE TABLE ────────────────────────────────────────────────────────────
 
 fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
-    let table = &model.table_name;
+    let table = &model.table_name();
     let mut col_defs: Vec<String> = Vec::new();
 
     for (field_name, field) in &model.fields {
@@ -638,7 +660,7 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
     )];
 
     // Explicit model-level indexes
-    for index in &model.indexes {
+    for index in model.indexes() {
         statements.push(create_index_sql(table, index, schema)?);
     }
 
@@ -736,7 +758,7 @@ fn field_index_flag(field: &FieldAst) -> Option<bool> {
 
 fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
     match field {
-        FieldAst::Uuid(f) => Ok(scalar_col(name, "UUID", f)),
+        FieldAst::Uuid(f) => Ok(scalar_col(name, "UUID", f, false)),
         FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Bytes(f) | FieldAst::Color(f) => {
             let pg = if matches!(field, FieldAst::RichText(_)) {
                 "JSONB"
@@ -745,21 +767,22 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             } else {
                 "TEXT"
             };
-            Ok(scalar_col(name, pg, f))
+            let rich_text = matches!(field, FieldAst::RichText(_));
+            Ok(scalar_col(name, pg, f, rich_text))
         }
         FieldAst::Email(f) => {
-            let mut def = scalar_col(name, "TEXT", f);
+            let mut def = scalar_col(name, "TEXT", f, false);
             def.push_str(&format!(" CHECK (\"{name}\" ~* '^[^@]+@[^@]+\\.[^@]+$')"));
             Ok(def)
         }
-        FieldAst::Integer(f) => Ok(scalar_col(name, "INTEGER", f)),
-        FieldAst::Float(f) => Ok(scalar_col(name, "DOUBLE PRECISION", f)),
-        FieldAst::Boolean(f) => Ok(scalar_col(name, "BOOLEAN", f)),
-        FieldAst::Datetime(f) => Ok(scalar_col(name, "TIMESTAMPTZ", f)),
-        FieldAst::BigInt(f) => Ok(scalar_col(name, "BIGINT", f)),
-        FieldAst::SmallInt(f) => Ok(scalar_col(name, "SMALLINT", f)),
-        FieldAst::Date(f) => Ok(scalar_col(name, "DATE", f)),
-        FieldAst::Timestamp(f) => Ok(scalar_col(name, "TIMESTAMP", f)),
+        FieldAst::Integer(f) => Ok(scalar_col(name, "INTEGER", f, false)),
+        FieldAst::Float(f) => Ok(scalar_col(name, "DOUBLE PRECISION", f, false)),
+        FieldAst::Boolean(f) => Ok(scalar_col(name, "BOOLEAN", f, false)),
+        FieldAst::Datetime(f) => Ok(scalar_col(name, "TIMESTAMPTZ", f, false)),
+        FieldAst::BigInt(f) => Ok(scalar_col(name, "BIGINT", f, false)),
+        FieldAst::SmallInt(f) => Ok(scalar_col(name, "SMALLINT", f, false)),
+        FieldAst::Date(f) => Ok(scalar_col(name, "DATE", f, false)),
+        FieldAst::Timestamp(f) => Ok(scalar_col(name, "TIMESTAMP", f, false)),
         FieldAst::Serial(f) => {
             // SERIAL is self-declaring — NOT NULL + sequence default are implicit.
             // primary_key / unique flags still apply.
@@ -780,23 +803,23 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             };
             Ok(format!("\"{name}\" BIGSERIAL{pk}{uniq}"))
         }
-        FieldAst::Money(f) => Ok(scalar_col(name, "NUMERIC(19,4)", f)),
+        FieldAst::Money(f) => Ok(scalar_col(name, "NUMERIC(19,4)", f, false)),
         FieldAst::Url(f) => {
-            let mut def = scalar_col(name, "TEXT", f);
+            let mut def = scalar_col(name, "TEXT", f, false);
             def.push_str(&format!(" CHECK (\"{name}\" ~* '^https?://')"));
             Ok(def)
         }
-        FieldAst::Ip(f) => Ok(scalar_col(name, "INET", f)),
-        FieldAst::Cidr(f) => Ok(scalar_col(name, "CIDR", f)),
-        FieldAst::Macaddr(f) => Ok(scalar_col(name, "MACADDR", f)),
-        FieldAst::Interval(f) => Ok(scalar_col(name, "INTERVAL", f)),
-        FieldAst::TsQuery(f) => Ok(scalar_col(name, "TSQUERY", f)),
+        FieldAst::Ip(f) => Ok(scalar_col(name, "INET", f, false)),
+        FieldAst::Cidr(f) => Ok(scalar_col(name, "CIDR", f, false)),
+        FieldAst::Macaddr(f) => Ok(scalar_col(name, "MACADDR", f, false)),
+        FieldAst::Interval(f) => Ok(scalar_col(name, "INTERVAL", f, false)),
+        FieldAst::TsQuery(f) => Ok(scalar_col(name, "TSQUERY", f, false)),
         FieldAst::TsVector(f) => {
             // tsvector is typically NOT NULL; index is GIN.
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("\"{name}\" TSVECTOR{req}"))
         }
-        FieldAst::Xml(f) => Ok(scalar_col(name, "XML", f)),
+        FieldAst::Xml(f) => Ok(scalar_col(name, "XML", f, false)),
         FieldAst::Array(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = if f.unique { " UNIQUE" } else { "" };
@@ -830,6 +853,10 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("\"{name}\" JSONB{req}"))
         }
+        FieldAst::Button(f) => {
+            let req = if f.required { " NOT NULL" } else { "" };
+            Ok(format!("\"{name}\" JSONB{req}"))
+        }
         FieldAst::Decimal(f) => {
             let pg = match (f.precision, f.scale) {
                 (Some(p), Some(s)) => format!("NUMERIC({p}, {s})"),
@@ -845,8 +872,10 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             &ScalarFieldAst {
                 pg_type: "JSONB".into(),
                 required: f.required,
+                localized: f.localized,
                 ..Default::default()
             },
+            false,
         )),
         FieldAst::Blocks(f) => Ok(scalar_col(
             name,
@@ -854,8 +883,10 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             &ScalarFieldAst {
                 pg_type: "JSONB".into(),
                 required: f.required,
+                localized: f.localized,
                 ..Default::default()
             },
+            false,
         )),
         FieldAst::Geo(f) => {
             let geo_type = f.geo_type.to_uppercase();
@@ -891,7 +922,7 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
     }
 }
 
-fn scalar_col(name: &str, pg_type: &str, f: &ScalarFieldAst) -> String {
+fn scalar_col(name: &str, pg_type: &str, f: &ScalarFieldAst, rich_text: bool) -> String {
     // Localized fields are stored as JSONB regardless of their base type.
     let effective_type = if f.localized { "JSONB" } else { pg_type };
     let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
@@ -908,7 +939,14 @@ fn scalar_col(name: &str, pg_type: &str, f: &ScalarFieldAst) -> String {
     let default = f
         .default
         .as_ref()
-        .map(|d| format!(" DEFAULT {}", render_default(d)))
+        .map(|d| {
+            let expr = if rich_text {
+                rich_text_default_sql(d).unwrap_or_else(|| render_default(d))
+            } else {
+                render_default(d)
+            };
+            format!(" DEFAULT {expr}")
+        })
         .unwrap_or_default();
     // CHECK constraints don't apply to JSONB-stored localized columns.
     let check = if f.localized {
@@ -937,15 +975,57 @@ fn render_default(d: &DefaultValueAst) -> String {
 
 // ─── ALTER COLUMN ─────────────────────────────────────────────────────────────
 
+fn strategy_from_changes(changes: &serde_json::Value) -> ConversionStrategy {
+    let conv = changes.get("conversion");
+    let kind = conv
+        .and_then(|c| c.get("strategy"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("transform_cast");
+    ConversionStrategy {
+        kind: match kind {
+            "safe_cast" => ConversionStrategyKind::SafeCast,
+            "kind_migrate" => ConversionStrategyKind::KindMigrate,
+            "recreate_column" => ConversionStrategyKind::RecreateColumn,
+            "blocked" => ConversionStrategyKind::Blocked,
+            _ => ConversionStrategyKind::TransformCast,
+        },
+        using_expr: conv
+            .and_then(|c| c.get("usingExpr"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        pre_update: conv
+            .and_then(|c| c.get("preUpdate"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        blocked_reason: changes
+            .get("blocked")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+    }
+}
+
 fn alter_column_sql(
     table: &str,
     column: &str,
+    field: &FieldAst,
     changes: &serde_json::Value,
     schema: &str,
 ) -> Result<String> {
     let mut stmts: Vec<String> = Vec::new();
+    let strategy = strategy_from_changes(changes);
 
-    // Type change
+    if let Some(pre) = strategy.pre_update.as_ref() {
+        stmts.push(pre.clone());
+    }
+
+    if let Some(kc) = changes.get("kind_change") {
+        let from = kc.get("from").and_then(|v| v.as_str()).unwrap_or("");
+        let to = kc.get("to").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(pre) = kind_migrate_pre_update(table, column, schema, from, to, field) {
+            stmts.push(pre);
+        }
+    }
+
     if let Some(type_change) = changes.get("type") {
         let pg_type = type_change
             .get("to_pg")
@@ -956,26 +1036,7 @@ fn alter_column_sql(
             .and_then(|v| v.as_str())
             .unwrap_or("?");
 
-        // Localization-aware USING clause
-        let using_expr = if let Some(loc) = changes.get("localization") {
-            let direction = loc
-                .get("direction")
-                .and_then(|v| v.as_str())
-                .unwrap_or("add");
-            let locale = loc
-                .get("default_locale")
-                .and_then(|v| v.as_str())
-                .unwrap_or("en");
-            if direction == "add" {
-                // TEXT → JSONB: wrap existing value as default-locale translation
-                format!("jsonb_build_object('{locale}', \"{column}\"::text)")
-            } else {
-                // JSONB → TEXT: extract default-locale value
-                format!("(\"{column}\"->>'{}')::text", locale)
-            }
-        } else {
-            format!("\"{column}\"::{pg_type}")
-        };
+        let using_expr = using_expr_for_alter(&strategy, column, pg_type);
 
         stmts.push(format!(
             "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" \
@@ -984,18 +1045,22 @@ fn alter_column_sql(
         ));
     }
 
-    // Nullability change
     if let Some(null_change) = changes.get("nullability") {
         let to = null_change.get("to").and_then(|v| v.as_str()).unwrap_or("");
         if to == "not_null" {
-            // Pre-flight guard: fail if NULLs exist
-            stmts.push(format!(
-                "DO $$ BEGIN\n  \
-                 IF EXISTS (SELECT 1 FROM \"{schema}\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
-                 RAISE EXCEPTION 'Cannot set NOT NULL on {table}.{column}: NULL values exist.';\n  \
-                 END IF;\n\
-                 END $$;"
-            ));
+            if let Some(backfill) = add_column_backfill_default(field) {
+                stmts.push(format!(
+                    "UPDATE \"{schema}\".\"{table}\" SET \"{column}\" = {backfill} WHERE \"{column}\" IS NULL;"
+                ));
+            } else {
+                stmts.push(format!(
+                    "DO $$ BEGIN\n  \
+                     IF EXISTS (SELECT 1 FROM \"{schema}\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
+                     RAISE EXCEPTION 'Cannot set NOT NULL on {table}.{column}: NULL values exist.';\n  \
+                     END IF;\n\
+                     END $$;"
+                ));
+            }
             stmts.push(format!(
                 "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
             ));
@@ -1004,6 +1069,101 @@ fn alter_column_sql(
                 "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
             ));
         }
+    }
+
+    Ok(stmts.join("\n"))
+}
+
+fn recreate_column_sql(
+    table: &str,
+    column: &str,
+    field: &FieldAst,
+    dependencies: &[ColumnDependencySnapshot],
+    schema: &str,
+) -> Result<String> {
+    let mut stmts: Vec<String> = Vec::new();
+
+    for dep in dependencies {
+        match dep.kind.as_str() {
+            "foreign_key" => {
+                stmts.push(format!(
+                    "ALTER TABLE \"{schema}\".\"{}\" DROP CONSTRAINT IF EXISTS \"{}\";",
+                    dep.table, dep.name
+                ));
+            }
+            "index" => {
+                stmts.push(format!("DROP INDEX IF EXISTS \"{}\";", dep.name));
+            }
+            _ => {}
+        }
+    }
+
+    stmts.push(format!(
+        "ALTER TABLE \"{schema}\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";"
+    ));
+
+    let col_def = field_to_column_def(column, field)?;
+    stmts.push(format!(
+        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN {col_def};"
+    ));
+
+    for dep in dependencies {
+        if dep.kind != "foreign_key" {
+            continue;
+        }
+        let cols = dep
+            .columns
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .map(|n| format!("\"{n}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| format!("\"{column}\""));
+        let ref_table = dep.foreign_table.as_deref().unwrap_or("?");
+        let ref_cols = dep
+            .foreign_columns
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .map(|n| format!("\"{n}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| "\"id\"".into());
+        let on_delete = dep
+            .on_delete
+            .as_deref()
+            .map(|a| format!(" ON DELETE {a}"))
+            .unwrap_or_default();
+        stmts.push(format!(
+            "ALTER TABLE \"{schema}\".\"{}\" ADD CONSTRAINT \"{}\" \
+             FOREIGN KEY ({cols}) REFERENCES \"{schema}\".\"{ref_table}\" ({ref_cols}){on_delete};",
+            dep.table, dep.name
+        ));
+    }
+
+    for dep in dependencies {
+        if dep.kind != "index" {
+            continue;
+        }
+        let cols = dep
+            .columns
+            .as_ref()
+            .map(|c| {
+                c.iter()
+                    .map(|n| format!("\"{n}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| format!("\"{column}\""));
+        let unique = if dep.unique { "UNIQUE " } else { "" };
+        let method = dep.index_method.as_deref().unwrap_or("btree");
+        stmts.push(format!(
+            "CREATE {unique}INDEX IF NOT EXISTS \"{}\" ON \"{schema}\".\"{}\" USING {method} ({cols});",
+            dep.name, dep.table
+        ));
     }
 
     Ok(stmts.join("\n"))

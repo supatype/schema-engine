@@ -1,69 +1,312 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "User",
-      "tableName": "users",
       "fields": {
-        "id":    { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "email": { "kind": "email",   "pgType": "TEXT",    "required": true,  "unique": true  },
-        "name":  { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "email": {
+          "kind": "email",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "Category",
-      "tableName": "categories",
       "fields": {
-        "id":   { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name": { "kind": "text", "pgType": "TEXT", "required": true,  "unique": true  },
-        "slug": { "kind": "slug", "pgType": "TEXT", "required": true,  "unique": true,  "from": "name" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "name",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "categories",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "Post",
-      "tableName": "posts",
       "fields": {
-        "id":        { "kind": "uuid",    "pgType": "UUID",  "primaryKey": true, "required": true,  "unique": false, "default": { "kind": "genRandomUuid" } },
-        "title":     { "kind": "text",    "pgType": "TEXT",  "required": true,   "unique": false },
-        "slug":      { "kind": "slug",    "pgType": "TEXT",  "required": true,   "unique": true,  "from": "title" },
-        "content":   { "kind": "richText","pgType": "JSONB", "required": true,   "unique": false },
-        "authorId":  { "kind": "relation","cardinality": "belongsTo", "target": "User",     "foreignKey": "author_id",   "onDelete": "cascade" },
-        "categoryId":{ "kind": "relation","cardinality": "belongsTo", "target": "Category", "foreignKey": "category_id", "onDelete": "setNull" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "title",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "content": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "authorId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        },
+        "categoryId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Category",
+          "onDelete": "setNull",
+          "annotations": {
+            "db": {
+              "foreignKey": "category_id"
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [
-        { "fields": ["author_id"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": [
+            {
+              "fields": [
+                "author_id"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "Comment",
-      "tableName": "comments",
       "fields": {
-        "id":      { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "body":    { "kind": "text", "pgType": "TEXT", "required": true,  "unique": false },
-        "postId":  { "kind": "relation", "cardinality": "belongsTo", "target": "Post",     "foreignKey": "post_id",   "onDelete": "cascade" },
-        "authorId":{ "kind": "relation", "cardinality": "belongsTo", "target": "User",     "foreignKey": "author_id", "onDelete": "cascade" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "body": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "postId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Post",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "post_id"
+            }
+          }
+        },
+        "authorId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "comments",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "Tag",
-      "tableName": "tags",
       "fields": {
-        "id":   { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name": { "kind": "text", "pgType": "TEXT", "required": true,  "unique": true  }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": false, "softDelete": false }
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "tags",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     }
   ]
 }

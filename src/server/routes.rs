@@ -47,7 +47,9 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
-    let diff = crate::differ::diff(&ast, &db_state).map_err(engine_error)?;
+    let previous_ast = load_previous_schema(&pool).await;
+    let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
+        .map_err(engine_error)?;
     Ok(Json(serde_json::to_value(&diff).unwrap()))
 }
 
@@ -61,7 +63,9 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
-    let diff = crate::differ::diff(&ast, &db_state).map_err(engine_error)?;
+    let previous_ast = load_previous_schema(&pool).await;
+    let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
+        .map_err(engine_error)?;
     let sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
         .map_err(engine_error)?;
     Ok(Json(SqlResponse { sql }))
@@ -100,6 +104,10 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         .await
         .map_err(engine_error)?;
     sqlx::raw_sql(&migration_history::ensure_migrations_status_columns_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
         .execute(&pool)
         .await
         .map_err(engine_error)?;
@@ -150,42 +158,26 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
             .map_err(engine_error)?,
     };
 
-    let diff = crate::differ::diff(&ast, &db_state).map_err(engine_error)?;
+    let previous_ast = if !req.no_cache {
+        load_previous_schema(&pool).await
+    } else {
+        None
+    };
+    let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
+        .map_err(engine_error)?;
 
     if diff.operations.is_empty() {
         sqlx::raw_sql(&storage_sql)
             .execute(&pool)
             .await
             .map_err(engine_error)?;
-        info!("Schema is up to date — refreshing admin_config on latest migration record.");
+        info!("Schema is up to date — refreshing Studio metadata.");
         let admin_cfg =
             crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
         let schema_snap = serde_json::to_value(&ast).map_err(engine_error)?;
-        let n = migration_history::update_latest_migration_admin(&pool, &admin_cfg, &schema_snap)
+        migration_history::refresh_metadata_on_up_to_date_push(&pool, &admin_cfg, &schema_snap)
             .await
             .map_err(engine_error)?;
-        if n == 0 {
-            let migration_name = format!(
-                "admin_refresh_{}",
-                chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")
-            );
-            let hash = {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(schema_snap.to_string().as_bytes());
-                format!("sha256:{}", hex::encode(h.finalize()))
-            };
-            sqlx::query(&migration_history::insert_migration_sql())
-                .bind(&migration_name)
-                .bind(&hash)
-                .bind(env!("ENGINE_VERSION"))
-                .bind(&schema_snap)
-                .bind(&admin_cfg)
-                .bind(None::<String>)
-                .execute(&pool)
-                .await
-                .map_err(engine_error)?;
-        }
         return Ok(Json(serde_json::json!({
             "status": "up_to_date",
             "operations": 0,
@@ -237,7 +229,9 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
             &e.to_string(),
         )
         .await;
-        return Err(engine_error(e));
+        let msg =
+            crate::generator::sql::migration_errors::enrich_migration_error(&e.to_string());
+        return Err(engine_error(anyhow::anyhow!(msg)));
     }
 
     let new_db_state = match crate::introspector::introspect_connection(&mut tx, &req.schema).await
@@ -425,18 +419,9 @@ pub async fn studio_config(
 ) -> EngineResponse<serde_json::Value> {
     let url = resolve_database_url(req.database_url)?;
     let pool = connect_db(&url).await?;
-    let schema_ident = sanitize_schema_identifier(&req.schema)?;
-    let studio_sql = format!(
-        "SELECT admin_config FROM {}.migrations WHERE admin_config IS NOT NULL ORDER BY applied_at DESC LIMIT 1",
-        schema_ident
-    );
-    let row: Option<(serde_json::Value,)> = sqlx::query_as(&studio_sql)
-        .fetch_optional(&pool)
-        .await
-        .map_err(engine_error)?;
 
-    match row {
-        Some((config,)) => Ok(Json(config)),
+    match crate::state::migration_history::load_latest_admin_config(&pool).await {
+        Some(config) => Ok(Json(config)),
         None => Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -480,6 +465,13 @@ pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+async fn load_previous_schema(pool: &PgPool) -> Option<crate::parser::ast::SchemaAst> {
+    use crate::state::migration_history;
+    migration_history::load_latest_schema_snapshot(pool)
+        .await
+        .and_then(|v| serde_json::from_value(v).ok())
+}
+
 fn engine_error(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
     let msg = e.to_string();
     error!(%msg, "engine error");
@@ -501,32 +493,6 @@ fn require_ast(
             }),
         )),
     }
-}
-
-fn sanitize_schema_identifier(schema: &str) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    if schema.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Schema must not be empty".to_string(),
-            }),
-        ));
-    }
-
-    let mut chars = schema.chars();
-    let first = chars.next().unwrap_or('_');
-    let valid_start = first.is_ascii_alphabetic() || first == '_';
-    let valid_rest = chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if !valid_start || !valid_rest {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Invalid schema identifier".to_string(),
-            }),
-        ));
-    }
-
-    Ok(format!("\"{}\"", schema))
 }
 
 fn parse_ast(
@@ -639,7 +605,38 @@ fn pg_cell_to_json(row: &sqlx::postgres::PgRow, i: usize) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_schema_identifier;
+    use axum::http::StatusCode;
+    use axum::Json;
+
+    use super::ErrorResponse;
+
+    fn sanitize_schema_identifier(
+        schema: &str,
+    ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+        if schema.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Schema must not be empty".to_string(),
+                }),
+            ));
+        }
+
+        let mut chars = schema.chars();
+        let first = chars.next().unwrap_or('_');
+        let valid_start = first.is_ascii_alphabetic() || first == '_';
+        let valid_rest = chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid_start || !valid_rest {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Invalid schema identifier".to_string(),
+                }),
+            ));
+        }
+
+        Ok(format!("\"{}\"", schema))
+    }
 
     #[test]
     fn accepts_valid_schema_identifier() {

@@ -58,16 +58,16 @@ pub fn diff(
 
     // Track which table names appear in schema (to detect tables that lost access rules).
     let _schema_table_names: std::collections::HashSet<&str> =
-        ast.models.iter().map(|m| m.table_name.as_str()).collect();
+        ast.models.iter().map(|m| m.table_name()).collect();
 
     // ── Per-model: apply / update policies ───────────────────────────────────
 
     for model in &ast.models {
-        let table = model.table_name.as_str();
-        let has_access_rules = model.access.read.is_some()
-            || model.access.create.is_some()
-            || model.access.update.is_some()
-            || model.access.delete.is_some();
+        let table = model.table_name();
+        let has_access_rules = model.access().read.is_some()
+            || model.access().create.is_some()
+            || model.access().update.is_some()
+            || model.access().delete.is_some();
 
         let db_policies: &[&crate::introspector::rls::DbRlsPolicy] = db_policies_by_table
             .get(table)
@@ -91,7 +91,7 @@ pub fn diff(
             > = db_policies.iter().map(|p| (p.name.as_str(), *p)).collect();
 
             // For each expected policy, check if it exists and if its expression matches.
-            let expected = expected_policies(&model.access);
+            let expected = expected_policies(model.access());
             let expected_names: std::collections::HashSet<String> = expected
                 .iter()
                 .map(|(suffix, _)| format!("{table}_{suffix}"))
@@ -99,7 +99,7 @@ pub fn diff(
 
             for (suffix, rule_opt) in &expected {
                 let policy_name = format!("{table}_{suffix}");
-                let expected_expr = normalise(&access_rule_to_expr(rule_opt.unwrap()));
+                let expected_expr = normalise(&access_rule_to_expr(model, rule_opt.unwrap()));
 
                 if let Some(db_pol) = db_pol_map.get(policy_name.as_str()) {
                     // Policy exists — compare the USING or WITH CHECK expression.

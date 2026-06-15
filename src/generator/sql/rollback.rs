@@ -71,6 +71,12 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
             changes,
             ..
         } => rollback_alter_column(table, column, changes, schema),
+        Operation::RecreateColumn { table, column, .. } => {
+            format!(
+                "-- WARNING: Cannot automatically roll back RECREATE COLUMN \"{table}\".\"{column}\". \
+                     Original column data was discarded. Restore from backup or snapshot."
+            )
+        }
         // AddIndex → DROP INDEX
         Operation::AddIndex { table, index, .. } => {
             let derived = format!("{}_{}_idx", table, index.fields.join("_"));
@@ -218,6 +224,16 @@ fn rollback_alter_column(
 
     // Reverse type change: restore old type from from_udt
     if let Some(type_change) = changes.get("type") {
+        if changes
+            .get("conversion")
+            .and_then(|c| c.get("strategy"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| matches!(s, "transform_cast" | "kind_migrate"))
+        {
+            stmts.push(format!(
+                "-- WARNING: Transform/kind migration on \"{table}\".\"{column}\" is not automatically reversible."
+            ));
+        }
         let from_udt = type_change
             .get("from_udt")
             .and_then(|v| v.as_str())
@@ -299,6 +315,9 @@ fn forward_description(op: &Operation) -> String {
             table, from, to, ..
         } => format!("rename {table}.{from} -> {to}"),
         Operation::AlterColumn { table, column, .. } => format!("alter column {table}.{column}"),
+        Operation::RecreateColumn { table, column, .. } => {
+            format!("recreate column {table}.{column}")
+        }
         Operation::AddIndex { table, index, .. } => {
             format!("add index on {table}({})", index.fields.join(","))
         }

@@ -20,16 +20,37 @@ fn make_enum_schema(values: &[&str]) -> String {
     let values_json: Vec<String> = values.iter().map(|v| format!("\"{}\"", v)).collect();
     format!(
         r#"{{
-        "models": [{{
-            "name": "Post", "tableName": "posts",
-            "fields": {{
-                "id": {{ "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": {{ "kind": "genRandomUuid" }} }},
-                "title": {{ "kind": "text", "pgType": "TEXT", "required": true, "unique": false }},
-                "status": {{ "kind": "enum", "pgType": "ENUM", "required": true, "unique": false, "values": [{}], "localized": false }}
-            }},
-            "access": {{}}, "indexes": [], "options": {{ "timestamps": false, "softDelete": false }}
-        }}]
-    }}"#,
+  "astVersion": 2,
+  "models": [{{
+    "name": "Post",
+    "fields": {{
+      "id": {{
+        "kind": "uuid",
+        "primaryKey": true,
+        "required": true,
+        "default": {{ "kind": "genRandomUuid" }},
+        "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }}
+      }},
+      "title": {{
+        "kind": "text",
+        "required": true,
+        "annotations": {{ "db": {{ "pgType": "TEXT", "unique": false }} }}
+      }},
+      "status": {{
+        "kind": "enum",
+        "required": true,
+        "values": [{}],
+        "localized": false,
+        "annotations": {{ "db": {{ "pgType": "ENUM", "unique": false }} }}
+      }}
+    }},
+    "options": {{ "timestamps": false, "softDelete": false }},
+    "annotations": {{
+      "db": {{ "tableName": "posts", "indexes": [] }},
+      "platform": {{ "access": {{}} }}
+    }}
+  }}]
+}}"#,
         values_json.join(", ")
     )
 }

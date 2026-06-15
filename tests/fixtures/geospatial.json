@@ -1,29 +1,152 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "Location",
-      "tableName": "locations",
       "fields": {
-        "id":          { "kind": "uuid",   "pgType": "UUID",  "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":        { "kind": "text",   "pgType": "TEXT",  "required": true, "unique": false },
-        "description": { "kind": "text",   "pgType": "TEXT",  "required": false,"unique": false },
-        "point":       { "kind": "geo",    "pgType": "GEOGRAPHY(POINT,4326)", "required": true,  "geoType": "point",   "srid": 4326 },
-        "region":      { "kind": "geo",    "pgType": "GEOGRAPHY(POLYGON,4326)","required": false, "geoType": "polygon", "srid": 4326 },
-        "category":    { "kind": "enum",   "pgType": "TEXT",  "required": true, "unique": false, "values": ["restaurant","hotel","attraction","transport","other"], "default": "other" },
-        "metadata":    { "kind": "json",   "pgType": "JSONB", "required": false }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "description": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "point": {
+          "kind": "geo",
+          "required": true,
+          "geoType": "point",
+          "srid": 4326,
+          "annotations": {
+            "db": {
+              "pgType": "GEOGRAPHY(POINT,4326)"
+            }
+          }
+        },
+        "region": {
+          "kind": "geo",
+          "required": false,
+          "geoType": "polygon",
+          "srid": 4326,
+          "annotations": {
+            "db": {
+              "pgType": "GEOGRAPHY(POLYGON,4326)"
+            }
+          }
+        },
+        "category": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "restaurant",
+            "hotel",
+            "attraction",
+            "transport",
+            "other"
+          ],
+          "default": "other",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "metadata": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
       },
-      "access": {
-        "read":   { "type": "public" },
-        "create": { "type": "role", "roles": ["admin","contributor"] },
-        "update": { "type": "role", "roles": ["admin","contributor"] },
-        "delete": { "type": "role", "roles": ["admin"] }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
       },
-      "indexes": [
-        { "fields": ["point"],  "unique": false, "using": "gist" },
-        { "fields": ["region"], "unique": false, "using": "gist" },
-        { "fields": ["category"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": false }
+      "annotations": {
+        "db": {
+          "tableName": "locations",
+          "indexes": [
+            {
+              "fields": [
+                "point"
+              ],
+              "unique": false,
+              "using": "gist"
+            },
+            {
+              "fields": [
+                "region"
+              ],
+              "unique": false,
+              "using": "gist"
+            },
+            {
+              "fields": [
+                "category"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin",
+                "contributor"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin",
+                "contributor"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
     }
   ]
 }

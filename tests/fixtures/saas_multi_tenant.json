@@ -1,60 +1,298 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "Workspace",
-      "tableName": "workspaces",
       "fields": {
-        "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":   { "kind": "text", "pgType": "TEXT", "required": true, "unique": false },
-        "slug":   { "kind": "slug", "pgType": "TEXT", "required": true, "unique": true, "from": "name" },
-        "plan":   { "kind": "enum", "pgType": "TEXT", "required": true, "unique": false, "values": ["free","pro","enterprise"], "default": "free" },
-        "settings": { "kind": "json", "pgType": "JSONB", "required": false }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "name",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "plan": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "free",
+            "pro",
+            "enterprise"
+          ],
+          "default": "free",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "settings": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "workspaces",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "WorkspaceMember",
-      "tableName": "workspace_members",
       "fields": {
-        "id":          { "kind": "uuid",    "pgType": "UUID",  "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "workspaceId": { "kind": "relation","cardinality": "belongsTo", "target": "Workspace", "foreignKey": "workspace_id", "onDelete": "cascade" },
-        "userId":      { "kind": "uuid",    "pgType": "UUID",  "required": true, "unique": false, "index": true },
-        "role":        { "kind": "enum",    "pgType": "TEXT",  "required": true, "unique": false, "values": ["owner","admin","member","viewer"], "default": "member" },
-        "invitedAt":   { "kind": "datetime","pgType": "TIMESTAMPTZ","required": false, "unique": false }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "workspaceId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Workspace",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "workspace_id"
+            }
+          }
+        },
+        "userId": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false,
+              "index": true
+            }
+          }
+        },
+        "role": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "owner",
+            "admin",
+            "member",
+            "viewer"
+          ],
+          "default": "member",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "invitedAt": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMPTZ",
+              "unique": false
+            }
+          }
+        }
       },
-      "access": {
-        "read":   { "type": "custom", "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid())" },
-        "create": { "type": "role",   "roles": ["admin"] },
-        "update": { "type": "role",   "roles": ["admin"] },
-        "delete": { "type": "role",   "roles": ["admin"] }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
       },
-      "indexes": [
-        { "fields": ["workspace_id", "user_id"], "unique": true, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": false }
+      "annotations": {
+        "db": {
+          "tableName": "workspace_members",
+          "indexes": [
+            {
+              "fields": [
+                "workspace_id",
+                "user_id"
+              ],
+              "unique": true,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "custom",
+              "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid())"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
     },
     {
       "name": "Project",
-      "tableName": "projects",
       "fields": {
-        "id":          { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "workspaceId": { "kind": "relation","cardinality": "belongsTo", "target": "Workspace", "foreignKey": "workspace_id", "onDelete": "cascade" },
-        "name":        { "kind": "text",    "pgType": "TEXT", "required": true, "unique": false },
-        "description": { "kind": "text",    "pgType": "TEXT", "required": false,"unique": false },
-        "archived":    { "kind": "boolean", "pgType": "BOOLEAN", "required": true, "unique": false, "default": { "kind": "value", "value": false } }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "workspaceId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Workspace",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "workspace_id"
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "description": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "archived": {
+          "kind": "boolean",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": false
+          },
+          "annotations": {
+            "db": {
+              "pgType": "BOOLEAN",
+              "unique": false
+            }
+          }
+        }
       },
-      "access": {
-        "read":   { "type": "custom", "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid())" },
-        "create": { "type": "custom", "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid() AND role IN ('owner','admin'))" },
-        "update": { "type": "custom", "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid() AND role IN ('owner','admin'))" },
-        "delete": { "type": "custom", "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid() AND role = 'owner')" }
+      "options": {
+        "timestamps": true,
+        "softDelete": true
       },
-      "indexes": [
-        { "fields": ["workspace_id"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": true }
+      "annotations": {
+        "db": {
+          "tableName": "projects",
+          "indexes": [
+            {
+              "fields": [
+                "workspace_id"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "custom",
+              "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid())"
+            },
+            "create": {
+              "type": "custom",
+              "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid() AND role IN ('owner','admin'))"
+            },
+            "update": {
+              "type": "custom",
+              "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid() AND role IN ('owner','admin'))"
+            },
+            "delete": {
+              "type": "custom",
+              "expression": "workspace_id IN (SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid() AND role = 'owner')"
+            }
+          }
+        }
+      }
     }
   ]
 }

@@ -1,83 +1,437 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "Customer",
-      "tableName": "customers",
       "fields": {
-        "id":         { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "email":      { "kind": "email",   "pgType": "TEXT",    "required": true,  "unique": true  },
-        "name":       { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false },
-        "phone":      { "kind": "text",    "pgType": "TEXT",    "required": false, "unique": false },
-        "address":    { "kind": "json",    "pgType": "JSONB",   "required": false  },
-        "stripeId":   { "kind": "text",    "pgType": "TEXT",    "required": false, "unique": true  }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "email": {
+          "kind": "email",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "phone": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "address": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "stripeId": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        }
       },
-      "access": {
-        "read":   { "type": "owner",  "field": "id" },
-        "create": { "type": "public"  },
-        "update": { "type": "owner",  "field": "id" },
-        "delete": { "type": "role",   "roles": ["admin"] }
+      "options": {
+        "timestamps": true,
+        "softDelete": true
       },
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": true }
+      "annotations": {
+        "db": {
+          "tableName": "customers",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "owner",
+              "field": "id"
+            },
+            "create": {
+              "type": "public"
+            },
+            "update": {
+              "type": "owner",
+              "field": "id"
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
     },
     {
       "name": "Product",
-      "tableName": "products",
       "fields": {
-        "id":          { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":        { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false },
-        "slug":        { "kind": "slug",    "pgType": "TEXT",    "required": true,  "unique": true,  "from": "name" },
-        "description": { "kind": "richText","pgType": "JSONB",   "required": false, "unique": false },
-        "price":       { "kind": "decimal", "pgType": "NUMERIC", "required": true,  "precision": 10, "scale": 2 },
-        "stock":       { "kind": "integer", "pgType": "INTEGER", "required": true,  "unique": false, "default": { "kind": "value", "value": 0 } },
-        "status":      { "kind": "enum",    "pgType": "TEXT",    "required": true,  "unique": false, "values": ["active","archived","draft"], "default": "draft" },
-        "images":      { "kind": "json",    "pgType": "JSONB",   "required": false  }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "name",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "description": {
+          "kind": "richText",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "price": {
+          "kind": "decimal",
+          "required": true,
+          "precision": 10,
+          "scale": 2,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          }
+        },
+        "stock": {
+          "kind": "integer",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": 0
+          },
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "active",
+            "archived",
+            "draft"
+          ],
+          "default": "draft",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "images": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
       },
-      "access": {
-        "read":   { "type": "public" },
-        "create": { "type": "role",  "roles": ["admin"] },
-        "update": { "type": "role",  "roles": ["admin"] },
-        "delete": { "type": "role",  "roles": ["admin"] }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
       },
-      "indexes": [
-        { "fields": ["status"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": false }
+      "annotations": {
+        "db": {
+          "tableName": "products",
+          "indexes": [
+            {
+              "fields": [
+                "status"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
     },
     {
       "name": "Order",
-      "tableName": "orders",
       "fields": {
-        "id":         { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "customerId": { "kind": "relation","cardinality": "belongsTo", "target": "Customer", "foreignKey": "customer_id", "onDelete": "restrict" },
-        "status":     { "kind": "enum",    "pgType": "TEXT",    "required": true,  "unique": false, "values": ["pending","paid","shipped","delivered","cancelled"], "default": "pending" },
-        "total":      { "kind": "decimal", "pgType": "NUMERIC", "required": true,  "precision": 10, "scale": 2 },
-        "notes":      { "kind": "text",    "pgType": "TEXT",    "required": false, "unique": false }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "customerId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Customer",
+          "onDelete": "restrict",
+          "annotations": {
+            "db": {
+              "foreignKey": "customer_id"
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "pending",
+            "paid",
+            "shipped",
+            "delivered",
+            "cancelled"
+          ],
+          "default": "pending",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "total": {
+          "kind": "decimal",
+          "required": true,
+          "precision": 10,
+          "scale": 2,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          }
+        },
+        "notes": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
       },
-      "access": {
-        "read":   { "type": "owner", "field": "customer_id" },
-        "create": { "type": "owner", "field": "customer_id" },
-        "update": { "type": "role",  "roles": ["admin"] },
-        "delete": { "type": "role",  "roles": ["admin"] }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
       },
-      "indexes": [
-        { "fields": ["customer_id", "status"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": false }
+      "annotations": {
+        "db": {
+          "tableName": "orders",
+          "indexes": [
+            {
+              "fields": [
+                "customer_id",
+                "status"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "owner",
+              "field": "customerId"
+            },
+            "create": {
+              "type": "owner",
+              "field": "customerId"
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
     },
     {
       "name": "OrderItem",
-      "tableName": "order_items",
       "fields": {
-        "id":        { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "orderId":   { "kind": "relation","cardinality": "belongsTo", "target": "Order",   "foreignKey": "order_id",   "onDelete": "cascade" },
-        "productId": { "kind": "relation","cardinality": "belongsTo", "target": "Product", "foreignKey": "product_id", "onDelete": "restrict" },
-        "quantity":  { "kind": "integer", "pgType": "INTEGER", "required": true, "unique": false },
-        "unitPrice": { "kind": "decimal", "pgType": "NUMERIC", "required": true, "precision": 10, "scale": 2 }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "orderId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Order",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "order_id"
+            }
+          }
+        },
+        "productId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Product",
+          "onDelete": "restrict",
+          "annotations": {
+            "db": {
+              "foreignKey": "product_id"
+            }
+          }
+        },
+        "quantity": {
+          "kind": "integer",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        },
+        "unitPrice": {
+          "kind": "decimal",
+          "required": true,
+          "precision": 10,
+          "scale": 2,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": false, "softDelete": false }
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "order_items",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     }
   ]
 }

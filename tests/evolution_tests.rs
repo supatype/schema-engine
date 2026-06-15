@@ -52,16 +52,62 @@ fn fk(table: &str, col_name: &str, ftable: &str) -> DbConstraint {
 #[test]
 fn test_add_column_nullable() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":      { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title":   { "kind": "text", "pgType": "TEXT", "required": true,  "unique": false },
-                "excerpt": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "excerpt": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -91,15 +137,52 @@ fn test_add_column_nullable() {
 #[test]
 fn test_drop_column() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -133,15 +216,52 @@ fn test_drop_column() {
 #[test]
 fn test_rename_column_detected() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":          { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "body_content": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "body_content": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -193,24 +313,85 @@ fn test_rename_column_detected() {
 #[test]
 fn test_add_fk_on_existing_table() {
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "User", "tableName": "users",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-            },
-            {
-                "name": "Post", "tableName": "posts",
-                "fields": {
-                    "id":       { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "authorId": { "kind": "relation","cardinality": "belongsTo","target": "User","foreignKey": "author_id","onDelete": "cascade" }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "authorId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -248,24 +429,85 @@ fn test_add_fk_on_existing_table() {
 #[test]
 fn test_fk_already_exists_no_op() {
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "User", "tableName": "users",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-            },
-            {
-                "name": "Post", "tableName": "posts",
-                "fields": {
-                    "id":       { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "authorId": { "kind": "relation","cardinality": "belongsTo","target": "User","foreignKey": "author_id","onDelete": "cascade" }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "authorId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -309,15 +551,52 @@ fn test_fk_already_exists_no_op() {
 fn test_drop_fk_when_relation_removed() {
     // Schema: plain UUID column (relation was removed)
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":        { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "author_id": { "kind": "uuid", "pgType": "UUID", "required": false, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "author_id": {
+          "kind": "uuid",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -351,22 +630,85 @@ fn test_drop_fk_when_relation_removed() {
 #[test]
 fn test_new_table_added() {
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "User", "tableName": "users",
-                "fields": { "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } } },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-            },
-            {
-                "name": "Profile", "tableName": "profiles",
-                "fields": {
-                    "id":     { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "userId": { "kind": "relation","cardinality": "belongsTo","target": "User","foreignKey": "user_id","onDelete": "cascade" }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Profile",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "userId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "user_id"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "profiles",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -405,12 +747,42 @@ fn test_new_table_added() {
 #[test]
 fn test_drop_table_when_model_removed() {
     let ast_json = r#"{
-        "models": [{
-            "name": "User", "tableName": "users",
-            "fields": { "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } } },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -447,24 +819,80 @@ fn test_drop_table_when_model_removed() {
 #[test]
 fn test_junction_table_not_recreated() {
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "Student", "tableName": "students",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "courses": { "kind": "relation", "cardinality": "manyToMany", "target": "Course", "through": "enrollments" }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-            },
-            {
-                "name": "Course", "tableName": "courses",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Student",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        },
+        "courses": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Course",
+          "through": "enrollments"
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "students",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Course",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "courses",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -503,15 +931,52 @@ fn test_junction_table_not_recreated() {
 #[test]
 fn test_timestamps_option_idempotency() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": true, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -548,14 +1013,42 @@ fn test_timestamps_option_idempotency() {
 #[test]
 fn test_soft_delete_option_idempotency() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": true }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -587,15 +1080,53 @@ fn test_soft_delete_option_idempotency() {
 #[test]
 fn test_auto_index_emitted_with_new_indexed_column() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":       { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "authorId": { "kind": "uuid", "pgType": "UUID", "required": true, "unique": false, "index": true }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "authorId": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false,
+              "index": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -633,14 +1164,42 @@ fn test_rollback_reverses_create_table() {
     use supatype_engine::generator::sql::rollback;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
@@ -677,22 +1236,85 @@ fn test_rollback_reverses_add_fk() {
     use supatype_engine::generator::sql::rollback;
 
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "User", "tableName": "users",
-                "fields": { "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } } },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-            },
-            {
-                "name": "Post", "tableName": "posts",
-                "fields": {
-                    "id":       { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "authorId": { "kind": "relation","cardinality": "belongsTo","target": "User","foreignKey": "author_id","onDelete": "cascade" }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "authorId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
@@ -710,15 +1332,56 @@ fn test_rollback_reverses_add_fk() {
 fn test_add_column_not_null_with_default() {
     // Adding a NOT NULL column with a DEFAULT is safe — Postgres fills existing rows.
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":        { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "published": { "kind": "boolean", "pgType": "BOOLEAN", "required": true, "unique": false, "default": { "kind": "value", "value": false } }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "published": {
+          "kind": "boolean",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": false
+          },
+          "annotations": {
+            "db": {
+              "pgType": "BOOLEAN",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -743,21 +1406,306 @@ fn test_add_column_not_null_with_default() {
     );
 }
 
+#[test]
+fn test_add_required_richtext_column_backfills_empty_lexical() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "someField": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "_global_homepage",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "_global_homepage".into(),
+            columns: vec![col("id", "uuid")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("ADD COLUMN \"someField\" JSONB NOT NULL DEFAULT"),
+        "must backfill existing rows when adding required JSONB column"
+    );
+    assert!(
+        sql.contains("'type', 'root'"),
+        "richText backfill must use empty Lexical document"
+    );
+    assert!(
+        sql.contains("ALTER COLUMN \"someField\" DROP DEFAULT"),
+        "must drop transient DEFAULT after backfill"
+    );
+}
+
+#[test]
+fn test_alter_nullable_richtext_to_required_backfills_existing_rows() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "someField": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": { "pgType": "JSONB", "unique": false },
+            "platform": { "editor": "rich" }
+          }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false, "singleton": true },
+      "annotations": {
+        "db": { "tableName": "_global_homepage", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "_global_homepage".into(),
+            columns: vec![col("id", "uuid"), col("someField", "jsonb")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("UPDATE \"public\".\"_global_homepage\" SET \"someField\""),
+        "must backfill NULLs before SET NOT NULL"
+    );
+    assert!(
+        sql.contains("ALTER COLUMN \"someField\" SET NOT NULL"),
+        "must tighten nullability after backfill"
+    );
+}
+
+#[test]
+fn test_add_required_richtext_column_with_string_default() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "someField": {
+          "kind": "richText",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": "Welcome to Elmside."
+          },
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "_global_homepage",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "_global_homepage".into(),
+            columns: vec![col("id", "uuid")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("ADD COLUMN \"someField\" JSONB NOT NULL DEFAULT"),
+        "required RichText with schema default must emit DEFAULT on ADD COLUMN"
+    );
+    assert!(
+        sql.contains("'text', 'Welcome to Elmside.'"),
+        "plain string default must become Lexical paragraph text, not raw TEXT default"
+    );
+    assert!(
+        !sql.contains("DROP DEFAULT"),
+        "persistent schema default must not be dropped after backfill"
+    );
+}
+
+#[test]
+fn test_richtext_lexical_object_default_sql() {
+    use supatype_engine::generator::sql::column_conversion::rich_text_default_sql;
+    use supatype_engine::parser::ast::DefaultValueAst;
+
+    let lexical = serde_json::json!({
+        "root": {
+            "type": "root",
+            "version": 1,
+            "children": []
+        }
+    });
+    let sql = rich_text_default_sql(&DefaultValueAst::Value {
+        value: lexical,
+    })
+    .unwrap();
+    assert!(sql.ends_with("::jsonb"));
+    assert!(sql.contains("\"root\""));
+}
+
 // ─── Scenario 16: change_column_type_safe ────────────────────────────────────
 
 #[test]
 fn test_change_column_type_safe_widening() {
     // Widening int2 → BIGINT is a safe AlterColumn.
     let ast_json = r#"{
-        "models": [{
-            "name": "Counter", "tableName": "counters",
-            "fields": {
-                "id":    { "kind": "uuid",    "pgType": "UUID",   "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "value": { "kind": "bigInt",  "pgType": "BIGINT", "required": false, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Counter",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "value": {
+          "kind": "bigInt",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "BIGINT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "counters",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -795,15 +1743,52 @@ fn test_change_column_type_safe_widening() {
 fn test_change_column_type_lossy() {
     // Narrowing bigint → integer is a cautious type change (may lose data).
     let ast_json = r#"{
-        "models": [{
-            "name": "Counter", "tableName": "counters",
-            "fields": {
-                "id":    { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "value": { "kind": "integer", "pgType": "INTEGER", "required": false, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Counter",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "value": {
+          "kind": "integer",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "counters",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -839,15 +1824,52 @@ fn test_change_column_type_lossy() {
 fn test_add_not_null_to_existing_nullable_column() {
     // Making an existing nullable column NOT NULL is cautious (pre-flight guard needed).
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -883,15 +1905,52 @@ fn test_add_not_null_to_existing_nullable_column() {
 fn test_drop_not_null_from_existing_column() {
     // Making an existing NOT NULL column nullable is safe.
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -934,15 +1993,52 @@ fn test_alter_column_not_null_sql_has_preflight_guard() {
 
     // Schema wants title to be NOT NULL
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -976,15 +2072,52 @@ fn test_alter_column_rollback_reverses_nullability() {
     use supatype_engine::generator::sql::rollback;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -1013,15 +2146,46 @@ fn test_alter_column_rollback_reverses_nullability() {
 fn test_rls_fresh_model_authenticated() {
     // A brand-new model with read access.authenticated → EnableRls + CreateRlsPolicy
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": { "read": { "type": "authenticated" } },
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            }
+          }
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -1072,7 +2236,13 @@ fn test_rls_any_rule_generates_or_expression() {
         ],
     };
 
-    let expr = access_rule_to_expr(&rule);
+    let model = supatype_engine::parser::ast::ModelAst {
+        name: "Test".to_string(),
+        fields: indexmap::IndexMap::new(),
+        options: Default::default(),
+        annotations: Default::default(),
+    };
+    let expr = access_rule_to_expr(&model, &rule);
     assert!(expr.contains("OR"), "any() rule must produce OR expression");
     assert!(
         expr.contains("auth.uid()"),
@@ -1090,17 +2260,48 @@ fn test_rls_any_rule_generates_or_expression() {
 #[test]
 fn test_rls_changed_expression_triggers_recreate() {
     // DB has posts_select with expression for 'public'; schema now says 'authenticated'.
-    // Differ must emit DropRlsPolicy + CreateRlsPolicy.
+    // Differ emits CreateRlsPolicy only (idempotent DROP IF EXISTS + CREATE in SQL).
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": { "read": { "type": "authenticated" } },
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            }
+          }
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -1127,14 +2328,14 @@ fn test_rls_changed_expression_triggers_recreate() {
         |op| matches!(op, Operation::DropRlsPolicy { policy, .. } if policy == "posts_select"),
     );
     assert!(
-        drop_policy,
-        "should emit DropRlsPolicy when expression changed"
+        !drop_policy,
+        "must not emit separate DropRlsPolicy — CreateRlsPolicy SQL is idempotent"
     );
 
     let create_policy = diff.operations.iter().any(
         |op| matches!(op, Operation::CreateRlsPolicy { policy, .. } if policy == "posts_select"),
     );
-    assert!(create_policy, "should emit CreateRlsPolicy after drop");
+    assert!(create_policy, "should emit CreateRlsPolicy when expression changed");
 }
 
 // ─── Scenario 25: model loses access rules → all policies dropped + warning ───
@@ -1144,15 +2345,42 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
     // Schema no longer has access rules; DB has existing policy.
     // Differ must drop all policies and emit a warning.
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {},
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -1199,36 +2427,113 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
     use supatype_engine::generator::sql::rls;
 
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "User", "tableName": "users",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-                },
-                "access": {
-                    "read": { "type": "authenticated" },
-                    "create": { "type": "authenticated" },
-                    "update": { "type": "authenticated" },
-                    "delete": { "type": "authenticated" }
-                },
-                "indexes": [], "options": { "timestamps": false, "softDelete": false }
-            },
-            {
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "userId": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "foreignKey": "user_id", "onDelete": "cascade" }
-            },
-            "access": {
-                "read":   { "type": "authenticated" },
-                "create": { "type": "authenticated" },
-                "update": { "type": "owner", "field": "user_id" },
-                "delete": { "type": "owner", "field": "user_id" }
-            },
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            },
+            "create": {
+              "type": "authenticated"
+            },
+            "update": {
+              "type": "authenticated"
+            },
+            "delete": {
+              "type": "authenticated"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "userId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "user_id"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            },
+            "create": {
+              "type": "authenticated"
+            },
+            "update": {
+              "type": "owner",
+              "field": "userId"
+            },
+            "delete": {
+              "type": "owner",
+              "field": "userId"
+            }
+          }
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let sql = rls::generate(&ast).unwrap();
@@ -1271,15 +2576,52 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
 fn test_storage_resolver_infers_bucket_from_image_field() {
     // An image field with bucket "posts_avatar" should produce one StorageBucketAst.
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "avatar": { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_avatar" }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "avatar": {
+          "kind": "image",
+          "required": false,
+          "bucket": "posts_avatar",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     assert_eq!(
@@ -1300,15 +2642,52 @@ fn test_storage_generator_emits_ddl_and_bucket_upsert() {
     use supatype_engine::generator::sql::storage;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "avatar": { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_avatar" }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "avatar": {
+          "kind": "image",
+          "required": false,
+          "bucket": "posts_avatar",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let sql = storage::generate(&ast).unwrap();
@@ -1335,16 +2714,56 @@ fn test_storage_rls_inherits_model_read_access_rule() {
     use supatype_engine::generator::sql::storage;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "avatar": { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_avatar" }
-            },
-            "access": { "read": { "type": "authenticated" } },
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "avatar": {
+          "kind": "image",
+          "required": false,
+          "bucket": "posts_avatar",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            }
+          }
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let sql = storage::generate(&ast).unwrap();
@@ -1377,16 +2796,62 @@ fn test_storage_rls_inherits_model_read_access_rule() {
 fn test_storage_resolver_deduplicates_same_bucket() {
     // Two image fields pointing to the same bucket should produce only one StorageBucketAst.
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":       { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "cover":    { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_images" },
-                "thumb":    { "kind": "image", "pgType": "JSONB", "required": false, "bucket": "posts_images" }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "cover": {
+          "kind": "image",
+          "required": false,
+          "bucket": "posts_images",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "thumb": {
+          "kind": "image",
+          "required": false,
+          "bucket": "posts_images",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     assert_eq!(
@@ -1402,25 +2867,98 @@ fn test_storage_resolver_deduplicates_same_bucket() {
 #[test]
 fn test_admin_singleton_in_globals() {
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "Post", "tableName": "posts",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-            },
-            {
-                "name": "SiteSettings", "tableName": "site_settings",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "siteName": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": true }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "SiteSettings",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "siteName": {
+          "kind": "text",
+          "required": true,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "site_settings",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let config = admin::generate(&ast).unwrap();
@@ -1441,15 +2979,59 @@ fn test_admin_singleton_in_globals() {
 #[test]
 fn test_admin_enum_field_widget() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let config = admin::generate(&ast).unwrap();
@@ -1472,31 +3054,87 @@ fn test_admin_enum_field_widget() {
 #[test]
 fn test_admin_belongs_to_relation_picker() {
     let ast_json = r#"{
-        "models": [{
-            "name": "User", "tableName": "users",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }, {
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "author": {
-                    "kind": "relation",
-                    "cardinality": "belongsTo",
-                    "target": "User",
-                    "fkColumn": "author_id",
-                    "targetPk": "id",
-                    "onDelete": "RESTRICT",
-                    "required": false,
-                    "unique": false,
-                    "uniqueFk": false
-                }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "author": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "RESTRICT",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let config = admin::generate(&ast).unwrap();
@@ -1508,11 +3146,15 @@ fn test_admin_belongs_to_relation_picker() {
         .find(|m| m["name"] == "Post")
         .unwrap();
     let fields = post_model["fields"].as_array().unwrap();
-    let author_field = fields.iter().find(|f| f["name"] == "author").unwrap();
+    let author_field = fields
+        .iter()
+        .find(|f| f["name"] == "author_id")
+        .unwrap();
 
     assert_eq!(author_field["widget"], "relation");
     assert_eq!(author_field["options"]["target"], "users");
     assert_eq!(author_field["options"]["cardinality"], "belongsTo");
+    assert_eq!(author_field["options"]["foreignKey"], "author_id");
     assert_eq!(
         author_field["showInList"], true,
         "belongsTo should show in list"
@@ -1524,30 +3166,109 @@ fn test_admin_belongs_to_relation_picker() {
 #[test]
 fn test_admin_navigation_content_group() {
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "Post", "tableName": "posts",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-            },
-            {
-                "name": "Category", "tableName": "categories",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-            },
-            {
-                "name": "Config", "tableName": "config",
-                "fields": {
-                    "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": true }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Category",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "categories",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Config",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "config",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let config = admin::generate(&ast).unwrap();
@@ -1575,17 +3296,59 @@ fn test_admin_navigation_content_group() {
 #[test]
 fn test_admin_localized_field_in_config() {
     let ast_json = r#"{
-        "locales": ["en", "fr"],
-        "defaultLocale": "en",
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text", "pgType": "JSONB", "required": true, "unique": false, "localized": true }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "locales": [
+    "en",
+    "fr"
+  ],
+  "defaultLocale": "en"
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let config = admin::generate(&ast).unwrap();
@@ -1610,38 +3373,89 @@ fn test_admin_localized_field_in_config() {
 #[test]
 fn test_admin_blocks_field_widget() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Page", "tableName": "pages",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "content": {
-                    "kind": "blocks",
-                    "required": false,
-                    "index": true,
-                    "blocks": [
-                        {
-                            "name": "hero",
-                            "label": "Hero Banner",
-                            "icon": null,
-                            "fields": {
-                                "heading": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false },
-                                "subheading": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false, "localized": false }
-                            }
-                        },
-                        {
-                            "name": "richtext",
-                            "label": null,
-                            "icon": null,
-                            "fields": {
-                                "body": { "kind": "richText", "pgType": "JSONB", "required": true, "unique": false, "localized": false }
-                            }
-                        }
-                    ]
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Page",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "content": {
+          "kind": "blocks",
+          "required": false,
+          "blocks": [
+            {
+              "name": "hero",
+              "label": "Hero Banner",
+              "icon": null,
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "TEXT",
+                  "required": true,
+                  "unique": false,
+                  "localized": false
+                },
+                "subheading": {
+                  "kind": "text",
+                  "pgType": "TEXT",
+                  "required": false,
+                  "unique": false,
+                  "localized": false
                 }
+              }
             },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+            {
+              "name": "richtext",
+              "label": null,
+              "icon": null,
+              "fields": {
+                "body": {
+                  "kind": "richText",
+                  "pgType": "JSONB",
+                  "required": true,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            }
+          ],
+          "annotations": {
+            "db": {
+              "index": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "pages",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let config = admin::generate(&ast).unwrap();
@@ -1672,15 +3486,54 @@ fn test_studio_metadata_basic_model() {
     use supatype_engine::generator::studio;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":    { "kind": "uuid",  "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title": { "kind": "text",  "pgType": "TEXT", "required": true, "unique": false, "localized": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let meta = studio::generate(&ast).unwrap();
@@ -1707,26 +3560,104 @@ fn test_studio_metadata_stats() {
     use supatype_engine::generator::studio;
 
     let ast_json = r#"{
-        "models": [
-            {
-                "name": "Post", "tableName": "posts",
-                "fields": {
-                    "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "title":  { "kind": "text", "pgType": "TEXT", "required": true, "unique": false, "localized": false },
-                    "author": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "uniqueFk": false }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-            },
-            {
-                "name": "User", "tableName": "users",
-                "fields": {
-                    "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                    "email": { "kind": "email", "pgType": "TEXT", "required": true, "unique": true, "localized": false }
-                },
-                "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "author": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "uniqueFk": false
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "email": {
+          "kind": "email",
+          "required": true,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let meta = studio::generate(&ast).unwrap();
@@ -1749,21 +3680,82 @@ fn test_studio_metadata_relation_field() {
     use supatype_engine::generator::studio;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "User", "tableName": "users",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }, {
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "author": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "uniqueFk": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "author": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "uniqueFk": false
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let meta = studio::generate(&ast).unwrap();
@@ -1789,14 +3781,43 @@ fn test_openapi_paths_for_model() {
     use supatype_engine::generator::openapi;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let spec = openapi::generate(&ast).unwrap();
@@ -1833,18 +3854,87 @@ fn test_openapi_schema_field_types() {
     use supatype_engine::generator::openapi;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":        { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true,  "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title":     { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false, "localized": false },
-                "views":     { "kind": "integer", "pgType": "INTEGER", "required": false, "unique": false, "localized": false },
-                "active":    { "kind": "boolean", "pgType": "BOOLEAN", "required": false, "unique": false, "localized": false },
-                "createdAt": { "kind": "datetime","pgType": "TIMESTAMPTZ","required": false,"unique": false,"localized": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "views": {
+          "kind": "integer",
+          "required": false,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        },
+        "active": {
+          "kind": "boolean",
+          "required": false,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "BOOLEAN",
+              "unique": false
+            }
+          }
+        },
+        "createdAt": {
+          "kind": "datetime",
+          "required": false,
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMPTZ",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let spec = openapi::generate(&ast).unwrap();
@@ -1872,15 +3962,59 @@ fn test_openapi_schema_enum_field() {
     use supatype_engine::generator::openapi;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "required": true, "unique": false, "values": ["draft", "published", "archived"], "localized": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "localized": false,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let spec = openapi::generate(&ast).unwrap();
@@ -1915,18 +4049,65 @@ fn test_plugin_custom_field_sql() {
     use supatype_engine::generator::sql::migration;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Contact", "tableName": "contacts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "string", "required": true, "unique": false, "index": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }],
-        "plugins": [
-            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
-        ]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Contact",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "phone": {
+          "kind": "custom",
+          "plugin": "@supatype/plugin-phone-field",
+          "fieldType": "phone",
+          "tsType": "string",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "contacts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "plugins": [
+    {
+      "name": "@supatype/plugin-phone-field",
+      "version": "1.0.0",
+      "pluginApi": 1,
+      "pluginType": "fieldType"
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -1958,18 +4139,65 @@ fn test_plugin_custom_field_typescript() {
     use supatype_engine::generator::typescript::types;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Contact", "tableName": "contacts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "PhoneNumber", "required": true, "unique": false, "index": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }],
-        "plugins": [
-            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
-        ]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Contact",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "phone": {
+          "kind": "custom",
+          "plugin": "@supatype/plugin-phone-field",
+          "fieldType": "phone",
+          "tsType": "PhoneNumber",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "contacts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "plugins": [
+    {
+      "name": "@supatype/plugin-phone-field",
+      "version": "1.0.0",
+      "pluginApi": 1,
+      "pluginType": "fieldType"
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let ts = types::generate(&ast).unwrap();
@@ -1989,6 +4217,7 @@ fn test_plugin_version_mismatch_warning() {
     let api_version = SUPPORTED_PLUGIN_API + 1; // intentionally wrong
     let ast_json = format!(
         r#"{{
+        "astVersion": 2,
         "models": [],
         "plugins": [
             {{ "name": "@community/supatype-paddle", "version": "2.0.0", "pluginApi": {api_version}, "pluginType": "provider" }}
@@ -2021,11 +4250,17 @@ fn test_plugin_version_mismatch_warning() {
 #[test]
 fn test_plugin_compatible_version_no_warning() {
     let ast_json = r#"{
-        "models": [],
-        "plugins": [
-            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
-        ]
-    }"#;
+  "astVersion": 2,
+  "models": [],
+  "plugins": [
+    {
+      "name": "@supatype/plugin-phone-field",
+      "version": "1.0.0",
+      "pluginApi": 1,
+      "pluginType": "fieldType"
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
 
@@ -2045,18 +4280,65 @@ fn test_plugin_compatible_version_no_warning() {
 #[test]
 fn test_plugin_custom_field_diff() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Contact", "tableName": "contacts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "string", "required": false, "unique": false, "index": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }],
-        "plugins": [
-            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
-        ]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Contact",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "phone": {
+          "kind": "custom",
+          "plugin": "@supatype/plugin-phone-field",
+          "fieldType": "phone",
+          "tsType": "string",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "contacts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "plugins": [
+    {
+      "name": "@supatype/plugin-phone-field",
+      "version": "1.0.0",
+      "pluginApi": 1,
+      "pluginType": "fieldType"
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2088,18 +4370,65 @@ fn test_plugin_custom_field_studio_metadata() {
     use supatype_engine::generator::studio;
 
     let ast_json = r#"{
-        "models": [{
-            "name": "Contact", "tableName": "contacts",
-            "fields": {
-                "id":    { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "phone": { "kind": "custom", "plugin": "@supatype/plugin-phone-field", "fieldType": "phone", "pgType": "TEXT", "tsType": "PhoneNumber", "required": false, "unique": false, "index": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false, "singleton": false }
-        }],
-        "plugins": [
-            { "name": "@supatype/plugin-phone-field", "version": "1.0.0", "pluginApi": 1, "pluginType": "fieldType" }
-        ]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Contact",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "phone": {
+          "kind": "custom",
+          "plugin": "@supatype/plugin-phone-field",
+          "fieldType": "phone",
+          "tsType": "PhoneNumber",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "contacts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "plugins": [
+    {
+      "name": "@supatype/plugin-phone-field",
+      "version": "1.0.0",
+      "pluginApi": 1,
+      "pluginType": "fieldType"
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let meta = studio::generate(&ast).unwrap();
@@ -2118,18 +4447,76 @@ fn test_plugin_custom_field_studio_metadata() {
 
 fn simple_post_ast() -> &'static str {
     r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":           { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "title":        { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false },
-                "score":        { "kind": "integer", "pgType": "INTEGER", "required": false, "unique": false },
-                "active":       { "kind": "boolean", "pgType": "BOOLEAN", "required": true,  "unique": false },
-                "_timestamps":  { "kind": "timestamps" }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": true, "softDelete": false, "singleton": false }
-        }]
-    }"#
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "score": {
+          "kind": "integer",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        },
+        "active": {
+          "kind": "boolean",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "BOOLEAN",
+              "unique": false
+            }
+          }
+        },
+        "_timestamps": {
+          "kind": "timestamps"
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#
 }
 
 // ─── Scenario 49: Python @dataclass with correct type annotations ─────────────
@@ -2548,14 +4935,15 @@ fn test_sso_enabled_rls_policies() {
 #[test]
 fn test_sso_config_parses_from_schema_json() {
     let ast_json = r#"{
-        "models": [],
-        "sso": {
-            "enabled": true,
-            "accessTokenExpirySecs": 1800,
-            "refreshTokenExpiryDays": 14,
-            "keyRotationDays": 60
-        }
-    }"#;
+  "astVersion": 2,
+  "models": [],
+  "sso": {
+    "enabled": true,
+    "accessTokenExpirySecs": 1800,
+    "refreshTokenExpiryDays": 14,
+    "keyRotationDays": 60
+  }
+}"#;
 
     let ast = parser::parse(ast_json).expect("schema with sso block must parse");
     let sso = ast.sso.expect("sso field must be present");
@@ -2574,15 +4962,57 @@ fn test_sso_config_parses_from_schema_json() {
 #[test]
 fn test_enum_add_value_safe() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published", "archived"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2616,15 +5046,57 @@ fn test_enum_add_value_safe() {
 #[test]
 fn test_enum_add_value_generates_alter_type_sql() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published", "archived"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2654,15 +5126,56 @@ fn test_enum_add_value_generates_alter_type_sql() {
 #[test]
 fn test_enum_remove_value_destructive() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "draft",
+            "published"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2709,15 +5222,56 @@ fn test_enum_remove_value_destructive() {
 #[test]
 fn test_enum_remove_value_requires_force() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "draft",
+            "published"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2756,15 +5310,56 @@ fn test_enum_remove_value_requires_force() {
 #[test]
 fn test_enum_remove_value_warning_message() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "draft",
+            "published"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2796,15 +5391,56 @@ fn test_enum_rename_value_detected_via_similarity() {
     // "draft" → "drft" looks like a rename (high similarity).
     // "published" stays the same.
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["drafts", "published"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "drafts",
+            "published"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2849,15 +5485,56 @@ fn test_enum_rename_value_detected_via_similarity() {
 #[test]
 fn test_enum_rename_value_generates_alter_type_rename_sql() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["drafts", "published"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "drafts",
+            "published"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2888,15 +5565,56 @@ fn test_enum_rename_value_generates_alter_type_rename_sql() {
 fn test_enum_reorder_values_detected() {
     // Same values, different order: schema says [published, draft], DB has [draft, published].
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["published", "draft"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "published",
+            "draft"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2940,15 +5658,56 @@ fn test_enum_reorder_values_detected() {
 #[test]
 fn test_enum_reorder_values_generates_recreate_sql() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["published", "draft"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "published",
+            "draft"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -2988,15 +5747,56 @@ fn test_enum_reorder_values_generates_recreate_sql() {
 #[test]
 fn test_enum_no_change_produces_no_ops() {
     let ast_json = r#"{
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id":     { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "status": { "kind": "enum", "pgType": "ENUM", "values": ["draft", "published"], "required": true, "unique": false }
-            },
-            "access": {}, "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "values": [
+            "draft",
+            "published"
+          ],
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "ENUM",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
@@ -3034,4 +5834,796 @@ fn test_enum_no_change_produces_no_ops() {
         enum_ops.is_empty(),
         "unchanged enum should produce no enum operations; got: {enum_ops:?}"
     );
+}
+
+// ─── Scenario: text → richText (plain TEXT to Lexical JSONB) ─────────────────
+
+#[test]
+fn test_alter_column_text_to_richtext_uses_lexical_wrap() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "story1_para1": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "homepage",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "homepage".into(),
+            columns: vec![
+                col("id", "uuid"),
+                col("story1_para1", "text"),
+            ],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("TYPE JSONB USING"),
+        "must alter column type to JSONB with USING"
+    );
+    assert!(
+        sql.contains("'type', 'root'"),
+        "must wrap plain text as Lexical root document"
+    );
+    assert!(
+        sql.contains("'text', \"story1_para1\"::text"),
+        "must preserve existing plain text in Lexical text node"
+    );
+    assert!(
+        !sql.contains("story1_para1\"::jsonb"),
+        "must not use raw ::jsonb cast on plain text"
+    );
+}
+
+// ─── Scenario: richText → text (Lexical JSONB back to plain TEXT) ─────────────
+
+#[test]
+fn test_alter_column_richtext_to_text_extracts_lexical_plain_text() {
+    use supatype_engine::generator::sql::migration;
+
+    let previous_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "story1_para1": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "_global_homepage",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "story1_para1": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "_global_homepage",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let previous = parser::parse(previous_json).unwrap();
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "_global_homepage".into(),
+            columns: vec![
+                col("id", "uuid"),
+                DbColumn {
+                    name: "story1_para1".into(),
+                    data_type: "jsonb".into(),
+                    udt_name: "jsonb".into(),
+                    nullable: false,
+                    default: None,
+                    ordinal_position: 1,
+                },
+            ],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff_with_previous(&ast, &db, Some(&previous)).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("TYPE TEXT USING"),
+        "must alter JSONB column to TEXT with USING"
+    );
+    assert!(
+        sql.contains("jsonb_path_query"),
+        "must extract Lexical text nodes in a pre-update, got:\n{sql}"
+    );
+    assert!(
+        sql.contains("to_jsonb("),
+        "pre-update must materialise plain text before ALTER TYPE"
+    );
+    assert!(
+        !sql.contains("TYPE TEXT USING COALESCE((SELECT"),
+        "subqueries are not allowed in ALTER COLUMN USING"
+    );
+    assert!(
+        !sql.contains("->>'en'"),
+        "must not treat Lexical JSONB as localized map"
+    );
+}
+
+// ─── Scenario: json → richText (JSONB kind change, same PG type) ─────────────
+
+#[test]
+fn test_alter_column_json_to_richtext_migrates_jsonb_data() {
+    use supatype_engine::generator::sql::migration;
+
+    let previous_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "story1_para1": {
+          "kind": "json",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "homepage",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Homepage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "story1_para1": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "homepage",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let previous = parser::parse(previous_json).unwrap();
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "homepage".into(),
+            columns: vec![col("id", "uuid"), col("story1_para1", "jsonb")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff_with_previous(&ast, &db, Some(&previous)).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("UPDATE \"public\".\"homepage\""),
+        "must UPDATE rows when PG type unchanged but kind changed"
+    );
+    assert!(
+        sql.contains("'type', 'root'"),
+        "must convert JSONB values to Lexical documents"
+    );
+    assert!(
+        !sql.contains("TYPE JSONB"),
+        "must not ALTER TYPE when column is already JSONB"
+    );
+}
+
+// ─── Scenario: integer → richText (scalar to Lexical JSONB) ────────────────
+
+#[test]
+fn test_alter_column_integer_to_richtext_uses_lexical_wrap() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Counter",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "value": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "counter",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "counter".into(),
+            columns: vec![col("id", "uuid"), col("value", "int4")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(sql.contains("TYPE JSONB USING"));
+    assert!(sql.contains("'type', 'root'"));
+    assert!(sql.contains("\"value\"::text"));
+    assert!(!sql.contains("\"value\"::jsonb"));
+}
+
+// ─── Column conversion: integer → json (typed to_jsonb) ─────────────────────
+
+#[test]
+fn test_alter_column_integer_to_json_uses_to_jsonb() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Counter",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "value": {
+          "kind": "json",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "counter",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "counter".into(),
+            columns: vec![col("id", "uuid"), col("value", "int4")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(sql.contains("TYPE JSONB USING to_jsonb(\"value\")"));
+}
+
+// ─── Column conversion: localization add ─────────────────────────────────────
+
+#[test]
+fn test_alter_column_localization_add_wraps_default_locale() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            columns: vec![col("id", "uuid"), col("title", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(sql.contains("jsonb_build_object('en'"));
+}
+
+// ─── Column conversion: unc castable → recreate column ───────────────────────
+
+#[test]
+fn test_geo_to_json_emits_recreate_column() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Place",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "loc": {
+          "kind": "geo",
+          "required": false,
+          "geoType": "point",
+          "srid": 4326,
+          "annotations": {
+            "db": {
+              "pgType": "GEOGRAPHY",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "places",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let previous_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Place",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "loc": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "places",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let previous = parser::parse(previous_json).unwrap();
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "places".into(),
+            columns: vec![
+                col("id", "uuid"),
+                DbColumn {
+                    name: "loc".into(),
+                    data_type: "jsonb".into(),
+                    udt_name: "jsonb".into(),
+                    nullable: true,
+                    default: None,
+                    ordinal_position: 2,
+                },
+            ],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff_with_previous(&ast, &db, Some(&previous)).unwrap();
+    let recreate = diff.operations.iter().any(|op| {
+        matches!(op, Operation::RecreateColumn { column, .. } if column == "loc")
+    });
+    assert!(recreate, "geo from jsonb should recreate column; got {:?}", diff.operations);
+}
+
+// ─── Array element type change detected ──────────────────────────────────────
+
+#[test]
+fn test_array_element_type_change_detected() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Tag",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "names": {
+          "kind": "array",
+          "required": false,
+          "annotations": {
+            "db": {
+              "elementType": "INTEGER",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "tags",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "tags".into(),
+            columns: vec![col("id", "uuid"), col("names", "_text")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let alter = diff
+        .operations
+        .iter()
+        .any(|op| matches!(op, Operation::AlterColumn { column, .. } if column == "names"));
+    assert!(alter, "text[] → integer[] should emit AlterColumn");
 }

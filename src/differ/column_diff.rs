@@ -1,14 +1,18 @@
-use super::{Operation, Risk};
+use super::{ColumnDependencySnapshot, Operation, Risk};
+use crate::generator::sql::column_conversion::{
+    self, add_column_backfill_default, plan_type_conversion, required_field_existing_table_warning,
+    supports_kind_data_migration, ConversionStrategyKind,
+};
+use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::tables::{DbColumn, DbTable};
 use crate::parser::ast::{FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality};
-use anyhow::Result;
+use crate::state::database_state::DatabaseState;
+use anyhow::{bail, Result};
 use serde_json::json;
 use strsim::jaro_winkler;
 
 const RENAME_THRESHOLD: f64 = 0.7;
 
-/// Returns the effective column name(s) produced by a field.
-/// Relations produce a FK column name; composites produce multiple.
 fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
     match field {
         FieldAst::Relation(rel) => match rel.cardinality {
@@ -31,7 +35,6 @@ fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
     }
 }
 
-/// Returns true if the field has `index: true` set.
 fn has_index_flag(field: &FieldAst) -> bool {
     match field {
         FieldAst::Text(f)
@@ -64,7 +67,6 @@ fn has_index_flag(field: &FieldAst) -> bool {
     }
 }
 
-/// Returns whether the schema field requires the DB column to be NOT NULL.
 fn field_required(field: &FieldAst) -> Option<bool> {
     match field {
         FieldAst::Text(f)
@@ -101,12 +103,10 @@ fn field_required(field: &FieldAst) -> Option<bool> {
         FieldAst::Array(f) => Some(f.required),
         FieldAst::Image(f) | FieldAst::File(f) => Some(f.required),
         FieldAst::Custom(f) => Some(f.required),
-        // Composites / relations don't map directly to a single column required flag
         _ => None,
     }
 }
 
-/// Returns true if a scalar field has `localized: true`.
 fn is_localized(field: &FieldAst) -> bool {
     match field {
         FieldAst::Text(f)
@@ -128,13 +128,71 @@ fn is_localized(field: &FieldAst) -> bool {
         FieldAst::Slug(f) => f.localized,
         FieldAst::Enum(f) => f.localized,
         FieldAst::Json(f) => f.localized,
+        FieldAst::Button(f) => f.localized,
         FieldAst::Decimal(f) => f.localized,
         FieldAst::Money(f) => f.localized,
+        FieldAst::Image(f) | FieldAst::File(f) => f.localized,
+        FieldAst::Blocks(f) => f.localized,
         _ => false,
     }
 }
 
-/// Returns true if the field is text-like (meaning a JSONB DB column is likely a localized version).
+pub fn field_kind(field: &FieldAst) -> Option<&'static str> {
+    match field {
+        FieldAst::Text(_) => Some("text"),
+        FieldAst::RichText(_) => Some("richText"),
+        FieldAst::Json(_) => Some("json"),
+        FieldAst::Button(_) => Some("button"),
+        FieldAst::Blocks(_) => Some("blocks"),
+        FieldAst::Image(_) => Some("image"),
+        FieldAst::File(_) => Some("file"),
+        FieldAst::Email(_) => Some("email"),
+        FieldAst::Url(_) => Some("url"),
+        FieldAst::Slug(_) => Some("slug"),
+        FieldAst::Xml(_) => Some("xml"),
+        FieldAst::Enum(_) => Some("enum"),
+        FieldAst::Integer(_) => Some("integer"),
+        FieldAst::Float(_) => Some("float"),
+        FieldAst::Boolean(_) => Some("boolean"),
+        FieldAst::Uuid(_) => Some("uuid"),
+        FieldAst::Datetime(_) => Some("datetime"),
+        FieldAst::Date(_) => Some("date"),
+        FieldAst::Timestamp(_) => Some("timestamp"),
+        FieldAst::BigInt(_) => Some("bigInt"),
+        FieldAst::SmallInt(_) => Some("smallInt"),
+        FieldAst::Bytes(_) => Some("bytes"),
+        FieldAst::Color(_) => Some("color"),
+        FieldAst::Decimal(_) => Some("decimal"),
+        FieldAst::Money(_) => Some("money"),
+        FieldAst::Geo(_) => Some("geo"),
+        FieldAst::Vector(_) => Some("vector"),
+        FieldAst::Array(_) => Some("array"),
+        FieldAst::Custom(_) => None,
+        _ => None,
+    }
+}
+
+fn field_for_column<'a>(model: &'a ModelAst, col_name: &str) -> Option<&'a FieldAst> {
+    for (name, field) in &model.fields {
+        if column_names_for(name, field).iter().any(|c| c == col_name) {
+            return Some(field);
+        }
+    }
+    None
+}
+
+fn field_migration_kind(field: &FieldAst) -> Option<&'static str> {
+    match field {
+        FieldAst::RichText(_) => Some("richText"),
+        FieldAst::Json(_) => Some("json"),
+        FieldAst::Button(_) => Some("button"),
+        FieldAst::Blocks(_) => Some("blocks"),
+        FieldAst::Image(_) => Some("image"),
+        FieldAst::File(_) => Some("file"),
+        _ => None,
+    }
+}
+
 fn is_text_like(field: &FieldAst) -> bool {
     matches!(
         field,
@@ -156,106 +214,205 @@ fn is_text_like(field: &FieldAst) -> bool {
     )
 }
 
-/// Returns the expected Postgres udt_name for a schema field.
-/// Returns None for fields where type comparison is not straightforward (Decimal, Money, Geo, Vector, Array).
-fn expected_udt(field: &FieldAst) -> Option<&'static str> {
-    // Localized fields are always JSONB in the DB.
+fn array_element_udt(element_type: &str) -> &'static str {
+    match element_type.to_uppercase().as_str() {
+        "TEXT" | "VARCHAR" | "CHARACTER VARYING" => "_text",
+        "INTEGER" | "INT" | "INT4" => "_int4",
+        "BIGINT" | "INT8" => "_int8",
+        "SMALLINT" | "INT2" => "_int2",
+        "UUID" => "_uuid",
+        "BOOLEAN" | "BOOL" => "_bool",
+        "DOUBLE PRECISION" | "FLOAT8" => "_float8",
+        "REAL" | "FLOAT4" => "_float4",
+        _ => "_text",
+    }
+}
+
+fn expected_udt(field: &FieldAst) -> Option<String> {
     if is_localized(field) {
-        return Some("jsonb");
+        return Some("jsonb".into());
     }
     match field {
-        FieldAst::Text(f) if f.pg_type.is_empty() => Some("text"),
-        FieldAst::Text(_) => None, // custom pg_type — skip comparison
+        FieldAst::Text(f) if !f.pg_type.is_empty() => Some(f.pg_type.to_lowercase()),
+        FieldAst::Text(_) => Some("text".into()),
         FieldAst::Color(_)
         | FieldAst::Email(_)
         | FieldAst::Url(_)
         | FieldAst::Slug(_)
         | FieldAst::Xml(_)
-        | FieldAst::Enum(_) => Some("text"),
+        | FieldAst::Enum(_) => Some("text".into()),
         FieldAst::RichText(_)
         | FieldAst::Json(_)
         | FieldAst::Image(_)
         | FieldAst::File(_)
-        | FieldAst::Blocks(_) => Some("jsonb"),
-        FieldAst::Bytes(_) => Some("bytea"),
-        FieldAst::Integer(_) | FieldAst::Serial(_) => Some("int4"),
-        FieldAst::SmallInt(_) => Some("int2"),
-        FieldAst::BigInt(_) | FieldAst::BigSerial(_) => Some("int8"),
-        FieldAst::Float(_) => Some("float8"),
-        FieldAst::Boolean(_) => Some("bool"),
-        FieldAst::Uuid(_) => Some("uuid"),
-        FieldAst::Datetime(_) => Some("timestamptz"),
-        FieldAst::Date(_) => Some("date"),
-        FieldAst::Timestamp(_) => Some("timestamp"),
-        FieldAst::Ip(_) => Some("inet"),
-        FieldAst::Cidr(_) => Some("cidr"),
-        FieldAst::Macaddr(_) => Some("macaddr"),
-        FieldAst::Interval(_) => Some("interval"),
-        FieldAst::TsQuery(_) => Some("tsquery"),
-        FieldAst::TsVector(_) => Some("tsvector"),
-        // These use complex types — skip udt comparison
+        | FieldAst::Blocks(_) => Some("jsonb".into()),
+        FieldAst::Bytes(_) => Some("bytea".into()),
+        FieldAst::Integer(_) | FieldAst::Serial(_) => Some("int4".into()),
+        FieldAst::SmallInt(_) => Some("int2".into()),
+        FieldAst::BigInt(_) | FieldAst::BigSerial(_) => Some("int8".into()),
+        FieldAst::Float(_) => Some("float8".into()),
+        FieldAst::Boolean(_) => Some("bool".into()),
+        FieldAst::Uuid(_) => Some("uuid".into()),
+        FieldAst::Datetime(_) => Some("timestamptz".into()),
+        FieldAst::Date(_) => Some("date".into()),
+        FieldAst::Timestamp(_) => Some("timestamp".into()),
+        FieldAst::Ip(_) => Some("inet".into()),
+        FieldAst::Cidr(_) => Some("cidr".into()),
+        FieldAst::Macaddr(_) => Some("macaddr".into()),
+        FieldAst::Interval(_) => Some("interval".into()),
+        FieldAst::TsQuery(_) => Some("tsquery".into()),
+        FieldAst::TsVector(_) => Some("tsvector".into()),
+        FieldAst::Decimal(_) | FieldAst::Money(_) => Some("numeric".into()),
+        FieldAst::Array(a) => Some(array_element_udt(&a.element_type).into()),
+        FieldAst::Geo(_) => Some("geography".into()),
+        FieldAst::Vector(_) => Some("vector".into()),
+        FieldAst::Custom(c) => Some(c.pg_type.to_lowercase()),
         _ => None,
     }
 }
 
-/// Returns the Postgres type keyword for ALTER COLUMN TYPE ... USING casts.
-fn field_pg_type(field: &FieldAst) -> &'static str {
-    if is_localized(field) {
-        return "JSONB";
+fn column_type_matches(field: &FieldAst, db_col: &DbColumn) -> bool {
+    let Some(expected) = expected_udt(field) else {
+        return true;
+    };
+    if db_col.udt_name != expected {
+        return false;
     }
     match field {
+        FieldAst::Decimal(d) => {
+            let want = match (d.precision, d.scale) {
+                (Some(p), Some(s)) => format!("numeric({p},{s})"),
+                (Some(p), None) => format!("numeric({p})"),
+                _ => "numeric".into(),
+            };
+            db_col.data_type.to_lowercase().replace(' ', "") == want.replace(' ', "")
+        }
+        FieldAst::Vector(v) => db_col
+            .data_type
+            .to_lowercase()
+            .contains(&format!("vector({})", v.dimensions)),
+        FieldAst::Geo(g) => db_col
+            .data_type
+            .to_lowercase()
+            .contains(&g.geo_type.to_lowercase()),
+        _ => true,
+    }
+}
+
+fn field_pg_type(field: &FieldAst) -> String {
+    if is_localized(field) {
+        return "JSONB".into();
+    }
+    match field {
+        FieldAst::Text(f) if !f.pg_type.is_empty() => f.pg_type.to_uppercase(),
         FieldAst::Text(_)
         | FieldAst::Color(_)
         | FieldAst::Email(_)
         | FieldAst::Url(_)
         | FieldAst::Slug(_)
         | FieldAst::Xml(_)
-        | FieldAst::Enum(_) => "TEXT",
+        | FieldAst::Enum(_) => "TEXT".into(),
         FieldAst::RichText(_)
         | FieldAst::Json(_)
         | FieldAst::Image(_)
         | FieldAst::File(_)
-        | FieldAst::Blocks(_) => "JSONB",
-        FieldAst::Bytes(_) => "BYTEA",
-        FieldAst::Integer(_) | FieldAst::Serial(_) => "INTEGER",
-        FieldAst::SmallInt(_) => "SMALLINT",
-        FieldAst::BigInt(_) | FieldAst::BigSerial(_) => "BIGINT",
-        FieldAst::Float(_) => "DOUBLE PRECISION",
-        FieldAst::Boolean(_) => "BOOLEAN",
-        FieldAst::Uuid(_) => "UUID",
-        FieldAst::Datetime(_) => "TIMESTAMPTZ",
-        FieldAst::Date(_) => "DATE",
-        FieldAst::Timestamp(_) => "TIMESTAMP",
-        FieldAst::Ip(_) => "INET",
-        FieldAst::Cidr(_) => "CIDR",
-        FieldAst::Macaddr(_) => "MACADDR",
-        FieldAst::Interval(_) => "INTERVAL",
-        FieldAst::TsQuery(_) => "TSQUERY",
-        FieldAst::TsVector(_) => "TSVECTOR",
-        _ => "TEXT",
+        | FieldAst::Blocks(_) => "JSONB".into(),
+        FieldAst::Bytes(_) => "BYTEA".into(),
+        FieldAst::Integer(_) | FieldAst::Serial(_) => "INTEGER".into(),
+        FieldAst::SmallInt(_) => "SMALLINT".into(),
+        FieldAst::BigInt(_) | FieldAst::BigSerial(_) => "BIGINT".into(),
+        FieldAst::Float(_) => "DOUBLE PRECISION".into(),
+        FieldAst::Boolean(_) => "BOOLEAN".into(),
+        FieldAst::Uuid(_) => "UUID".into(),
+        FieldAst::Datetime(_) => "TIMESTAMPTZ".into(),
+        FieldAst::Date(_) => "DATE".into(),
+        FieldAst::Timestamp(_) => "TIMESTAMP".into(),
+        FieldAst::Ip(_) => "INET".into(),
+        FieldAst::Cidr(_) => "CIDR".into(),
+        FieldAst::Macaddr(_) => "MACADDR".into(),
+        FieldAst::Interval(_) => "INTERVAL".into(),
+        FieldAst::TsQuery(_) => "TSQUERY".into(),
+        FieldAst::TsVector(_) => "TSVECTOR".into(),
+        FieldAst::Decimal(d) => match (d.precision, d.scale) {
+            (Some(p), Some(s)) => format!("NUMERIC({p}, {s})"),
+            (Some(p), None) => format!("NUMERIC({p})"),
+            _ => "NUMERIC".into(),
+        },
+        FieldAst::Money(_) => "NUMERIC(19,4)".into(),
+        FieldAst::Array(a) => format!("{}[]", a.element_type.to_uppercase()),
+        FieldAst::Geo(g) => {
+            let srid = g.srid.unwrap_or(4326);
+            format!("GEOGRAPHY({}, {})", g.geo_type.to_uppercase(), srid)
+        }
+        FieldAst::Vector(v) => format!("vector({})", v.dimensions),
+        FieldAst::Custom(c) => c.pg_type.to_uppercase(),
+        _ => "TEXT".into(),
     }
 }
 
-/// Returns true if changing from `from_udt` to `to_pg_type` is a safe widening
-/// that Postgres will accept without a USING cast and without data loss.
-fn is_safe_widening(from_udt: &str, to_pg: &str) -> bool {
-    matches!(
-        (from_udt, to_pg.to_uppercase().as_str()),
-        ("int2", "INTEGER")
-            | ("int2", "BIGINT")
-            | ("int4", "BIGINT")
-            | ("float4", "DOUBLE PRECISION")
-            | ("varchar", "TEXT")
-            | ("bpchar", "TEXT")
-    )
+pub fn discover_column_dependencies(
+    table: &str,
+    column: &str,
+    db: &DatabaseState,
+) -> Vec<ColumnDependencySnapshot> {
+    let mut deps = Vec::new();
+
+    for c in &db.constraints {
+        if c.constraint_type != DbConstraintType::ForeignKey {
+            continue;
+        }
+        let is_outgoing = c.table == table && c.columns.iter().any(|col| col == column);
+        let is_incoming = c.foreign_table.as_deref() == Some(table)
+            && c.foreign_columns
+                .as_ref()
+                .is_some_and(|cols| cols.iter().any(|col| col == column));
+        if is_outgoing || is_incoming {
+            deps.push(ColumnDependencySnapshot {
+                kind: "foreign_key".into(),
+                table: c.table.clone(),
+                name: c.name.clone(),
+                columns: Some(c.columns.clone()),
+                foreign_table: c.foreign_table.clone(),
+                foreign_columns: c.foreign_columns.clone(),
+                on_delete: c.on_delete.clone(),
+                unique: false,
+                index_method: None,
+            });
+        }
+    }
+
+    for idx in &db.indexes {
+        if idx.table == table
+            && idx.columns.iter().any(|c| c == column)
+            && !idx.is_primary
+        {
+            deps.push(ColumnDependencySnapshot {
+                kind: "index".into(),
+                table: idx.table.clone(),
+                name: idx.name.clone(),
+                columns: Some(idx.columns.clone()),
+                foreign_table: None,
+                foreign_columns: None,
+                on_delete: None,
+                unique: idx.unique,
+                index_method: Some(idx.method.clone()),
+            });
+        }
+    }
+
+    deps
 }
 
-/// Compares a schema field against the live DB column and returns a JSON object
-/// describing the changes needed, or serde_json::Value::Null if nothing changed.
-fn detect_changes(field: &FieldAst, db_col: &DbColumn, default_locale: &str) -> serde_json::Value {
+fn detect_changes(
+    field: &FieldAst,
+    db_col: &DbColumn,
+    default_locale: &str,
+    previous_field: Option<&FieldAst>,
+    table: &str,
+    schema: &str,
+) -> serde_json::Value {
     let mut changes = serde_json::Map::new();
 
-    // Nullability change
     if let Some(required) = field_required(field) {
         let schema_nullable = !required;
         let db_nullable = db_col.nullable;
@@ -270,80 +427,212 @@ fn detect_changes(field: &FieldAst, db_col: &DbColumn, default_locale: &str) -> 
         }
     }
 
-    // Type change
-    if let Some(expected) = expected_udt(field) {
+    let type_changed = !column_type_matches(field, db_col);
+
+    if type_changed {
+        let pg_type = field_pg_type(field);
         let actual = db_col.udt_name.as_str();
-        if expected != actual {
-            let pg_type = field_pg_type(field);
-            let safe = is_safe_widening(actual, pg_type);
+        let safe = column_conversion::is_safe_widening(actual, &pg_type);
+        let from_kind = previous_field.and_then(field_kind);
+        let to_kind = field_migration_kind(field).or_else(|| field_kind(field));
+
+        let mut type_change = json!({
+            "from_udt": actual,
+            "to_pg": pg_type,
+            "safe_widening": safe
+        });
+        if let Some(k) = to_kind {
+            type_change["to_kind"] = json!(k);
+        }
+        if let Some(k) = from_kind {
+            type_change["from_kind"] = json!(k);
+        }
+        changes.insert("type".into(), type_change);
+
+        if is_localized(field) && actual != "jsonb" {
             changes.insert(
-                "type".into(),
+                "localization".into(),
                 json!({
-                    "from_udt": actual,
-                    "to_pg": pg_type,
-                    "safe_widening": safe
+                    "direction": "add",
+                    "default_locale": default_locale
                 }),
             );
-
-            // Localization metadata — used by migration.rs to choose the right USING clause.
-            if is_localized(field) && actual != "jsonb" {
-                // Adding localization: text-like → JSONB
-                changes.insert(
-                    "localization".into(),
-                    json!({
-                        "direction": "add",
-                        "default_locale": default_locale
-                    }),
-                );
-            } else if !is_localized(field) && actual == "jsonb" && is_text_like(field) {
-                // Removing localization: JSONB → text-like (destructive — translations lost)
-                changes.insert(
-                    "localization".into(),
-                    json!({
-                        "direction": "remove",
-                        "default_locale": default_locale
-                    }),
-                );
+        } else if !is_localized(field)
+            && actual == "jsonb"
+            && is_text_like(field)
+            && previous_field.map(is_localized).unwrap_or(false)
+        {
+            changes.insert(
+                "localization".into(),
+                json!({
+                    "direction": "remove",
+                    "default_locale": default_locale
+                }),
+            );
+        }
+    } else if let Some(prev) = previous_field {
+        if let (Some(from), Some(to)) = (field_kind(prev), field_kind(field)) {
+            if from != to && supports_kind_data_migration(from, to) {
+                changes.insert("kind_change".into(), json!({ "from": from, "to": to }));
             }
         }
     }
 
     if changes.is_empty() {
-        serde_json::Value::Null
-    } else {
-        serde_json::Value::Object(changes)
+        return serde_json::Value::Null;
     }
+
+    let changes_val = serde_json::Value::Object(changes.clone());
+    if changes.contains_key("type") || changes.contains_key("kind_change") {
+        let from_udt = changes
+            .get("type")
+            .and_then(|t| t.get("from_udt"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(db_col.udt_name.as_str());
+        let to_pg = changes
+            .get("type")
+            .and_then(|t| t.get("to_pg"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| field_pg_type(field));
+        let from_kind = changes
+            .get("type")
+            .and_then(|t| t.get("from_kind"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                changes
+                    .get("kind_change")
+                    .and_then(|k| k.get("from"))
+                    .and_then(|v| v.as_str())
+            });
+        let to_kind = changes
+            .get("type")
+            .and_then(|t| t.get("to_kind"))
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                changes
+                    .get("kind_change")
+                    .and_then(|k| k.get("to"))
+                    .and_then(|v| v.as_str())
+            });
+
+        let strategy = if changes.contains_key("kind_change") && !changes.contains_key("type") {
+            column_conversion::ConversionStrategy {
+                kind: ConversionStrategyKind::KindMigrate,
+                using_expr: None,
+                pre_update: None,
+                blocked_reason: None,
+            }
+        } else {
+            plan_type_conversion(
+                table,
+                &db_col.name,
+                schema,
+                from_udt,
+                &to_pg,
+                from_kind,
+                to_kind,
+                &changes_val,
+                field,
+            )
+        };
+
+        if strategy.kind == ConversionStrategyKind::Blocked {
+            changes.insert(
+                "blocked".into(),
+                json!(strategy.blocked_reason.unwrap_or_default()),
+            );
+        } else {
+            changes.insert(
+                "conversion".into(),
+                json!({
+                    "strategy": match strategy.kind {
+                        ConversionStrategyKind::SafeCast => "safe_cast",
+                        ConversionStrategyKind::TransformCast => "transform_cast",
+                        ConversionStrategyKind::KindMigrate => "kind_migrate",
+                        ConversionStrategyKind::RecreateColumn => "recreate_column",
+                        ConversionStrategyKind::Blocked => "blocked",
+                    },
+                    "usingExpr": strategy.using_expr,
+                    "preUpdate": strategy.pre_update,
+                }),
+            );
+        }
+    }
+
+    serde_json::Value::Object(changes)
 }
 
-/// Classifies the risk of an AlterColumn operation.
-fn changes_risk(changes: &serde_json::Value) -> Risk {
-    // NULL → NOT NULL is cautious (may fail if NULLs exist)
+fn changes_risk(changes: &serde_json::Value, field: &FieldAst, column: &str) -> Risk {
+    if changes.get("blocked").is_some() {
+        return Risk::Destructive;
+    }
+
     if let Some(null_change) = changes.get("nullability") {
         if null_change.get("to").and_then(|v| v.as_str()) == Some("not_null") {
             return Risk::Cautious;
         }
     }
-    // Type change
-    if let Some(type_change) = changes.get("type") {
-        // Removing localization (JSONB → text) is destructive — translations are lost
+
+    if let Some(conv) = changes.get("conversion") {
+        let strategy = conv.get("strategy").and_then(|v| v.as_str()).unwrap_or("");
+        return match strategy {
+            "safe_cast" => Risk::Safe,
+            "recreate_column" => Risk::Destructive,
+            "transform_cast" | "kind_migrate" => {
+                if let Some(loc) = changes.get("localization") {
+                    if loc.get("direction").and_then(|v| v.as_str()) == Some("remove") {
+                        return Risk::Destructive;
+                    }
+                }
+                Risk::Cautious
+            }
+            _ => Risk::Cautious,
+        };
+    }
+
+    if changes.get("kind_change").is_some() {
+        return Risk::Cautious;
+    }
+
+    if changes.get("type").is_some() {
         if let Some(loc) = changes.get("localization") {
             if loc.get("direction").and_then(|v| v.as_str()) == Some("remove") {
                 return Risk::Destructive;
             }
-            // Adding localization (text → JSONB) is cautious — data transformation
             return Risk::Cautious;
         }
-        if type_change.get("safe_widening").and_then(|v| v.as_bool()) == Some(true) {
-            return Risk::Safe;
-        }
-        return Risk::Cautious; // potentially lossy
+        let _ = (field, column);
+        return Risk::Cautious;
     }
+
     Risk::Safe
 }
 
-/// Generates a human-readable warning for an AlterColumn operation.
 fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Option<String> {
     let mut parts = Vec::new();
+
+    if let Some(blocked) = changes.get("blocked").and_then(|v| v.as_str()) {
+        parts.push(format!("{table}.{column}: blocked — {blocked}"));
+    }
+
+    if let Some(conv) = changes.get("conversion") {
+        if conv.get("strategy").and_then(|v| v.as_str()) == Some("recreate_column") {
+            let from = changes
+                .get("type")
+                .and_then(|t| t.get("from_udt"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let to = changes
+                .get("type")
+                .and_then(|t| t.get("to_pg"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            parts.push(format!(
+                "{table}.{column}: cannot cast {from} → {to} — column will be dropped and recreated empty (destructive, data loss)"
+            ));
+        }
+    }
 
     if let Some(null_change) = changes.get("nullability") {
         if null_change.get("to").and_then(|v| v.as_str()) == Some("not_null") {
@@ -351,6 +640,14 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                 "{table}.{column}: setting NOT NULL — migration will fail if NULL values exist"
             ));
         }
+    }
+
+    if let Some(kc) = changes.get("kind_change") {
+        let from = kc.get("from").and_then(|v| v.as_str()).unwrap_or("?");
+        let to = kc.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+        parts.push(format!(
+            "{table}.{column}: field kind {from} → {to} — existing rows will be converted (cautious)."
+        ));
     }
 
     if let Some(_type_change) = changes.get("type") {
@@ -375,7 +672,12 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                      Use --force to proceed (destructive)."
                 ));
             }
-        } else {
+        } else if changes
+            .get("conversion")
+            .and_then(|c| c.get("strategy"))
+            .and_then(|v| v.as_str())
+            != Some("recreate_column")
+        {
             let from = _type_change
                 .get("from_udt")
                 .and_then(|v| v.as_str())
@@ -407,17 +709,25 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
     }
 }
 
+fn conversion_strategy_name(changes: &serde_json::Value) -> Option<&str> {
+    changes
+        .get("conversion")
+        .and_then(|c| c.get("strategy"))
+        .and_then(|v| v.as_str())
+}
+
 pub fn diff(
     model: &ModelAst,
     db_table: &DbTable,
+    db: &DatabaseState,
     ops: &mut Vec<Operation>,
     warnings: &mut Vec<String>,
     default_locale: &str,
+    previous_model: Option<&ModelAst>,
 ) -> Result<()> {
     let db_col_names: std::collections::HashSet<String> =
         db_table.columns.iter().map(|c| c.name.clone()).collect();
 
-    // Expand schema fields to the actual DB columns they produce
     let schema_columns: std::collections::HashMap<String, (&str, &FieldAst)> = model
         .fields
         .iter()
@@ -428,7 +738,6 @@ pub fn diff(
         })
         .collect();
 
-    // Columns added by model options (not explicit fields) must not be treated as dropped.
     let mut options_cols: std::collections::HashSet<String> = std::collections::HashSet::new();
     if model.options.timestamps && !model.fields.contains_key("timestamps") {
         options_cols.insert("created_at".into());
@@ -454,8 +763,6 @@ pub fn diff(
         .map(|c| c.name.as_str())
         .collect();
 
-    // ─── Rename detection ───────────────────────────────────────────────────
-
     let mut renamed_dropped = std::collections::HashSet::new();
     let mut renamed_added = std::collections::HashSet::new();
 
@@ -471,7 +778,7 @@ pub fn diff(
         {
             if jaro_winkler(drop, add) >= RENAME_THRESHOLD {
                 ops.push(Operation::RenameColumn {
-                    table: model.table_name.clone(),
+                    table: model.table_name().to_string(),
                     from: drop.to_string(),
                     to: add.to_string(),
                     risk: Risk::Safe,
@@ -479,7 +786,7 @@ pub fn diff(
                 warnings.push(format!(
                     "Column '{drop}' removed and '{add}' added on table '{}'. Treating as rename. \
                      Specify in platform.renames.json to suppress this warning.",
-                    model.table_name
+                    model.table_name()
                 ));
                 renamed_dropped.insert(drop);
                 renamed_added.insert(add);
@@ -487,22 +794,26 @@ pub fn diff(
         }
     }
 
-    // ─── Added columns ──────────────────────────────────────────────────────
-
     for col in &added {
         if !renamed_added.contains(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
+                if field_required(field) == Some(true) && add_column_backfill_default(field).is_none()
+                {
+                    warnings.push(required_field_existing_table_warning(
+                        model.table_name(),
+                        col,
+                    ));
+                }
                 ops.push(Operation::AddColumn {
-                    table: model.table_name.clone(),
+                    table: model.table_name().to_string(),
                     column: col.to_string(),
                     field: Box::new((*field).clone()),
                     risk: Risk::Safe,
                 });
 
-                // If the field has `index: true` and it's a new column, also emit AddIndex.
                 if has_index_flag(field) {
                     ops.push(Operation::AddIndex {
-                        table: model.table_name.clone(),
+                        table: model.table_name().to_string(),
                         index: Box::new(IndexAst {
                             name: None,
                             fields: vec![col.to_string()],
@@ -516,21 +827,16 @@ pub fn diff(
         }
     }
 
-    // ─── Dropped columns ────────────────────────────────────────────────────
-
     for col in &dropped {
         if !renamed_dropped.contains(*col) {
             ops.push(Operation::DropColumn {
-                table: model.table_name.clone(),
+                table: model.table_name().to_string(),
                 column: col.to_string(),
                 risk: Risk::Destructive,
             });
         }
     }
 
-    // ─── Modified columns (AlterColumn detection) ───────────────────────────
-
-    // Only consider columns that exist in both schema and DB and were not renamed.
     let db_col_map: std::collections::HashMap<&str, &DbColumn> = db_table
         .columns
         .iter()
@@ -538,11 +844,9 @@ pub fn diff(
         .collect();
 
     for (col_name, (_, field)) in &schema_columns {
-        // Skip composite / relation pseudo-columns and options columns
         if options_cols.contains(col_name.as_str()) {
             continue;
         }
-        // Skip if this column was renamed, added, or dropped
         if renamed_added.contains(col_name.as_str()) {
             continue;
         }
@@ -551,16 +855,62 @@ pub fn diff(
         }
 
         if let Some(db_col) = db_col_map.get(col_name.as_str()) {
-            let changes = detect_changes(field, db_col, default_locale);
-            if !changes.is_null() {
-                let risk = changes_risk(&changes);
-                let warning = changes_warning(&model.table_name, col_name, &changes);
-                if let Some(ref w) = warning {
-                    warnings.push(w.clone());
-                }
-                ops.push(Operation::AlterColumn {
-                    table: model.table_name.clone(),
+            let previous_field = previous_model.and_then(|m| field_for_column(m, col_name));
+            let changes = detect_changes(
+                field,
+                db_col,
+                default_locale,
+                previous_field,
+                &model.table_name(),
+                &db_table.schema,
+            );
+
+            if changes.is_null() {
+                continue;
+            }
+
+            if changes.get("blocked").is_some() {
+                let msg = changes_warning(&model.table_name(), col_name, &changes)
+                    .unwrap_or_else(|| format!("{}.{}: blocked conversion", model.table_name(), col_name));
+                bail!(msg);
+            }
+
+            let risk = changes_risk(&changes, field, col_name);
+            let warning = changes_warning(&model.table_name(), col_name, &changes);
+            if let Some(ref w) = warning {
+                warnings.push(w.clone());
+            }
+            if changes
+                .get("nullability")
+                .and_then(|n| n.get("to"))
+                .and_then(|v| v.as_str())
+                == Some("not_null")
+                && field_required(field) == Some(true)
+                && add_column_backfill_default(field).is_none()
+            {
+                warnings.push(required_field_existing_table_warning(
+                    model.table_name(),
+                    col_name,
+                ));
+            }
+
+            if conversion_strategy_name(&changes) == Some("recreate_column") {
+                let dependencies =
+                    discover_column_dependencies(&model.table_name(), col_name, db);
+                ops.push(Operation::RecreateColumn {
+                    table: model.table_name().to_string(),
                     column: col_name.clone(),
+                    field: Box::new((*field).clone()),
+                    changes,
+                    dependencies,
+                    risk,
+                    warning,
+                });
+            } else {
+                ops.push(Operation::AlterColumn {
+                    table: model.table_name().to_string(),
+                    column: col_name.clone(),
+                    field: Box::new((*field).clone()),
                     changes,
                     risk,
                     warning,

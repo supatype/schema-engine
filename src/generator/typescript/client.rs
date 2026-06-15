@@ -25,7 +25,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
     for model in &ast.models {
         let class_name = pascal_case(&model.name);
-        let table = &model.table_name;
+        let table = &model.table_name();
 
         out.push_str(&format!(
             r#"export class {class_name}Client {{

@@ -1,41 +1,194 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "Category",
-      "tableName": "categories",
       "fields": {
-        "id":       { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":     { "kind": "text",    "pgType": "TEXT", "required": true,  "unique": false },
-        "slug":     { "kind": "slug",    "pgType": "TEXT", "required": true,  "unique": true, "from": "name" },
-        "parentId": { "kind": "relation","cardinality": "belongsTo", "target": "Category", "foreignKey": "parent_id", "onDelete": "setNull" },
-        "depth":    { "kind": "integer", "pgType": "INTEGER", "required": true, "unique": false, "default": { "kind": "value", "value": 0 } },
-        "path":     { "kind": "array",   "elementType": "TEXT", "required": false, "unique": false }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "name",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "parentId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Category",
+          "onDelete": "setNull",
+          "annotations": {
+            "db": {
+              "foreignKey": "parent_id"
+            }
+          }
+        },
+        "depth": {
+          "kind": "integer",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": 0
+          },
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        },
+        "path": {
+          "kind": "array",
+          "required": false,
+          "annotations": {
+            "db": {
+              "elementType": "TEXT",
+              "unique": false
+            }
+          }
+        }
       },
-      "access": {
-        "read": { "type": "public" },
-        "create": { "type": "role", "roles": ["admin"] },
-        "update": { "type": "role", "roles": ["admin"] },
-        "delete": { "type": "role", "roles": ["admin"] }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
       },
-      "indexes": [
-        { "fields": ["parent_id"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": false }
+      "annotations": {
+        "db": {
+          "tableName": "categories",
+          "indexes": [
+            {
+              "fields": [
+                "parent_id"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
     },
     {
       "name": "Employee",
-      "tableName": "employees",
       "fields": {
-        "id":         { "kind": "uuid",    "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":       { "kind": "text",    "pgType": "TEXT", "required": true,  "unique": false },
-        "email":      { "kind": "email",   "pgType": "TEXT", "required": true,  "unique": true  },
-        "managerId":  { "kind": "relation","cardinality": "belongsTo", "target": "Employee", "foreignKey": "manager_id", "onDelete": "setNull" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "email": {
+          "kind": "email",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "managerId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Employee",
+          "onDelete": "setNull",
+          "annotations": {
+            "db": {
+              "foreignKey": "manager_id"
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [
-        { "fields": ["manager_id"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "employees",
+          "indexes": [
+            {
+              "fields": [
+                "manager_id"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     }
   ]
 }

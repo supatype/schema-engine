@@ -1,31 +1,50 @@
+use supatype_engine::generator::sql::rls::access_rule_to_expr;
 use supatype_engine::parser;
 
 #[test]
-fn owner_rule_accepts_relation_fk_and_normalizes_camel_case() {
+fn owner_rule_accepts_kernel_relation_field_name() {
     let schema = r#"{
+        "astVersion": 2,
         "models": [
             {
                 "name": "User",
-                "tableName": "users",
                 "fields": {
-                    "email": { "kind": "text", "pgType": "TEXT", "required": true, "unique": true }
+                    "email": {
+                        "kind": "text",
+                        "required": true,
+                        "annotations": { "db": { "pgType": "TEXT", "unique": true } }
+                    }
                 },
-                "access": {},
-                "indexes": [],
-                "options": {}
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "users", "indexes": [] },
+                    "platform": { "access": {} }
+                }
             },
             {
                 "name": "Post",
-                "tableName": "posts",
                 "fields": {
-                    "author": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "onDelete": "cascade" },
-                    "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
+                    "author": {
+                        "kind": "relation",
+                        "cardinality": "belongsTo",
+                        "target": "User",
+                        "annotations": { "db": { "foreignKey": "author_id" } }
+                    },
+                    "title": {
+                        "kind": "text",
+                        "required": true,
+                        "annotations": { "db": { "pgType": "TEXT" } }
+                    }
                 },
-                "access": {
-                    "update": { "type": "owner", "field": "authorId" }
-                },
-                "indexes": [],
-                "options": {}
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "posts", "indexes": [] },
+                    "platform": {
+                        "access": {
+                            "update": { "type": "owner", "field": "author" }
+                        }
+                    }
+                }
             }
         ]
     }"#;
@@ -36,29 +55,42 @@ fn owner_rule_accepts_relation_fk_and_normalizes_camel_case() {
         .iter()
         .find(|m| m.name == "Post")
         .expect("Post model must exist");
-    let rule = post.access.update.as_ref().expect("update rule must exist");
+    let rule = post.access().update.as_ref().expect("update rule must exist");
     let serialized = serde_json::to_string(rule).expect("rule must serialize");
     assert!(
-        serialized.contains("\"field\":\"author_id\""),
-        "owner field should normalize to author_id, got: {serialized}"
+        serialized.contains("\"field\":\"author\""),
+        "owner field should keep kernel name author, got: {serialized}"
+    );
+    let expr = access_rule_to_expr(post, rule);
+    assert!(
+        expr.contains("auth.uid() = author_id"),
+        "RLS should resolve author to author_id column, got: {expr}"
     );
 }
 
 #[test]
 fn owner_rule_rejects_non_relation_fields_with_actionable_message() {
     let schema = r#"{
+        "astVersion": 2,
         "models": [
             {
                 "name": "Post",
-                "tableName": "posts",
                 "fields": {
-                    "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
+                    "title": {
+                        "kind": "text",
+                        "required": true,
+                        "annotations": { "db": { "pgType": "TEXT" } }
+                    }
                 },
-                "access": {
-                    "update": { "type": "owner", "field": "title" }
-                },
-                "indexes": [],
-                "options": {}
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "posts", "indexes": [] },
+                    "platform": {
+                        "access": {
+                            "update": { "type": "owner", "field": "title" }
+                        }
+                    }
+                }
             }
         ]
     }"#;
@@ -70,7 +102,7 @@ fn owner_rule_rejects_non_relation_fields_with_actionable_message() {
         "error should mention invalid owner field, got: {message}"
     );
     assert!(
-        message.contains("relation foreign keys"),
+        message.contains("kernel field names"),
         "error should explain constraint, got: {message}"
     );
 }
@@ -78,18 +110,26 @@ fn owner_rule_rejects_non_relation_fields_with_actionable_message() {
 #[test]
 fn owner_rule_allows_self_id_without_relations() {
     let schema = r#"{
+        "astVersion": 2,
         "models": [
             {
                 "name": "Todo",
-                "tableName": "todos",
                 "fields": {
-                    "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
+                    "title": {
+                        "kind": "text",
+                        "required": true,
+                        "annotations": { "db": { "pgType": "TEXT" } }
+                    }
                 },
-                "access": {
-                    "update": { "type": "owner", "field": "id" }
-                },
-                "indexes": [],
-                "options": {}
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "todos", "indexes": [] },
+                    "platform": {
+                        "access": {
+                            "update": { "type": "owner", "field": "id" }
+                        }
+                    }
+                }
             }
         ]
     }"#;
@@ -101,7 +141,7 @@ fn owner_rule_allows_self_id_without_relations() {
         .find(|m| m.name == "Todo")
         .expect("Todo model must exist");
     assert!(
-        todo.access.update.is_some(),
+        todo.access().update.is_some(),
         "update rule should be preserved"
     );
 }

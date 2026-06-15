@@ -38,17 +38,35 @@ fn col_pk(name: &str, data_type: &str, default: &str) -> DbColumn {
 #[test]
 fn test_auto_pk_injected_into_model_without_explicit_pk() {
     let schema = r#"{
-        "models": [{
-            "name": "Article",
-            "tableName": "article",
-            "fields": {
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {},
-            "indexes": [],
-            "options": {}
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Article",
+      "fields": {
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "article",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema).unwrap();
     let model = &ast.models[0];
@@ -77,21 +95,49 @@ fn test_auto_pk_injected_into_model_without_explicit_pk() {
 #[test]
 fn test_no_duplicate_id_when_explicit_pk_exists() {
     let schema = r#"{
-        "models": [{
-            "name": "Article",
-            "tableName": "article",
-            "fields": {
-                "articleId": {
-                    "kind": "uuid", "pgType": "UUID", "required": true, "unique": false,
-                    "primaryKey": true, "default": { "kind": "genRandomUuid" }
-                },
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {},
-            "indexes": [],
-            "options": {}
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Article",
+      "fields": {
+        "articleId": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "article",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema).unwrap();
     let model = &ast.models[0];
@@ -107,17 +153,35 @@ fn test_no_duplicate_id_when_explicit_pk_exists() {
 #[test]
 fn test_no_drop_id_on_noop_diff() {
     let schema = r#"{
-        "models": [{
-            "name": "Article",
-            "tableName": "article",
-            "fields": {
-                "title": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-            },
-            "access": {},
-            "indexes": [],
-            "options": {}
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Article",
+      "fields": {
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "article",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema).unwrap();
 
@@ -151,19 +215,55 @@ fn test_no_drop_id_on_noop_diff() {
 fn test_field_order_preserved_in_create_table_sql() {
     // Fields deliberately in non-alphabetical order: z_field, a_field, m_field
     let schema = r#"{
-        "models": [{
-            "name": "Ordered",
-            "tableName": "ordered",
-            "fields": {
-                "z_field": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false },
-                "a_field": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false },
-                "m_field": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false }
-            },
-            "access": {},
-            "indexes": [],
-            "options": {}
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Ordered",
+      "fields": {
+        "z_field": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "a_field": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "m_field": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "ordered",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
@@ -186,30 +286,66 @@ fn test_field_order_preserved_in_create_table_sql() {
 #[test]
 fn test_belongs_to_fk_derived_from_field_name() {
     let schema = r#"{
-        "models": [
-            {
-                "name": "User",
-                "tableName": "user",
-                "fields": {
-                    "name": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-                },
-                "access": {},
-                "indexes": [],
-                "options": {}
-            },
-            {
-                "name": "Post",
-                "tableName": "post",
-                "fields": {
-                    "title":  { "kind": "text", "pgType": "TEXT", "required": true, "unique": false },
-                    "author": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "onDelete": "cascade" }
-                },
-                "access": {},
-                "indexes": [],
-                "options": {}
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "user",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "author": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade"
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "post",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
@@ -236,30 +372,66 @@ fn test_belongs_to_fk_derived_from_field_name() {
 #[test]
 fn test_migration_comments_are_ascii_only() {
     let schema = r#"{
-        "models": [
-            {
-                "name": "User",
-                "tableName": "user",
-                "fields": {
-                    "name": { "kind": "text", "pgType": "TEXT", "required": true, "unique": false }
-                },
-                "access": {},
-                "indexes": [],
-                "options": {}
-            },
-            {
-                "name": "Post",
-                "tableName": "post",
-                "fields": {
-                    "title":  { "kind": "text", "pgType": "TEXT", "required": true, "unique": false },
-                    "author": { "kind": "relation", "cardinality": "belongsTo", "target": "User", "onDelete": "cascade" }
-                },
-                "access": {},
-                "indexes": [],
-                "options": {}
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
             }
-        ]
-    }"#;
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "user",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    },
+    {
+      "name": "Post",
+      "fields": {
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "author": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "User",
+          "onDelete": "cascade"
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "post",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
@@ -281,17 +453,35 @@ fn test_migration_comments_are_ascii_only() {
 fn test_rename_column_comment_uses_ascii_arrow() {
     // Schema now has "new_name"; DB still has "old_name" — differ should detect rename.
     let schema = r#"{
-        "models": [{
-            "name": "Thing",
-            "tableName": "thing",
-            "fields": {
-                "new_name": { "kind": "text", "pgType": "TEXT", "required": false, "unique": false }
-            },
-            "access": {},
-            "indexes": [],
-            "options": {}
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Thing",
+      "fields": {
+        "new_name": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "thing",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema).unwrap();
 

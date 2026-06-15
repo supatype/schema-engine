@@ -15,12 +15,12 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             || model.fields.contains_key("updated_at");
 
         if needs_updated_at {
-            out.push_str(&updated_at_trigger(&model.table_name));
+            out.push_str(&updated_at_trigger(&model.table_name()));
         }
 
         for (field_name, field) in &model.fields {
             if let FieldAst::Slug(slug) = field {
-                out.push_str(&slug_trigger(&model.table_name, field_name, &slug.from));
+                out.push_str(&slug_trigger(&model.table_name(), field_name, &slug.from));
             }
         }
     }

@@ -29,12 +29,12 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
 
             json!({
                 "name": model.name,
-                "tableName": model.table_name,
+                "tableName": model.table_name(),
                 "singleton": model.options.singleton,
                 "softDelete": model.options.soft_delete,
                 "timestamps": model.options.timestamps,
-                "access": model.access,
-                "indexes": model.indexes,
+                "access": model.access(),
+                "indexes": model.indexes(),
                 "fields": fields,
             })
         })

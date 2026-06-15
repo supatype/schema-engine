@@ -4,7 +4,10 @@ use supatype_engine::parser;
 
 #[test]
 fn test_parse_empty_schema() {
-    let input = r#"{"models":[]}"#;
+    let input = r#"{
+  "astVersion": 2,
+  "models": []
+}"#;
     let ast = parser::parse(input).unwrap();
     assert!(ast.models.is_empty());
 }
@@ -19,28 +22,78 @@ fn test_parse_basic_model() {
 #[test]
 fn test_storage_buckets_merge_and_declarative_rls() {
     let input = r#"{
-        "storageBuckets": [{
-            "id": "docs",
-            "public": false,
-            "accessMode": "private",
-            "allowedMimeTypes": ["application/pdf"],
-            "fileSizeLimit": 52428800,
-            "access": {
-                "read": { "type": "public" },
-                "create": { "type": "authenticated" },
-                "delete": { "type": "authenticated" }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
             }
-        }],
-        "models": [{
-            "name": "Post", "tableName": "posts",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "manual": { "kind": "file", "pgType": "TEXT", "required": false, "bucket": "docs" }
-            },
-            "access": { "read": { "type": "authenticated" } },
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+          }
+        },
+        "manual": {
+          "kind": "file",
+          "required": false,
+          "bucket": "docs",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "storageBuckets": [
+    {
+      "id": "docs",
+      "public": false,
+      "accessMode": "private",
+      "allowedMimeTypes": [
+        "application/pdf"
+      ],
+      "fileSizeLimit": 52428800,
+      "access": {
+        "read": {
+          "type": "public"
+        },
+        "create": {
+          "type": "authenticated"
+        },
+        "delete": {
+          "type": "authenticated"
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(input).unwrap();
     let b = ast
@@ -66,22 +119,60 @@ fn test_storage_buckets_merge_and_declarative_rls() {
 #[test]
 fn test_storage_custom_mode_and_s3_policy_roundtrip() {
     let input = r#"{
-        "storageBuckets": [{
-            "id": "private_docs",
-            "public": false,
-            "accessMode": "custom",
-            "s3BucketPolicy": "{\"Version\":\"2012-10-17\"}"
-        }],
-        "models": [{
-            "name": "Doc", "tableName": "docs",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-                "file": { "kind": "file", "pgType": "TEXT", "required": false, "bucket": "private_docs" }
-            },
-            "access": {},
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Doc",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "file": {
+          "kind": "file",
+          "required": false,
+          "bucket": "private_docs",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT"
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "docs",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "storageBuckets": [
+    {
+      "id": "private_docs",
+      "public": false,
+      "accessMode": "custom",
+      "s3BucketPolicy": "{\"Version\":\"2012-10-17\"}"
+    }
+  ]
+}"#;
 
     let ast = parser::parse(input).unwrap();
     let b = ast
@@ -116,21 +207,52 @@ fn test_storage_custom_mode_and_s3_policy_roundtrip() {
 #[test]
 fn test_admin_output_includes_storage_buckets() {
     let input = r#"{
-        "storageBuckets": [{
-            "id": "avatars",
-            "public": true,
-            "accessMode": "public",
-            "allowedMimeTypes": ["image/png"]
-        }],
-        "models": [{
-            "name": "User", "tableName": "users",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {},
-            "indexes": [], "options": { "timestamps": false, "softDelete": false }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "User",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "users",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "storageBuckets": [
+    {
+      "id": "avatars",
+      "public": true,
+      "accessMode": "public",
+      "allowedMimeTypes": [
+        "image/png"
+      ]
+    }
+  ]
+}"#;
 
     let ast = parser::parse(input).unwrap();
     let admin_json = admin::generate(&ast).unwrap();

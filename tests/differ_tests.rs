@@ -81,19 +81,42 @@ fn test_timestamp_option_columns_not_treated_as_dropped() {
 #[test]
 fn test_soft_delete_option_column_not_treated_as_dropped() {
     let schema_json = r#"{
-        "models": [{
-            "name": "Article",
-            "tableName": "articles",
-            "fields": {
-                "id": { "kind": "uuid", "pgType": "UUID", "primaryKey": true,
-                        "required": true, "unique": false,
-                        "default": { "kind": "genRandomUuid" } }
-            },
-            "access": {},
-            "indexes": [],
-            "options": { "timestamps": false, "softDelete": true }
-        }]
-    }"#;
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Article",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "articles",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
+}"#;
 
     let ast = parser::parse(schema_json).unwrap();
 
@@ -135,7 +158,7 @@ fn test_existing_index_not_regenerated_when_name_matches() {
             .iter()
             .map(|m| DbTable {
                 schema: "public".into(),
-                name: m.table_name.clone(),
+                name: m.table_name().to_string(),
                 columns: vec![col("id", "uuid")],
             })
             .collect(),

@@ -20,6 +20,24 @@ Database  ◄── Migrate ◄── Diff ◄───────────�
 4. **Migrate** — Generate a forward SQL migration (wrapped in a transaction, SHA-256 hashed) from the diff.
 5. **Generate** — Emit TypeScript `Row` and `Insert` interfaces, RLS policy SQL, PostgREST config, or admin panel JSON.
 
+## Column type migrations
+
+The engine classifies every column type / kind change through a **conversion registry** (`generator/sql/column_conversion.rs`):
+
+| Strategy | Risk | Behaviour |
+|---|---|---|
+| **SafeCast** | safe | Widening casts (`int2→int8`, `varchar→text`) |
+| **TransformCast** | cautious | Custom `USING` preserves or reshapes data (`text→richText`, `integer→json` via `to_jsonb`) |
+| **KindMigrate** | cautious | Same Postgres type; `UPDATE` rows then optional no-op ALTER (`json→richText` on JSONB) |
+| **RecreateColumn** | destructive | Drop FKs/indexes → drop column → add column empty (data loss) |
+| **Blocked** | — | Diff fails with an actionable message (`richText→blocks`) |
+
+Interactive `push` prompts for **cautious and destructive** column conversions. Destructive ops also require `--force` when generating SQL non-interactively.
+
+Kind-only migrations (e.g. `json→richText` while the column stays JSONB) require the **previous schema** snapshot (`diff_with_previous` on push).
+
+See `tests/evolution_tests.rs` and `tests/migration_conversion_integration.rs` for the conversion matrix.
+
 ## Commands
 
 | Command | Description |

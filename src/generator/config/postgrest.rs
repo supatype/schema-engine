@@ -14,7 +14,7 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
         .map(|m| {
             json!({
                 "schema": "public",
-                "table": m.table_name,
+                "table": m.table_name(),
             })
         })
         .collect();

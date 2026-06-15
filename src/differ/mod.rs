@@ -61,7 +61,18 @@ pub enum Operation {
     AlterColumn {
         table: String,
         column: String,
+        field: Box<FieldAst>,
         changes: serde_json::Value,
+        risk: Risk,
+        warning: Option<String>,
+    },
+    /// Drop and re-add a column when type conversion is impossible (data loss).
+    RecreateColumn {
+        table: String,
+        column: String,
+        field: Box<FieldAst>,
+        changes: serde_json::Value,
+        dependencies: Vec<ColumnDependencySnapshot>,
         risk: Risk,
         warning: Option<String>,
     },
@@ -163,6 +174,27 @@ pub enum Operation {
     },
 }
 
+/// FK / index metadata captured before a column is dropped and recreated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnDependencySnapshot {
+    pub kind: String,
+    pub table: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreign_table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foreign_columns: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_delete: Option<String>,
+    #[serde(default)]
+    pub unique: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_method: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Risk {
@@ -181,11 +213,20 @@ pub struct DiffSummary {
 }
 
 pub fn diff(ast: &SchemaAst, db: &DatabaseState) -> Result<DiffOutput> {
+    diff_with_previous(ast, db, None)
+}
+
+/// Diff against live DB state, optionally comparing field kinds to a previous schema snapshot.
+pub fn diff_with_previous(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    previous: Option<&SchemaAst>,
+) -> Result<DiffOutput> {
     let mut ops: Vec<Operation> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
 
     enum_diff::diff(ast, db, &mut ops, &mut warnings)?;
-    table_diff::diff(ast, db, &mut ops, &mut warnings)?;
+    table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
     index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
     trigger_diff::diff(ast, db, &mut ops)?;
@@ -226,6 +267,7 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::DropColumn { risk, .. }
         | Operation::RenameColumn { risk, .. }
         | Operation::AlterColumn { risk, .. }
+        | Operation::RecreateColumn { risk, .. }
         | Operation::AddIndex { risk, .. }
         | Operation::DropIndex { risk, .. }
         | Operation::AddForeignKey { risk, .. }

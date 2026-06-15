@@ -1,64 +1,291 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "Author",
-      "tableName": "authors",
       "fields": {
-        "id":       { "kind": "uuid",  "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name":     { "kind": "text",  "pgType": "TEXT", "required": true, "unique": false },
-        "email":    { "kind": "email", "pgType": "TEXT", "required": true, "unique": true  },
-        "bio":      { "kind": "text",  "pgType": "TEXT", "required": false,"unique": false },
-        "avatar":   { "kind": "image", "pgType": "JSONB","required": false, "bucket": "avatars" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "email": {
+          "kind": "email",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "bio": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "avatar": {
+          "kind": "image",
+          "required": false,
+          "bucket": "avatars",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": true, "softDelete": false }
+      "options": {
+        "timestamps": true,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "authors",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "Article",
-      "tableName": "articles",
       "fields": {
-        "id":       { "kind": "uuid",     "pgType": "UUID",  "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "title":    { "kind": "text",     "pgType": "TEXT",  "required": true,  "unique": false },
-        "slug":     { "kind": "slug",     "pgType": "TEXT",  "required": true,  "unique": true, "from": "title" },
-        "body":     { "kind": "richText", "pgType": "JSONB", "required": true,  "unique": false },
-        "excerpt":  { "kind": "text",     "pgType": "TEXT",  "required": false, "unique": false },
-        "authorId": { "kind": "relation", "cardinality": "belongsTo", "target": "Author", "foreignKey": "author_id", "onDelete": "restrict" },
-        "searchVector": { "kind": "tsVector", "pgType": "TSVECTOR", "required": false, "unique": false, "index": false }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "title",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "body": {
+          "kind": "richText",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "excerpt": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "authorId": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Author",
+          "onDelete": "restrict",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        },
+        "searchVector": {
+          "kind": "tsVector",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TSVECTOR",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
       },
-      "access": {
-        "read": { "type": "public" },
-        "create": { "type": "role", "roles": ["editor","admin"] },
-        "update": { "type": "role", "roles": ["editor","admin"] },
-        "delete": { "type": "role", "roles": ["admin"] }
+      "options": {
+        "timestamps": true,
+        "softDelete": true
       },
-      "indexes": [
-        { "fields": ["search_vector"], "unique": false, "using": "gin" },
-        { "fields": ["author_id"], "unique": false, "using": "btree" }
-      ],
-      "options": { "timestamps": true, "softDelete": true }
+      "annotations": {
+        "db": {
+          "tableName": "articles",
+          "indexes": [
+            {
+              "fields": [
+                "search_vector"
+              ],
+              "unique": false,
+              "using": "gin"
+            },
+            {
+              "fields": [
+                "author_id"
+              ],
+              "unique": false,
+              "using": "btree"
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "editor",
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "editor",
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
     },
     {
       "name": "Tag",
-      "tableName": "tags",
       "fields": {
-        "id":   { "kind": "uuid", "pgType": "UUID", "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "name": { "kind": "text", "pgType": "TEXT", "required": true,  "unique": true  },
-        "slug": { "kind": "slug", "pgType": "TEXT", "required": true,  "unique": true, "from": "name" }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "name",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": false, "softDelete": false }
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "tags",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     },
     {
       "name": "ArticleTag",
-      "tableName": "articles",
       "fields": {
-        "articles": { "kind": "relation", "cardinality": "manyToMany", "target": "Tag", "through": "article_tags" }
+        "articles": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Tag",
+          "through": "article_tags"
+        }
       },
-      "access": {},
-      "indexes": [],
-      "options": { "timestamps": false, "softDelete": false }
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "articles",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     }
   ]
 }

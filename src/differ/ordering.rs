@@ -26,6 +26,7 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::AddColumn { .. } => 6,
         Operation::RenameColumn { .. } => 6,
         Operation::AlterColumn { .. } => 7,
+        Operation::RecreateColumn { .. } => 7,
         Operation::AddForeignKey { .. } => 8,
         Operation::AddIndex { .. } => 9,
         Operation::EnableRls { .. } => 10,

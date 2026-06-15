@@ -1,37 +1,270 @@
 {
+  "astVersion": 2,
   "models": [
     {
       "name": "KitchenSink",
-      "tableName": "kitchen_sink",
       "fields": {
-        "id":          { "kind": "uuid",     "pgType": "UUID",  "primaryKey": true, "required": true, "unique": false, "default": { "kind": "genRandomUuid" } },
-        "textField":   { "kind": "text",     "pgType": "TEXT",  "required": true, "unique": false },
-        "emailField":  { "kind": "email",    "pgType": "TEXT",  "required": false,"unique": true  },
-        "intField":    { "kind": "integer",  "pgType": "INTEGER","required": true, "unique": false, "default": { "kind": "value", "value": 0 } },
-        "floatField":  { "kind": "float",    "pgType": "DOUBLE PRECISION","required": false,"unique": false },
-        "boolField":   { "kind": "boolean",  "pgType": "BOOLEAN","required": true, "unique": false, "default": { "kind": "value", "value": false } },
-        "datetimeField":{ "kind": "datetime","pgType": "TIMESTAMPTZ","required": false,"unique": false },
-        "dateField":   { "kind": "date",     "pgType": "DATE",  "required": false,"unique": false },
-        "bigintField": { "kind": "bigInt",   "pgType": "BIGINT","required": false,"unique": false },
-        "smallintField":{ "kind": "smallInt","pgType": "SMALLINT","required": false,"unique": false },
-        "decimalField": { "kind": "decimal", "pgType": "NUMERIC","required": false,"precision": 18,"scale": 4 },
-        "jsonbField":  { "kind": "json",     "pgType": "JSONB", "required": false },
-        "enumField":   { "kind": "enum",     "pgType": "TEXT",  "required": true, "unique": false, "values": ["a","b","c"], "default": "a" },
-        "slugField":   { "kind": "slug",     "pgType": "TEXT",  "required": false,"unique": true,  "from": "textField" },
-        "richTextField":{ "kind": "richText","pgType": "JSONB", "required": false,"unique": false },
-        "bytesField":  { "kind": "bytes",    "pgType": "BYTEA", "required": false,"unique": false },
-        "urlField":    { "kind": "url",      "pgType": "TEXT",  "required": false,"unique": false },
-        "ipField":     { "kind": "ip",       "pgType": "INET",  "required": false,"unique": false },
-        "intervalField":{ "kind": "interval","pgType": "INTERVAL","required": false,"unique": false },
-        "arrayField":  { "kind": "array",    "elementType": "TEXT", "required": false, "unique": false },
-        "vectorField": { "kind": "vector",   "pgType": "vector(512)", "required": false, "dimensions": 512 }
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "textField": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "emailField": {
+          "kind": "email",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "intField": {
+          "kind": "integer",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": 0
+          },
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        },
+        "floatField": {
+          "kind": "float",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "DOUBLE PRECISION",
+              "unique": false
+            }
+          }
+        },
+        "boolField": {
+          "kind": "boolean",
+          "required": true,
+          "default": {
+            "kind": "value",
+            "value": false
+          },
+          "annotations": {
+            "db": {
+              "pgType": "BOOLEAN",
+              "unique": false
+            }
+          }
+        },
+        "datetimeField": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMPTZ",
+              "unique": false
+            }
+          }
+        },
+        "dateField": {
+          "kind": "date",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "DATE",
+              "unique": false
+            }
+          }
+        },
+        "bigintField": {
+          "kind": "bigInt",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "BIGINT",
+              "unique": false
+            }
+          }
+        },
+        "smallintField": {
+          "kind": "smallInt",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "SMALLINT",
+              "unique": false
+            }
+          }
+        },
+        "decimalField": {
+          "kind": "decimal",
+          "required": false,
+          "precision": 18,
+          "scale": 4,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          }
+        },
+        "jsonbField": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "enumField": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "a",
+            "b",
+            "c"
+          ],
+          "default": "a",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "slugField": {
+          "kind": "slug",
+          "required": false,
+          "from": "textField",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "richTextField": {
+          "kind": "richText",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "bytesField": {
+          "kind": "bytes",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "BYTEA",
+              "unique": false
+            }
+          }
+        },
+        "urlField": {
+          "kind": "url",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "ipField": {
+          "kind": "ip",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "INET",
+              "unique": false
+            }
+          }
+        },
+        "intervalField": {
+          "kind": "interval",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "INTERVAL",
+              "unique": false
+            }
+          }
+        },
+        "arrayField": {
+          "kind": "array",
+          "required": false,
+          "annotations": {
+            "db": {
+              "elementType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "vectorField": {
+          "kind": "vector",
+          "required": false,
+          "dimensions": 512,
+          "annotations": {
+            "db": {
+              "pgType": "vector(512)"
+            }
+          }
+        }
       },
-      "access": {},
-      "indexes": [
-        { "fields": ["jsonb_field"], "unique": false, "using": "gin" },
-        { "fields": ["vector_field"], "unique": false, "using": "hnsw" }
-      ],
-      "options": { "timestamps": true, "softDelete": true }
+      "options": {
+        "timestamps": true,
+        "softDelete": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "kitchen_sink",
+          "indexes": [
+            {
+              "fields": [
+                "jsonb_field"
+              ],
+              "unique": false,
+              "using": "gin"
+            },
+            {
+              "fields": [
+                "vector_field"
+              ],
+              "unique": false,
+              "using": "hnsw"
+            }
+          ]
+        },
+        "platform": {
+          "access": {}
+        }
+      }
     }
   ]
 }

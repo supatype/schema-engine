@@ -21,19 +21,91 @@ use supatype_engine::{generator::sdk, parser};
 /// required bool, enum field, and a timestamps composite — enough to exercise all
 /// major type-mapping branches in every SDK generator.
 const TEST_SCHEMA: &str = r#"{
-    "models": [{
-        "name": "Article",
-        "tableName": "articles",
-        "fields": {
-            "id":           { "kind": "uuid",    "pgType": "UUID",    "primaryKey": true, "required": true,  "unique": false, "default": { "kind": "genRandomUuid" } },
-            "title":        { "kind": "text",    "pgType": "TEXT",    "required": true,  "unique": false },
-            "viewCount":    { "kind": "integer", "pgType": "INTEGER", "required": false, "unique": false },
-            "published":    { "kind": "boolean", "pgType": "BOOLEAN", "required": true,  "unique": false },
-            "status":       { "kind": "enum",    "pgType": "TEXT",    "required": true,  "unique": false, "values": ["draft", "published", "archived"], "default": "draft" },
-            "_timestamps":  { "kind": "timestamps" }
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Article",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
         },
-        "access": {}, "indexes": [], "options": { "timestamps": true, "softDelete": false, "singleton": false }
-    }]
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "viewCount": {
+          "kind": "integer",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "INTEGER",
+              "unique": false
+            }
+          }
+        },
+        "published": {
+          "kind": "boolean",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "BOOLEAN",
+              "unique": false
+            }
+          }
+        },
+        "status": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "draft",
+            "published",
+            "archived"
+          ],
+          "default": "draft",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false
+            }
+          }
+        },
+        "_timestamps": {
+          "kind": "timestamps"
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "softDelete": false,
+        "singleton": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "articles",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ]
 }"#;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

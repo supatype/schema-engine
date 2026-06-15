@@ -69,6 +69,70 @@ pub fn ensure_migrations_status_columns_sql() -> String {
     )
 }
 
+pub fn ensure_schema_state_studio_columns_sql() -> String {
+    format!(
+        "ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS ast_snapshot JSONB;\
+         ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS admin_config JSONB"
+    )
+}
+
+fn snapshot_hash(schema_snapshot: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(schema_snapshot.to_string().as_bytes());
+    format!("sha256:{}", hex::encode(h.finalize()))
+}
+
+/// Latest applied schema AST snapshot (for kind-aware diffs when PG types are unchanged).
+pub async fn load_latest_schema_snapshot(pool: &PgPool) -> Option<serde_json::Value> {
+    let sql = format!(
+        "SELECT schema_snapshot FROM {SCHEMA}.migrations \
+         WHERE rolled_back = false AND schema_snapshot IS NOT NULL \
+         ORDER BY applied_at DESC LIMIT 1"
+    );
+    if let Ok(Some((v,))) = sqlx::query_as::<_, (serde_json::Value,)>(&sql)
+        .fetch_optional(pool)
+        .await
+    {
+        return Some(v);
+    }
+
+    let fallback = format!(
+        "SELECT ast_snapshot FROM {SCHEMA}.schema_state WHERE id = 1 AND ast_snapshot IS NOT NULL"
+    );
+    sqlx::query_as::<_, (serde_json::Value,)>(&fallback)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|(v,)| v)
+}
+
+/// Latest Studio admin config from migration history or schema_state fallback.
+pub async fn load_latest_admin_config(pool: &PgPool) -> Option<serde_json::Value> {
+    let sql = format!(
+        "SELECT admin_config FROM {SCHEMA}.migrations \
+         WHERE rolled_back = false AND admin_config IS NOT NULL \
+         ORDER BY applied_at DESC LIMIT 1"
+    );
+    if let Ok(Some((v,))) = sqlx::query_as::<_, (serde_json::Value,)>(&sql)
+        .fetch_optional(pool)
+        .await
+    {
+        return Some(v);
+    }
+
+    let fallback = format!(
+        "SELECT admin_config FROM {SCHEMA}.schema_state WHERE id = 1 AND admin_config IS NOT NULL"
+    );
+    sqlx::query_as::<_, (serde_json::Value,)>(&fallback)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|(v,)| v)
+}
+
 pub async fn load_schema_state(
     pool: &PgPool,
 ) -> Option<crate::state::database_state::DatabaseState> {
@@ -202,6 +266,54 @@ pub async fn update_latest_migration_admin(
         .execute(pool)
         .await?;
     Ok(res.rows_affected())
+}
+
+/// When push finds no DDL diff: refresh Studio metadata on the latest migration row, or
+/// record a one-time `initial_*` baseline when no active migration exists yet.
+pub async fn refresh_metadata_on_up_to_date_push(
+    pool: &PgPool,
+    admin_config: &serde_json::Value,
+    schema_snapshot: &serde_json::Value,
+) -> Result<()> {
+    save_studio_metadata_if_present(pool, admin_config, schema_snapshot).await?;
+
+    let n = update_latest_migration_admin(pool, admin_config, schema_snapshot).await?;
+    if n > 0 {
+        return Ok(());
+    }
+
+    let migration_name = format!(
+        "initial_{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S")
+    );
+    let hash = snapshot_hash(schema_snapshot);
+    sqlx::query(&insert_migration_sql())
+        .bind(&migration_name)
+        .bind(&hash)
+        .bind(env!("ENGINE_VERSION"))
+        .bind(schema_snapshot)
+        .bind(admin_config)
+        .bind(None::<String>)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Persist Studio metadata on `schema_state` when a cached DB snapshot row already exists.
+pub async fn save_studio_metadata_if_present(
+    pool: &PgPool,
+    admin_config: &serde_json::Value,
+    schema_snapshot: &serde_json::Value,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE {SCHEMA}.schema_state SET ast_snapshot = $1, admin_config = $2 WHERE id = 1"
+    );
+    sqlx::query(&sql)
+        .bind(schema_snapshot)
+        .bind(admin_config)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
 pub fn insert_failed_migration_sql() -> String {

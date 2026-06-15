@@ -89,7 +89,7 @@ fn resolve_junction_tables(ast: &mut SchemaAst) {
             if let FieldAst::Relation(rel) = field {
                 if matches!(rel.cardinality, RelationCardinality::ManyToMany) {
                     let junction_name = rel.through.clone().unwrap_or_else(|| {
-                        let mut names = [model.table_name.clone(), rel.target.clone()];
+                        let mut names = [model.table_name().to_string(), rel.target.clone()];
                         names.sort();
                         names.join("_")
                     });

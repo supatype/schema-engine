@@ -33,12 +33,12 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
     // ─── Navigation ───────────────────────────────────────────────────────────
     let content_items: Vec<Value> = collections
         .iter()
-        .map(|m| json!({ "label": m.name.clone(), "model": m.table_name.clone() }))
+        .map(|m| json!({ "label": m.name.clone(), "model": m.table_name().to_string() }))
         .collect();
 
     let settings_items: Vec<Value> = singletons
         .iter()
-        .map(|m| json!({ "label": m.name.clone(), "global": m.table_name.clone() }))
+        .map(|m| json!({ "label": m.name.clone(), "global": m.table_name().to_string() }))
         .collect();
 
     let mut navigation: Vec<Value> = Vec::new();
@@ -91,7 +91,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
 
     json!({
         "name": model.name,
-        "tableName": model.table_name,
+        "tableName": model.table_name(),
         "singleton": model.options.singleton,
         "publishing": has_publishing,
         "softDelete": has_soft_delete,
@@ -260,12 +260,13 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                             .fields
                             .iter()
                             .map(|(fname, ffield)| {
+                                let localized = field_is_localized(ffield);
                                 let mut field = json!({
                                     "name": fname,
                                     "label": to_label(fname),
                                     "widget": field_widget_named(ffield, fname),
                                     "required": false,
-                                    "localized": false,
+                                    "localized": localized,
                                 });
                                 let options: Option<Value> = match ffield {
                                     FieldAst::Image(s) | FieldAst::File(s) => {
@@ -283,6 +284,9 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                                 if let Some(opts) = options {
                                     field["options"] = opts;
                                 }
+                                if localized {
+                                    field["defaultLocale"] = json!(default_locale);
+                                }
                                 field
                             })
                             .collect();
@@ -294,7 +298,7 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                         })
                     })
                     .collect();
-                fields.push(json!({
+                let mut entry = json!({
                     "name": name,
                     "label": to_label(name),
                     "widget": "blocks",
@@ -302,9 +306,13 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     "showInList": false,
                     "filterable": false,
                     "sortable": false,
-                    "localized": false,
+                    "localized": b.localized,
                     "options": { "blockTypes": block_defs },
-                }));
+                });
+                if b.localized {
+                    entry["defaultLocale"] = json!(default_locale);
+                }
+                fields.push(entry);
             }
             other => {
                 let localized = field_is_localized(other);
@@ -318,7 +326,8 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     || matches!(
                         other,
                         FieldAst::Vector(_) | FieldAst::TsVector(_) | FieldAst::TsQuery(_)
-                    );
+                    )
+                    || field_is_server_managed(other);
 
                 let mut entry = json!({
                     "name": name,
@@ -390,7 +399,7 @@ fn resolve_relation_target(rel: &RelationFieldAst, ast: &SchemaAst) -> String {
     ast.models
         .iter()
         .find(|m| m.name == rel.target)
-        .map(|m| m.table_name.clone())
+        .map(|m| m.table_name().to_string())
         .unwrap_or_else(|| crate::parser::resolver::to_snake_case(&rel.target))
 }
 
@@ -412,6 +421,7 @@ fn datetime_field(
     m.insert("localized".into(), json!(false));
     if server_now_studio {
         m.insert("options".into(), json!({ "studioTimestampDefault": "now" }));
+        m.insert("readOnly".into(), json!(true));
     }
     Value::Object(m)
 }
@@ -439,6 +449,7 @@ fn field_widget(field: &FieldAst) -> &'static str {
         FieldAst::Slug(_) => "slug",
         FieldAst::Enum(_) => "select",
         FieldAst::Json(_) => "json",
+        FieldAst::Button(_) => "button",
         FieldAst::Image(_) => "image",
         FieldAst::File(_) => "file",
         FieldAst::Geo(_) => "text",
@@ -569,6 +580,7 @@ fn field_required_flag(field: &FieldAst) -> bool {
         FieldAst::Slug(f) => f.required,
         FieldAst::Enum(f) => f.required,
         FieldAst::Json(f) => f.required,
+        FieldAst::Button(f) => f.required,
         FieldAst::Decimal(f) => f.required,
         FieldAst::Image(f) | FieldAst::File(f) => f.required,
         FieldAst::Geo(f) => f.required,
@@ -599,8 +611,11 @@ fn field_is_localized(field: &FieldAst) -> bool {
         FieldAst::Slug(f) => f.localized,
         FieldAst::Enum(f) => f.localized,
         FieldAst::Json(f) => f.localized,
+        FieldAst::Button(f) => f.localized,
         FieldAst::Decimal(f) => f.localized,
         FieldAst::Money(f) => f.localized,
+        FieldAst::Image(f) | FieldAst::File(f) => f.localized,
+        FieldAst::Blocks(f) => f.localized,
         _ => false,
     }
 }
@@ -635,6 +650,7 @@ fn field_is_read_only(field: &FieldAst) -> bool {
         FieldAst::Slug(f) => f.read_only,
         FieldAst::Enum(f) => f.read_only,
         FieldAst::Json(f) => f.read_only,
+        FieldAst::Button(f) => f.read_only,
         FieldAst::Decimal(f) => f.read_only,
         FieldAst::Image(f) | FieldAst::File(f) => f.read_only,
         FieldAst::Geo(f) => f.read_only,
@@ -643,6 +659,21 @@ fn field_is_read_only(field: &FieldAst) -> bool {
         FieldAst::Relation(f) => f.read_only,
         FieldAst::Array(f) => f.read_only,
         FieldAst::Custom(f) => f.read_only,
+        _ => false,
+    }
+}
+
+/// DB-assigned columns (defaults, sequences, audit timestamps) — read-only in Studio.
+fn field_is_server_managed(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => {
+            matches!(f.default, Some(DefaultValueAst::Now))
+                || f.annotations.db.server_generated
+        }
+        FieldAst::Uuid(f) => {
+            f.primary_key || matches!(f.default, Some(DefaultValueAst::GenRandomUuid))
+        }
+        FieldAst::Serial(_) | FieldAst::BigSerial(_) => true,
         _ => false,
     }
 }
