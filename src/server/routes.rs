@@ -229,8 +229,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
             &e.to_string(),
         )
         .await;
-        let msg =
-            crate::generator::sql::migration_errors::enrich_migration_error(&e.to_string());
+        let msg = crate::generator::sql::migration_errors::enrich_migration_error(&e.to_string());
         return Err(engine_error(anyhow::anyhow!(msg)));
     }
 
@@ -507,18 +506,14 @@ async fn connect_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse
         .map_err(|e| engine_error(anyhow::anyhow!("Failed to connect to database: {e}")))
 }
 
-fn resolve_db_request_url(
-    req: &DbRequest,
-) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+fn resolve_db_request_url(req: &DbRequest) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     resolve_database_url(req.database_url.clone())
 }
 
 fn resolve_database_url(
     explicit: Option<String>,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    let env_url = std::env::var("DATABASE_URL")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let env_url = std::env::var("DATABASE_URL").ok().filter(|s| !s.is_empty());
 
     if let Some(env) = env_url {
         if let Some(body) = explicit {

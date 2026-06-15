@@ -1,6 +1,6 @@
 use super::accessors::db_table_name_mut;
-use super::ast::{DefaultValueAst, FieldAst, ScalarFieldAst, SchemaAst};
 use super::annotations::FieldAnnotations;
+use super::ast::{DefaultValueAst, FieldAst, ScalarFieldAst, SchemaAst};
 use super::resolver::to_snake_case;
 #[allow(unused_imports)]
 use indexmap::IndexMap;

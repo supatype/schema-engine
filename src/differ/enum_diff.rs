@@ -29,7 +29,7 @@ fn columns_using_enum(ast: &SchemaAst, enum_name: &str) -> Vec<(String, String)>
                 if ef.pg_type.to_uppercase() == "TEXT" {
                     continue; // TEXT+CHECK enum — no native Postgres type
                 }
-                let name = enum_type_name(&model.table_name(), field_name);
+                let name = enum_type_name(model.table_name(), field_name);
                 if name == enum_name {
                     cols.push((model.table_name().to_string(), field_name.clone()));
                 }
@@ -61,7 +61,7 @@ pub fn diff(
                 if ef.pg_type.to_uppercase() == "TEXT" {
                     continue;
                 }
-                let name = enum_type_name(&model.table_name(), field_name);
+                let name = enum_type_name(model.table_name(), field_name);
                 schema_enums.insert(name, ef.values.clone());
             }
         }

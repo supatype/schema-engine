@@ -55,7 +55,11 @@ fn owner_rule_accepts_kernel_relation_field_name() {
         .iter()
         .find(|m| m.name == "Post")
         .expect("Post model must exist");
-    let rule = post.access().update.as_ref().expect("update rule must exist");
+    let rule = post
+        .access()
+        .update
+        .as_ref()
+        .expect("update rule must exist");
     let serialized = serde_json::to_string(rule).expect("rule must serialize");
     assert!(
         serialized.contains("\"field\":\"author\""),

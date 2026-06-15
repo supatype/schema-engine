@@ -183,7 +183,7 @@ fn render_forward_operation_lines(
             | Operation::AddColumn { risk, .. }
             | Operation::DropColumn { risk, .. }
             | Operation::RenameColumn { risk, .. }
-            |         Operation::AlterColumn { risk, .. }
+            | Operation::AlterColumn { risk, .. }
             | Operation::RecreateColumn { risk, .. }
             | Operation::AddIndex { risk, .. }
             | Operation::DropIndex { risk, .. }

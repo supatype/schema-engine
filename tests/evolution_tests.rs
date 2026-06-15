@@ -1490,7 +1490,7 @@ fn test_add_required_richtext_column_backfills_empty_lexical() {
 }
 
 #[test]
-fn test_alter_nullable_richtext_to_required_backfills_existing_rows() {
+fn test_alter_nullable_richtext_to_required_has_preflight_guard() {
     use supatype_engine::generator::sql::migration;
 
     let ast_json = r#"{
@@ -1538,12 +1538,12 @@ fn test_alter_nullable_richtext_to_required_backfills_existing_rows() {
     let sql = migration::generate(&diff, true, "public", &ast).unwrap();
 
     assert!(
-        sql.contains("UPDATE \"public\".\"_global_homepage\" SET \"someField\""),
-        "must backfill NULLs before SET NOT NULL"
+        sql.contains("RAISE EXCEPTION"),
+        "must guard against NULL rows before SET NOT NULL"
     );
     assert!(
         sql.contains("ALTER COLUMN \"someField\" SET NOT NULL"),
-        "must tighten nullability after backfill"
+        "must tighten nullability after preflight guard"
     );
 }
 
@@ -1646,10 +1646,7 @@ fn test_richtext_lexical_object_default_sql() {
             "children": []
         }
     });
-    let sql = rich_text_default_sql(&DefaultValueAst::Value {
-        value: lexical,
-    })
-    .unwrap();
+    let sql = rich_text_default_sql(&DefaultValueAst::Value { value: lexical }).unwrap();
     assert!(sql.ends_with("::jsonb"));
     assert!(sql.contains("\"root\""));
 }
@@ -2335,7 +2332,10 @@ fn test_rls_changed_expression_triggers_recreate() {
     let create_policy = diff.operations.iter().any(
         |op| matches!(op, Operation::CreateRlsPolicy { policy, .. } if policy == "posts_select"),
     );
-    assert!(create_policy, "should emit CreateRlsPolicy when expression changed");
+    assert!(
+        create_policy,
+        "should emit CreateRlsPolicy when expression changed"
+    );
 }
 
 // ─── Scenario 25: model loses access rules → all policies dropped + warning ───
@@ -3146,10 +3146,7 @@ fn test_admin_belongs_to_relation_picker() {
         .find(|m| m["name"] == "Post")
         .unwrap();
     let fields = post_model["fields"].as_array().unwrap();
-    let author_field = fields
-        .iter()
-        .find(|f| f["name"] == "author_id")
-        .unwrap();
+    let author_field = fields.iter().find(|f| f["name"] == "author_id").unwrap();
 
     assert_eq!(author_field["widget"], "relation");
     assert_eq!(author_field["options"]["target"], "users");
@@ -5898,10 +5895,7 @@ fn test_alter_column_text_to_richtext_uses_lexical_wrap() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "homepage".into(),
-            columns: vec![
-                col("id", "uuid"),
-                col("story1_para1", "text"),
-            ],
+            columns: vec![col("id", "uuid"), col("story1_para1", "text")],
         }],
         ..DatabaseState::default()
     };
@@ -6552,10 +6546,15 @@ fn test_geo_to_json_emits_recreate_column() {
     };
 
     let diff = differ::diff_with_previous(&ast, &db, Some(&previous)).unwrap();
-    let recreate = diff.operations.iter().any(|op| {
-        matches!(op, Operation::RecreateColumn { column, .. } if column == "loc")
-    });
-    assert!(recreate, "geo from jsonb should recreate column; got {:?}", diff.operations);
+    let recreate = diff
+        .operations
+        .iter()
+        .any(|op| matches!(op, Operation::RecreateColumn { column, .. } if column == "loc"));
+    assert!(
+        recreate,
+        "geo from jsonb should recreate column; got {:?}",
+        diff.operations
+    );
 }
 
 // ─── Array element type change detected ──────────────────────────────────────

@@ -45,7 +45,10 @@ pub fn deserialize_schema(value: &Value) -> Result<SchemaAst> {
             .and_then(|v| v.as_str())
             .map(str::to_string),
         plugins: deserialize_optional_vec(value, "plugins")?,
-        sso: value.get("sso").map(|v| serde_json::from_value(v.clone())).transpose()?,
+        sso: value
+            .get("sso")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()?,
         warnings: deserialize_optional_string_vec(value, "warnings"),
     })
 }
@@ -75,7 +78,9 @@ fn deserialize_model(value: &Value) -> Result<ModelAst> {
         .to_string();
 
     let fields_val = value.get("fields").context("model missing \"fields\"")?;
-    let fields_obj = fields_val.as_object().context("\"fields\" must be an object")?;
+    let fields_obj = fields_val
+        .as_object()
+        .context("\"fields\" must be an object")?;
     let mut fields = IndexMap::new();
     for (field_name, field_val) in fields_obj {
         fields.insert(field_name.clone(), deserialize_field(field_val)?);
@@ -113,9 +118,15 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
         .transpose()?
         .unwrap_or_default();
 
-    let required = value.get("required").and_then(|v| v.as_bool()).unwrap_or(false);
+    let required = value
+        .get("required")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let read_only = annotations.platform.read_only;
-    let localized = value.get("localized").and_then(|v| v.as_bool()).unwrap_or(false);
+    let localized = value
+        .get("localized")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let default_val: Option<DefaultValueAst> = if kind == "enum" {
         None
@@ -391,8 +402,14 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
             Ok(FieldAst::Decimal(DecimalFieldAst {
                 pg_type,
                 required,
-                precision: value.get("precision").and_then(|v| v.as_u64()).map(|n| n as u32),
-                scale: value.get("scale").and_then(|v| v.as_u64()).map(|n| n as u32),
+                precision: value
+                    .get("precision")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32),
+                scale: value
+                    .get("scale")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as u32),
                 localized,
                 read_only,
                 annotations,
@@ -513,7 +530,10 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                     .get("onUpdate")
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
-                unique_fk: value.get("uniqueFk").and_then(|v| v.as_bool()).unwrap_or(false),
+                unique_fk: value
+                    .get("uniqueFk")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 read_only,
                 annotations,
             }))
@@ -539,10 +559,7 @@ fn scalar_from_v2(
     localized: bool,
     default_val: Option<DefaultValueAst>,
 ) -> Result<ScalarFieldAst> {
-    let kind = value
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .unwrap_or("text");
+    let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("text");
     let pg_type = pg_type_or_default(&annotations.db, kind);
     let sources: Vec<String> = value
         .get("sources")
@@ -557,7 +574,10 @@ fn scalar_from_v2(
         pg_type,
         required,
         unique: annotations.db.unique,
-        primary_key: value.get("primaryKey").and_then(|v| v.as_bool()).unwrap_or(false),
+        primary_key: value
+            .get("primaryKey")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         index: annotations.db.index,
         default: default_val,
         check: value
@@ -829,7 +849,8 @@ fn serialize_field(field: &FieldAst) -> Value {
                             ann_obj
                                 .entry("platform")
                                 .or_insert_with(|| Value::Object(serde_json::Map::new()));
-                            if let Some(platform) = ann_obj.get_mut("platform").and_then(|p| p.as_object_mut())
+                            if let Some(platform) =
+                                ann_obj.get_mut("platform").and_then(|p| p.as_object_mut())
                             {
                                 platform.insert("readOnly".into(), Value::Bool(true));
                             }

@@ -19,7 +19,9 @@ where
         }
     };
 
-    let pool = sqlx::PgPool::connect(&url).await.expect("connect DATABASE_URL");
+    let pool = sqlx::PgPool::connect(&url)
+        .await
+        .expect("connect DATABASE_URL");
     f(pool).await;
 }
 
@@ -87,11 +89,10 @@ async fn integer_to_jsonb_preserves_numeric_json() {
 
         sqlx::raw_sql(&sql).execute(&pool).await.expect("migrate");
 
-        let row: (serde_json::Value,) =
-            sqlx::query_as("SELECT value FROM conv_test WHERE id = 1")
-                .fetch_one(&pool)
-                .await
-                .expect("read row");
+        let row: (serde_json::Value,) = sqlx::query_as("SELECT value FROM conv_test WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read row");
 
         assert_eq!(row.0, serde_json::json!(42));
     })
@@ -165,11 +166,10 @@ async fn text_to_richtext_wraps_lexical_document() {
 
         sqlx::raw_sql(&sql).execute(&pool).await.expect("migrate");
 
-        let row: (serde_json::Value,) =
-            sqlx::query_as("SELECT body FROM rt_test WHERE id = 1")
-                .fetch_one(&pool)
-                .await
-                .expect("read row");
+        let row: (serde_json::Value,) = sqlx::query_as("SELECT body FROM rt_test WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read row");
 
         assert_eq!(row.0["root"]["type"], "root");
         let text = row.0["root"]["children"][0]["children"][0]["text"]
@@ -274,11 +274,10 @@ async fn richtext_to_text_extracts_plain_text() {
 
         sqlx::raw_sql(&sql).execute(&pool).await.expect("migrate");
 
-        let row: (String,) =
-            sqlx::query_as("SELECT body FROM rt_back_test WHERE id = 1")
-                .fetch_one(&pool)
-                .await
-                .expect("read row");
+        let row: (String,) = sqlx::query_as("SELECT body FROM rt_back_test WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read row");
 
         assert_eq!(row.0, "Retreat copy");
     })

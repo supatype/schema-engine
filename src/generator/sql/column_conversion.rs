@@ -1,7 +1,7 @@
 //! Column type / kind conversion registry — maps (from_udt, to_pg, kinds) → migration strategy.
 
 use crate::differ::Risk;
-use crate::parser::ast::{DefaultValueAst, FieldAst, BlocksFieldAst, ScalarFieldAst};
+use crate::parser::ast::{BlocksFieldAst, DefaultValueAst, FieldAst, ScalarFieldAst};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,11 +37,17 @@ pub fn is_array_udt(udt: &str) -> bool {
 }
 
 pub fn is_numeric_udt(udt: &str) -> bool {
-    matches!(udt, "int2" | "int4" | "int8" | "float4" | "float8" | "numeric")
+    matches!(
+        udt,
+        "int2" | "int4" | "int8" | "float4" | "float8" | "numeric"
+    )
 }
 
 pub fn is_scalar_jsonb_source_udt(udt: &str) -> bool {
-    matches!(udt, "int2" | "int4" | "int8" | "float4" | "float8" | "bool" | "numeric")
+    matches!(
+        udt,
+        "int2" | "int4" | "int8" | "float4" | "float8" | "bool" | "numeric"
+    )
 }
 
 /// Returns true if changing from `from_udt` to `to_pg_type` is a safe widening
@@ -148,9 +154,7 @@ fn blocks_wrap_expr(col: &str, block_name: &str) -> String {
 
 fn first_block_name(field: &FieldAst) -> Option<String> {
     match field {
-        FieldAst::Blocks(BlocksFieldAst { blocks, .. }) => {
-            blocks.first().map(|b| b.name.clone())
-        }
+        FieldAst::Blocks(BlocksFieldAst { blocks, .. }) => blocks.first().map(|b| b.name.clone()),
         _ => None,
     }
 }
@@ -179,7 +183,12 @@ fn to_pg_upper(pg: &str) -> String {
 }
 
 /// Whether a cross-family cast should drop/recreate instead of ALTER USING.
-pub fn should_recreate_column(from_udt: &str, to_pg: &str, from_kind: Option<&str>, to_kind: Option<&str>) -> bool {
+pub fn should_recreate_column(
+    from_udt: &str,
+    to_pg: &str,
+    from_kind: Option<&str>,
+    to_kind: Option<&str>,
+) -> bool {
     let to = to_pg_upper(to_pg);
     if is_geo_udt(from_udt) || is_vector_udt(from_udt) || is_bytea_udt(from_udt) {
         return true;
@@ -187,7 +196,22 @@ pub fn should_recreate_column(from_udt: &str, to_pg: &str, from_kind: Option<&st
     if to.contains("GEOGRAPHY") || to.contains("GEOMETRY") || to.starts_with("VECTOR") {
         return true;
     }
-    if from_udt == "jsonb" && matches!(to.as_str(), "INTEGER" | "BIGINT" | "SMALLINT" | "BOOLEAN" | "UUID" | "DATE" | "TIMESTAMPTZ" | "TIMESTAMP" | "DOUBLE PRECISION" | "REAL" | "INET") {
+    if from_udt == "jsonb"
+        && matches!(
+            to.as_str(),
+            "INTEGER"
+                | "BIGINT"
+                | "SMALLINT"
+                | "BOOLEAN"
+                | "UUID"
+                | "DATE"
+                | "TIMESTAMPTZ"
+                | "TIMESTAMP"
+                | "DOUBLE PRECISION"
+                | "REAL"
+                | "INET"
+        )
+    {
         return true;
     }
     if is_bytea_udt(from_udt) || to == "BYTEA" {
@@ -256,6 +280,7 @@ pub fn kind_migrate_pre_update(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn plan_type_conversion(
     table: &str,
     column: &str,
@@ -273,24 +298,26 @@ pub fn plan_type_conversion(
             .and_then(|v| v.as_str())
             .unwrap_or("add");
         // Only unwrap locale maps — not Lexical richText / json / blocks documents.
-        if direction == "remove" && matches!(from_kind, Some("richText") | Some("json") | Some("blocks")) {
+        if direction == "remove"
+            && matches!(from_kind, Some("richText") | Some("json") | Some("blocks"))
+        {
             // fall through to jsonb → TEXT richText extraction below
         } else {
-        let locale = loc
-            .get("default_locale")
-            .and_then(|v| v.as_str())
-            .unwrap_or("en");
-        let using = if direction == "add" {
-            format!("jsonb_build_object('{locale}', \"{column}\"::text)")
-        } else {
-            format!("(\"{column}\"->>'{locale}')::text")
-        };
-        return ConversionStrategy {
-            kind: ConversionStrategyKind::TransformCast,
-            using_expr: Some(using),
-            pre_update: None,
-            blocked_reason: None,
-        };
+            let locale = loc
+                .get("default_locale")
+                .and_then(|v| v.as_str())
+                .unwrap_or("en");
+            let using = if direction == "add" {
+                format!("jsonb_build_object('{locale}', \"{column}\"::text)")
+            } else {
+                format!("(\"{column}\"->>'{locale}')::text")
+            };
+            return ConversionStrategy {
+                kind: ConversionStrategyKind::TransformCast,
+                using_expr: Some(using),
+                pre_update: None,
+                blocked_reason: None,
+            };
         }
     }
 
@@ -434,7 +461,11 @@ pub fn plan_type_conversion(
     {
         return ConversionStrategy {
             kind: ConversionStrategyKind::TransformCast,
-            using_expr: Some(format!("NULLIF(trim({col}::text), '')::{to_pg}", col = col, to_pg = to_pg)),
+            using_expr: Some(format!(
+                "NULLIF(trim({col}::text), '')::{to_pg}",
+                col = col,
+                to_pg = to_pg
+            )),
             pre_update: None,
             blocked_reason: None,
         };
@@ -496,10 +527,7 @@ fn required_scalar_no_default(f: &ScalarFieldAst) -> bool {
 }
 
 fn is_lexical_document_value(value: &serde_json::Value) -> bool {
-    value
-        .as_object()
-        .and_then(|o| o.get("root"))
-        .is_some()
+    value.as_object().and_then(|o| o.get("root")).is_some()
 }
 
 /// True when `s` is JSON text for a Lexical `SerializedEditorState` (has top-level `root`).
@@ -517,7 +545,9 @@ fn is_lexical_json_string(s: &str) -> bool {
 /// SQL DEFAULT expression for a RichText field: plain string → Lexical paragraph; Lexical JSON → `jsonb`.
 pub fn rich_text_default_sql(default: &DefaultValueAst) -> Option<String> {
     match default {
-        DefaultValueAst::Value { value: serde_json::Value::String(s) } => {
+        DefaultValueAst::Value {
+            value: serde_json::Value::String(s),
+        } => {
             if is_lexical_json_string(s) {
                 Some(format!("'{}'::jsonb", s.replace('\'', "''")))
             } else {
@@ -548,12 +578,23 @@ pub fn add_column_backfill_default(field: &FieldAst) -> Option<String> {
         FieldAst::RichText(f) if required_scalar_no_default(f) => {
             Some(text_to_lexical_jsonb_expr("''"))
         }
-        FieldAst::Text(f) | FieldAst::Color(f) | FieldAst::Email(f) | FieldAst::Url(f)
-        | FieldAst::Xml(f) | FieldAst::Bytes(f) if required_scalar_no_default(f) => Some("''".into()),
+        FieldAst::Text(f)
+        | FieldAst::Color(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Xml(f)
+        | FieldAst::Bytes(f)
+            if required_scalar_no_default(f) =>
+        {
+            Some("''".into())
+        }
         FieldAst::Slug(f) if f.required => Some("''".into()),
         FieldAst::Boolean(f) if required_scalar_no_default(f) => Some("false".into()),
         FieldAst::Integer(f) | FieldAst::SmallInt(f) | FieldAst::BigInt(f)
-            if required_scalar_no_default(f) => Some("0".into()),
+            if required_scalar_no_default(f) =>
+        {
+            Some("0".into())
+        }
         FieldAst::Float(f) if required_scalar_no_default(f) => Some("0".into()),
         FieldAst::Decimal(f) if f.required => Some("0".into()),
         FieldAst::Money(f) if f.required => Some("0".into()),

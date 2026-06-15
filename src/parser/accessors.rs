@@ -178,9 +178,8 @@ pub fn resolve_owner_column(model: &ModelAst, kernel_field: &str) -> String {
                 RelationCardinality::BelongsTo | RelationCardinality::ManyToMany
             );
             if is_owning {
-                return db_foreign_key(field, field_name).unwrap_or_else(|| {
-                    default_foreign_key_column(field_name)
-                });
+                return db_foreign_key(field, field_name)
+                    .unwrap_or_else(|| default_foreign_key_column(field_name));
             }
         }
         return to_snake_case(kernel_field);

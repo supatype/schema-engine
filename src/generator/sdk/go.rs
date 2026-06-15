@@ -27,7 +27,8 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
     for model in &ast.models {
         out.push_str(&format!(
             "// {} maps to the {} Postgres table.\n",
-            model.name, model.table_name()
+            model.name,
+            model.table_name()
         ));
         out.push_str(&format!("type {} struct {{\n", model.name));
 

@@ -17,7 +17,11 @@ pub fn enrich_migration_error(raw: &str) -> String {
 }
 
 fn parse_null_violation(raw: &str) -> Option<(&str, &str)> {
-    if let Some((col, tail)) = raw.split("column \"").nth(1)?.split_once("\" of relation \"") {
+    if let Some((col, tail)) = raw
+        .split("column \"")
+        .nth(1)?
+        .split_once("\" of relation \"")
+    {
         let table = tail.split('"').next()?;
         return Some((col, table));
     }

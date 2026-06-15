@@ -87,7 +87,7 @@ pub fn diff(
                 let from_name = ops
                     .iter()
                     .find_map(|op| match op {
-                        Operation::RenameTable { from, to, .. } if to == &model.table_name() => {
+                        Operation::RenameTable { from, to, .. } if to == model.table_name() => {
                             Some(from.clone())
                         }
                         _ => None,
@@ -178,7 +178,10 @@ pub fn diff(
     Ok(())
 }
 
-fn previous_model<'a>(previous: Option<&'a SchemaAst>, table_name: &str) -> Option<&'a crate::parser::ast::ModelAst> {
+fn previous_model<'a>(
+    previous: Option<&'a SchemaAst>,
+    table_name: &str,
+) -> Option<&'a crate::parser::ast::ModelAst> {
     previous?
         .models
         .iter()

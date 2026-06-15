@@ -121,8 +121,9 @@ pub fn relation_fk_columns(model: &super::ast::ModelAst) -> HashSet<String> {
             );
             if is_owning {
                 cols.insert(
-                    db_foreign_key(field, field_name)
-                        .unwrap_or_else(|| super::accessors::default_foreign_key_column(field_name)),
+                    db_foreign_key(field, field_name).unwrap_or_else(|| {
+                        super::accessors::default_foreign_key_column(field_name)
+                    }),
                 );
             }
         }

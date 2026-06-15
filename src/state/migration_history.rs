@@ -282,10 +282,7 @@ pub async fn refresh_metadata_on_up_to_date_push(
         return Ok(());
     }
 
-    let migration_name = format!(
-        "initial_{}",
-        chrono::Utc::now().format("%Y%m%d_%H%M%S")
-    );
+    let migration_name = format!("initial_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
     let hash = snapshot_hash(schema_snapshot);
     sqlx::query(&insert_migration_sql())
         .bind(&migration_name)

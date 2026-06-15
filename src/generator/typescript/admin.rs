@@ -203,10 +203,9 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     RelationCardinality::ManyToMany => "manyToMany",
                 };
                 let target_table = resolve_relation_target(rel, ast);
-                let fk_col = rel
-                    .foreign_key
-                    .clone()
-                    .unwrap_or_else(|| format!("{}_id", crate::parser::resolver::to_snake_case(name)));
+                let fk_col = rel.foreign_key.clone().unwrap_or_else(|| {
+                    format!("{}_id", crate::parser::resolver::to_snake_case(name))
+                });
                 let mut options = json!({
                     "target": target_table,
                     "cardinality": cardinality,
@@ -667,8 +666,7 @@ fn field_is_read_only(field: &FieldAst) -> bool {
 fn field_is_server_managed(field: &FieldAst) -> bool {
     match field {
         FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => {
-            matches!(f.default, Some(DefaultValueAst::Now))
-                || f.annotations.db.server_generated
+            matches!(f.default, Some(DefaultValueAst::Now)) || f.annotations.db.server_generated
         }
         FieldAst::Uuid(f) => {
             f.primary_key || matches!(f.default, Some(DefaultValueAst::GenRandomUuid))

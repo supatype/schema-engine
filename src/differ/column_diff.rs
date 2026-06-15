@@ -382,10 +382,7 @@ pub fn discover_column_dependencies(
     }
 
     for idx in &db.indexes {
-        if idx.table == table
-            && idx.columns.iter().any(|c| c == column)
-            && !idx.is_primary
-        {
+        if idx.table == table && idx.columns.iter().any(|c| c == column) && !idx.is_primary {
             deps.push(ColumnDependencySnapshot {
                 kind: "index".into(),
                 table: idx.table.clone(),
@@ -797,7 +794,8 @@ pub fn diff(
     for col in &added {
         if !renamed_added.contains(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
-                if field_required(field) == Some(true) && add_column_backfill_default(field).is_none()
+                if field_required(field) == Some(true)
+                    && add_column_backfill_default(field).is_none()
                 {
                     warnings.push(required_field_existing_table_warning(
                         model.table_name(),
@@ -861,7 +859,7 @@ pub fn diff(
                 db_col,
                 default_locale,
                 previous_field,
-                &model.table_name(),
+                model.table_name(),
                 &db_table.schema,
             );
 
@@ -870,13 +868,15 @@ pub fn diff(
             }
 
             if changes.get("blocked").is_some() {
-                let msg = changes_warning(&model.table_name(), col_name, &changes)
-                    .unwrap_or_else(|| format!("{}.{}: blocked conversion", model.table_name(), col_name));
+                let msg =
+                    changes_warning(model.table_name(), col_name, &changes).unwrap_or_else(|| {
+                        format!("{}.{}: blocked conversion", model.table_name(), col_name)
+                    });
                 bail!(msg);
             }
 
             let risk = changes_risk(&changes, field, col_name);
-            let warning = changes_warning(&model.table_name(), col_name, &changes);
+            let warning = changes_warning(model.table_name(), col_name, &changes);
             if let Some(ref w) = warning {
                 warnings.push(w.clone());
             }
@@ -895,8 +895,7 @@ pub fn diff(
             }
 
             if conversion_strategy_name(&changes) == Some("recreate_column") {
-                let dependencies =
-                    discover_column_dependencies(&model.table_name(), col_name, db);
+                let dependencies = discover_column_dependencies(model.table_name(), col_name, db);
                 ops.push(Operation::RecreateColumn {
                     table: model.table_name().to_string(),
                     column: col_name.clone(),

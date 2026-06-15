@@ -82,9 +82,9 @@ async fn main() {
         .route_layer(from_fn(require_admin_token));
 
     let bind_host = std::env::var("ENGINE_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let bind_ip: std::net::IpAddr = bind_host.parse().unwrap_or(std::net::IpAddr::V4(
-        std::net::Ipv4Addr::new(127, 0, 0, 1),
-    ));
+    let bind_ip: std::net::IpAddr = bind_host
+        .parse()
+        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1)));
     let addr = SocketAddr::from((bind_ip, port));
     info!(%addr, version = env!("ENGINE_VERSION"), "Schema engine server starting");
 

@@ -281,12 +281,15 @@ async fn main() -> Result<()> {
                 None
             };
 
-            let mut diff =
-                supatype_engine::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())?;
+            let mut diff = supatype_engine::differ::diff_with_previous(
+                &ast,
+                &db_state,
+                previous_ast.as_ref(),
+            )?;
 
             // Interactive rename confirmation (skipped in CI with --non-interactive)
             if !non_interactive {
-                diff =             confirm_renames(diff)?;
+                diff = confirm_renames(diff)?;
                 confirm_risky_changes(&diff)?;
             }
 
@@ -700,29 +703,29 @@ fn risky_op_summary(op: &supatype_engine::differ::Operation) -> Option<String> {
     use supatype_engine::differ::{risk_of, Operation, Risk};
     match risk_of(op) {
         Risk::Safe => None,
-        Risk::Cautious | Risk::Destructive => match op {
-            Operation::AlterColumn {
-                table,
-                column,
-                warning,
-                ..
-            } => Some(
-                warning.clone().unwrap_or_else(|| {
+        Risk::Cautious | Risk::Destructive => {
+            match op {
+                Operation::AlterColumn {
+                    table,
+                    column,
+                    warning,
+                    ..
+                } => Some(warning.clone().unwrap_or_else(|| {
                     format!("Alter column '{table}.{column}' (lossy conversion)")
-                }),
-            ),
-            Operation::RecreateColumn {
-                table,
-                column,
-                warning,
-                ..
-            } => Some(
-                warning.clone().unwrap_or_else(|| {
-                    format!("Recreate column '{table}.{column}' (data loss)")
-                }),
-            ),
-            other => Some(destructive_op_summary(other)),
-        },
+                })),
+                Operation::RecreateColumn {
+                    table,
+                    column,
+                    warning,
+                    ..
+                } => {
+                    Some(warning.clone().unwrap_or_else(|| {
+                        format!("Recreate column '{table}.{column}' (data loss)")
+                    }))
+                }
+                other => Some(destructive_op_summary(other)),
+            }
+        }
     }
 }
 
@@ -762,7 +765,10 @@ fn destructive_op_summary(op: &supatype_engine::differ::Operation) -> String {
             format!("Recreate column (data loss): '{table}.{column}'")
         }
         Operation::AlterColumn {
-            table, column, warning, ..
+            table,
+            column,
+            warning,
+            ..
         } => warning
             .clone()
             .unwrap_or_else(|| format!("Alter column '{table}.{column}'")),

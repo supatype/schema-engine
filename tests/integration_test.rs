@@ -52,9 +52,7 @@ where
     let container = match Postgres::default().start().await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "SKIP integration_test: DATABASE_URL not set and Docker unavailable ({e})"
-            );
+            eprintln!("SKIP integration_test: DATABASE_URL not set and Docker unavailable ({e})");
             return;
         }
     };

@@ -3,8 +3,8 @@ pub mod annotations;
 pub mod ast;
 pub mod normaliser;
 pub mod resolver;
-pub mod validator;
 pub mod v2;
+pub mod validator;
 
 use anyhow::Result;
 use ast::SchemaAst;

@@ -268,7 +268,7 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
                 .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
 
             model_entries.push(ModelBucketAccess {
-                table: &model.table_name(),
+                table: model.table_name(),
                 bucket_id,
                 read_expr,
                 write_expr,
