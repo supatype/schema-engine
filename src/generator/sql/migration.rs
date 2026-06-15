@@ -1048,19 +1048,13 @@ fn alter_column_sql(
     if let Some(null_change) = changes.get("nullability") {
         let to = null_change.get("to").and_then(|v| v.as_str()).unwrap_or("");
         if to == "not_null" {
-            if let Some(backfill) = add_column_backfill_default(field) {
-                stmts.push(format!(
-                    "UPDATE \"{schema}\".\"{table}\" SET \"{column}\" = {backfill} WHERE \"{column}\" IS NULL;"
-                ));
-            } else {
-                stmts.push(format!(
-                    "DO $$ BEGIN\n  \
-                     IF EXISTS (SELECT 1 FROM \"{schema}\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
-                     RAISE EXCEPTION 'Cannot set NOT NULL on {table}.{column}: NULL values exist.';\n  \
-                     END IF;\n\
-                     END $$;"
-                ));
-            }
+            stmts.push(format!(
+                "DO $$ BEGIN\n  \
+                 IF EXISTS (SELECT 1 FROM \"{schema}\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
+                 RAISE EXCEPTION 'Cannot set NOT NULL on {table}.{column}: NULL values exist.';\n  \
+                 END IF;\n\
+                 END $$;"
+            ));
             stmts.push(format!(
                 "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
             ));
