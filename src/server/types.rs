@@ -38,6 +38,10 @@ pub struct DbRequest {
     pub non_interactive: bool,
     #[serde(default)]
     pub no_cache: bool,
+    #[serde(default)]
+    pub strict: bool,
+    #[serde(default)]
+    pub yes: bool,
 }
 
 fn default_schema() -> String {

@@ -250,6 +250,24 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         }
     };
 
+    let drift_warnings =
+        crate::differ::integrity::post_push_warnings(&ast, &new_db_state);
+    if req.strict && !crate::differ::integrity::post_push_ok(&ast, &new_db_state, true) {
+        let msg = drift_warnings.join("; ");
+        migration_history::rollback_push_tx(
+            tx,
+            &pool,
+            &migration_name,
+            &hash,
+            &apply_batch,
+            &msg,
+        )
+        .await;
+        return Err(engine_error(anyhow::anyhow!(
+            "Push rolled back: post-apply schema drift in strict mode ({msg})"
+        )));
+    }
+
     if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
         migration_history::rollback_push_tx(
             tx,
@@ -292,7 +310,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     Ok(Json(serde_json::json!({
         "status": "applied",
         "name": migration_name,
-        "operations": diff.operations.len()
+        "operations": diff.operations.len(),
+        "warnings": drift_warnings
     })))
 }
 
@@ -460,6 +479,109 @@ pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_
         .await
         .map_err(engine_error)?;
     Ok(Json(serde_json::to_value(&report).unwrap()))
+}
+
+// ── Doctor (DB — read-only drift report) ────────────────────────────────────
+
+pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    let ast_json = require_ast(&req.ast)?;
+    let ast = parse_ast(&ast_json)?;
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
+    let db_state = if req.no_cache {
+        crate::introspector::introspect(&pool, &req.schema)
+            .await
+            .map_err(engine_error)?
+    } else {
+        crate::introspector::introspect(&pool, &req.schema)
+            .await
+            .map_err(engine_error)?
+    };
+    let report = crate::differ::doctor::report(&ast, &db_state);
+    Ok(Json(serde_json::to_value(&report).unwrap()))
+}
+
+// ── Adopt (DB — stamp managed comments) ─────────────────────────────────────
+
+pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    use crate::state::migration_history;
+
+    let ast_json = require_ast(&req.ast)?;
+    let ast = parse_ast(&ast_json)?;
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
+
+    sqlx::raw_sql(migration_history::create_internal_schema_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::create_migrations_table_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+
+    let db_state = if req.no_cache {
+        crate::introspector::introspect(&pool, &req.schema)
+            .await
+            .map_err(engine_error)?
+    } else if let Some(cached) = migration_history::load_schema_state(&pool).await {
+        cached
+    } else {
+        crate::introspector::introspect(&pool, &req.schema)
+            .await
+            .map_err(engine_error)?
+    };
+
+    let stamp_sql = crate::differ::doctor::adopt_stamp_sql(&ast, &db_state, &req.schema);
+    let doctor_report = crate::differ::doctor::report(&ast, &db_state);
+
+    if !req.yes {
+        return Ok(Json(serde_json::json!({
+            "status": "preview",
+            "stampStatements": stamp_sql,
+            "doctor": doctor_report,
+        })));
+    }
+
+    if stamp_sql.is_empty() {
+        return Ok(Json(serde_json::json!({ "status": "nothing_to_stamp" })));
+    }
+
+    let batch = stamp_sql.join("\n");
+    sqlx::raw_sql(&batch)
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+
+    let fresh = crate::introspector::introspect(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
+    migration_history::save_schema_state(&pool, &fresh)
+        .await
+        .map_err(engine_error)?;
+
+    let migration_name = format!("adopt_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
+    let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
+    migration_history::insert_applied_migration(
+        &pool,
+        &migration_name,
+        "adopt",
+        serde_json::to_value(&ast).ok(),
+        admin_cfg,
+        &batch,
+    )
+    .await
+    .map_err(engine_error)?;
+
+    Ok(Json(serde_json::json!({
+        "status": "adopted",
+        "stamped": stamp_sql.len(),
+        "name": migration_name
+    })))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

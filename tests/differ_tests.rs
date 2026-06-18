@@ -169,6 +169,7 @@ fn test_existing_index_not_regenerated_when_name_matches() {
             unique: false,
             method: "btree".into(),
             is_primary: false,
+            comment: None,
         }],
         ..DatabaseState::default()
     };

@@ -41,7 +41,8 @@ jobs:
             --test parser_tests \
             --test differ_tests \
             --test migration_tests \
-            --test evolution_tests
+            --test evolution_tests \
+            --test owner_validation_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})

@@ -13,7 +13,7 @@ use strsim::jaro_winkler;
 
 const RENAME_THRESHOLD: f64 = 0.7;
 
-fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
+pub fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
     match field {
         FieldAst::Relation(rel) => match rel.cardinality {
             RelationCardinality::BelongsTo => {

@@ -1,5 +1,7 @@
-use crate::parser::accessors::{db_table_name, platform_access, resolve_owner_column};
-use crate::parser::ast::{AccessRule, ModelAst, SchemaAst};
+use crate::parser::accessors::{
+    db_foreign_key, db_table_name, platform_access, resolve_owner_column,
+};
+use crate::parser::ast::{AccessRule, DefaultValueAst, FieldAst, ModelAst, SchemaAst};
 use anyhow::Result;
 
 /// Generates RLS policy SQL for all models that have access rules.
@@ -34,16 +36,16 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         ));
 
         if let Some(rule) = &access.read {
-            out.push_str(&render_select_policy_sql(schema, table, model, rule));
+            out.push_str(&render_select_policy_sql(schema, table, ast, model, rule));
         }
         if let Some(rule) = &access.create {
-            out.push_str(&render_insert_policy_sql(schema, table, model, rule));
+            out.push_str(&render_insert_policy_sql(schema, table, ast, model, rule));
         }
         if let Some(rule) = &access.update {
-            out.push_str(&render_update_policy_sql(schema, table, model, rule));
+            out.push_str(&render_update_policy_sql(schema, table, ast, model, rule));
         }
         if let Some(rule) = &access.delete {
-            out.push_str(&render_delete_policy_sql(schema, table, model, rule));
+            out.push_str(&render_delete_policy_sql(schema, table, ast, model, rule));
         }
     }
 
@@ -88,14 +90,15 @@ pub fn render_policy_migration_sql(
     schema: &str,
     table: &str,
     suffix: &str,
+    ast: &SchemaAst,
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
     match suffix {
-        "select" => render_select_policy_sql(schema, table, model, rule),
-        "insert" => render_insert_policy_sql(schema, table, model, rule),
-        "update" => render_update_policy_sql(schema, table, model, rule),
-        "delete" => render_delete_policy_sql(schema, table, model, rule),
+        "select" => render_select_policy_sql(schema, table, ast, model, rule),
+        "insert" => render_insert_policy_sql(schema, table, ast, model, rule),
+        "update" => render_update_policy_sql(schema, table, ast, model, rule),
+        "delete" => render_delete_policy_sql(schema, table, ast, model, rule),
         other => format!("-- unknown RLS policy suffix: {other}\n"),
     }
 }
@@ -103,10 +106,11 @@ pub fn render_policy_migration_sql(
 pub(crate) fn render_select_policy_sql(
     schema: &str,
     table: &str,
+    ast: &SchemaAst,
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    let expr = access_rule_to_expr(model, rule);
+    let expr = access_rule_to_expr(ast, model, rule);
     let name = format!("{table}_select");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
@@ -118,10 +122,11 @@ pub(crate) fn render_select_policy_sql(
 pub(crate) fn render_insert_policy_sql(
     schema: &str,
     table: &str,
+    ast: &SchemaAst,
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    let expr = access_rule_to_expr(model, rule);
+    let expr = access_rule_to_expr(ast, model, rule);
     let name = format!("{table}_insert");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
@@ -133,10 +138,11 @@ pub(crate) fn render_insert_policy_sql(
 pub(crate) fn render_update_policy_sql(
     schema: &str,
     table: &str,
+    ast: &SchemaAst,
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    let expr = access_rule_to_expr(model, rule);
+    let expr = access_rule_to_expr(ast, model, rule);
     let name = format!("{table}_update");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
@@ -148,10 +154,11 @@ pub(crate) fn render_update_policy_sql(
 pub(crate) fn render_delete_policy_sql(
     schema: &str,
     table: &str,
+    ast: &SchemaAst,
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    let expr = access_rule_to_expr(model, rule);
+    let expr = access_rule_to_expr(ast, model, rule);
     let name = format!("{table}_delete");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
@@ -161,15 +168,12 @@ pub(crate) fn render_delete_policy_sql(
 }
 
 /// Converts an AccessRule to a Postgres expression string for use in a USING / WITH CHECK clause.
-pub fn access_rule_to_expr(model: &ModelAst, rule: &AccessRule) -> String {
+pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule) -> String {
     match rule {
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => "auth.uid() IS NOT NULL".to_string(),
-        AccessRule::Owner { field } => {
-            let column = resolve_owner_column(model, field);
-            format!("auth.uid() = {column}")
-        }
+        AccessRule::Owner { field } => owner_access_expr(ast, model, field),
         AccessRule::Role { roles } => {
             if roles.len() == 1 {
                 format!("auth.role() = '{}'", roles[0])
@@ -187,7 +191,7 @@ pub fn access_rule_to_expr(model: &ModelAst, rule: &AccessRule) -> String {
             let parts: Vec<String> = rules
                 .iter()
                 .map(|r| {
-                    let expr = access_rule_to_expr(model, r);
+                    let expr = access_rule_to_expr(ast, model, r);
                     if matches!(r, AccessRule::Any { .. }) {
                         format!("({expr})")
                     } else {
@@ -198,4 +202,63 @@ pub fn access_rule_to_expr(model: &ModelAst, rule: &AccessRule) -> String {
             parts.join("\n    OR\n    ")
         }
     }
+}
+
+/// Owner / OwnerFrom — compare auth.uid() to a row column or ownership via a related model.
+fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
+    if kernel_field == "id" {
+        return "auth.uid() = id".to_string();
+    }
+
+    if let Some((field_name, field)) = model.fields.get_key_value(kernel_field) {
+        if let FieldAst::Relation(rel) = field {
+            let fk = db_foreign_key(field, field_name).unwrap_or_else(|| {
+                crate::parser::accessors::default_foreign_key_column(field_name)
+            });
+
+            if let Some(target) = ast.models.iter().find(|m| m.name == rel.target) {
+                if is_user_identity_model(target) {
+                    return format!("auth.uid() = {fk}");
+                }
+                if let Some(owner_col) = owner_column_on_model(target) {
+                    let table = db_table_name(target);
+                    return format!(
+                        "EXISTS (SELECT 1 FROM \"{table}\" WHERE \"{table}\".id = {fk} AND auth.uid() = \"{table}\".{owner_col})"
+                    );
+                }
+            }
+
+            return format!("auth.uid() = {fk}");
+        }
+
+        let column = resolve_owner_column(model, kernel_field);
+        return format!("auth.uid() = {column}");
+    }
+
+    let column = resolve_owner_column(model, kernel_field);
+    format!("auth.uid() = {column}")
+}
+
+/// Models whose primary key is the auth user id (e.g. Profile), not a generated UUID.
+fn is_user_identity_model(model: &ModelAst) -> bool {
+    let Some(FieldAst::Uuid(id)) = model.fields.get("id") else {
+        return false;
+    };
+    if !id.primary_key {
+        return false;
+    }
+    !matches!(id.default, Some(DefaultValueAst::GenRandomUuid))
+}
+
+/// Owner column on a related model (from its read/update Owner rule).
+fn owner_column_on_model(model: &ModelAst) -> Option<String> {
+    let access = platform_access(model);
+    let rule = access.read.as_ref().or(access.update.as_ref())?;
+    let AccessRule::Owner { field } = rule else {
+        return None;
+    };
+    if field == "id" {
+        return Some("id".to_string());
+    }
+    Some(resolve_owner_column(model, field))
 }

@@ -77,6 +77,11 @@ enum Command {
             help = "Bypass schema state cache and do a full DB introspection"
         )]
         no_cache: bool,
+        #[arg(
+            long,
+            help = "Fail push when post-apply drift remains (missing or stale managed objects)"
+        )]
+        strict: bool,
     },
     /// Generate typed client code (TypeScript by default; use --lang for other languages)
     Generate {
@@ -124,6 +129,29 @@ enum Command {
     Validate {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
+    },
+    /// Report schema drift between AST and live database (read-only)
+    Doctor {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long, default_value = "public")]
+        schema: String,
+        #[arg(long, help = "Exit non-zero when missing or stale managed drift exists")]
+        strict: bool,
+    },
+    /// Stamp managed comments on DB objects matching the AST (adoption ceremony)
+    Adopt {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long, default_value = "public")]
+        schema: String,
+        #[arg(long, help = "Apply stamp SQL without interactive confirmation")]
+        yes: bool,
+        #[arg(
+            long,
+            help = "Bypass schema state cache and do a full DB introspection"
+        )]
+        no_cache: bool,
     },
 }
 
@@ -191,6 +219,7 @@ async fn main() -> Result<()> {
             name,
             non_interactive,
             no_cache,
+            strict,
         } => {
             use supatype_engine::state::{migration_history, studio_state};
             let ast = supatype_engine::parser::parse(&input)?;
@@ -391,6 +420,26 @@ async fn main() -> Result<()> {
                 }
             };
 
+            let drift_warnings =
+                supatype_engine::differ::integrity::post_push_warnings(&ast, &new_db_state);
+            if strict
+                && !supatype_engine::differ::integrity::post_push_ok(&ast, &new_db_state, true)
+            {
+                let msg = drift_warnings.join("; ");
+                migration_history::rollback_push_tx(
+                    tx,
+                    &pool,
+                    &migration_name,
+                    &hash,
+                    &apply_batch,
+                    &msg,
+                )
+                .await;
+                return Err(anyhow::anyhow!(
+                    "Push rolled back: post-apply schema drift in strict mode ({msg})"
+                ));
+            }
+
             if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
                 migration_history::rollback_push_tx(
                     tx,
@@ -430,10 +479,12 @@ async fn main() -> Result<()> {
             tx.commit().await.context("commit migration transaction")?;
 
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
+            let warnings_json = serde_json::to_string(&drift_warnings)?;
             println!(
-                "{{\"status\":\"applied\",\"name\":\"{}\",\"operations\":{}}}",
+                "{{\"status\":\"applied\",\"name\":\"{}\",\"operations\":{},\"warnings\":{}}}",
                 migration_name,
-                diff.operations.len()
+                diff.operations.len(),
+                warnings_json
             );
         }
         Command::Generate { lang } => {
@@ -522,6 +573,93 @@ async fn main() -> Result<()> {
             let pool = sqlx::PgPool::connect(&database_url).await?;
             let report = supatype_engine::differ::risk_analyser::validate(&diff, &pool).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        Command::Doctor {
+            database_url,
+            schema,
+            strict,
+        } => {
+            let ast = supatype_engine::parser::parse(&input)?;
+            let pool = sqlx::PgPool::connect(&database_url).await?;
+            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
+            let report = supatype_engine::differ::doctor::report(&ast, &db_state);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if strict && supatype_engine::differ::doctor::has_strict_issues(&report) {
+                std::process::exit(1);
+            }
+        }
+        Command::Adopt {
+            database_url,
+            schema,
+            yes,
+            no_cache,
+        } => {
+            use supatype_engine::state::migration_history;
+            let ast = supatype_engine::parser::parse(&input)?;
+            let pool = sqlx::PgPool::connect(&database_url).await?;
+
+            sqlx::raw_sql(migration_history::create_internal_schema_sql())
+                .execute(&pool)
+                .await?;
+            sqlx::raw_sql(&migration_history::create_migrations_table_sql())
+                .execute(&pool)
+                .await?;
+            sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
+                .execute(&pool)
+                .await?;
+
+            let db_state = if no_cache {
+                supatype_engine::introspector::introspect(&pool, &schema).await?
+            } else if let Some(cached) = migration_history::load_schema_state(&pool).await {
+                cached
+            } else {
+                supatype_engine::introspector::introspect(&pool, &schema).await?
+            };
+
+            let stamp_sql =
+                supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db_state, &schema);
+            let doctor_report = supatype_engine::differ::doctor::report(&ast, &db_state);
+
+            if !yes {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "status": "preview",
+                        "stampStatements": stamp_sql,
+                        "doctor": doctor_report,
+                    }))?
+                );
+                return Ok(());
+            }
+
+            if stamp_sql.is_empty() {
+                println!("{{\"status\":\"nothing_to_stamp\"}}");
+                return Ok(());
+            }
+
+            let batch = stamp_sql.join("\n");
+            sqlx::raw_sql(&batch).execute(&pool).await?;
+
+            let fresh = supatype_engine::introspector::introspect(&pool, &schema).await?;
+            migration_history::save_schema_state(&pool, &fresh).await?;
+
+            let migration_name = format!("adopt_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
+            let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
+            migration_history::insert_applied_migration(
+                &pool,
+                &migration_name,
+                "adopt",
+                serde_json::to_value(&ast).ok(),
+                admin_cfg,
+                &batch,
+            )
+            .await?;
+
+            println!(
+                "{{\"status\":\"adopted\",\"stamped\":{},\"name\":\"{}\"}}",
+                stamp_sql.len(),
+                migration_name
+            );
         }
     }
 

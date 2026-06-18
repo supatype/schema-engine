@@ -1,4 +1,4 @@
-use super::DiffOutput;
+use super::{DiffOutput, Operation};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -19,13 +19,43 @@ pub struct ValidationCheck {
 }
 
 /// Run pre-flight checks against production data before applying a migration.
-pub async fn validate(_diff: &DiffOutput, _pool: &PgPool) -> Result<ValidationReport> {
-    let checks = Vec::new();
+pub async fn validate(diff: &DiffOutput, pool: &PgPool) -> Result<ValidationReport> {
+    let mut checks = Vec::new();
 
-    // TODO: Phase 1 — check for NULL values before SET NOT NULL,
-    // check for duplicates before ADD UNIQUE, etc.
+    for op in &diff.operations {
+        if let Operation::AddUniqueConstraint {
+            table,
+            column,
+            constraint,
+            ..
+        } = op
+        {
+            let op_label = format!("AddUniqueConstraint {table}.{column}");
+            let (total, distinct): (i64, i64) = sqlx::query_as(&format!(
+                "SELECT COUNT(*)::bigint, COUNT(DISTINCT \"{column}\")::bigint \
+                 FROM \"{table}\" WHERE \"{column}\" IS NOT NULL"
+            ))
+            .fetch_one(pool)
+            .await?;
 
-    let safe_to_apply = checks.iter().all(|c: &ValidationCheck| c.passed);
+            let passed = total == distinct;
+            let message = if passed {
+                format!("No duplicate values in {table}.{column}")
+            } else {
+                let dupes = total - distinct;
+                format!(
+                    "{dupes} duplicate value(s) in {table}.{column} — cannot add constraint {constraint}"
+                )
+            };
+            checks.push(ValidationCheck {
+                operation: op_label,
+                passed,
+                message,
+            });
+        }
+    }
+
+    let safe_to_apply = checks.iter().all(|c| c.passed);
     Ok(ValidationReport {
         safe_to_apply,
         checks,

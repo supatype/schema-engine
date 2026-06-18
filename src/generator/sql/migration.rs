@@ -1,4 +1,10 @@
 use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
+use crate::differ::column_diff::column_names_for;
+use crate::managed::{
+    comment_on_constraint_sql, comment_on_index_sql, expected_unique_constraint_name,
+    managed_comment,
+};
+use crate::parser::accessors::db_unique;
 use crate::generator::sql::column_conversion::{
     add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
@@ -189,6 +195,8 @@ fn render_forward_operation_lines(
             | Operation::DropIndex { risk, .. }
             | Operation::AddForeignKey { risk, .. }
             | Operation::DropForeignKey { risk, .. }
+            | Operation::AddUniqueConstraint { risk, .. }
+            | Operation::DropUniqueConstraint { risk, .. }
             | Operation::CreateEnum { risk, .. }
             | Operation::DropEnum { risk, .. }
             | Operation::AddEnumValue { risk, .. }
@@ -259,6 +267,12 @@ fn op_description(op: &Operation) -> String {
         Operation::DropForeignKey {
             table, constraint, ..
         } => format!("Drop FK: {table}.{constraint}"),
+        Operation::AddUniqueConstraint {
+            table, column, ..
+        } => format!("Add unique constraint: {table}.{column}"),
+        Operation::DropUniqueConstraint {
+            table, constraint, ..
+        } => format!("Drop unique constraint: {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("Create enum: {name}"),
         Operation::DropEnum { name, .. } => format!("Drop enum: {name}"),
         Operation::AddEnumValue {
@@ -318,7 +332,7 @@ fn render_create_rls_policy_sql(
     let rule = rule
         .ok_or_else(|| anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}"))?;
     Ok(crate::generator::sql::rls::render_policy_migration_sql(
-        schema, table, suffix, model, rule,
+        schema, table, suffix, ast, model, rule,
     ))
 }
 
@@ -433,6 +447,17 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             ref_schema.as_deref().unwrap_or(schema),
         ),
         Operation::DropForeignKey {
+            table, constraint, ..
+        } => Ok(format!(
+            "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
+        )),
+        Operation::AddUniqueConstraint {
+            table,
+            column,
+            constraint,
+            ..
+        } => add_unique_constraint_sql(table, column, constraint, schema),
+        Operation::DropUniqueConstraint {
             table, constraint, ..
         } => Ok(format!(
             "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
@@ -659,6 +684,21 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
         col_defs.join(",\n")
     )];
 
+    // Stamp inline UNIQUE constraints created by CREATE TABLE.
+    for (field_name, field) in &model.fields {
+        if !db_unique(field) || matches!(field, FieldAst::Relation(_)) {
+            continue;
+        }
+        for col in column_names_for(field_name, field) {
+            if col.is_empty() {
+                continue;
+            }
+            let constraint = expected_unique_constraint_name(table, &col);
+            let comment = managed_comment("unique_constraint", table, &[col.as_str()]);
+            statements.push(comment_on_constraint_sql(table, &constraint, &comment, schema));
+        }
+    }
+
     // Explicit model-level indexes
     for index in model.indexes() {
         statements.push(create_index_sql(table, index, schema)?);
@@ -707,10 +747,13 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
 
     // Singleton (global config) — enforce exactly one row via a partial unique index.
     if model.options.singleton {
+        let idx_name = format!("{table}_singleton_idx");
         statements.push(format!(
-            "CREATE UNIQUE INDEX IF NOT EXISTS \"{table}_singleton_idx\" \
+            "CREATE UNIQUE INDEX IF NOT EXISTS \"{idx_name}\" \
              ON \"{schema}\".\"{table}\" ((TRUE));"
         ));
+        let comment = managed_comment("unique_index", table, &[]);
+        statements.push(comment_on_index_sql(&idx_name, &comment, schema));
     }
 
     Ok(statements.join("\n\n"))
@@ -1184,8 +1227,30 @@ fn create_index_sql(table: &str, index: &IndexAst, schema: &str) -> Result<Strin
         Box::leak(format!("{table}_{}_idx", index.fields.join("_")).into_boxed_str())
     });
 
+    let kind = if index.unique {
+        "unique_index"
+    } else {
+        "index"
+    };
+    let field_refs: Vec<&str> = index.fields.iter().map(String::as_str).collect();
+    let comment = managed_comment(kind, table, &field_refs);
+    let comment_sql = comment_on_index_sql(idx_name, &comment, schema);
+
     Ok(format!(
-        "CREATE {unique}INDEX IF NOT EXISTS \"{idx_name}\" ON \"{schema}\".\"{table}\" USING {method} ({cols});"
+        "CREATE {unique}INDEX IF NOT EXISTS \"{idx_name}\" ON \"{schema}\".\"{table}\" USING {method} ({cols});\n{comment_sql}"
+    ))
+}
+
+fn add_unique_constraint_sql(
+    table: &str,
+    column: &str,
+    constraint: &str,
+    schema: &str,
+) -> Result<String> {
+    let comment = managed_comment("unique_constraint", table, &[column]);
+    let comment_sql = comment_on_constraint_sql(table, constraint, &comment, schema);
+    Ok(format!(
+        "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" UNIQUE (\"{column}\");\n{comment_sql}"
     ))
 }
 

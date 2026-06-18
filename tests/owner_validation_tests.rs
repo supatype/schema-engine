@@ -65,7 +65,7 @@ fn owner_rule_accepts_kernel_relation_field_name() {
         serialized.contains("\"field\":\"author\""),
         "owner field should keep kernel name author, got: {serialized}"
     );
-    let expr = access_rule_to_expr(post, rule);
+    let expr = access_rule_to_expr(&ast, post, rule);
     assert!(
         expr.contains("auth.uid() = author_id"),
         "RLS should resolve author to author_id column, got: {expr}"
@@ -147,5 +147,98 @@ fn owner_rule_allows_self_id_without_relations() {
     assert!(
         todo.access().update.is_some(),
         "update rule should be preserved"
+    );
+}
+
+#[test]
+fn owner_from_nested_relation_generates_exists_subquery() {
+    let schema = r#"{
+        "astVersion": 2,
+        "models": [
+            {
+                "name": "Profile",
+                "fields": {
+                    "id": {
+                        "kind": "uuid",
+                        "primaryKey": true,
+                        "required": true,
+                        "annotations": { "db": { "pgType": "UUID" } }
+                    }
+                },
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "profile", "indexes": [] },
+                    "platform": { "access": {} }
+                }
+            },
+            {
+                "name": "Album",
+                "fields": {
+                    "id": {
+                        "kind": "uuid",
+                        "primaryKey": true,
+                        "required": true,
+                        "default": { "kind": "genRandomUuid" },
+                        "annotations": { "db": { "pgType": "UUID" } }
+                    },
+                    "owner": {
+                        "kind": "relation",
+                        "cardinality": "belongsTo",
+                        "target": "Profile",
+                        "annotations": { "db": { "foreignKey": "owner_id" } }
+                    }
+                },
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "album", "indexes": [] },
+                    "platform": {
+                        "access": {
+                            "read": { "type": "owner", "field": "owner" }
+                        }
+                    }
+                }
+            },
+            {
+                "name": "Photo",
+                "fields": {
+                    "album": {
+                        "kind": "relation",
+                        "cardinality": "belongsTo",
+                        "target": "Album",
+                        "annotations": { "db": { "foreignKey": "album_id" } }
+                    }
+                },
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "photo", "indexes": [] },
+                    "platform": {
+                        "access": {
+                            "read": { "type": "owner", "field": "album" }
+                        }
+                    }
+                }
+            }
+        ]
+    }"#;
+
+    let ast = parser::parse(schema).expect("schema must parse");
+    let photo = ast
+        .models
+        .iter()
+        .find(|m| m.name == "Photo")
+        .expect("Photo model must exist");
+    let rule = photo.access().read.as_ref().expect("read rule must exist");
+    let expr = access_rule_to_expr(&ast, photo, rule);
+    assert!(
+        expr.contains("EXISTS (SELECT 1 FROM \"album\""),
+        "OwnerFrom<album> must check ownership via album table, got: {expr}"
+    );
+    assert!(
+        expr.contains("owner_id"),
+        "must compare album owner_id to auth.uid(), got: {expr}"
+    );
+    assert!(
+        !expr.contains("auth.uid() = album_id"),
+        "must not compare uid() directly to album_id, got: {expr}"
     );
 }

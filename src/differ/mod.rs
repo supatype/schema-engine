@@ -1,7 +1,9 @@
 pub mod column_diff;
 pub mod constraint_diff;
+pub mod doctor;
 pub mod enum_diff;
 pub mod index_diff;
+pub mod integrity;
 pub mod ordering;
 pub mod risk_analyser;
 pub mod rls_diff;
@@ -97,6 +99,17 @@ pub enum Operation {
         risk: Risk,
     },
     DropForeignKey {
+        table: String,
+        constraint: String,
+        risk: Risk,
+    },
+    AddUniqueConstraint {
+        table: String,
+        column: String,
+        constraint: String,
+        risk: Risk,
+    },
+    DropUniqueConstraint {
         table: String,
         constraint: String,
         risk: Risk,
@@ -227,6 +240,7 @@ pub fn diff_with_previous(
 
     enum_diff::diff(ast, db, &mut ops, &mut warnings)?;
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
+    constraint_diff::diff(ast, db, &mut ops)?;
     index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
     trigger_diff::diff(ast, db, &mut ops)?;
@@ -272,6 +286,8 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::DropIndex { risk, .. }
         | Operation::AddForeignKey { risk, .. }
         | Operation::DropForeignKey { risk, .. }
+        | Operation::AddUniqueConstraint { risk, .. }
+        | Operation::DropUniqueConstraint { risk, .. }
         | Operation::CreateEnum { risk, .. }
         | Operation::DropEnum { risk, .. }
         | Operation::AddEnumValue { risk, .. }

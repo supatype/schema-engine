@@ -77,6 +77,8 @@ async fn main() {
         .route("/push", post(server::routes::push))
         .route("/migrations", post(server::routes::migrations))
         .route("/validate", post(server::routes::validate))
+        .route("/doctor", post(server::routes::doctor))
+        .route("/adopt", post(server::routes::adopt))
         .route("/studio-config", post(server::routes::studio_config))
         .route("/sql", post(server::routes::execute_sql))
         .route_layer(from_fn(require_admin_token));

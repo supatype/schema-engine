@@ -13,6 +13,9 @@ pub struct DbConstraint {
     pub foreign_columns: Option<Vec<String>>,
     pub check_expression: Option<String>,
     pub on_delete: Option<String>,
+    /// Postgres `COMMENT ON CONSTRAINT` text, when set.
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,21 +83,29 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 foreign_columns: Some(foreign_columns),
                 check_expression: None,
                 on_delete,
+                comment: None,
             },
         )
         .collect();
 
-    // Read UNIQUE constraints
-    let unique_rows: Vec<(String, String, String)> = sqlx::query_as(
+    // Read UNIQUE constraints (with optional comment)
+    let unique_rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         r#"
         SELECT
             tc.table_name,
             tc.constraint_name,
-            kcu.column_name
+            kcu.column_name,
+            pg_catalog.obj_description(c.oid, 'pg_constraint')
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
             ON tc.constraint_name = kcu.constraint_name
            AND tc.table_schema    = kcu.table_schema
+        JOIN pg_catalog.pg_constraint c
+            ON c.conname = tc.constraint_name
+        JOIN pg_catalog.pg_class cl
+            ON cl.oid = c.conrelid
+        JOIN pg_catalog.pg_namespace n
+            ON n.oid = cl.relnamespace AND n.nspname = tc.table_schema
         WHERE tc.table_schema    = $1
           AND tc.constraint_type = 'UNIQUE'
         ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position
@@ -104,12 +115,15 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
     .fetch_all(&mut *conn)
     .await?;
 
-    let mut unique_map: std::collections::HashMap<(String, String), Vec<String>> =
+    let mut unique_map: std::collections::HashMap<(String, String), (Vec<String>, Option<String>)> =
         std::collections::HashMap::new();
-    for (table, constraint, col) in unique_rows {
-        unique_map.entry((table, constraint)).or_default().push(col);
+    for (table, constraint, col, comment) in unique_rows {
+        let entry = unique_map
+            .entry((table.clone(), constraint.clone()))
+            .or_insert_with(|| (vec![], comment));
+        entry.0.push(col);
     }
-    for ((table, name), columns) in unique_map {
+    for ((table, name), (columns, comment)) in unique_map {
         constraints.push(DbConstraint {
             table,
             name,
@@ -119,6 +133,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
             foreign_columns: None,
             check_expression: None,
             on_delete: None,
+            comment,
         });
     }
 
@@ -153,6 +168,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
             foreign_columns: None,
             check_expression: Some(check_clause),
             on_delete: None,
+            comment: None,
         });
     }
 

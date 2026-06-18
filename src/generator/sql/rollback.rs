@@ -117,6 +117,19 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
             format!("-- WARNING: Cannot automatically roll back DROP CONSTRAINT \"{table}\".\"{constraint}\". \
                      Restore from backup.")
         }
+        Operation::AddUniqueConstraint {
+            table, constraint, ..
+        } => {
+            format!(
+                "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
+            )
+        }
+        Operation::DropUniqueConstraint {
+            table, constraint, ..
+        } => {
+            format!("-- WARNING: Cannot automatically roll back DROP CONSTRAINT \"{table}\".\"{constraint}\". \
+                     Recreate the unique constraint manually.")
+        }
         // CreateEnum → DROP TYPE
         Operation::CreateEnum { name, .. } => {
             format!("DROP TYPE IF EXISTS \"{name}\";")
@@ -328,6 +341,12 @@ fn forward_description(op: &Operation) -> String {
         Operation::DropForeignKey {
             table, constraint, ..
         } => format!("drop fk {table}.{constraint}"),
+        Operation::AddUniqueConstraint {
+            table, column, ..
+        } => format!("add unique {table}.{column}"),
+        Operation::DropUniqueConstraint {
+            table, constraint, ..
+        } => format!("drop unique {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("create enum {name}"),
         Operation::DropEnum { name, .. } => format!("drop enum {name}"),
         Operation::AddEnumValue {

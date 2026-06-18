@@ -44,6 +44,7 @@ fn fk(table: &str, col_name: &str, ftable: &str) -> DbConstraint {
         foreign_columns: Some(vec!["id".into()]),
         check_expression: None,
         on_delete: Some("RESTRICT".into()),
+        comment: None,
     }
 }
 
@@ -2239,7 +2240,18 @@ fn test_rls_any_rule_generates_or_expression() {
         options: Default::default(),
         annotations: Default::default(),
     };
-    let expr = access_rule_to_expr(&model, &rule);
+    let ast = supatype_engine::parser::ast::SchemaAst {
+        ast_version: 2,
+        models: vec![model.clone()],
+        junction_tables: vec![],
+        storage_buckets: vec![],
+        locales: vec![],
+        default_locale: None,
+        plugins: vec![],
+        sso: None,
+        warnings: vec![],
+    };
+    let expr = access_rule_to_expr(&ast, &model, &rule);
     assert!(expr.contains("OR"), "any() rule must produce OR expression");
     assert!(
         expr.contains("auth.uid()"),
@@ -6625,4 +6637,207 @@ fn test_array_element_type_change_detected() {
         .iter()
         .any(|op| matches!(op, Operation::AlterColumn { column, .. } if column == "names"));
     assert!(alter, "text[] → integer[] should emit AlterColumn");
+}
+
+// ─── Managed objects: Keepsake slug unique regression ───────────────────────
+
+fn managed_unique_constraint(table: &str, column: &str) -> DbConstraint {
+    DbConstraint {
+        table: table.into(),
+        name: format!("{table}_{column}_key"),
+        constraint_type: DbConstraintType::Unique,
+        columns: vec![column.into()],
+        foreign_table: None,
+        foreign_columns: None,
+        check_expression: None,
+        on_delete: None,
+        comment: Some(format!(
+            "supatype:managed;kind=unique_constraint;table={table};fields={column};v=1"
+        )),
+    }
+}
+
+#[test]
+fn test_drop_managed_slug_unique_when_removed_from_ast() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [{
+    "name": "Album",
+    "fields": {
+      "id": { "kind": "uuid", "primaryKey": true, "required": true,
+        "annotations": { "db": { "pgType": "UUID" } } },
+      "owner_id": { "kind": "uuid", "required": true,
+        "annotations": { "db": { "pgType": "UUID" } } },
+      "slug": { "kind": "slug", "required": true, "from": "title",
+        "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+      "title": { "kind": "text", "required": true,
+        "annotations": { "db": { "pgType": "TEXT" } } }
+    },
+    "options": {},
+    "annotations": {
+      "db": {
+        "tableName": "album",
+        "indexes": [{ "fields": ["owner_id", "slug"], "unique": true, "using": "btree" }]
+      },
+      "platform": { "access": {} }
+    }
+  }]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "album".into(),
+            columns: vec![
+                col("id", "uuid"),
+                col("owner_id", "uuid"),
+                col("slug", "text"),
+                col("title", "text"),
+            ],
+        }],
+        constraints: vec![managed_unique_constraint("album", "slug")],
+        indexes: vec![supatype_engine::introspector::indexes::DbIndex {
+            table: "album".into(),
+            name: "album_owner_id_slug_idx".into(),
+            columns: vec!["owner_id".into(), "slug".into()],
+            unique: true,
+            method: "btree".into(),
+            is_primary: false,
+            comment: Some(
+                "supatype:managed;kind=unique_index;table=album;fields=owner_id,slug;v=1".into(),
+            ),
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    assert!(
+        diff.operations.iter().any(|op| {
+            matches!(
+                op,
+                Operation::DropUniqueConstraint {
+                    constraint,
+                    table,
+                    ..
+                } if table == "album" && constraint == "album_slug_key"
+            )
+        }),
+        "expected DropUniqueConstraint for managed album_slug_key; got {:?}",
+        diff.operations
+    );
+}
+
+#[test]
+fn test_unmanaged_slug_unique_never_auto_dropped() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [{
+    "name": "Album",
+    "fields": {
+      "id": { "kind": "uuid", "primaryKey": true, "required": true,
+        "annotations": { "db": { "pgType": "UUID" } } },
+      "title": { "kind": "text", "required": true,
+        "annotations": { "db": { "pgType": "TEXT" } } },
+      "slug": { "kind": "slug", "required": true, "from": "title",
+        "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+    },
+    "options": {},
+    "annotations": {
+      "db": { "tableName": "album", "indexes": [] },
+      "platform": { "access": {} }
+    }
+  }]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let mut constraint = managed_unique_constraint("album", "slug");
+    constraint.comment = None;
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "album".into(),
+            columns: vec![col("id", "uuid"), col("title", "text"), col("slug", "text")],
+        }],
+        constraints: vec![constraint],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    assert!(
+        !diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::DropUniqueConstraint { .. })),
+        "unmanaged constraint must not be auto-dropped"
+    );
+
+    let report = supatype_engine::differ::doctor::report(&ast, &db);
+    assert!(
+        report.unmanaged_drift.iter().any(|i| i.name == "album_slug_key"),
+        "doctor should flag unmanaged album_slug_key"
+    );
+}
+
+#[test]
+fn test_drop_managed_model_index_removed_from_ast() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [{
+    "name": "Album",
+    "fields": {
+      "id": { "kind": "uuid", "primaryKey": true, "required": true,
+        "annotations": { "db": { "pgType": "UUID" } } },
+      "owner_id": { "kind": "uuid", "required": true,
+        "annotations": { "db": { "pgType": "UUID" } } },
+      "title": { "kind": "text", "required": true,
+        "annotations": { "db": { "pgType": "TEXT" } } },
+      "slug": { "kind": "slug", "required": true, "from": "title",
+        "annotations": { "db": { "pgType": "TEXT" } } }
+    },
+    "options": {},
+    "annotations": {
+      "db": { "tableName": "album", "indexes": [] },
+      "platform": { "access": {} }
+    }
+  }]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "album".into(),
+            columns: vec![
+                col("id", "uuid"),
+                col("owner_id", "uuid"),
+                col("title", "text"),
+                col("slug", "text"),
+            ],
+        }],
+        indexes: vec![supatype_engine::introspector::indexes::DbIndex {
+            table: "album".into(),
+            name: "album_owner_id_slug_idx".into(),
+            columns: vec!["owner_id".into(), "slug".into()],
+            unique: true,
+            method: "btree".into(),
+            is_primary: false,
+            comment: Some(
+                "supatype:managed;kind=unique_index;table=album;fields=owner_id,slug;v=1".into(),
+            ),
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    assert!(
+        diff.operations.iter().any(|op| {
+            matches!(
+                op,
+                Operation::DropIndex { index_name, .. } if index_name == "album_owner_id_slug_idx"
+            )
+        }),
+        "expected DropIndex for stale managed index; got {:?}",
+        diff.operations
+    );
 }

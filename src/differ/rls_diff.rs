@@ -99,7 +99,7 @@ pub fn diff(
 
             for (suffix, rule_opt) in &expected {
                 let policy_name = format!("{table}_{suffix}");
-                let expected_expr = normalise(&access_rule_to_expr(model, rule_opt.unwrap()));
+                let expected_expr = normalise(&access_rule_to_expr(ast, model, rule_opt.unwrap()));
 
                 if let Some(db_pol) = db_pol_map.get(policy_name.as_str()) {
                     // Policy exists — compare the USING or WITH CHECK expression.

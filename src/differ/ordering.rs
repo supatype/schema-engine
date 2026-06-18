@@ -28,6 +28,7 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::AlterColumn { .. } => 7,
         Operation::RecreateColumn { .. } => 7,
         Operation::AddForeignKey { .. } => 8,
+        Operation::AddUniqueConstraint { .. } => 8,
         Operation::AddIndex { .. } => 9,
         Operation::EnableRls { .. } => 10,
         // Drop RLS policies BEFORE creating them, so a drop+recreate of the same
@@ -37,6 +38,7 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::CreateTrigger { .. } => 13,
         Operation::DropTrigger { .. } => 14,
         Operation::DropForeignKey { .. } => 15,
+        Operation::DropUniqueConstraint { .. } => 15,
         Operation::DropIndex { .. } => 16,
         Operation::DropColumn { .. } => 17,
         Operation::DropTable { .. } => 18,

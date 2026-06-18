@@ -9,6 +9,8 @@ pub mod licensing;
 pub mod parser;
 pub mod wasm;
 
+pub mod managed;
+
 // DB-dependent modules — not needed in WASM context
 #[cfg(not(target_arch = "wasm32"))]
 pub mod differ;
