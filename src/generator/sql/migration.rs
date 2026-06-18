@@ -1,14 +1,14 @@
-use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
 use crate::differ::column_diff::column_names_for;
+use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
+use crate::generator::sql::column_conversion::{
+    add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
+    using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
+};
 use crate::managed::{
     comment_on_constraint_sql, comment_on_index_sql, expected_unique_constraint_name,
     managed_comment,
 };
 use crate::parser::accessors::db_unique;
-use crate::generator::sql::column_conversion::{
-    add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
-    using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
-};
 use crate::parser::ast::{
     DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst, SchemaAst,
@@ -267,9 +267,9 @@ fn op_description(op: &Operation) -> String {
         Operation::DropForeignKey {
             table, constraint, ..
         } => format!("Drop FK: {table}.{constraint}"),
-        Operation::AddUniqueConstraint {
-            table, column, ..
-        } => format!("Add unique constraint: {table}.{column}"),
+        Operation::AddUniqueConstraint { table, column, .. } => {
+            format!("Add unique constraint: {table}.{column}")
+        }
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("Drop unique constraint: {table}.{constraint}"),
@@ -695,7 +695,12 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
             }
             let constraint = expected_unique_constraint_name(table, &col);
             let comment = managed_comment("unique_constraint", table, &[col.as_str()]);
-            statements.push(comment_on_constraint_sql(table, &constraint, &comment, schema));
+            statements.push(comment_on_constraint_sql(
+                table,
+                &constraint,
+                &comment,
+                schema,
+            ));
         }
     }
 

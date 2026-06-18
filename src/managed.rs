@@ -28,11 +28,14 @@ pub fn expected_model_index_name(table: &str, fields: &[String]) -> String {
 }
 
 /// SQL to stamp a constraint comment (escaped single quotes in comment).
-pub fn comment_on_constraint_sql(table: &str, constraint: &str, comment: &str, schema: &str) -> String {
+pub fn comment_on_constraint_sql(
+    table: &str,
+    constraint: &str,
+    comment: &str,
+    schema: &str,
+) -> String {
     let escaped = comment.replace('\'', "''");
-    format!(
-        "COMMENT ON CONSTRAINT \"{constraint}\" ON \"{schema}\".\"{table}\" IS '{escaped}';"
-    )
+    format!("COMMENT ON CONSTRAINT \"{constraint}\" ON \"{schema}\".\"{table}\" IS '{escaped}';")
 }
 
 /// SQL to stamp an index comment.

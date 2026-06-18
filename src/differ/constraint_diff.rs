@@ -87,7 +87,10 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, ops: &mut Vec<Operation>) -> Re
         }
         // Also skip if a matching expected unique exists under a different constraint name.
         let col = constraint.columns.first().map(String::as_str).unwrap_or("");
-        if expected.iter().any(|e| e.table == constraint.table && e.column == col) {
+        if expected
+            .iter()
+            .any(|e| e.table == constraint.table && e.column == col)
+        {
             continue;
         }
         if !is_managed_comment(constraint.comment.as_deref()) {
@@ -104,7 +107,6 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, ops: &mut Vec<Operation>) -> Re
 }
 
 fn table_being_created(ops: &[Operation], table: &str) -> bool {
-    ops.iter().any(|op| {
-        matches!(op, Operation::CreateTable { table: t, .. } if t == table)
-    })
+    ops.iter()
+        .any(|op| matches!(op, Operation::CreateTable { table: t, .. } if t == table))
 }

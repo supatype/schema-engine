@@ -1,8 +1,7 @@
 use crate::differ::column_diff::column_names_for;
 use crate::introspector::constraints::{DbConstraint, DbConstraintType};
 use crate::managed::{
-    expected_model_index_name, expected_unique_constraint_name, is_managed_comment,
-    managed_comment,
+    expected_model_index_name, expected_unique_constraint_name, is_managed_comment, managed_comment,
 };
 use crate::parser::accessors::db_unique;
 use crate::parser::ast::{FieldAst, SchemaAst};
@@ -67,7 +66,10 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
     }
 
     for exp in &expected_indexes {
-        let exists = db.indexes.iter().any(|i| i.table == exp.table && i.name == exp.index_name);
+        let exists = db
+            .indexes
+            .iter()
+            .any(|i| i.table == exp.table && i.name == exp.index_name);
         if !exists {
             missing.push(DoctorItem {
                 kind: if exp.unique {
@@ -95,11 +97,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
         if expected_unique_keys.contains(&key) {
             continue;
         }
-        let col = constraint
-            .columns
-            .first()
-            .cloned()
-            .unwrap_or_default();
+        let col = constraint.columns.first().cloned().unwrap_or_default();
         if expected_uniques
             .iter()
             .any(|e| e.table == constraint.table && e.column == col)
@@ -114,9 +112,11 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
         }
     }
 
-    for idx in db.indexes.iter().filter(|i| {
-        !i.is_primary && schema_tables.contains(i.table.as_str())
-    }) {
+    for idx in db
+        .indexes
+        .iter()
+        .filter(|i| !i.is_primary && schema_tables.contains(i.table.as_str()))
+    {
         let key = (idx.table.clone(), idx.name.clone());
         if expected_index_keys.contains(&key) {
             continue;
@@ -265,10 +265,7 @@ pub fn adopt_stamp_sql(ast: &SchemaAst, db: &DatabaseState, schema: &str) -> Vec
             if !is_managed_comment(c.comment.as_deref()) {
                 let comment = managed_comment("unique_constraint", &exp.table, &[&exp.column]);
                 lines.push(crate::managed::comment_on_constraint_sql(
-                    &exp.table,
-                    &c.name,
-                    &comment,
-                    schema,
+                    &exp.table, &c.name, &comment, schema,
                 ));
             }
         }
@@ -281,11 +278,7 @@ pub fn adopt_stamp_sql(ast: &SchemaAst, db: &DatabaseState, schema: &str) -> Vec
             .find(|i| i.table == exp.table && i.name == exp.index_name);
         if let Some(i) = idx {
             if !is_managed_comment(i.comment.as_deref()) {
-                let kind = if exp.unique {
-                    "unique_index"
-                } else {
-                    "index"
-                };
+                let kind = if exp.unique { "unique_index" } else { "index" };
                 let field_refs: Vec<&str> = exp.fields.iter().map(String::as_str).collect();
                 let comment = managed_comment(kind, &exp.table, &field_refs);
                 lines.push(crate::managed::comment_on_index_sql(

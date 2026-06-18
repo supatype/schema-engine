@@ -250,19 +250,11 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         }
     };
 
-    let drift_warnings =
-        crate::differ::integrity::post_push_warnings(&ast, &new_db_state);
+    let drift_warnings = crate::differ::integrity::post_push_warnings(&ast, &new_db_state);
     if req.strict && !crate::differ::integrity::post_push_ok(&ast, &new_db_state, true) {
         let msg = drift_warnings.join("; ");
-        migration_history::rollback_push_tx(
-            tx,
-            &pool,
-            &migration_name,
-            &hash,
-            &apply_batch,
-            &msg,
-        )
-        .await;
+        migration_history::rollback_push_tx(tx, &pool, &migration_name, &hash, &apply_batch, &msg)
+            .await;
         return Err(engine_error(anyhow::anyhow!(
             "Push rolled back: post-apply schema drift in strict mode ({msg})"
         )));
@@ -488,15 +480,9 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    let db_state = if req.no_cache {
-        crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?
-    } else {
-        crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?
-    };
+    let db_state = crate::introspector::introspect(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
     let report = crate::differ::doctor::report(&ast, &db_state);
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
