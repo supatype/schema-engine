@@ -28,10 +28,27 @@ fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
 /// differences (schema prefix, parentheses, quotes, whitespace) so an unchanged
 /// policy compares equal and is left untouched. The same transform is applied to
 /// both sides, so it only ever collapses incidental formatting, never semantics.
-fn normalise(s: &str) -> String {
+/// Postgres also qualifies columns on the policy's own table (`photo.album_id` vs
+/// `album_id` in generated SQL). Strip only that table prefix so subquery refs
+/// like `album.owner_id` are preserved.
+fn normalise(s: &str, table: &str) -> String {
     let mut out = s.replace("auth.", "");
     out.retain(|c| c != '(' && c != ')' && c != '"');
+    let table_prefix = format!("{table}.");
+    out = out.replace(&table_prefix, "");
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalise;
+
+    #[test]
+    fn normalise_strips_own_table_column_prefix() {
+        let generated = "EXISTS (SELECT 1 FROM \"album\" WHERE \"album\".id = album_id AND auth.uid() = \"album\".owner_id)";
+        let stored = "(EXISTS ( SELECT 1 FROM album WHERE ((album.id = photo.album_id) AND (uid() = album.owner_id))))";
+        assert_eq!(normalise(generated, "photo"), normalise(stored, "photo"));
+    }
 }
 
 pub fn diff(
@@ -99,7 +116,8 @@ pub fn diff(
 
             for (suffix, rule_opt) in &expected {
                 let policy_name = format!("{table}_{suffix}");
-                let expected_expr = normalise(&access_rule_to_expr(ast, model, rule_opt.unwrap()));
+                let expected_expr =
+                    normalise(&access_rule_to_expr(ast, model, rule_opt.unwrap()), table);
 
                 if let Some(db_pol) = db_pol_map.get(policy_name.as_str()) {
                     // Policy exists — compare the USING or WITH CHECK expression.
@@ -107,7 +125,7 @@ pub fn diff(
                         "insert" => db_pol.check_expr.as_deref().unwrap_or(""),
                         _ => db_pol.using_expr.as_deref().unwrap_or(""),
                     };
-                    let db_expr_norm = normalise(db_expr);
+                    let db_expr_norm = normalise(db_expr, table);
 
                     if db_expr_norm != expected_expr {
                         // Expression changed — recreate. CreateRlsPolicy already renders
