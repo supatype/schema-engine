@@ -217,6 +217,17 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     )
     .map_err(engine_error)?;
 
+    let sql_down = crate::generator::sql::rollback::generate(&diff, &req.schema).ok();
+    let schema_sources = req.schema_sources_base64.as_deref().and_then(|b64| {
+        use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+        B64.decode(b64).ok()
+    });
+    let migration_sources = migration_history::AppliedMigrationSources {
+        sql_down,
+        schema_sources,
+        schema_sources_manifest: req.schema_sources_manifest.clone(),
+    };
+
     let mut tx = pool.begin().await.map_err(engine_error)?;
 
     if let Err(e) = (&mut *tx).execute(sqlx::raw_sql(apply_body.as_str())).await {
@@ -281,6 +292,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         serde_json::to_value(&ast).ok(),
         admin_cfg,
         &apply_batch,
+        &migration_sources,
     )
     .await
     {
@@ -412,12 +424,54 @@ pub async fn openapi(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::
 // ── Migrations list (DB) ────────────────────────────────────────────────────
 
 pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    let list = crate::state::migration_history::list_migrations(&pool)
+    for col_sql in crate::state::migration_history::ensure_all_migration_columns_sql() {
+        sqlx::raw_sql(&col_sql)
+            .execute(&pool)
+            .await
+            .map_err(engine_error)?;
+    }
+    if let Some(name) = req.name.filter(|n| !n.trim().is_empty()) {
+        let sources = crate::state::migration_history::load_migration_sources(&pool, &name)
+            .await
+            .map_err(engine_error)?;
+        match sources {
+            Some((bytes, manifest)) => Ok(Json(serde_json::json!({
+                "name": name,
+                "schema_sources_base64": B64.encode(bytes),
+                "schema_sources_manifest": manifest,
+            }))),
+            None => Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Migration {name} has no schema snapshot"),
+                }),
+            )),
+        }
+    } else {
+        let list = crate::state::migration_history::list_migrations_summary(&pool)
+            .await
+            .map_err(engine_error)?;
+        Ok(Json(serde_json::to_value(&list).unwrap()))
+    }
+}
+
+pub async fn rollback(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    let url = resolve_db_request_url(&req)?;
+    let pool = connect_db(&url).await?;
+    for col_sql in crate::state::migration_history::ensure_all_migration_columns_sql() {
+        sqlx::raw_sql(&col_sql)
+            .execute(&pool)
+            .await
+            .map_err(engine_error)?;
+    }
+    let result = crate::state::migration_history::apply_rollback(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
-    Ok(Json(serde_json::to_value(&list).unwrap()))
+    Ok(Json(serde_json::to_value(&result).unwrap()))
 }
 
 // ── Studio config (DB) — latest persisted AdminConfig ─────────────────────
@@ -559,6 +613,7 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
         serde_json::to_value(&ast).ok(),
         admin_cfg,
         &batch,
+        &migration_history::AppliedMigrationSources::default(),
     )
     .await
     .map_err(engine_error)?;

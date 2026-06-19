@@ -42,6 +42,10 @@ pub struct DbRequest {
     pub strict: bool,
     #[serde(default)]
     pub yes: bool,
+    #[serde(default)]
+    pub schema_sources_base64: Option<String>,
+    #[serde(default)]
+    pub schema_sources_manifest: Option<serde_json::Value>,
 }
 
 fn default_schema() -> String {

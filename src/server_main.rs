@@ -76,6 +76,7 @@ async fn main() {
         .route("/migrate", post(server::routes::migrate))
         .route("/push", post(server::routes::push))
         .route("/migrations", post(server::routes::migrations))
+        .route("/rollback", post(server::routes::rollback))
         .route("/validate", post(server::routes::validate))
         .route("/doctor", post(server::routes::doctor))
         .route("/adopt", post(server::routes::adopt))

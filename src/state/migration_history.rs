@@ -8,6 +8,31 @@ const SCHEMA: &str = "_supatype";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MigrationListItem {
+    pub id: i32,
+    pub name: String,
+    pub hash: String,
+    pub applied_at: String,
+    pub rolled_back: bool,
+    pub engine_version: String,
+    pub status: String,
+    pub schema_sources_manifest: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackResult {
+    pub status: String,
+    pub name: String,
+    pub message: String,
+    pub restored_migration_name: Option<String>,
+    pub schema_sources_manifest: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_sources_base64: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MigrationRecord {
     pub id: i32,
     pub name: String,
@@ -58,8 +83,29 @@ pub fn ensure_migrations_admin_config_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS admin_config JSONB")
 }
 
+pub fn ensure_migrations_sql_down_column_sql() -> String {
+    format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS sql_down TEXT")
+}
+
 pub fn ensure_migrations_sql_up_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS sql_up TEXT")
+}
+
+pub fn ensure_migrations_schema_sources_column_sql() -> String {
+    format!(
+        "ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS schema_sources BYTEA;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS schema_sources_manifest JSONB"
+    )
+}
+
+pub fn ensure_all_migration_columns_sql() -> Vec<String> {
+    vec![
+        ensure_migrations_admin_config_column_sql(),
+        ensure_migrations_sql_up_column_sql(),
+        ensure_migrations_status_columns_sql(),
+        ensure_migrations_sql_down_column_sql(),
+        ensure_migrations_schema_sources_column_sql(),
+    ]
 }
 
 pub fn ensure_migrations_status_columns_sql() -> String {
@@ -219,9 +265,16 @@ where
 pub fn insert_migration_sql() -> String {
     format!(
         "INSERT INTO {SCHEMA}.migrations \
-         (name, hash, engine_version, schema_snapshot, admin_config, sql_up) \
-         VALUES ($1, $2, $3, $4, $5, $6)"
+         (name, hash, engine_version, schema_snapshot, admin_config, sql_up, sql_down, schema_sources, schema_sources_manifest) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
     )
+}
+
+#[derive(Default)]
+pub struct AppliedMigrationSources {
+    pub sql_down: Option<String>,
+    pub schema_sources: Option<Vec<u8>>,
+    pub schema_sources_manifest: Option<serde_json::Value>,
 }
 
 /// Record a successful migration row (same shape as [`insert_migration_sql`]).
@@ -232,6 +285,7 @@ pub async fn insert_applied_migration<'e, E>(
     schema_snapshot: Option<serde_json::Value>,
     admin_config: Option<serde_json::Value>,
     sql_up: &str,
+    sources: &AppliedMigrationSources,
 ) -> Result<()>
 where
     E: Executor<'e, Database = Postgres>,
@@ -244,6 +298,9 @@ where
         .bind(schema_snapshot)
         .bind(admin_config)
         .bind(sql_up)
+        .bind(sources.sql_down.as_deref())
+        .bind(sources.schema_sources.as_deref())
+        .bind(sources.schema_sources_manifest.as_ref())
         .execute(executor)
         .await?;
     Ok(())
@@ -291,6 +348,9 @@ pub async fn refresh_metadata_on_up_to_date_push(
         .bind(schema_snapshot)
         .bind(admin_config)
         .bind(None::<String>)
+        .bind(None::<String>)
+        .bind(None::<Vec<u8>>)
+        .bind(None::<serde_json::Value>)
         .execute(pool)
         .await?;
     Ok(())
@@ -355,4 +415,185 @@ pub async fn rollback_push_tx(
     {
         eprintln!("Warning: could not record failed migration: {record_err}");
     }
+}
+
+pub async fn list_migrations_summary(pool: &PgPool) -> Result<Vec<MigrationListItem>> {
+    type MigrationSummaryRow = (
+        i32,
+        String,
+        String,
+        String,
+        bool,
+        String,
+        String,
+        Option<serde_json::Value>,
+    );
+
+    let sql = format!(
+        "SELECT id, name, hash, applied_at::TEXT, rolled_back, engine_version, \
+         COALESCE(status, 'applied'), schema_sources_manifest \
+         FROM {SCHEMA}.migrations ORDER BY applied_at DESC"
+    );
+    let rows: Vec<MigrationSummaryRow> = sqlx::query_as(&sql).fetch_all(pool).await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, hash, applied_at, rolled_back, engine_version, status, manifest)| {
+                MigrationListItem {
+                    id,
+                    name,
+                    hash,
+                    applied_at,
+                    rolled_back,
+                    engine_version,
+                    status,
+                    schema_sources_manifest: manifest,
+                }
+            },
+        )
+        .collect())
+}
+
+struct LatestMigrationRow {
+    id: i32,
+    name: String,
+    sql_down: Option<String>,
+}
+
+async fn load_latest_applied_migration(pool: &PgPool) -> Result<Option<LatestMigrationRow>> {
+    let sql = format!(
+        "SELECT id, name, sql_down FROM {SCHEMA}.migrations \
+         WHERE rolled_back = false AND COALESCE(status, 'applied') = 'applied' \
+         ORDER BY applied_at DESC LIMIT 1"
+    );
+    Ok(sqlx::query_as::<_, (i32, String, Option<String>)>(&sql)
+        .fetch_optional(pool)
+        .await?
+        .map(|(id, name, sql_down)| LatestMigrationRow { id, name, sql_down }))
+}
+
+struct PriorMigrationRow {
+    name: String,
+    schema_snapshot: Option<serde_json::Value>,
+    admin_config: Option<serde_json::Value>,
+    schema_sources: Option<Vec<u8>>,
+    schema_sources_manifest: Option<serde_json::Value>,
+}
+
+async fn load_prior_applied_migration(
+    pool: &PgPool,
+    exclude_id: i32,
+) -> Result<Option<PriorMigrationRow>> {
+    let sql = format!(
+        "SELECT name, schema_snapshot, admin_config, schema_sources, schema_sources_manifest \
+         FROM {SCHEMA}.migrations \
+         WHERE rolled_back = false AND COALESCE(status, 'applied') = 'applied' AND id <> $1 \
+         ORDER BY applied_at DESC LIMIT 1"
+    );
+    Ok(sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<serde_json::Value>,
+            Option<serde_json::Value>,
+            Option<Vec<u8>>,
+            Option<serde_json::Value>,
+        ),
+    >(&sql)
+    .bind(exclude_id)
+    .fetch_optional(pool)
+    .await?
+    .map(
+        |(name, schema_snapshot, admin_config, schema_sources, schema_sources_manifest)| {
+            PriorMigrationRow {
+                name,
+                schema_snapshot,
+                admin_config,
+                schema_sources,
+                schema_sources_manifest,
+            }
+        },
+    ))
+}
+
+pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResult> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+
+    let latest = load_latest_applied_migration(pool).await?.ok_or_else(|| {
+        anyhow::anyhow!("no_applied_migration: No applied migration to roll back")
+    })?;
+
+    let sql_down = latest
+        .sql_down
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("no_rollback_sql: Migration has no rollback SQL (metadata-only push?)")
+        })?;
+
+    let prior = load_prior_applied_migration(pool, latest.id).await?;
+
+    let mut tx = pool.begin().await?;
+
+    (&mut *tx)
+        .execute(sqlx::raw_sql(&sql_down))
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
+
+    let mark_sql = format!(
+        "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = $1"
+    );
+    sqlx::query(&mark_sql)
+        .bind(latest.id)
+        .execute(&mut *tx)
+        .await?;
+
+    if let Some(ref prior) = prior {
+        if let (Some(admin), Some(snap)) = (&prior.admin_config, &prior.schema_snapshot) {
+            let studio_sql = format!(
+                "UPDATE {SCHEMA}.schema_state SET ast_snapshot = $1, admin_config = $2 WHERE id = 1"
+            );
+            sqlx::query(&studio_sql)
+                .bind(snap)
+                .bind(admin)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
+    save_schema_state(&mut *tx, &new_state).await?;
+
+    tx.commit().await?;
+
+    let (restored_name, manifest, sources_b64) = prior
+        .map(|p| {
+            (
+                Some(p.name),
+                p.schema_sources_manifest,
+                p.schema_sources.map(|b| B64.encode(b)),
+            )
+        })
+        .unwrap_or((None, None, None));
+
+    Ok(RollbackResult {
+        status: "rolled_back".into(),
+        name: latest.name.clone(),
+        message: format!("Rolled back migration {}.", latest.name),
+        restored_migration_name: restored_name,
+        schema_sources_manifest: manifest,
+        schema_sources_base64: sources_b64,
+    })
+}
+
+pub async fn load_migration_sources(
+    pool: &PgPool,
+    name: &str,
+) -> Result<Option<(Vec<u8>, Option<serde_json::Value>)>> {
+    let sql = format!(
+        "SELECT schema_sources, schema_sources_manifest FROM {SCHEMA}.migrations WHERE name = $1"
+    );
+    let row: Option<(Option<Vec<u8>>, Option<serde_json::Value>)> =
+        sqlx::query_as(&sql).bind(name).fetch_optional(pool).await?;
+    Ok(row.and_then(|(sources, manifest)| sources.map(|s| (s, manifest))))
 }

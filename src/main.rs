@@ -82,6 +82,10 @@ enum Command {
             help = "Fail push when post-apply drift remains (missing or stale managed objects)"
         )]
         strict: bool,
+        #[arg(long, help = "Path to gzip-compressed tar of schema source files")]
+        schema_sources_gz: Option<String>,
+        #[arg(long, help = "Path to schema_sources manifest JSON")]
+        schema_sources_manifest: Option<String>,
     },
     /// Generate typed client code (TypeScript by default; use --lang for other languages)
     Generate {
@@ -124,6 +128,16 @@ enum Command {
     Migrations {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
+        /// When set, return schema source snapshot for this migration name
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Roll back the last applied migration
+    Rollback {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long, default_value = "public")]
+        schema: String,
     },
     /// Validate a migration is safe to apply
     Validate {
@@ -175,7 +189,10 @@ async fn main() -> Result<()> {
 
     let _license = supatype_engine::licensing::License::new(cli.license.as_deref());
 
-    let input = read_input(cli.input.as_deref())?;
+    let input = match &cli.command {
+        Command::Migrations { .. } | Command::Rollback { .. } => String::new(),
+        _ => read_input(cli.input.as_deref())?,
+    };
 
     match cli.command {
         Command::Parse => {
@@ -223,6 +240,8 @@ async fn main() -> Result<()> {
             non_interactive,
             no_cache,
             strict,
+            schema_sources_gz,
+            schema_sources_manifest,
         } => {
             use supatype_engine::state::{migration_history, studio_state};
             let ast = supatype_engine::parser::parse(&input)?;
@@ -244,22 +263,30 @@ async fn main() -> Result<()> {
                 .execute(&pool)
                 .await
                 .context("Failed to create schema_state table")?;
-            sqlx::raw_sql(&migration_history::ensure_migrations_admin_config_column_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to ensure admin_config column")?;
-            sqlx::raw_sql(&migration_history::ensure_migrations_sql_up_column_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to ensure sql_up column")?;
-            sqlx::raw_sql(&migration_history::ensure_migrations_status_columns_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to ensure status/error_message columns")?;
             sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
                 .execute(&pool)
                 .await
                 .context("Failed to ensure schema_state studio columns")?;
+            for col_sql in migration_history::ensure_all_migration_columns_sql() {
+                sqlx::raw_sql(&col_sql)
+                    .execute(&pool)
+                    .await
+                    .context("Failed to ensure migration columns")?;
+            }
+
+            let schema_sources_bytes = schema_sources_gz
+                .as_deref()
+                .map(std::fs::read)
+                .transpose()
+                .with_context(|| "Failed to read schema_sources_gz")?;
+            let schema_sources_manifest_json = schema_sources_manifest
+                .as_deref()
+                .map(std::fs::read_to_string)
+                .transpose()
+                .with_context(|| "Failed to read schema_sources_manifest")?
+                .map(|s| serde_json::from_str(&s))
+                .transpose()
+                .context("Failed to parse schema_sources_manifest JSON")?;
 
             // Ensure supatype schema and studio tables exist
             sqlx::raw_sql(studio_state::create_studio_schema_sql())
@@ -380,6 +407,7 @@ async fn main() -> Result<()> {
                     &schema,
                     &ast,
                 )?;
+            let sql_down = supatype_engine::generator::sql::rollback::generate(&diff, &schema).ok();
 
             let mut tx = pool.begin().await.context("begin migration transaction")?;
 
@@ -457,6 +485,11 @@ async fn main() -> Result<()> {
             }
 
             let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
+            let migration_sources = migration_history::AppliedMigrationSources {
+                sql_down,
+                schema_sources: schema_sources_bytes,
+                schema_sources_manifest: schema_sources_manifest_json,
+            };
             if let Err(e) = migration_history::insert_applied_migration(
                 &mut *tx,
                 &migration_name,
@@ -464,6 +497,7 @@ async fn main() -> Result<()> {
                 serde_json::to_value(&ast).ok(),
                 admin_cfg,
                 &apply_batch,
+                &migration_sources,
             )
             .await
             {
@@ -562,13 +596,48 @@ async fn main() -> Result<()> {
             let spec = supatype_engine::generator::openapi::generate(&ast)?;
             println!("{}", serde_json::to_string_pretty(&spec)?);
         }
-        Command::Migrations { database_url } => {
+        Command::Migrations { database_url, name } => {
+            use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
             use supatype_engine::state::migration_history;
             let pool = sqlx::PgPool::connect(&database_url)
                 .await
                 .context("Failed to connect to database")?;
-            let migrations = migration_history::list_migrations(&pool).await?;
-            println!("{}", serde_json::to_string_pretty(&migrations)?);
+            for col_sql in migration_history::ensure_all_migration_columns_sql() {
+                sqlx::raw_sql(&col_sql).execute(&pool).await?;
+            }
+            if let Some(migration_name) = name.filter(|n| !n.trim().is_empty()) {
+                let sources = migration_history::load_migration_sources(&pool, &migration_name)
+                    .await
+                    .context("Failed to load migration sources")?;
+                let payload = match sources {
+                    Some((bytes, manifest)) => serde_json::json!({
+                        "name": migration_name,
+                        "schema_sources_base64": B64.encode(bytes),
+                        "schema_sources_manifest": manifest,
+                    }),
+                    None => {
+                        anyhow::bail!("Migration {migration_name} has no schema snapshot")
+                    }
+                };
+                println!("{}", serde_json::to_string(&payload)?);
+            } else {
+                let migrations = migration_history::list_migrations_summary(&pool).await?;
+                println!("{}", serde_json::to_string_pretty(&migrations)?);
+            }
+        }
+        Command::Rollback {
+            database_url,
+            schema,
+        } => {
+            use supatype_engine::state::migration_history;
+            let pool = sqlx::PgPool::connect(&database_url)
+                .await
+                .context("Failed to connect to database")?;
+            for col_sql in migration_history::ensure_all_migration_columns_sql() {
+                sqlx::raw_sql(&col_sql).execute(&pool).await?;
+            }
+            let result = migration_history::apply_rollback(&pool, &schema).await?;
+            println!("{}", serde_json::to_string(&result)?);
         }
         Command::Validate { database_url } => {
             let diff: supatype_engine::differ::DiffOutput =
@@ -655,6 +724,7 @@ async fn main() -> Result<()> {
                 serde_json::to_value(&ast).ok(),
                 admin_cfg,
                 &batch,
+                &migration_history::AppliedMigrationSources::default(),
             )
             .await?;
 

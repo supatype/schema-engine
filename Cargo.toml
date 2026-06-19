@@ -37,6 +37,7 @@ indexmap = { version = "2", features = ["serde"] }
 # Pure computation — wasm-compatible
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22"
 petgraph = "0.7"
 strsim = "0.11"
 similar = "2"
