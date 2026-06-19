@@ -52,18 +52,21 @@ pub fn create_internal_schema_sql() -> &'static str {
 pub fn create_migrations_table_sql() -> String {
     format!(
         r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.migrations (
-    id               SERIAL PRIMARY KEY,
-    name             TEXT NOT NULL UNIQUE,
-    hash             TEXT NOT NULL,
-    applied_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    rolled_back      BOOLEAN NOT NULL DEFAULT FALSE,
-    rolled_back_at   TIMESTAMPTZ,
-    engine_version   TEXT NOT NULL,
-    schema_snapshot  JSONB,
-    admin_config     JSONB,
-    sql_up           TEXT,
-    status           TEXT NOT NULL DEFAULT 'applied',
-    error_message    TEXT
+    id                      SERIAL PRIMARY KEY,
+    name                    TEXT NOT NULL UNIQUE,
+    hash                    TEXT NOT NULL,
+    applied_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    rolled_back             BOOLEAN NOT NULL DEFAULT FALSE,
+    rolled_back_at          TIMESTAMPTZ,
+    engine_version          TEXT NOT NULL,
+    schema_snapshot         JSONB,
+    admin_config            JSONB,
+    sql_up                  TEXT,
+    sql_down                TEXT,
+    schema_sources          BYTEA,
+    schema_sources_manifest JSONB,
+    status                  TEXT NOT NULL DEFAULT 'applied',
+    error_message           TEXT
 )"#
     )
 }
