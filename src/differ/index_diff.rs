@@ -64,7 +64,8 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, ops: &mut Vec<Operation>) -> Re
             && db.constraints.iter().any(|c| {
                 c.name == idx.name
                     && c.table == idx.table
-                    && c.constraint_type == crate::introspector::constraints::DbConstraintType::Unique
+                    && c.constraint_type
+                        == crate::introspector::constraints::DbConstraintType::Unique
             })
         {
             continue;

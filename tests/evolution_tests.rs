@@ -6774,7 +6774,10 @@ fn test_unmanaged_slug_unique_never_auto_dropped() {
 
     let report = supatype_engine::differ::doctor::report(&ast, &db);
     assert!(
-        report.unmanaged_drift.iter().any(|i| i.name == "album_slug_key"),
+        report
+            .unmanaged_drift
+            .iter()
+            .any(|i| i.name == "album_slug_key"),
         "doctor should flag unmanaged album_slug_key"
     );
 }

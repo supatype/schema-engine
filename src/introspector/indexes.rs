@@ -16,8 +16,18 @@ pub struct DbIndex {
     pub comment: Option<String>,
 }
 
+type IndexRow = (
+    String,
+    String,
+    Vec<String>,
+    bool,
+    String,
+    bool,
+    Option<String>,
+);
+
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbIndex>> {
-    let rows: Vec<(String, String, Vec<String>, bool, String, bool, Option<String>)> = sqlx::query_as(
+    let rows: Vec<IndexRow> = sqlx::query_as(
         "SELECT t.relname, i.relname,
                 array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)),
                 ix.indisunique, am.amname, ix.indisprimary,

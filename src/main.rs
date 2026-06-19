@@ -136,7 +136,10 @@ enum Command {
         database_url: String,
         #[arg(long, default_value = "public")]
         schema: String,
-        #[arg(long, help = "Exit non-zero when missing or stale managed drift exists")]
+        #[arg(
+            long,
+            help = "Exit non-zero when missing or stale managed drift exists"
+        )]
         strict: bool,
     },
     /// Stamp managed comments on DB objects matching the AST (adoption ceremony)

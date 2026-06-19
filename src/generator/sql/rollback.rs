@@ -341,9 +341,9 @@ fn forward_description(op: &Operation) -> String {
         Operation::DropForeignKey {
             table, constraint, ..
         } => format!("drop fk {table}.{constraint}"),
-        Operation::AddUniqueConstraint {
-            table, column, ..
-        } => format!("add unique {table}.{column}"),
+        Operation::AddUniqueConstraint { table, column, .. } => {
+            format!("add unique {table}.{column}")
+        }
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("drop unique {table}.{constraint}"),
