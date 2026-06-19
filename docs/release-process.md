@@ -13,7 +13,7 @@
    - Strips debug symbols
    - Generates checksums.sha256
    - Signs checksums with minisign
-   - Uploads to CDN (releases.supatype.io)
+   - Uploads to CDN (releases.supatype.com)
    - Updates latest.json and versions.json
    - Creates GitHub Release on supatype-schema-engine
    - Mirrors to supatype/engine-releases (public fallback)
