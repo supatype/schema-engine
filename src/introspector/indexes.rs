@@ -16,7 +16,15 @@ pub struct DbIndex {
     pub comment: Option<String>,
 }
 
-type IndexRow = (String, String, Vec<String>, bool, String, bool, Option<String>);
+type IndexRow = (
+    String,
+    String,
+    Vec<String>,
+    bool,
+    String,
+    bool,
+    Option<String>,
+);
 
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbIndex>> {
     let rows: Vec<IndexRow> = sqlx::query_as(
