@@ -179,7 +179,7 @@ jobs:
       - name: Update engine/latest.json
         run: |
           EP="${{ secrets.CDN_ENDPOINT }}"
-          printf '{"version":"%s","date":"%s","checksums_url":"https://releases.supatype.io/engine/v%s/checksums.sha256"}\n' \
+          printf '{"version":"%s","date":"%s","checksums_url":"https://releases.supatype.com/engine/v%s/checksums.sha256"}\n' \
             "${VERSION}" "$(date -u +%Y-%m-%d)" "${VERSION}" > latest.json
           aws s3 cp latest.json \
             "s3://${{ secrets.CDN_BUCKET }}/engine/latest.json" \
