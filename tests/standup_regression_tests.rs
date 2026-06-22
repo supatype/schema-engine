@@ -48,7 +48,9 @@ fn pk_column_does_not_emit_id_key_unique_constraint() {
 #[test]
 fn relation_and_explicit_fk_scalar_emit_column_once() {
     let sql = forward_sql();
-    let start = sql.find("CREATE TABLE IF NOT EXISTS \"public\".\"team\"").unwrap();
+    let start = sql
+        .find("CREATE TABLE IF NOT EXISTS \"public\".\"team\"")
+        .unwrap();
     let end = sql[start..].find(");").unwrap() + start;
     let create_team = &sql[start..end];
     let occurrences = create_team.matches("\"owner_id\"").count();
