@@ -124,7 +124,13 @@ pub fn db_unique(field: &FieldAst) -> bool {
         | FieldAst::TsQuery(s)
         | FieldAst::TsVector(s)
         | FieldAst::Xml(s)
-        | FieldAst::Color(s) => s.unique,
+        // A primary-key column is implicitly unique via its `<table>_pkey`
+        // constraint and never gets a separate `<table>_<col>_key` UNIQUE
+        // constraint emitted (see column definition in the SQL generator).
+        // Reporting it as a standalone unique here makes the constraint differ,
+        // doctor, and managed-comment stamping reference a constraint that was
+        // never created (e.g. `COMMENT ON CONSTRAINT "profile_id_key"`).
+        | FieldAst::Color(s) => s.unique && !s.primary_key,
         FieldAst::Slug(s) => s.unique,
         FieldAst::Enum(s) => s.unique,
         FieldAst::Array(s) => s.unique,

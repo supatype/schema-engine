@@ -360,6 +360,15 @@ async fn main() -> Result<()> {
                     .await
                     .context("Failed to apply storage schema/policies")?;
 
+                // Trigger functions (slug / updated_at) are idempotent and not part of
+                // the model diff — ensure they exist on every push so an up-to-date
+                // schema still gets its slug/updated_at triggers installed.
+                let triggers_sql = supatype_engine::generator::sql::triggers::generate(&ast)?;
+                sqlx::raw_sql(&triggers_sql)
+                    .execute(&pool)
+                    .await
+                    .context("Failed to apply trigger functions")?;
+
                 // AST-only changes (widgets, labels, etc.) still need admin_config / snapshot
                 // so Studio and tooling see the latest schema without a DDL migration.
                 info!("Schema is up to date — refreshing Studio metadata.");
