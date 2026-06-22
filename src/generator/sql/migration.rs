@@ -64,7 +64,18 @@ pub fn push_storage_and_model_apply_body(
 ) -> Result<String> {
     assert_forward_allowed(diff, force)?;
     let body = render_forward_outer_body(diff, schema, ast)?;
-    Ok(format!("{}\n{}", storage_sql.trim(), body.trim_end()))
+    // Slug / updated_at trigger functions are idempotent (CREATE OR REPLACE) and
+    // must run in the same transaction as the DDL, otherwise NOT NULL columns
+    // populated by triggers (e.g. `Slug<...>`) fail on insert. The per-operation
+    // renderer only emits a placeholder comment for CreateTrigger, so apply the
+    // generated trigger SQL here.
+    let triggers = super::triggers::generate(ast)?;
+    Ok(format!(
+        "{}\n{}\n{}",
+        storage_sql.trim(),
+        body.trim_end(),
+        triggers.trim_end()
+    ))
 }
 
 /// Single `BEGIN`…`COMMIT` script: `storage` SQL, then [`forward_sql_outer_body`].
@@ -631,10 +642,22 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                     let fk_col = rel
                         .foreign_key
-                        .as_deref()
-                        .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                    let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
-                    col_defs.push(format!("    \"{fk_col}\" UUID{uniq}"));
+                        .clone()
+                        .unwrap_or_else(|| format!("{field_name}_id"));
+                    // When the FK column is also declared explicitly as a scalar
+                    // field (the documented `author: RelatedTo<…>` + `author_id`
+                    // pattern), that scalar definition owns the column. Emitting it
+                    // here too produces a duplicate `column "…" specified more than
+                    // once` error, so defer to the explicit declaration.
+                    let explicitly_declared = model
+                        .fields
+                        .get(fk_col.as_str())
+                        .map(|f| !matches!(f, FieldAst::Relation(_)))
+                        .unwrap_or(false);
+                    if !explicitly_declared {
+                        let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
+                        col_defs.push(format!("    \"{fk_col}\" UUID{uniq}"));
+                    }
                     // FK constraint is a separate AddForeignKey operation (emitted after all tables).
                 }
                 // hasMany / hasOne / manyToMany produce no column here

@@ -1,0 +1,81 @@
+{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Profile",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": true, "index": false } }
+        },
+        "display_name": {
+          "kind": "text",
+          "required": true,
+          "annotations": { "db": { "pgType": "TEXT", "unique": false, "index": false } }
+        }
+      },
+      "options": { "timestamps": true, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "profile", "indexes": [] },
+        "platform": {
+          "access": {
+            "read": { "type": "public" },
+            "create": { "type": "owner", "field": "id" },
+            "update": { "type": "owner", "field": "id" },
+            "delete": { "type": "owner", "field": "id" }
+          }
+        }
+      }
+    },
+    {
+      "name": "Team",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": true, "index": false } }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": { "db": { "pgType": "TEXT", "unique": false, "index": false } }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "name",
+          "annotations": { "db": { "pgType": "TEXT", "unique": true } }
+        },
+        "owner": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Profile",
+          "onDelete": "cascade",
+          "annotations": { "db": { "foreignKey": "owner_id" } }
+        },
+        "owner_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": { "db": { "pgType": "UUID", "unique": false, "index": false } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "team", "indexes": [] },
+        "platform": {
+          "access": {
+            "read": { "type": "public" },
+            "create": { "type": "role", "roles": ["authenticated"] },
+            "update": { "type": "owner", "field": "owner" },
+            "delete": { "type": "owner", "field": "owner" }
+          }
+        }
+      }
+    }
+  ]
+}

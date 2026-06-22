@@ -136,7 +136,19 @@ fn emit_fields(model: &ModelAst, mode: Mode, out: &mut String) {
                         .foreign_key
                         .clone()
                         .unwrap_or_else(|| format!("{}_id", to_snake_case(name)));
-                    emit_one(&fk_col, "string", true, false, mode, out, ind);
+                    // When the FK column is also declared explicitly as a scalar
+                    // field (the `author: RelatedTo<…>` + `author_id` pattern),
+                    // that scalar definition is emitted by the `other` branch.
+                    // Emitting it here too would produce a duplicate key in the
+                    // generated Row/Insert/Update object types.
+                    let explicitly_declared = model
+                        .fields
+                        .get(fk_col.as_str())
+                        .map(|f| !matches!(f, FieldAst::Relation(_)))
+                        .unwrap_or(false);
+                    if !explicitly_declared {
+                        emit_one(&fk_col, "string", true, false, mode, out, ind);
+                    }
                 }
             }
             FieldAst::Timestamps => emit_timestamps(mode, out, ind, true, true),

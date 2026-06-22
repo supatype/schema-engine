@@ -4,6 +4,11 @@ use anyhow::Result;
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     let mut out = String::new();
 
+    // Trigger functions live in the _platform schema — ensure it exists and is
+    // usable by the app roles, since BEFORE INSERT/UPDATE triggers execute these
+    // functions as the invoking role (e.g. `authenticated`).
+    out.push_str("CREATE SCHEMA IF NOT EXISTS _platform;\n");
+    out.push_str("GRANT USAGE ON SCHEMA _platform TO PUBLIC;\n\n");
     // updated_at trigger function (shared, created once per schema push)
     out.push_str(UPDATED_AT_FUNCTION);
     // slugify helper function (shared, created once)
@@ -24,6 +29,10 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             }
         }
     }
+
+    // Trigger functions must be executable by whichever role performs the
+    // insert/update that fires them.
+    out.push_str("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;\n");
 
     Ok(out)
 }
