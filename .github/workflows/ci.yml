@@ -42,7 +42,8 @@ jobs:
             --test differ_tests \
             --test migration_tests \
             --test evolution_tests \
-            --test owner_validation_tests
+            --test owner_validation_tests \
+            --test column_type_match_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})
@@ -105,18 +106,17 @@ jobs:
         run: cargo test --test sdk_exec_tests -- --nocapture
 
   integration:
-    name: Integration Tests (Postgres ${{ matrix.pg }})
+    name: Integration Tests (supatype/postgres)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        pg: ["14", "15", "16"]
     services:
       postgres:
-        image: postgres:${{ matrix.pg }}
+        image: supatype/postgres:17-latest
         env:
+          POSTGRES_USER: supatype_admin
           POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U supatype_admin"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -128,5 +128,5 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run integration tests
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
-        run: cargo test --test integration_test
+          DATABASE_URL: postgres://supatype_admin:postgres@localhost:5432/postgres
+        run: cargo test --test integration_test --test migration_conversion_integration

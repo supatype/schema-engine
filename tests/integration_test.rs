@@ -1,114 +1,12 @@
 /// Integration tests — Postgres round-trip and batch transaction semantics.
 ///
-/// **Two backends:**
-/// - If **`DATABASE_URL`** is set (e.g. GitHub Actions service Postgres), each test creates an
-///   ephemeral database on that server, runs, then **`DROP DATABASE`**. No Docker required.
-/// - Otherwise uses **testcontainers** (Docker must be available).
-use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
+/// **Backends:**
+/// - **`DATABASE_URL`** (CI / local): ephemeral database on that server, then `DROP DATABASE`.
+/// - Otherwise **testcontainers** with **`supatype/postgres`** (PostGIS, pgvector — production parity).
+mod common;
 
+use common::with_integration_pool;
 use supatype_engine::{differ, generator::sql::migration, introspector, parser};
-use testcontainers::runners::AsyncRunner;
-use testcontainers_modules::postgres::Postgres;
-
-static EPHEMERAL_SEQ: AtomicU64 = AtomicU64::new(0);
-
-fn database_url_with_name(admin_url: &str, db: &str) -> String {
-    let (base, query) = match admin_url.split_once('?') {
-        Some((b, q)) => (b, Some(q)),
-        None => (admin_url, None),
-    };
-    let prefix = base
-        .rsplit_once('/')
-        .expect("DATABASE_URL must include /dbname (e.g. …/postgres)")
-        .0;
-    match query {
-        Some(q) => format!("{}/{}?{}", prefix, db, q),
-        None => format!("{}/{}", prefix, db),
-    }
-}
-
-async fn terminate_db_sessions(admin: &sqlx::PgPool, db_name: &str) {
-    let safe = db_name.replace('\'', "''");
-    let sql = format!(
-        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
-         WHERE datname = '{safe}' AND pid <> pg_backend_pid()"
-    );
-    let _ = sqlx::raw_sql(&sql).execute(admin).await;
-}
-
-/// Runs `f` against an isolated Postgres (ephemeral DB or testcontainers).
-/// Skips the test when `DATABASE_URL` is unset and Docker/testcontainers is unavailable.
-async fn with_integration_pool<F, Fut>(f: F)
-where
-    F: FnOnce(sqlx::PgPool) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    if std::env::var("DATABASE_URL").is_ok() {
-        with_ephemeral_database(f).await;
-        return;
-    }
-
-    let container = match Postgres::default().start().await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("SKIP integration_test: DATABASE_URL not set and Docker unavailable ({e})");
-            return;
-        }
-    };
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    let pool = sqlx::PgPool::connect(&url)
-        .await
-        .expect("connect testcontainers postgres");
-    f(pool.clone()).await;
-    pool.close().await;
-    drop(container);
-}
-
-async fn with_ephemeral_database<F, Fut>(f: F)
-where
-    F: FnOnce(sqlx::PgPool) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    let admin_url =
-        std::env::var("DATABASE_URL").expect("with_ephemeral_database requires DATABASE_URL");
-    let admin = sqlx::PgPool::connect(&admin_url)
-        .await
-        .expect("DATABASE_URL: connect admin pool");
-    let n = EPHEMERAL_SEQ.fetch_add(1, Ordering::SeqCst);
-    let db_name = format!("st_engine_it_{}_{}", std::process::id(), n);
-    assert!(
-        db_name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
-        "generated db name must be a safe identifier: {db_name}"
-    );
-
-    sqlx::raw_sql(&format!(r#"CREATE DATABASE "{db_name}""#))
-        .execute(&admin)
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "CREATE DATABASE {db_name} failed: {e} \
-                 (DATABASE_URL user needs CREATEDB / superuser)"
-            )
-        });
-
-    let child_url = database_url_with_name(&admin_url, &db_name);
-    let pool = sqlx::PgPool::connect(&child_url)
-        .await
-        .unwrap_or_else(|e| panic!("connect ephemeral database {db_name}: {e}"));
-
-    f(pool.clone()).await;
-    pool.close().await;
-
-    terminate_db_sessions(&admin, &db_name).await;
-    let _ = sqlx::raw_sql(&format!(r#"DROP DATABASE IF EXISTS "{db_name}""#))
-        .execute(&admin)
-        .await;
-    admin.close().await;
-}
 
 // ─── Phase 1: Fresh schema application ───────────────────────────────────────
 
@@ -196,6 +94,73 @@ async fn test_fresh_five_model_blog_schema() {
             "posts.category_id FK must exist"
         );
         assert!(post_cols.contains(&"slug"), "posts.slug must exist");
+    })
+    .await;
+}
+
+// ─── PostGIS / GeoPoint idempotency (regression for USER-DEFINED drift) ────────
+
+fn is_type_drift_operation(op: &differ::Operation) -> bool {
+    match op {
+        differ::Operation::RecreateColumn { .. } => true,
+        differ::Operation::AlterColumn { changes, .. } => changes.get("type").is_some(),
+        _ => false,
+    }
+}
+
+#[tokio::test]
+async fn test_geospatial_schema_idempotent_after_push() {
+    with_integration_pool(|pool| async move {
+        let input = include_str!("fixtures/geospatial.json");
+        let ast = parser::parse(input).expect("geospatial fixture parses");
+
+        let empty = introspector::introspect(&pool, "public").await.unwrap();
+        let diff = differ::diff(&ast, &empty).unwrap();
+        let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&apply_sql)
+            .execute(&pool)
+            .await
+            .expect("geospatial migration must apply");
+
+        let after = introspector::introspect(&pool, "public").await.unwrap();
+        let locations = after
+            .tables
+            .iter()
+            .find(|t| t.name == "locations")
+            .expect("locations table must exist");
+
+        let point = locations
+            .columns
+            .iter()
+            .find(|c| c.name == "point")
+            .expect("point column must exist");
+        assert_eq!(
+            point.data_type.to_lowercase(),
+            "user-defined",
+            "PostGIS reports USER-DEFINED in information_schema"
+        );
+        assert_eq!(point.udt_name, "geography");
+
+        let second_diff = differ::diff(&ast, &after).unwrap();
+        let type_drift: Vec<_> = second_diff
+            .operations
+            .iter()
+            .filter(|op| is_type_drift_operation(op))
+            .collect();
+        assert!(
+            type_drift.is_empty(),
+            "geospatial columns must not drift on second push, got: {type_drift:?}; all ops: {:?}; warnings: {:?}",
+            second_diff.operations,
+            second_diff.warnings
+        );
+        assert!(
+            !second_diff
+                .warnings
+                .iter()
+                .any(|w| w.contains("cannot cast geography")),
+            "unexpected geo cast warning: {:?}",
+            second_diff.warnings
+        );
     })
     .await;
 }
