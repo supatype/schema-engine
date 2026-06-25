@@ -1,33 +1,16 @@
 //! Integration tests for column type conversion SQL against real Postgres.
 //!
-//! Requires **`DATABASE_URL`** (CI Postgres service). Skipped locally when unset.
+//! Uses the shared integration pool helper (ephemeral DB per test when `DATABASE_URL`
+//! is set, or testcontainers locally).
 
-use std::future::Future;
+mod common;
 
+use common::with_integration_pool;
 use supatype_engine::{differ, generator::sql::migration, introspector, parser};
-
-async fn with_pool<F, Fut>(f: F)
-where
-    F: FnOnce(sqlx::PgPool) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(u) => u,
-        Err(_) => {
-            eprintln!("SKIP migration_conversion_integration: DATABASE_URL not set");
-            return;
-        }
-    };
-
-    let pool = sqlx::PgPool::connect(&url)
-        .await
-        .expect("connect DATABASE_URL");
-    f(pool).await;
-}
 
 #[tokio::test]
 async fn integer_to_jsonb_preserves_numeric_json() {
-    with_pool(|pool| async move {
+    with_integration_pool(|pool| async move {
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS conv_test (id serial PRIMARY KEY, value integer); \
              TRUNCATE conv_test; \
@@ -101,7 +84,7 @@ async fn integer_to_jsonb_preserves_numeric_json() {
 
 #[tokio::test]
 async fn text_to_richtext_wraps_lexical_document() {
-    with_pool(|pool| async move {
+    with_integration_pool(|pool| async move {
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS rt_test (id serial PRIMARY KEY, body text); \
              TRUNCATE rt_test; \
@@ -182,7 +165,7 @@ async fn text_to_richtext_wraps_lexical_document() {
 
 #[tokio::test]
 async fn richtext_to_text_extracts_plain_text() {
-    with_pool(|pool| async move {
+    with_integration_pool(|pool| async move {
         let lexical = serde_json::json!({
             "root": {
                 "type": "root",
