@@ -287,16 +287,32 @@ fn column_type_matches(field: &FieldAst, db_col: &DbColumn) -> bool {
             };
             db_col.data_type.to_lowercase().replace(' ', "") == want.replace(' ', "")
         }
-        FieldAst::Vector(v) => db_col
-            .data_type
-            .to_lowercase()
-            .contains(&format!("vector({})", v.dimensions)),
-        FieldAst::Geo(g) => db_col
-            .data_type
-            .to_lowercase()
-            .contains(&g.geo_type.to_lowercase()),
+        FieldAst::Vector(v) => {
+            let dt = db_col.data_type.to_lowercase();
+            // pgvector reports USER-DEFINED in information_schema; udt_name is "vector".
+            if dt == "user-defined" {
+                return true;
+            }
+            dt.contains(&format!("vector({})", v.dimensions))
+        }
+        FieldAst::Geo(g) => {
+            let dt = db_col.data_type.to_lowercase();
+            // PostGIS types report USER-DEFINED in information_schema; udt_name is "geography".
+            if dt == "user-defined" {
+                return true;
+            }
+            if matches!(dt.as_str(), "geography" | "geometry") {
+                return true;
+            }
+            dt.contains(&g.geo_type.to_lowercase())
+        }
         _ => true,
     }
+}
+
+/// True when a live Postgres column (from `information_schema`) already matches `field`.
+pub fn column_type_matches_introspected(field: &FieldAst, db_col: &DbColumn) -> bool {
+    column_type_matches(field, db_col)
 }
 
 fn field_pg_type(field: &FieldAst) -> String {
