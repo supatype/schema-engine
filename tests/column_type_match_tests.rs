@@ -9,13 +9,7 @@ use supatype_engine::{
     state::database_state::DatabaseState,
 };
 
-fn pg_col(
-    name: &str,
-    data_type: &str,
-    udt_name: &str,
-    ordinal: i32,
-    nullable: bool,
-) -> DbColumn {
+fn pg_col(name: &str, data_type: &str, udt_name: &str, ordinal: i32, nullable: bool) -> DbColumn {
     DbColumn {
         name: name.into(),
         data_type: data_type.into(),
@@ -50,10 +44,7 @@ fn postgres_information_schema_types(field: &FieldAst) -> Option<(String, String
         FieldAst::Float(_) => ("double precision".into(), "float8".into()),
         FieldAst::Boolean(_) => ("boolean".into(), "bool".into()),
         FieldAst::Uuid(_) => ("uuid".into(), "uuid".into()),
-        FieldAst::Datetime(_) => (
-            "timestamp with time zone".into(),
-            "timestamptz".into(),
-        ),
+        FieldAst::Datetime(_) => ("timestamp with time zone".into(), "timestamptz".into()),
         FieldAst::Date(_) => ("date".into(), "date".into()),
         FieldAst::Timestamp(_) => ("timestamp without time zone".into(), "timestamp".into()),
         FieldAst::Ip(_) => ("inet".into(), "inet".into()),
@@ -149,13 +140,7 @@ fn test_geo_user_defined_geography_matches_no_type_drift() {
         .enumerate()
         .filter_map(|(i, (name, field))| {
             let (data_type, udt_name) = postgres_information_schema_types(field)?;
-            Some(pg_col(
-                name,
-                &data_type,
-                &udt_name,
-                (i + 1) as i32,
-                true,
-            ))
+            Some(pg_col(name, &data_type, &udt_name, (i + 1) as i32, true))
         })
         .collect();
 

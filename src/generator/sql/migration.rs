@@ -157,6 +157,17 @@ fn needs_postgis(diff: &DiffOutput) -> bool {
     })
 }
 
+fn needs_auth_helpers(diff: &DiffOutput) -> bool {
+    diff.operations.iter().any(|op| {
+        matches!(
+            op,
+            Operation::EnableRls { .. }
+                | Operation::CreateRlsPolicy { .. }
+                | Operation::DropRlsPolicy { .. }
+        )
+    })
+}
+
 // Optional extensions before inner `BEGIN`: pgcrypto (uuid gen_random_uuid), vector (pgvector),
 // postgis (GEOGRAPHY). `FieldAst::Custom` is not analysed here.
 fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
@@ -179,6 +190,15 @@ fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
 
     if needs_postgis(diff) {
         lines.push("CREATE EXTENSION IF NOT EXISTS \"postgis\";".into());
+        lines.push(String::new());
+    }
+
+    if needs_auth_helpers(diff) {
+        lines.push(
+            crate::generator::sql::rls::generate_auth_helpers()
+                .trim()
+                .into(),
+        );
         lines.push(String::new());
     }
 

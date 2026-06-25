@@ -34,9 +34,10 @@ pub fn admin_connection_url(host: &str, port: u16) -> String {
     format!("postgres://{PG_USER}:{PG_PASSWORD}@{host}:{port}/{PG_DB}")
 }
 
-pub async fn start_supatype_postgres(
-) -> Result<(testcontainers::ContainerAsync<GenericImage>, String), testcontainers::TestcontainersError>
-{
+pub async fn start_supatype_postgres() -> Result<
+    (testcontainers::ContainerAsync<GenericImage>, String),
+    testcontainers::TestcontainersError,
+> {
     let image_ref = integration_postgres_image();
     let (name, tag) = parse_image_ref(&image_ref);
     let container = GenericImage::new(name, tag)
@@ -93,9 +94,7 @@ where
     let (container, url) = match start_supatype_postgres().await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "SKIP integration: DATABASE_URL not set and Docker unavailable ({e})"
-            );
+            eprintln!("SKIP integration: DATABASE_URL not set and Docker unavailable ({e})");
             return;
         }
     };
