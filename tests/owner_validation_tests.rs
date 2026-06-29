@@ -287,7 +287,11 @@ fn owner_rule_accepts_fk_column_name_and_normalizes_to_field_name() {
 
     let ast = parser::parse(schema).expect("schema must parse when FK column name used in Owner");
     let room = ast.models.iter().find(|m| m.name == "Room").unwrap();
-    let update_rule = room.access().update.as_ref().expect("update rule must exist");
+    let update_rule = room
+        .access()
+        .update
+        .as_ref()
+        .expect("update rule must exist");
     let serialized = serde_json::to_string(update_rule).unwrap();
     assert!(
         serialized.contains("\"field\":\"created_by\""),
