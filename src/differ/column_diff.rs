@@ -103,6 +103,9 @@ fn field_required(field: &FieldAst) -> Option<bool> {
         FieldAst::Array(f) => Some(f.required),
         FieldAst::Image(f) | FieldAst::File(f) => Some(f.required),
         FieldAst::Custom(f) => Some(f.required),
+        FieldAst::Relation(rel) if matches!(rel.cardinality, RelationCardinality::BelongsTo) => {
+            Some(rel.required)
+        }
         _ => None,
     }
 }

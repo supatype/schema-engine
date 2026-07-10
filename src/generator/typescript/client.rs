@@ -1,6 +1,10 @@
 use crate::parser::ast::SchemaAst;
 use anyhow::Result;
 
+/// DEPRECATED — not wired into `generate` / CLI.
+/// Product F11 lives on `@supatype/client` as `client.from(table).subscribe(...)`
+/// against the WAL realtime service. Do not revive this NOTIFY-based prototype.
+///
 /// Generate a typed TypeScript client module for every model in the schema.
 ///
 /// Each model gets a class with:

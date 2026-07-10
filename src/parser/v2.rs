@@ -534,6 +534,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                     .get("uniqueFk")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                required,
                 read_only,
                 annotations,
             }))
