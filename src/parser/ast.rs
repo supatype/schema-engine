@@ -337,6 +337,9 @@ pub struct RelationFieldAst {
     /// True when the corresponding hasOne on the other side requires the FK to be UNIQUE.
     #[serde(default)]
     pub unique_fk: bool,
+    /// When true, belongsTo FK columns are NOT NULL.
+    #[serde(default)]
+    pub required: bool,
     #[serde(default)]
     pub read_only: bool,
     #[serde(default)]

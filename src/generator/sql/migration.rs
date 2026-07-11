@@ -387,8 +387,9 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             if let FieldAst::Relation(rel) = field.as_ref() {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                     let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
+                    let req = if rel.required { " NOT NULL" } else { "" };
                     return Ok(format!(
-                        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN \"{column}\" UUID{uniq};"
+                        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN \"{column}\" UUID{uniq}{req};"
                     ));
                 }
             }
@@ -676,7 +677,8 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
                         .unwrap_or(false);
                     if !explicitly_declared {
                         let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
-                        col_defs.push(format!("    \"{fk_col}\" UUID{uniq}"));
+                        let req = if rel.required { " NOT NULL" } else { "" };
+                        col_defs.push(format!("    \"{fk_col}\" UUID{uniq}{req}"));
                     }
                     // FK constraint is a separate AddForeignKey operation (emitted after all tables).
                 }
