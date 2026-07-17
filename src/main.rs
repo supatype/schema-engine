@@ -420,6 +420,32 @@ async fn main() -> Result<()> {
 
             let mut tx = pool.begin().await.context("begin migration transaction")?;
 
+            // Coordinate with realtime: skip WAL polls while this xact lock is held.
+            // Keys must match packages/cli + packages/realtime schema-push-lock constants.
+            // If the CLI already holds a session lock on the same keys, skip to avoid deadlock.
+            {
+                const lock_held: bool = sqlx::query_scalar(
+                    r#"
+                    SELECT EXISTS (
+                      SELECT 1 FROM pg_locks
+                      WHERE locktype = 'advisory'
+                        AND classid = 872014
+                        AND objid = 1
+                        AND granted
+                    )
+                    "#,
+                )
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap_or(false);
+                if !lock_held {
+                    sqlx::query("SELECT pg_advisory_xact_lock(872014, 1)")
+                        .execute(&mut *tx)
+                        .await
+                        .context("acquire schema-push advisory lock")?;
+                }
+            }
+
             if let Err(e) = (&mut *tx)
                 .execute(sqlx::raw_sql(&apply_body))
                 .await
