@@ -1,7 +1,9 @@
 use crate::parser::accessors::{
     db_foreign_key, db_table_name, platform_access, resolve_owner_column,
 };
-use crate::parser::ast::{AccessRule, DefaultValueAst, FieldAst, ModelAst, SchemaAst};
+use crate::parser::ast::{
+    AccessRule, DefaultValueAst, FieldAst, LiteralValue, ModelAst, Operand, SchemaAst,
+};
 use anyhow::Result;
 
 /// Generates RLS policy SQL for all models that have access rules.
@@ -52,38 +54,42 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
     Ok(out)
 }
 
-/// Returns SQL DDL for auth helper functions (auth.uid, auth.role, auth.roles).
-pub fn generate_auth_helpers() -> &'static str {
-    r#"-- Auth helper functions for Supatype RLS policies.
--- Install once per database. Safe to run repeatedly (CREATE OR REPLACE).
+/// SQL DDL for the auth helper functions a policy may call.
+///
+/// Delegates to `auth_functions` rather than keeping a second copy. There were
+/// two definitions of `auth.uid()` and `auth.role()` — this one, installed by a
+/// migration, and the canonical one reinstalled by `reapply_auth_helpers` at
+/// bootstrap. They had already diverged: this copy read only the top-level `role`
+/// claim, so a fresh push installed a version that ignored `app_metadata.role`
+/// until something else happened to overwrite it. Any helper added on one side
+/// (`auth.claim`, say) was simply missing on the other.
+///
+/// Safe to run repeatedly — every function is `CREATE OR REPLACE`.
+pub fn generate_auth_helpers() -> String {
+    let config = crate::generator::sql::auth_functions::AuthFunctionConfig {
+        project_ref: String::new(),
+        auth_schema: "auth".to_string(),
+    };
+    let mut sql = crate::generator::sql::auth_functions::generate_auth_functions(&config);
 
-CREATE SCHEMA IF NOT EXISTS auth;
+    // `auth.roles()` has no equivalent in auth_functions and is referenced by
+    // hand-written policies, so it stays here rather than disappearing.
+    sql.push_str(
+        r#"
 
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
-  LANGUAGE sql STABLE AS $$
-    SELECT NULLIF(
-      current_setting('request.jwt.claims', true)::json->>'sub', ''
-    )::uuid;
-  $$;
-
-CREATE OR REPLACE FUNCTION auth.role() RETURNS text
-  LANGUAGE sql STABLE AS $$
-    SELECT COALESCE(
-      NULLIF(current_setting('request.jwt.claims', true)::json->>'role', ''),
-      'anon'
-    );
-  $$;
-
+-- auth.roles() -- the `roles` claim as a text array.
 CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
   LANGUAGE sql STABLE AS $$
     SELECT ARRAY(
       SELECT jsonb_array_elements_text(
-        current_setting('request.jwt.claims', true)::jsonb->'roles'
+        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)
       )
     );
   $$;
 
-"#
+"#,
+    );
+    sql
 }
 
 pub fn render_policy_migration_sql(
@@ -208,21 +214,76 @@ pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule)
             }
         }
         AccessRule::Custom { expression } => expression.clone(),
-        AccessRule::Any { rules } => {
-            let parts: Vec<String> = rules
-                .iter()
-                .map(|r| {
-                    let expr = access_rule_to_expr(ast, model, r);
-                    if matches!(r, AccessRule::Any { .. }) {
-                        format!("({expr})")
-                    } else {
-                        expr
-                    }
-                })
-                .collect();
-            parts.join("\n    OR\n    ")
+        AccessRule::Any { rules } => join_rules(ast, model, rules, "OR"),
+        AccessRule::All { rules } => join_rules(ast, model, rules, "AND"),
+        AccessRule::Not { rule } => {
+            format!("NOT ({})", access_rule_to_expr(ast, model, rule))
+        }
+        AccessRule::Compare { left, op, right } => {
+            format!(
+                "{} {} {}",
+                operand_to_expr(left),
+                op.sql(),
+                operand_to_expr(right)
+            )
+        }
+        AccessRule::NullCheck { operand, is_null } => {
+            let test = if *is_null { "IS NULL" } else { "IS NOT NULL" };
+            format!("{} {test}", operand_to_expr(operand))
         }
     }
+}
+
+/// Joins composed rules, parenthesising any child that is itself a composition.
+///
+/// Without the parentheses `Any<[a, All<[b, c]>]>` would render as `a OR b AND c`,
+/// which Postgres reads as `a OR (b AND c)` — correct by luck here, and wrong the
+/// moment the nesting is the other way round. Precedence is never left to chance.
+fn join_rules(ast: &SchemaAst, model: &ModelAst, rules: &[AccessRule], joiner: &str) -> String {
+    let parts: Vec<String> = rules
+        .iter()
+        .map(|r| {
+            let expr = access_rule_to_expr(ast, model, r);
+            if matches!(
+                r,
+                AccessRule::Any { .. } | AccessRule::All { .. } | AccessRule::Custom { .. }
+            ) {
+                format!("({expr})")
+            } else {
+                expr
+            }
+        })
+        .collect();
+    parts.join(&format!("\n    {joiner}\n    "))
+}
+
+/// Renders one side of a comparison.
+fn operand_to_expr(operand: &Operand) -> String {
+    match operand {
+        Operand::Column { name } => format!("\"{}\"", name.replace('"', "\"\"")),
+        Operand::AuthUid => AUTH_UID.to_string(),
+        Operand::AuthRole => AUTH_ROLE.to_string(),
+        // Text, so it compares against a column or a string literal. A claim used
+        // as a *set* goes through the membership path instead, which needs the
+        // jsonb form.
+        Operand::Claim { path } => format!("auth.claim_text({})", quote_literal(path)),
+        Operand::Literal { value } => match value {
+            LiteralValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+            // `{:?}` on f64 keeps integers as `1` rather than `1.0`, so a whole
+            // number compares against an integer column without a cast.
+            LiteralValue::Number(n) => format!("{n:?}").trim_end_matches(".0").to_string(),
+            LiteralValue::Text(t) => quote_literal(t),
+        },
+    }
+}
+
+/// Single-quotes a string for SQL, doubling any embedded quote.
+///
+/// Schema authors control these strings, but a stray apostrophe in a claim path or
+/// a literal would otherwise end the quoted string and change the meaning of the
+/// policy around it.
+fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 /// Owner / OwnerFrom — compare auth.uid() to a row column or ownership via a related model.

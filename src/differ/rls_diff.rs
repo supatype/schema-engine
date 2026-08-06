@@ -653,9 +653,33 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
     // An operation neither parent allows stays denied.
     let (a, b) = (a?, b?);
     match (a, b) {
-        // Row-dependent rules cannot be evaluated against junction columns.
-        (AccessRule::Owner { .. } | AccessRule::Custom { .. } | AccessRule::Any { .. }, _)
-        | (_, AccessRule::Owner { .. } | AccessRule::Custom { .. } | AccessRule::Any { .. }) => None,
+        // Row-dependent rules cannot be evaluated against junction columns: a
+        // junction table has none of the parents' columns, so anything naming one
+        // is meaningless there. Every composed and comparison rule is treated as
+        // row-dependent — some (`Eq<AuthRole, "admin">`) are not, but deciding
+        // that needs a full analysis of the tree, and guessing wrong here would
+        // silently widen access on a table nobody inspects. The caller turns
+        // `None` into a deny plus a warning.
+        (
+            AccessRule::Owner { .. }
+            | AccessRule::Custom { .. }
+            | AccessRule::Any { .. }
+            | AccessRule::All { .. }
+            | AccessRule::Not { .. }
+            | AccessRule::Compare { .. }
+            | AccessRule::NullCheck { .. },
+            _,
+        )
+        | (
+            _,
+            AccessRule::Owner { .. }
+            | AccessRule::Custom { .. }
+            | AccessRule::Any { .. }
+            | AccessRule::All { .. }
+            | AccessRule::Not { .. }
+            | AccessRule::Compare { .. }
+            | AccessRule::NullCheck { .. },
+        ) => None,
 
         (AccessRule::Private, _) | (_, AccessRule::Private) => Some(AccessRule::Private),
 

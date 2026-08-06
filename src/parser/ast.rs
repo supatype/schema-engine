@@ -407,6 +407,85 @@ pub enum AccessRule {
     Any {
         rules: Vec<AccessRule>,
     },
+    /// AND-join — every rule must match.
+    All {
+        rules: Vec<AccessRule>,
+    },
+    /// Negation of a rule.
+    Not {
+        rule: Box<AccessRule>,
+    },
+    /// A binary comparison between two operands.
+    Compare {
+        left: Operand,
+        op: CompareOp,
+        right: Operand,
+    },
+    /// `IS NULL` / `IS NOT NULL` on an operand.
+    ///
+    /// Its own variant rather than a `CompareOp`, because SQL null comparison is
+    /// not an equality: `col = NULL` is null, never true, so rendering it through
+    /// the comparison path would produce a policy that silently denies everything.
+    NullCheck {
+        operand: Operand,
+        /// true for `IS NULL`, false for `IS NOT NULL`.
+        ///
+        /// Renamed explicitly: `rename_all` on an enum renames its *variants*, not
+        /// the fields inside them, and the AST JSON the CLI emits is camelCase
+        /// throughout.
+        #[serde(rename = "isNull")]
+        is_null: bool,
+    },
+}
+
+/// One side of a comparison.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Operand {
+    /// A column on the model the policy is attached to.
+    Column { name: String },
+    /// `auth.uid()`, wrapped so the planner evaluates it once per query.
+    AuthUid,
+    /// `auth.role()`, wrapped for the same reason.
+    AuthRole,
+    /// A nested JWT claim by dotted path, e.g. `app_metadata.tier`.
+    Claim { path: String },
+    /// A constant supplied in the schema.
+    Literal { value: LiteralValue },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum LiteralValue {
+    Bool(bool),
+    Number(f64),
+    Text(String),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CompareOp {
+    Eq,
+    Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Like,
+}
+
+impl CompareOp {
+    pub fn sql(self) -> &'static str {
+        match self {
+            CompareOp::Eq => "=",
+            CompareOp::Neq => "<>",
+            CompareOp::Gt => ">",
+            CompareOp::Gte => ">=",
+            CompareOp::Lt => "<",
+            CompareOp::Lte => "<=",
+            CompareOp::Like => "LIKE",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -103,6 +103,79 @@ async fn or_composition_and_custom_sql_reach_the_database() {
     .await;
 }
 
+// AND-composition, negation, comparisons and claim lookups, checked where it
+// counts — in the expression Postgres accepted and stored.
+#[tokio::test]
+async fn composition_and_comparisons_reach_the_database() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        let expr: String = sqlx::query_scalar(
+            "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'comments_select'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the Comment read policy exists");
+
+        // All<[ Eq<"author_id", AuthUid>, Not<Eq<AuthRole, "banned">>,
+        //       NotNull<"body">, Eq<"body", Claim<"app_metadata.tier">> ]>
+        assert!(expr.contains(" AND "), "expected an AND-join, got: {expr}");
+        assert!(expr.contains("NOT "), "negation missing: {expr}");
+        assert!(expr.contains("IS NOT NULL"), "null check missing: {expr}");
+        assert!(
+            expr.contains("claim_text") && expr.contains("app_metadata.tier"),
+            "claim lookup missing: {expr}"
+        );
+
+        // A null check must never be rendered as equality: `col = NULL` is null,
+        // never true, so the policy would silently deny everything.
+        assert!(!expr.contains("= NULL"), "null compared with equality: {expr}");
+    })
+    .await;
+}
+
+// Regression: the auth helpers had two definitions — one installed by a
+// migration, one reinstalled at bootstrap — and they had already diverged. A
+// fresh push installed a `role()` that ignored `app_metadata.role`, and helpers
+// added on one side were missing on the other.
+#[tokio::test]
+async fn a_fresh_push_installs_the_canonical_auth_helpers() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        let role_src: String = sqlx::query_scalar(
+            "SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'auth' AND p.proname = 'role'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("auth.role() exists");
+        assert!(
+            role_src.contains("app_metadata"),
+            "a fresh push installed a stale auth.role(): {role_src}"
+        );
+
+        for helper in ["uid", "role", "roles", "claim", "claim_text", "jwt", "email"] {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                                 WHERE n.nspname = 'auth' AND p.proname = $1)",
+            )
+            .bind(helper)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(exists, "auth.{helper}() missing after a fresh push");
+        }
+    })
+    .await;
+}
+
 // The wrapping is the whole point of the change: a bare `auth.uid()` is
 // re-evaluated per row, a wrapped one becomes an InitPlan evaluated once. Assert
 // it reaches the database that way rather than trusting the generator's string.

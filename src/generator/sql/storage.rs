@@ -150,6 +150,16 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
             }
         }
         AccessRule::Custom { expression } => expression.clone(),
+
+        // Storage policies run on `storage.objects`, which has none of the
+        // model's columns. A rule naming one cannot be evaluated here, so it
+        // denies rather than being rendered against a table where the column
+        // means something else or nothing at all. `Bucket*` rules are the
+        // supported vocabulary for buckets.
+        AccessRule::All { .. }
+        | AccessRule::Not { .. }
+        | AccessRule::Compare { .. }
+        | AccessRule::NullCheck { .. } => "FALSE".to_string(),
     }
 }
 

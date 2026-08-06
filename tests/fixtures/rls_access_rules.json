@@ -322,7 +322,54 @@
     "platform": {
      "access": {
       "read": {
-       "type": "authenticated"
+       "type": "all",
+       "rules": [
+        {
+         "type": "compare",
+         "op": "eq",
+         "left": {
+          "kind": "column",
+          "name": "author_id"
+         },
+         "right": {
+          "kind": "authUid"
+         }
+        },
+        {
+         "type": "not",
+         "rule": {
+          "type": "compare",
+          "op": "eq",
+          "left": {
+           "kind": "authRole"
+          },
+          "right": {
+           "kind": "literal",
+           "value": "banned"
+          }
+         }
+        },
+        {
+         "type": "nullCheck",
+         "operand": {
+          "kind": "column",
+          "name": "body"
+         },
+         "isNull": false
+        },
+        {
+         "type": "compare",
+         "op": "eq",
+         "left": {
+          "kind": "column",
+          "name": "body"
+         },
+         "right": {
+          "kind": "claim",
+          "path": "app_metadata.tier"
+         }
+        }
+       ]
       },
       "create": {
        "type": "authenticated"

@@ -48,6 +48,8 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
     sql.push_str(&generate_email_function(&config.auth_schema));
     sql.push_str("\n\n");
     sql.push_str(&generate_jwt_function(&config.auth_schema));
+    sql.push_str("\n\n");
+    sql.push_str(&generate_claim_function(&config.auth_schema));
 
     sql
 }
@@ -55,7 +57,7 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
 /// auth.uid() — extracts the user ID (sub claim) from the JWT.
 fn generate_uid_function(schema: &str) -> String {
     format!(
-        r#"-- auth.uid() — extracts user ID from JWT claims set by PostgREST
+        r#"-- auth.uid() -- extracts user ID from JWT claims set by PostgREST
 CREATE OR REPLACE FUNCTION {schema}.uid() RETURNS uuid AS $$
   SELECT COALESCE(
     NULLIF(
@@ -72,13 +74,13 @@ $$ LANGUAGE sql STABLE;"#,
 /// auth.role() — extracts the role from JWT claims (self-host / dedicated cloud).
 fn generate_role_function(schema: &str, _project_ref: &str) -> String {
     format!(
-        r#"-- auth.role() — application role for access rules.
+        r#"-- auth.role() -- application role for access rules.
 --
 -- Reads `app_metadata.role` first, falling back to the top-level `role` claim.
 -- The top-level claim is the one PostgREST uses to pick the Postgres role it
 -- runs the request as, so it can only ever be anon / authenticated /
--- service_role; application roles (admin, editor, …) live in app_metadata,
--- which only the Auth admin API can write — never `user_metadata`, which the
+-- service_role; application roles (admin, editor, etc.) live in app_metadata,
+-- which only the Auth admin API can write -- never `user_metadata`, which the
 -- user can edit themselves.
 CREATE OR REPLACE FUNCTION {schema}.role() RETURNS text AS $$
   SELECT COALESCE(
@@ -94,7 +96,7 @@ $$ LANGUAGE sql STABLE;"#,
 /// auth.email() — extracts the email from the JWT claims.
 fn generate_email_function(schema: &str) -> String {
     format!(
-        r#"-- auth.email() — extracts email from JWT claims
+        r#"-- auth.email() -- extracts email from JWT claims
 CREATE OR REPLACE FUNCTION {schema}.email() RETURNS text AS $$
   SELECT COALESCE(
     current_setting('request.jwt.claims', true)::jsonb ->> 'email',
@@ -105,10 +107,42 @@ $$ LANGUAGE sql STABLE;"#,
     )
 }
 
+/// auth.claim(path) — reads a nested JWT claim by dotted path.
+///
+/// `Claim<"app_metadata.tier">` in a schema compiles to a call here. Returning
+/// `jsonb` rather than `text` keeps arrays usable: a claim holding a list is what
+/// membership checks like `In<"site_id", Claim<"app_metadata.sites">>` read, and
+/// flattening it to text would lose that. Callers wanting a scalar cast with
+/// `->>`-style semantics use `#>>`, which this mirrors.
+///
+/// A missing path yields SQL NULL, so a policy comparing against an absent claim
+/// is false rather than an error — an unauthenticated or partial token must deny,
+/// not break the query.
+fn generate_claim_function(schema: &str) -> String {
+    format!(
+        r#"-- auth.claim(path) -- nested JWT claim by dotted path, e.g. 'app_metadata.tier'
+CREATE OR REPLACE FUNCTION {schema}.claim(claim_path text) RETURNS jsonb AS $$
+  SELECT COALESCE(
+    current_setting('request.jwt.claims', true)::jsonb,
+    '{{}}'::jsonb
+  ) #> string_to_array(claim_path, '.');
+$$ LANGUAGE sql STABLE;
+
+-- auth.claim_text(path) -- the same claim as text, for scalar comparisons.
+CREATE OR REPLACE FUNCTION {schema}.claim_text(claim_path text) RETURNS text AS $$
+  SELECT COALESCE(
+    current_setting('request.jwt.claims', true)::jsonb,
+    '{{}}'::jsonb
+  ) #>> string_to_array(claim_path, '.');
+$$ LANGUAGE sql STABLE;"#,
+        schema = schema
+    )
+}
+
 /// auth.jwt() — returns the full JWT claims as JSONB.
 fn generate_jwt_function(schema: &str) -> String {
     format!(
-        r#"-- auth.jwt() — returns full JWT claims as JSONB
+        r#"-- auth.jwt() -- returns full JWT claims as JSONB
 CREATE OR REPLACE FUNCTION {schema}.jwt() RETURNS jsonb AS $$
   SELECT COALESCE(
     current_setting('request.jwt.claims', true)::jsonb,
