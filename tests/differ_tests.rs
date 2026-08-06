@@ -198,3 +198,143 @@ fn col(name: &str, data_type: &str) -> DbColumn {
         ordinal_position: 0,
     }
 }
+
+// A model that declares no `access` used to be published with RLS off while
+// anon/authenticated hold broad grants — world-readable, and writable by any
+// signed-in user. The default is now deny: RLS on, no policies.
+#[test]
+fn test_models_without_access_get_rls_enabled_by_default() {
+    let ast = parser::parse(&blog_ast_without_access()).unwrap();
+    assert!(
+        ast.models.iter().all(|m| m.access().read.is_none()),
+        "access rules should have been stripped for this test",
+    );
+
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+
+    let enabled: Vec<&str> = diff
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            differ::Operation::EnableRls { table, .. } => Some(table.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    for model in &ast.models {
+        assert!(
+            enabled.contains(&model.table_name()),
+            "expected RLS to be enabled for {}",
+            model.table_name(),
+        );
+    }
+
+    // No policies may be created for them — RLS with zero policies is the deny.
+    assert!(
+        !diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, differ::Operation::CreateRlsPolicy { .. })),
+        "a model without access rules must not get policies",
+    );
+
+    assert!(
+        diff.warnings.iter().any(|w| w.contains("no access rules")),
+        "the deny-all must be reported, got: {:?}",
+        diff.warnings,
+    );
+}
+
+// Convergence: RLS-enabled state is introspected, so an already-denied table
+// must not be re-enabled on every push.
+#[test]
+fn test_rls_not_re_enabled_when_already_on() {
+    let ast = parser::parse(&blog_ast_without_access()).unwrap();
+
+    let db = DatabaseState {
+        rls_enabled_tables: ast.models.iter().map(|m| m.table_name().to_string()).collect(),
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    assert!(
+        !diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, differ::Operation::EnableRls { .. })),
+        "RLS was already enabled; expected no EnableRls operations",
+    );
+}
+
+/// The shared fixture declares access rules; strip them to exercise the
+/// "model author wrote no access block" default.
+fn blog_ast_without_access() -> String {
+    let mut value: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/basic_blog.json")).unwrap();
+    for model in value["models"].as_array_mut().unwrap() {
+        if let Some(platform) = model["annotations"]["platform"].as_object_mut() {
+            platform.remove("access");
+        }
+    }
+    value.to_string()
+}
+
+// Ownership: only Supatype-marked policies may be dropped. A hand-written policy
+// (SQL editor, psql) must survive a push, or we silently delete access control the
+// operator added.
+#[test]
+fn test_unmanaged_policies_are_not_dropped() {
+    use supatype_engine::introspector::rls::DbRlsPolicy;
+
+    let ast = parser::parse(&blog_ast_without_access()).unwrap();
+    let table = ast.models[0].table_name().to_string();
+
+    let db = DatabaseState {
+        rls_enabled_tables: vec![table.clone()],
+        rls_policies: vec![
+            DbRlsPolicy {
+                table: table.clone(),
+                name: "handwritten_extra".into(),
+                command: "r".into(),
+                permissive: true,
+                using_expr: Some("true".into()),
+                check_expr: None,
+                managed: false,
+            },
+            DbRlsPolicy {
+                table: table.clone(),
+                name: format!("{table}_select"),
+                command: "r".into(),
+                permissive: true,
+                using_expr: Some("true".into()),
+                check_expr: None,
+                managed: true,
+            },
+        ],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let dropped: Vec<&str> = diff
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            differ::Operation::DropRlsPolicy { policy, .. } => Some(policy.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        !dropped.contains(&"handwritten_extra"),
+        "an unmanaged policy must never be dropped, got {dropped:?}",
+    );
+    assert!(
+        dropped.contains(&format!("{table}_select").as_str()),
+        "the managed policy should be dropped for a model with no access rules, got {dropped:?}",
+    );
+    assert!(
+        diff.warnings.iter().any(|w| w.contains("hand-written")),
+        "unmanaged policies must be reported, got {:?}",
+        diff.warnings,
+    );
+}

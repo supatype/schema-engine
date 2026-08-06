@@ -526,6 +526,9 @@ fn test_fk_already_exists_no_op() {
             },
         ],
         constraints: vec![fk("posts", "author_id", "users")], // already applied
+        // These models declare no access rules, so a fully-applied schema now
+        // also has RLS enabled on them (deny-all default).
+        rls_enabled_tables: vec!["users".into(), "posts".into()],
         ..DatabaseState::default()
     };
 
@@ -924,6 +927,91 @@ fn test_junction_table_not_recreated() {
     assert!(
         jt_ops.is_empty(),
         "junction table already exists — must not recreate"
+    );
+}
+
+#[test]
+fn test_junction_table_not_dropped_as_orphan() {
+    // Junction tables are not models; the removed-table pass must not treat them
+    // as orphans when they are present in ast.junction_tables.
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Student",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "courses": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Course",
+          "through": "enrollments"
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "students", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    },
+    {
+      "name": "Course",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "courses", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![
+            DbTable {
+                schema: "public".into(),
+                name: "students".into(),
+                columns: vec![col("id", "uuid")],
+            },
+            DbTable {
+                schema: "public".into(),
+                name: "courses".into(),
+                columns: vec![col("id", "uuid")],
+            },
+            DbTable {
+                schema: "public".into(),
+                name: "enrollments".into(),
+                columns: vec![col("student_id", "uuid"), col("course_id", "uuid")],
+            },
+        ],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let drops: Vec<_> = diff
+        .operations
+        .iter()
+        .filter(|op| matches!(op, Operation::DropTable { table, .. } if table == "enrollments"))
+        .collect();
+    assert!(
+        drops.is_empty(),
+        "existing junction must not be dropped as an orphan table: {:?}",
+        diff.operations
     );
 }
 
@@ -2327,6 +2415,7 @@ fn test_rls_changed_expression_triggers_recreate() {
             // Old expression: true (public access)
             using_expr: Some("true".into()),
             check_expr: None,
+            managed: true,
         }],
         ..DatabaseState::default()
     };
@@ -2408,6 +2497,7 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
             permissive: true,
             using_expr: Some("auth.uid() IS NOT NULL".into()),
             check_expr: None,
+            managed: true,
         }],
         ..DatabaseState::default()
     };

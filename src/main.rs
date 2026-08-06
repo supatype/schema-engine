@@ -251,28 +251,10 @@ async fn main() -> Result<()> {
                 .context("Failed to connect to database")?;
 
             // Ensure _supatype schema and internal tables exist
-            sqlx::raw_sql(migration_history::create_internal_schema_sql())
-                .execute(&pool)
+            // Internal bookkeeping + auth helpers (shared with the server push path).
+            migration_history::bootstrap_internal_state(&pool)
                 .await
-                .context("Failed to create _supatype schema")?;
-            sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create migrations table")?;
-            sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create schema_state table")?;
-            sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to ensure schema_state studio columns")?;
-            for col_sql in migration_history::ensure_all_migration_columns_sql() {
-                sqlx::raw_sql(&col_sql)
-                    .execute(&pool)
-                    .await
-                    .context("Failed to ensure migration columns")?;
-            }
+                .context("Failed to bootstrap _supatype internal state")?;
 
             let schema_sources_bytes = schema_sources_gz
                 .as_deref()
@@ -424,7 +406,7 @@ async fn main() -> Result<()> {
             // Keys must match packages/cli + packages/realtime schema-push-lock constants.
             // If the CLI already holds a session lock on the same keys, skip to avoid deadlock.
             {
-                const lock_held: bool = sqlx::query_scalar(
+                let lock_held: bool = sqlx::query_scalar(
                     r#"
                     SELECT EXISTS (
                       SELECT 1 FROM pg_locks
@@ -520,6 +502,10 @@ async fn main() -> Result<()> {
             }
 
             let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
+            // Kept for the schema_state refresh after commit: Studio reads its schema
+            // from `_supatype.schema_state`, which was only written on the up-to-date
+            // branch — so any project whose last push applied a migration had none.
+            let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
             let migration_sources = migration_history::AppliedMigrationSources {
                 sql_down,
                 schema_sources: schema_sources_bytes,
@@ -549,6 +535,15 @@ async fn main() -> Result<()> {
             }
 
             tx.commit().await.context("commit migration transaction")?;
+
+            if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
+                if let Err(e) =
+                    migration_history::save_studio_metadata_if_present(&pool, admin_cfg, schema_snap)
+                        .await
+                {
+                    eprintln!("Warning: failed to refresh Studio metadata: {e}");
+                }
+            }
 
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
             let warnings_json = serde_json::to_string(&drift_warnings)?;
@@ -705,15 +700,10 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
 
-            sqlx::raw_sql(migration_history::create_internal_schema_sql())
-                .execute(&pool)
-                .await?;
-            sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-                .execute(&pool)
-                .await?;
-            sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-                .execute(&pool)
-                .await?;
+            // Internal bookkeeping + auth helpers (shared with the server push path).
+            migration_history::bootstrap_internal_state(&pool)
+                .await
+                .context("Failed to bootstrap _supatype internal state")?;
 
             let db_state = if no_cache {
                 supatype_engine::introspector::introspect(&pool, &schema).await?

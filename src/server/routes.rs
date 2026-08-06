@@ -82,33 +82,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
 
-    // Ensure _supatype schema and internal tables exist
-    sqlx::raw_sql(migration_history::create_internal_schema_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_migrations_admin_config_column_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_migrations_sql_up_column_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_migrations_status_columns_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
-        .execute(&pool)
+    // Internal bookkeeping + auth helpers (shared with the CLI push path).
+    migration_history::bootstrap_internal_state(&pool)
         .await
         .map_err(engine_error)?;
 
@@ -285,6 +260,9 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     }
 
     let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
+    let studio_metadata = admin_cfg
+        .clone()
+        .zip(serde_json::to_value(&ast).ok());
     if let Err(e) = migration_history::insert_applied_migration(
         &mut *tx,
         &migration_name,
@@ -309,6 +287,19 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     }
 
     tx.commit().await.map_err(engine_error)?;
+
+    // Studio metadata was previously persisted to `_supatype.schema_state` only on
+    // the up-to-date branch above, so any project whose last push applied a
+    // migration had null `ast_snapshot`/`admin_config` — leaving Studio with no
+    // server-side schema source. Refresh it here too; failure must not undo an
+    // applied migration, so it only warns.
+    if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
+        if let Err(e) =
+            migration_history::save_studio_metadata_if_present(&pool, admin_cfg, schema_snap).await
+        {
+            tracing::warn!(error = %e, "failed to refresh Studio metadata after migration");
+        }
+    }
 
     info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
     Ok(Json(serde_json::json!({
@@ -559,6 +550,13 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
         .execute(&pool)
         .await
         .map_err(engine_error)?;
+    sqlx::raw_sql(&migration_history::create_studio_members_table_sql())
+        .execute(&pool)
+        .await
+        .map_err(engine_error)?;
+    if let Err(e) = migration_history::reapply_auth_helpers(&pool, "auth").await {
+        tracing::warn!(error = %e, "failed to reapply auth helper functions");
+    }
     sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
         .execute(&pool)
         .await

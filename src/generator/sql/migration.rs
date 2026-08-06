@@ -1,4 +1,4 @@
-use crate::differ::column_diff::column_names_for;
+use crate::differ::column_diff::{column_names_for, field_pg_type};
 use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
 use crate::generator::sql::column_conversion::{
     add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
@@ -10,7 +10,7 @@ use crate::managed::{
 };
 use crate::parser::accessors::db_unique;
 use crate::parser::ast::{
-    DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
+    AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst, SchemaAst,
 };
 use anyhow::{anyhow, bail, Result};
@@ -343,33 +343,80 @@ fn render_create_rls_policy_sql(
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<String> {
-    let model = ast
-        .models
-        .iter()
-        .find(|m| m.table_name() == table)
-        .ok_or_else(|| anyhow!("CreateRlsPolicy: unknown table {table}"))?;
     let prefix = format!("{table}_");
     if !policy.starts_with(&prefix) {
         bail!("CreateRlsPolicy: policy name {policy} does not start with expected prefix {prefix}");
     }
     let suffix = &policy[prefix.len()..];
+    if !matches!(suffix, "select" | "insert" | "update" | "delete") {
+        bail!("CreateRlsPolicy: unknown policy suffix {suffix}");
+    }
+
+    if let Some(model) = ast.models.iter().find(|m| m.table_name() == table) {
+        let rule = match suffix {
+            "select" => model.access().read.as_ref(),
+            "insert" => model.access().create.as_ref(),
+            "update" => model.access().update.as_ref(),
+            _ => model.access().delete.as_ref(),
+        };
+        let rule = rule.ok_or_else(|| {
+            anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}")
+        })?;
+        return Ok(crate::generator::sql::rls::render_policy_migration_sql(
+            schema, table, suffix, ast, model, rule,
+        ));
+    }
+
+    // Junction tables have no model of their own — their policies are derived
+    // from the intersection of both parents' rules (see differ::rls_diff).
+    let junction = ast
+        .junction_tables
+        .iter()
+        .find(|j| j.name == table)
+        .ok_or_else(|| anyhow!("CreateRlsPolicy: unknown table {table}"))?;
+    let parent_a = ast
+        .models
+        .iter()
+        .find(|m| m.name == junction.model_a)
+        .ok_or_else(|| anyhow!("CreateRlsPolicy: junction {table} parent {} not found", junction.model_a))?;
+    let parent_b = ast
+        .models
+        .iter()
+        .find(|m| m.name == junction.model_b)
+        .ok_or_else(|| anyhow!("CreateRlsPolicy: junction {table} parent {} not found", junction.model_b))?;
+
+    let derived = crate::differ::rls_diff::intersect_access(parent_a.access(), parent_b.access());
     let rule = match suffix {
-        "select" => model.access().read.as_ref(),
-        "insert" => model.access().create.as_ref(),
-        "update" => model.access().update.as_ref(),
-        "delete" => model.access().delete.as_ref(),
-        _ => bail!("CreateRlsPolicy: unknown policy suffix {suffix}"),
-    };
-    let rule = rule
-        .ok_or_else(|| anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}"))?;
+        "select" => derived.read,
+        "insert" => derived.create,
+        "update" => derived.update,
+        _ => derived.delete,
+    }
+    .ok_or_else(|| {
+        anyhow!("CreateRlsPolicy: junction {table} has no derivable access rule for {suffix}")
+    })?;
+
+    // The differ only derives row-independent rules for junctions, because the
+    // junction table has none of the parents' columns for a row-dependent
+    // expression to reference. Assert that here rather than emit invalid SQL.
+    if matches!(
+        rule,
+        AccessRule::Owner { .. } | AccessRule::Custom { .. } | AccessRule::Any { .. }
+    ) {
+        bail!(
+            "CreateRlsPolicy: junction {table} derived a row-dependent rule for {suffix}; \
+             it cannot reference parent columns"
+        );
+    }
+
     Ok(crate::generator::sql::rls::render_policy_migration_sql(
-        schema, table, suffix, ast, model, rule,
+        schema, table, suffix, ast, parent_a, &rule,
     ))
 }
 
 fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {
     match op {
-        Operation::CreateTable { model, .. } => create_table_sql(model, schema),
+        Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast),
         Operation::DropTable { table, .. } => Ok(format!(
             "DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;"
         )),
@@ -382,14 +429,15 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             field,
             ..
         } => {
-            // BelongsTo relations produce a UUID FK column; the FK constraint is
-            // a separate AddForeignKey operation emitted after all table changes.
+            // BelongsTo relations produce an FK column typed like the target PK;
+            // the FK constraint is a separate AddForeignKey operation.
             if let FieldAst::Relation(rel) = field.as_ref() {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                     let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
                     let req = if rel.required { " NOT NULL" } else { "" };
+                    let pg_type = fk_pg_type_for_model(ast, &rel.target);
                     return Ok(format!(
-                        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN \"{column}\" UUID{uniq}{req};"
+                        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN \"{column}\" {pg_type}{uniq}{req};"
                     ));
                 }
             }
@@ -635,12 +683,12 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             table_b,
             ..
         } => {
-            let table_a_snake = to_snake_case(table_a);
-            let table_b_snake = to_snake_case(table_b);
+            let (ref_table_a, pk_a, type_a) = junction_ref_for_model(ast, table_a);
+            let (ref_table_b, pk_b, type_b) = junction_ref_for_model(ast, table_b);
             Ok(format!(
                 "CREATE TABLE IF NOT EXISTS \"{schema}\".\"{table}\" (\n    \
-                 \"{fk_a}\" UUID NOT NULL REFERENCES \"{schema}\".\"{table_a_snake}\" (\"id\") ON DELETE CASCADE,\n    \
-                 \"{fk_b}\" UUID NOT NULL REFERENCES \"{schema}\".\"{table_b_snake}\" (\"id\") ON DELETE CASCADE,\n    \
+                 \"{fk_a}\" {type_a} NOT NULL REFERENCES \"{schema}\".\"{ref_table_a}\" (\"{pk_a}\") ON DELETE CASCADE,\n    \
+                 \"{fk_b}\" {type_b} NOT NULL REFERENCES \"{schema}\".\"{ref_table_b}\" (\"{pk_b}\") ON DELETE CASCADE,\n    \
                  PRIMARY KEY (\"{fk_a}\", \"{fk_b}\")\n\
                  );"
             ))
@@ -653,7 +701,7 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
 
 // ─── CREATE TABLE ────────────────────────────────────────────────────────────
 
-fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
+fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<String> {
     let table = &model.table_name();
     let mut col_defs: Vec<String> = Vec::new();
 
@@ -678,7 +726,8 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
                     if !explicitly_declared {
                         let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
                         let req = if rel.required { " NOT NULL" } else { "" };
-                        col_defs.push(format!("    \"{fk_col}\" UUID{uniq}{req}"));
+                        let pg_type = fk_pg_type_for_model(ast, &rel.target);
+                        col_defs.push(format!("    \"{fk_col}\" {pg_type}{uniq}{req}"));
                     }
                     // FK constraint is a separate AddForeignKey operation (emitted after all tables).
                 }
@@ -1347,6 +1396,66 @@ fn add_fk_sql(
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
+/// FK column SQL type for a target model PK (SERIAL → INTEGER, UUID → UUID, …).
+fn fk_pg_type_for_model(ast: &SchemaAst, model_name: &str) -> String {
+    match model_primary_key(ast, model_name) {
+        Some((_, field)) => field_pg_type(field),
+        None => "UUID".into(),
+    }
+}
+
+/// `(table_name, pk_column, fk_pg_type)` for junction REFERENCES clauses.
+fn junction_ref_for_model(ast: &SchemaAst, model_name: &str) -> (String, String, String) {
+    let Some(model) = ast.models.iter().find(|m| m.name == model_name) else {
+        return (to_snake_case(model_name), "id".into(), "UUID".into());
+    };
+    let (pk_col, pk_type) = match model_primary_key(ast, model_name) {
+        Some((col, field)) => (col.to_string(), field_pg_type(field)),
+        None => ("id".into(), "UUID".into()),
+    };
+    (model.table_name().to_string(), pk_col, pk_type)
+}
+
+fn model_primary_key<'a>(ast: &'a SchemaAst, model_name: &str) -> Option<(&'a str, &'a FieldAst)> {
+    let model = ast.models.iter().find(|m| m.name == model_name)?;
+    model
+        .fields
+        .iter()
+        .find(|(_, f)| field_is_primary_key(f))
+        .map(|(name, field)| (name.as_str(), field))
+}
+
+fn field_is_primary_key(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(s)
+        | FieldAst::RichText(s)
+        | FieldAst::Integer(s)
+        | FieldAst::Float(s)
+        | FieldAst::Boolean(s)
+        | FieldAst::Datetime(s)
+        | FieldAst::Uuid(s)
+        | FieldAst::Email(s)
+        | FieldAst::BigInt(s)
+        | FieldAst::Bytes(s)
+        | FieldAst::SmallInt(s)
+        | FieldAst::Date(s)
+        | FieldAst::Timestamp(s)
+        | FieldAst::Serial(s)
+        | FieldAst::BigSerial(s)
+        | FieldAst::Money(s)
+        | FieldAst::Url(s)
+        | FieldAst::Ip(s)
+        | FieldAst::Cidr(s)
+        | FieldAst::Macaddr(s)
+        | FieldAst::Interval(s)
+        | FieldAst::TsQuery(s)
+        | FieldAst::TsVector(s)
+        | FieldAst::Xml(s)
+        | FieldAst::Color(s) => s.primary_key,
+        _ => false,
+    }
+}
+
 fn to_snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -1362,4 +1471,84 @@ fn migration_hash(sql: &str) -> String {
     let mut h = Sha256::new();
     h.update(sql.as_bytes());
     format!("sha256:{}", hex::encode(h.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser;
+
+    #[test]
+    fn junction_fk_columns_match_serial_primary_keys() {
+        let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Platform",
+      "fields": {
+        "id": {
+          "kind": "serial",
+          "primaryKey": true,
+          "required": true,
+          "annotations": { "db": { "pgType": "SERIAL", "unique": true } }
+        },
+        "games": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Game"
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "platform", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    },
+    {
+      "name": "Game",
+      "fields": {
+        "id": {
+          "kind": "serial",
+          "primaryKey": true,
+          "required": true,
+          "annotations": { "db": { "pgType": "SERIAL", "unique": true } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "game", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+        let ast = parser::parse(ast_json).unwrap();
+        assert!(
+            !ast.junction_tables.is_empty(),
+            "expected junction tables, models={:?}",
+            ast.models.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+        let jt = &ast.junction_tables[0];
+        let op = Operation::CreateJunctionTable {
+            table: jt.name.clone(),
+            fk_a: jt.fk_a.clone(),
+            table_a: jt.model_a.clone(),
+            fk_b: jt.fk_b.clone(),
+            table_b: jt.model_b.clone(),
+            risk: Risk::Safe,
+        };
+        let sql = render_operation(&op, "public", &ast).unwrap();
+        assert!(
+            sql.contains("INTEGER NOT NULL REFERENCES \"public\".\"game\""),
+            "expected INTEGER FK to game, got:\n{sql}"
+        );
+        assert!(
+            sql.contains("INTEGER NOT NULL REFERENCES \"public\".\"platform\""),
+            "expected INTEGER FK to platform, got:\n{sql}"
+        );
+        assert!(
+            !sql.contains("UUID NOT NULL REFERENCES"),
+            "must not hardcode UUID for serial PKs:\n{sql}"
+        );
+    }
 }

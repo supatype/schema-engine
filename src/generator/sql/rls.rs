@@ -94,13 +94,22 @@ pub fn render_policy_migration_sql(
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    match suffix {
+    let sql = match suffix {
         "select" => render_select_policy_sql(schema, table, ast, model, rule),
         "insert" => render_insert_policy_sql(schema, table, ast, model, rule),
         "update" => render_update_policy_sql(schema, table, ast, model, rule),
         "delete" => render_delete_policy_sql(schema, table, ast, model, rule),
-        other => format!("-- unknown RLS policy suffix: {other}\n"),
-    }
+        other => return format!("-- unknown RLS policy suffix: {other}\n"),
+    };
+
+    // Stamp ownership so the differ can distinguish our policies from
+    // hand-written ones instead of guessing from the name. Without this, a
+    // user's own policy is dropped on the next push, and one that happens to
+    // match our naming is silently replaced.
+    let comment = crate::managed::managed_comment("rls_policy", table, &[suffix]);
+    format!(
+        "{sql}COMMENT ON POLICY \"{table}_{suffix}\" ON \"{schema}\".\"{table}\" IS '{comment}';\n"
+    )
 }
 
 pub(crate) fn render_select_policy_sql(

@@ -69,36 +69,25 @@ $$ LANGUAGE sql STABLE;"#,
     )
 }
 
-/// auth.role() — extracts the role, stripping the project ref prefix.
-fn generate_role_function(schema: &str, project_ref: &str) -> String {
-    if project_ref.is_empty() {
-        // Self-hosted mode: no prefix stripping needed
-        return format!(
-            r#"-- auth.role() — extracts role from JWT claims
+/// auth.role() — extracts the role from JWT claims (self-host / dedicated cloud).
+fn generate_role_function(schema: &str, _project_ref: &str) -> String {
+    format!(
+        r#"-- auth.role() — application role for access rules.
+--
+-- Reads `app_metadata.role` first, falling back to the top-level `role` claim.
+-- The top-level claim is the one PostgREST uses to pick the Postgres role it
+-- runs the request as, so it can only ever be anon / authenticated /
+-- service_role; application roles (admin, editor, …) live in app_metadata,
+-- which only the Auth admin API can write — never `user_metadata`, which the
+-- user can edit themselves.
 CREATE OR REPLACE FUNCTION {schema}.role() RETURNS text AS $$
   SELECT COALESCE(
+    current_setting('request.jwt.claims', true)::jsonb -> 'app_metadata' ->> 'role',
     current_setting('request.jwt.claims', true)::jsonb ->> 'role',
     'anon'
   );
 $$ LANGUAGE sql STABLE;"#,
-            schema = schema
-        );
-    }
-
-    // Cloud mode: strip project ref prefix from role name
-    format!(
-        r#"-- auth.role() — extracts role from JWT claims (strips project ref prefix)
-CREATE OR REPLACE FUNCTION {schema}.role() RETURNS text AS $$
-  SELECT CASE current_setting('request.jwt.claims', true)::jsonb ->> 'role'
-    WHEN '{ref}_anon' THEN 'anon'
-    WHEN '{ref}_authenticated' THEN 'authenticated'
-    ELSE COALESCE(
-      current_setting('request.jwt.claims', true)::jsonb ->> 'role',
-      'anon'
-    )
-  END;
-$$ LANGUAGE sql STABLE;"#,
-        ref = project_ref
+        schema = schema
     )
 }
 
@@ -147,8 +136,9 @@ mod tests {
         assert!(sql.contains("auth.role()"));
         assert!(sql.contains("auth.email()"));
         assert!(sql.contains("auth.jwt()"));
-        assert!(sql.contains("kxv4m2np_anon"));
-        assert!(sql.contains("kxv4m2np_authenticated"));
+        // Dedicated cloud uses unprefixed JWT roles (self-host parity)
+        assert!(!sql.contains("kxv4m2np_anon"));
+        assert!(!sql.contains("kxv4m2np_authenticated"));
     }
 
     #[test]
@@ -161,7 +151,6 @@ mod tests {
 
         assert!(sql.contains("auth.uid()"));
         assert!(sql.contains("auth.role()"));
-        // Self-hosted should NOT have ref prefix logic
         assert!(!sql.contains("_anon"));
     }
 
@@ -174,9 +163,23 @@ mod tests {
     }
 
     #[test]
-    fn test_role_strips_prefix() {
+    fn test_role_prefers_app_metadata_over_postgrest_role_claim() {
         let sql = generate_role_function("auth", "abc123");
-        assert!(sql.contains("abc123_anon"));
-        assert!(sql.contains("abc123_authenticated"));
+        let app_idx = sql.find("'app_metadata' ->> 'role'").expect("app_metadata lookup");
+        let claim_idx = sql.find("::jsonb ->> 'role'").expect("top-level role fallback");
+        assert!(
+            app_idx < claim_idx,
+            "app role must take precedence over the PostgREST role claim",
+        );
+        // user_metadata is user-writable and must never grant authorization.
+        // (Checks for a JSON key lookup, not the word in the explanatory comment.)
+        assert!(!sql.contains("'user_metadata'"));
+    }
+
+    #[test]
+    fn test_role_unprefixed() {
+        let sql = generate_role_function("auth", "abc123");
+        assert!(!sql.contains("abc123_anon"));
+        assert!(sql.contains("request.jwt.claims"));
     }
 }

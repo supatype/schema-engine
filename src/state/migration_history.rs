@@ -82,6 +82,23 @@ pub fn create_schema_state_table_sql() -> String {
     )
 }
 
+/// Studio membership — who may use the admin UI, and with what capability set.
+///
+/// Deliberately NOT a JWT claim and NOT in the `public` schema: `_supatype` is
+/// absent from PGRST_DB_SCHEMAS, so nothing the developer's app or API surface
+/// does can read or write it. Studio roles are Supatype's namespace; the
+/// developer's own app roles live in their claims/tables and are unrelated.
+pub fn create_studio_members_table_sql() -> String {
+    format!(
+        r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.studio_members (
+    user_id     UUID PRIMARY KEY,
+    role        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)"#
+    )
+}
+
 pub fn ensure_migrations_admin_config_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS admin_config JSONB")
 }
@@ -101,8 +118,68 @@ pub fn ensure_migrations_schema_sources_column_sql() -> String {
     )
 }
 
+/// Repair a `migrations` table that predates this engine's layout.
+///
+/// [`create_migrations_table_sql`] uses CREATE TABLE IF NOT EXISTS, so a table
+/// created by anything else (e.g. an older engine, or a provisioner that
+/// pre-created it) silently wins and every insert then fails on a missing
+/// column. These columns are NOT NULL at creation time; added after the fact
+/// they must be nullable, which is harmless because every insert supplies them.
+pub fn ensure_migrations_core_columns_sql() -> String {
+    format!(
+        "ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS hash TEXT;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS engine_version TEXT;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW();\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS rolled_back BOOLEAN NOT NULL DEFAULT FALSE;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS rolled_back_at TIMESTAMPTZ;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS schema_snapshot JSONB"
+    )
+}
+
+/// A foreign `migrations` table may carry NOT NULL columns this engine never
+/// writes (a legacy layout used `version`, `sql`, `checksum`), and may lack the
+/// UNIQUE constraint on `name` that failed-migration upserts rely on. Relax the
+/// columns we don't own and restore the constraint so inserts can succeed.
+pub fn ensure_migrations_writable_sql() -> String {
+    format!(
+        "DO $$
+DECLARE
+  col RECORD;
+BEGIN
+  FOR col IN
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = '{SCHEMA}'
+      AND table_name = 'migrations'
+      AND is_nullable = 'NO'
+      AND column_default IS NULL
+      AND column_name <> ALL (ARRAY['id', 'name', 'hash', 'engine_version'])
+  LOOP
+    EXECUTE format('ALTER TABLE {SCHEMA}.migrations ALTER COLUMN %I DROP NOT NULL', col.column_name);
+  END LOOP;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_index i
+    JOIN pg_class c ON c.oid = i.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (i.indkey)
+    WHERE n.nspname = '{SCHEMA}'
+      AND c.relname = 'migrations'
+      AND i.indisunique
+      AND i.indnatts = 1
+      AND a.attname = 'name'
+  ) THEN
+    EXECUTE 'CREATE UNIQUE INDEX migrations_name_key ON {SCHEMA}.migrations (name)';
+  END IF;
+END $$"
+    )
+}
+
 pub fn ensure_all_migration_columns_sql() -> Vec<String> {
     vec![
+        ensure_migrations_core_columns_sql(),
+        ensure_migrations_writable_sql(),
         ensure_migrations_admin_config_column_sql(),
         ensure_migrations_sql_up_column_sql(),
         ensure_migrations_status_columns_sql(),
@@ -599,4 +676,62 @@ pub async fn load_migration_sources(
     let row: Option<(Option<Vec<u8>>, Option<serde_json::Value>)> =
         sqlx::query_as(&sql).bind(name).fetch_optional(pool).await?;
     Ok(row.and_then(|(sources, manifest)| sources.map(|s| (s, manifest))))
+}
+
+/// Re-apply the `auth.*` helper functions used by RLS policies.
+///
+/// These were only ever written at provision time, so an engine change to
+/// `auth.role()` (for example, resolving application roles from
+/// `app_metadata.role`) never reached an existing project — its policies kept
+/// calling the old definition indefinitely. They are CREATE OR REPLACE, so
+/// re-applying on every push is cheap and idempotent.
+///
+/// Skipped when there is no `auth` schema (a plain Postgres target), rather than
+/// failing a push that has nothing to do with auth.
+pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bool> {
+    let exists: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1",
+    )
+    .bind(auth_schema)
+    .fetch_optional(pool)
+    .await?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+
+    let config = crate::generator::sql::auth_functions::AuthFunctionConfig {
+        project_ref: String::new(),
+        auth_schema: auth_schema.to_string(),
+    };
+    let sql = crate::generator::sql::auth_functions::generate_auth_functions(&config);
+    sqlx::raw_sql(&sql).execute(pool).await?;
+    Ok(true)
+}
+
+/// Create and repair everything the engine owns inside `_supatype`, and re-apply
+/// the auth helper functions.
+///
+/// Both push implementations — the CLI binary (`main.rs`) and the HTTP server
+/// (`server/routes.rs`) — call this. They previously each wrote out the same
+/// sequence by hand, so every new internal object or repair had to be added
+/// twice; forgetting one produced exactly the silent drift this engine has been
+/// accumulating (a migrations table with no `hash`, RLS state that never
+/// converged, Studio metadata written on only one code path).
+pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(create_internal_schema_sql()).execute(pool).await?;
+    sqlx::raw_sql(&create_migrations_table_sql()).execute(pool).await?;
+    sqlx::raw_sql(&create_studio_members_table_sql()).execute(pool).await?;
+    sqlx::raw_sql(&create_schema_state_table_sql()).execute(pool).await?;
+    sqlx::raw_sql(&ensure_schema_state_studio_columns_sql()).execute(pool).await?;
+
+    for sql in ensure_all_migration_columns_sql() {
+        sqlx::raw_sql(&sql).execute(pool).await?;
+    }
+
+    // Helper functions are cosmetic to a migration's success, so a failure here
+    // must not abort the push.
+    if let Err(e) = reapply_auth_helpers(pool, "auth").await {
+        eprintln!("Warning: failed to reapply auth helper functions: {e}");
+    }
+    Ok(())
 }
