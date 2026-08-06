@@ -73,6 +73,20 @@ fn seed_tolerates_a_missing_auth_schema() {
     assert!(sql.contains("table_name = 'users'"), "got: {sql}");
 }
 
+// "Who gave this person admin, and when" has to be answerable months later, so
+// the trail is a table rather than a log line that rotates away — and it lives in
+// `_supatype` for the same reason `studio_members` does.
+#[test]
+fn audit_trail_records_who_changed_what() {
+    let sql = migration_history::create_studio_audit_table_sql();
+    assert!(sql.contains("_supatype.studio_audit"), "got: {sql}");
+    assert!(sql.contains("target_id   UUID NOT NULL"), "got: {sql}");
+    assert!(sql.contains("action      TEXT NOT NULL"), "got: {sql}");
+    // Nullable: a change can come from the CLI against the database directly,
+    // where there is no signed-in actor to attribute it to.
+    assert!(sql.contains("actor_id    UUID,"), "got: {sql}");
+}
+
 // ── Against a live Postgres ──────────────────────────────────────────────────
 
 async fn seed_and_list(pool: &sqlx::PgPool) -> Vec<(String, String)> {
@@ -206,6 +220,39 @@ async fn migration_tolerates_a_missing_table() {
             .execute(&pool)
             .await
             .expect("migration is a no-op with no table");
+    })
+    .await;
+}
+
+// The membership API writes here on every change, so a project that has been
+// pushed must always have the table — and a second push must not disturb it.
+#[tokio::test]
+async fn audit_table_is_created_and_idempotent() {
+    common::with_integration_pool(|pool| async move {
+        sqlx::raw_sql(migration_history::create_internal_schema_sql())
+            .execute(&pool)
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            sqlx::raw_sql(&migration_history::create_studio_audit_table_sql())
+                .execute(&pool)
+                .await
+                .expect("audit table creation is idempotent");
+        }
+
+        sqlx::raw_sql(
+            "INSERT INTO _supatype.studio_audit (actor_id, target_id, action, role)
+             VALUES (NULL, '11111111-2222-3333-4444-555555555555', 'set_role', 'editor')",
+        )
+        .execute(&pool)
+        .await
+        .expect("an unattributed change is still recordable");
+
+        let (count,): (i64,) = sqlx::query_as("SELECT count(*) FROM _supatype.studio_audit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
     })
     .await;
 }
