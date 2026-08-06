@@ -23,8 +23,15 @@ pub fn diff(
     let db_table_names: std::collections::HashSet<&str> =
         db.tables.iter().map(|t| t.name.as_str()).collect();
 
-    let schema_table_names: std::collections::HashSet<&str> =
-        ast.models.iter().map(|m| m.table_name()).collect();
+    // Junction tables are first-class schema objects — include them so the
+    // "removed table" pass does not drop live M2M tables as orphans (and then
+    // skip recreate because they still appear in the initial db snapshot).
+    let schema_table_names: std::collections::HashSet<&str> = ast
+        .models
+        .iter()
+        .map(|m| m.table_name())
+        .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
+        .collect();
 
     // Build a set of existing FK constraint names for fast lookup
     let db_fk_names: std::collections::HashSet<&str> = db

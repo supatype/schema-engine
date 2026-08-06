@@ -318,7 +318,8 @@ pub fn column_type_matches_introspected(field: &FieldAst, db_col: &DbColumn) -> 
     column_type_matches(field, db_col)
 }
 
-fn field_pg_type(field: &FieldAst) -> String {
+/// Postgres type used for columns / FK references (SERIAL → INTEGER, etc.).
+pub(crate) fn field_pg_type(field: &FieldAst) -> String {
     if is_localized(field) {
         return "JSONB".into();
     }

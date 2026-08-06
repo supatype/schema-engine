@@ -99,6 +99,39 @@ pub fn create_studio_members_table_sql() -> String {
     )
 }
 
+/// Seed `studio_members` from the admin roles that used to live in
+/// `app_metadata`.
+///
+/// Studio access moved out of JWT claims and into this table. Without a seed,
+/// the first push after that change locks every existing admin out of their own
+/// Studio: their claim no longer grants anything and they have no membership
+/// row. Runs only while the table is empty, so it cannot resurrect access that
+/// was deliberately revoked later.
+///
+/// `authenticated` is excluded because it is GoTrue's default for every signed-in
+/// user — treating it as a Studio role would admit the entire user base.
+pub fn seed_studio_members_from_claims_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM {SCHEMA}.studio_members) THEN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'auth' AND table_name = 'users'
+        ) THEN
+            INSERT INTO {SCHEMA}.studio_members (user_id, role)
+            SELECT id, raw_app_meta_data->>'role'
+              FROM auth.users
+             WHERE raw_app_meta_data->>'role' IS NOT NULL
+               AND raw_app_meta_data->>'role' <> ''
+               AND raw_app_meta_data->>'role' <> 'authenticated'
+            ON CONFLICT (user_id) DO NOTHING;
+        END IF;
+    END IF;
+END $$"#
+    )
+}
+
 pub fn ensure_migrations_admin_config_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS admin_config JSONB")
 }
@@ -721,6 +754,11 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(create_internal_schema_sql()).execute(pool).await?;
     sqlx::raw_sql(&create_migrations_table_sql()).execute(pool).await?;
     sqlx::raw_sql(&create_studio_members_table_sql()).execute(pool).await?;
+    // Migrating an existing project: carry forward the admins who only have the
+    // old `app_metadata.role` claim, before that claim stops meaning anything.
+    if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql()).execute(pool).await {
+        eprintln!("Warning: failed to seed Studio membership from existing admin roles: {e}");
+    }
     sqlx::raw_sql(&create_schema_state_table_sql()).execute(pool).await?;
     sqlx::raw_sql(&ensure_schema_state_studio_columns_sql()).execute(pool).await?;
 

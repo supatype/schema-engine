@@ -542,23 +542,10 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
 
-    sqlx::raw_sql(migration_history::create_internal_schema_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_studio_members_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    if let Err(e) = migration_history::reapply_auth_helpers(&pool, "auth").await {
-        tracing::warn!(error = %e, "failed to reapply auth helper functions");
-    }
-    sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-        .execute(&pool)
+    // Adopt hand-wrote this sequence and had already fallen behind it (no
+    // `schema_state` studio columns, no migrations-column repairs) — the exact
+    // drift `bootstrap_internal_state` exists to prevent.
+    migration_history::bootstrap_internal_state(&pool)
         .await
         .map_err(engine_error)?;
 
