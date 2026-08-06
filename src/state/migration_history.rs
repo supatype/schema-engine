@@ -88,14 +88,87 @@ pub fn create_schema_state_table_sql() -> String {
 /// absent from PGRST_DB_SCHEMAS, so nothing the developer's app or API surface
 /// does can read or write it. Studio roles are Supatype's namespace; the
 /// developer's own app roles live in their claims/tables and are unrelated.
+///
+/// A row identifies its holder by exactly one of two identities:
+///
+/// * `user_id` — a project `auth.users` id. How self-host grants access, and how
+///   a project's own users are admitted in either host.
+/// * `platform_user_id` — a Supatype Cloud account. Cloud callers are platform
+///   accounts, not project users, so they cannot be looked up by `user_id`.
+///
+/// Keeping both in one table means "who may use Studio for this project" has a
+/// single answer wherever the project runs, and the grants survive an export from
+/// cloud to self-host. The CHECK makes the identity space of every row explicit,
+/// so neither lookup can ever match a row it was not meant to.
 pub fn create_studio_members_table_sql() -> String {
     format!(
         r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.studio_members (
-    user_id     UUID PRIMARY KEY,
-    role        TEXT NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID UNIQUE,
+    platform_user_id  UUID UNIQUE,
+    role              TEXT NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT studio_members_one_identity
+        CHECK (num_nonnulls(user_id, platform_user_id) = 1)
 )"#
+    )
+}
+
+/// Migrate a `studio_members` table created before cloud accounts could hold a
+/// membership: `user_id` was the primary key and the only identity.
+///
+/// Written as a guarded DO block rather than plain `ALTER`s because the target
+/// shape has to be reached from either starting point — the pre-cloud table or
+/// the current one — and a push must never fail on a table that is already right.
+pub fn ensure_studio_members_platform_identity_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    IF to_regclass('{SCHEMA}.studio_members') IS NULL THEN
+        RETURN;
+    END IF;
+
+    ALTER TABLE {SCHEMA}.studio_members
+        ADD COLUMN IF NOT EXISTS platform_user_id UUID;
+
+    -- `user_id` becomes optional, so the primary key has to move off it.
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_members'::regclass
+           AND contype = 'p'
+           AND conkey = ARRAY[(SELECT attnum FROM pg_attribute
+                                WHERE attrelid = '{SCHEMA}.studio_members'::regclass
+                                  AND attname = 'user_id')]::smallint[]
+    ) THEN
+        ALTER TABLE {SCHEMA}.studio_members DROP CONSTRAINT studio_members_pkey;
+        ALTER TABLE {SCHEMA}.studio_members
+            ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+        ALTER TABLE {SCHEMA}.studio_members ADD PRIMARY KEY (id);
+        ALTER TABLE {SCHEMA}.studio_members ALTER COLUMN user_id DROP NOT NULL;
+        ALTER TABLE {SCHEMA}.studio_members ADD CONSTRAINT studio_members_user_id_key
+            UNIQUE (user_id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_members'::regclass
+           AND conname = 'studio_members_platform_user_id_key'
+    ) THEN
+        ALTER TABLE {SCHEMA}.studio_members
+            ADD CONSTRAINT studio_members_platform_user_id_key UNIQUE (platform_user_id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_members'::regclass
+           AND conname = 'studio_members_one_identity'
+    ) THEN
+        ALTER TABLE {SCHEMA}.studio_members
+            ADD CONSTRAINT studio_members_one_identity
+            CHECK (num_nonnulls(user_id, platform_user_id) = 1);
+    END IF;
+END $$"#
     )
 }
 
@@ -108,8 +181,20 @@ pub fn create_studio_members_table_sql() -> String {
 /// row. Runs only while the table is empty, so it cannot resurrect access that
 /// was deliberately revoked later.
 ///
-/// `authenticated` is excluded because it is GoTrue's default for every signed-in
-/// user — treating it as a Studio role would admit the entire user base.
+/// Only the roles that actually admitted anyone are carried over, and they all
+/// become the Studio role `admin`:
+///
+/// * `app_metadata.role` was the developer's own namespace, so it holds arbitrary
+///   application roles — `moderator`, `staff`, whatever their app needed. Those
+///   never granted Studio access (`STUDIO_ADMIN_ROLES` did, defaulting to `admin`
+///   and `supatype_admin`), so seeding them would *hand out* access rather than
+///   preserve it.
+/// * A Studio role has to be one the deployment understands, or the capability
+///   check refuses it. Copying claim strings verbatim would seed rows that deny.
+///
+/// A deployment that customised `STUDIO_ADMIN_ROLES` seeds nobody and falls
+/// through to the CLI's first-admin prompt, which is the right recovery — better
+/// than guessing which app roles were meant to be administrators.
 pub fn seed_studio_members_from_claims_sql() -> String {
     format!(
         r#"DO $$
@@ -119,12 +204,10 @@ BEGIN
             SELECT 1 FROM information_schema.tables
             WHERE table_schema = 'auth' AND table_name = 'users'
         ) THEN
-            INSERT INTO {SCHEMA}.studio_members (user_id, role)
-            SELECT id, raw_app_meta_data->>'role'
+            INSERT INTO {SCHEMA}.studio_members (user_id, platform_user_id, role)
+            SELECT id, NULL, 'admin'
               FROM auth.users
-             WHERE raw_app_meta_data->>'role' IS NOT NULL
-               AND raw_app_meta_data->>'role' <> ''
-               AND raw_app_meta_data->>'role' <> 'authenticated'
+             WHERE raw_app_meta_data->>'role' IN ('admin', 'supatype_admin')
             ON CONFLICT (user_id) DO NOTHING;
         END IF;
     END IF;
@@ -754,6 +837,7 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(create_internal_schema_sql()).execute(pool).await?;
     sqlx::raw_sql(&create_migrations_table_sql()).execute(pool).await?;
     sqlx::raw_sql(&create_studio_members_table_sql()).execute(pool).await?;
+    sqlx::raw_sql(&ensure_studio_members_platform_identity_sql()).execute(pool).await?;
     // Migrating an existing project: carry forward the admins who only have the
     // old `app_metadata.role` claim, before that claim stops meaning anything.
     if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql()).execute(pool).await {
