@@ -64,6 +64,45 @@ async fn policies_converge_after_the_first_push() {
     .await;
 }
 
+// Convergence alone would still pass if a rule were silently dropped, so assert
+// the composition actually reached the database.
+#[tokio::test]
+async fn or_composition_and_custom_sql_reach_the_database() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        let expr: String = sqlx::query_scalar(
+            "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'posts_select'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the Post read policy exists");
+
+        // Any<[Role<"admin">, Owner<"authorId">, Custom<"title <> ''">]>
+        assert!(expr.contains(" OR "), "expected an OR-join, got: {expr}");
+        assert!(expr.contains("auth.role()"), "role branch missing: {expr}");
+        assert!(expr.contains("author_id"), "owner branch missing: {expr}");
+        assert!(expr.contains("title"), "custom branch missing: {expr}");
+
+        // A Custom rule on its own is used verbatim rather than wrapped in
+        // anything that would change its meaning.
+        let tag_expr: String = sqlx::query_scalar(
+            "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'tags_select'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the Tag read policy exists");
+        assert!(
+            tag_expr.contains("name IS NOT NULL"),
+            "custom predicate altered: {tag_expr}"
+        );
+    })
+    .await;
+}
+
 // The wrapping is the whole point of the change: a bare `auth.uid()` is
 // re-evaluated per row, a wrapped one becomes an InitPlan evaluated once. Assert
 // it reaches the database that way rather than trusting the generator's string.

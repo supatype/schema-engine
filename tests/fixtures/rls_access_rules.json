@@ -225,7 +225,23 @@
     "platform": {
      "access": {
       "read": {
-       "type": "public"
+       "type": "any",
+       "rules": [
+        {
+         "type": "role",
+         "roles": [
+          "admin"
+         ]
+        },
+        {
+         "type": "owner",
+         "field": "authorId"
+        },
+        {
+         "type": "custom",
+         "expression": "title <> ''"
+        }
+       ]
       },
       "create": {
        "type": "authenticated"
@@ -362,7 +378,8 @@
     "platform": {
      "access": {
       "read": {
-       "type": "public"
+       "type": "custom",
+       "expression": "name IS NOT NULL"
       },
       "create": {
        "type": "role",
