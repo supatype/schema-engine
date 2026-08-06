@@ -115,7 +115,7 @@ pub fn create_studio_members_table_sql() -> String {
     )
 }
 
-/// Audit trail for Studio membership changes.
+/// Audit trail for Studio membership changes and elevated data access.
 ///
 /// Access-control changes need a durable record, not a log line that rotates
 /// away: "who gave this person admin, and when" has to be answerable months
@@ -124,16 +124,35 @@ pub fn create_studio_members_table_sql() -> String {
 ///
 /// `actor_id` is nullable because a change can come from the CLI against the
 /// database directly, where there is no signed-in actor to attribute it to.
+/// `target_id` is nullable because not every audited event is *about* someone:
+/// an elevated request has an actor and no target. `detail` carries the shape of
+/// whatever the action was — the method and path of an elevated request, say.
 pub fn create_studio_audit_table_sql() -> String {
     format!(
         r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.studio_audit (
     id          BIGSERIAL PRIMARY KEY,
     actor_id    UUID,
-    target_id   UUID NOT NULL,
+    target_id   UUID,
     action      TEXT NOT NULL,
     role        TEXT,
+    detail      JSONB,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )"#
+    )
+}
+
+/// Bring an audit table created for membership changes only up to the shape that
+/// also records elevated access.
+pub fn ensure_studio_audit_columns_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    IF to_regclass('{SCHEMA}.studio_audit') IS NULL THEN
+        RETURN;
+    END IF;
+    ALTER TABLE {SCHEMA}.studio_audit ADD COLUMN IF NOT EXISTS detail JSONB;
+    ALTER TABLE {SCHEMA}.studio_audit ALTER COLUMN target_id DROP NOT NULL;
+END $$"#
     )
 }
 
@@ -861,6 +880,7 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(&create_studio_members_table_sql()).execute(pool).await?;
     sqlx::raw_sql(&ensure_studio_members_platform_identity_sql()).execute(pool).await?;
     sqlx::raw_sql(&create_studio_audit_table_sql()).execute(pool).await?;
+    sqlx::raw_sql(&ensure_studio_audit_columns_sql()).execute(pool).await?;
     // Migrating an existing project: carry forward the admins who only have the
     // old `app_metadata.role` claim, before that claim stops meaning anything.
     if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql()).execute(pool).await {

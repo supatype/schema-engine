@@ -80,11 +80,81 @@ fn seed_tolerates_a_missing_auth_schema() {
 fn audit_trail_records_who_changed_what() {
     let sql = migration_history::create_studio_audit_table_sql();
     assert!(sql.contains("_supatype.studio_audit"), "got: {sql}");
-    assert!(sql.contains("target_id   UUID NOT NULL"), "got: {sql}");
     assert!(sql.contains("action      TEXT NOT NULL"), "got: {sql}");
-    // Nullable: a change can come from the CLI against the database directly,
-    // where there is no signed-in actor to attribute it to.
+    // Both ids are nullable: a change can come from the CLI with no signed-in
+    // actor, and not every audited event is *about* someone — an elevated request
+    // has an actor and no target.
     assert!(sql.contains("actor_id    UUID,"), "got: {sql}");
+    assert!(sql.contains("target_id   UUID,"), "got: {sql}");
+    assert!(sql.contains("detail      JSONB"), "got: {sql}");
+}
+
+// An audit table created for membership changes only must reach the shape that
+// also records elevated access, or the first elevated write fails on a NOT NULL.
+#[tokio::test]
+async fn audit_table_migrates_to_record_elevated_access() {
+    common::with_integration_pool(|pool| async move {
+        sqlx::raw_sql(migration_history::create_internal_schema_sql())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            r#"CREATE TABLE _supatype.studio_audit (
+                 id BIGSERIAL PRIMARY KEY,
+                 actor_id UUID,
+                 target_id UUID NOT NULL,
+                 action TEXT NOT NULL,
+                 role TEXT,
+                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+               );
+               INSERT INTO _supatype.studio_audit (actor_id, target_id, action, role)
+               VALUES (NULL, '11111111-2222-3333-4444-555555555555', 'set_role', 'admin');"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for _ in 0..2 {
+            sqlx::raw_sql(&migration_history::ensure_studio_audit_columns_sql())
+                .execute(&pool)
+                .await
+                .expect("audit migration is idempotent");
+        }
+
+        sqlx::raw_sql(
+            r#"INSERT INTO _supatype.studio_audit (actor_id, target_id, action, detail)
+               VALUES ('99999999-8888-7777-6666-555555555555', NULL, 'elevated_request',
+                       '{"method":"PATCH","path":"/rest/v1/posts"}')"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("an elevated request has no target");
+
+        let (kept,): (i64,) =
+            sqlx::query_as("SELECT count(*) FROM _supatype.studio_audit WHERE action = 'set_role'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(kept, 1, "existing audit records must survive the migration");
+    })
+    .await;
+}
+
+// The migration must be safe before the table exists — bootstrap order should not
+// be load-bearing.
+#[tokio::test]
+async fn audit_migration_tolerates_a_missing_table() {
+    common::with_integration_pool(|pool| async move {
+        sqlx::raw_sql(migration_history::create_internal_schema_sql())
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(&migration_history::ensure_studio_audit_columns_sql())
+            .execute(&pool)
+            .await
+            .expect("audit migration is a no-op with no table");
+    })
+    .await;
 }
 
 // ── Against a live Postgres ──────────────────────────────────────────────────
