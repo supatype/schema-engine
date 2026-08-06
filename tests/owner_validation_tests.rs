@@ -65,9 +65,13 @@ fn owner_rule_accepts_kernel_relation_field_name() {
         serialized.contains("\"field\":\"author\""),
         "owner field should keep kernel name author, got: {serialized}"
     );
+    // The point of the assertion is the column resolution — `author` becomes
+    // `author_id`. The auth call is wrapped in a scalar subquery so the planner
+    // evaluates it once per query, so match on the parts rather than one literal
+    // rendering of them.
     let expr = access_rule_to_expr(&ast, post, rule);
     assert!(
-        expr.contains("auth.uid() = author_id"),
+        expr.contains("auth.uid()") && expr.ends_with("= author_id"),
         "RLS should resolve author to author_id column, got: {expr}"
     );
 }

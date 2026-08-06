@@ -1,0 +1,378 @@
+{
+ "astVersion": 2,
+ "models": [
+  {
+   "name": "User",
+   "fields": {
+    "id": {
+     "kind": "uuid",
+     "primaryKey": true,
+     "required": true,
+     "default": {
+      "kind": "genRandomUuid"
+     },
+     "annotations": {
+      "db": {
+       "pgType": "UUID",
+       "unique": false
+      }
+     }
+    },
+    "email": {
+     "kind": "email",
+     "required": true,
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": true
+      }
+     }
+    },
+    "name": {
+     "kind": "text",
+     "required": true,
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": false
+      }
+     }
+    }
+   },
+   "options": {
+    "timestamps": true,
+    "softDelete": false
+   },
+   "annotations": {
+    "db": {
+     "tableName": "users",
+     "indexes": []
+    },
+    "platform": {
+     "access": {
+      "read": {
+       "type": "public"
+      },
+      "update": {
+       "type": "owner",
+       "field": "id"
+      },
+      "delete": {
+       "type": "role",
+       "roles": [
+        "admin"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "Category",
+   "fields": {
+    "id": {
+     "kind": "uuid",
+     "primaryKey": true,
+     "required": true,
+     "default": {
+      "kind": "genRandomUuid"
+     },
+     "annotations": {
+      "db": {
+       "pgType": "UUID",
+       "unique": false
+      }
+     }
+    },
+    "name": {
+     "kind": "text",
+     "required": true,
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": true
+      }
+     }
+    },
+    "slug": {
+     "kind": "slug",
+     "required": true,
+     "from": "name",
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": true
+      }
+     }
+    }
+   },
+   "options": {
+    "timestamps": true,
+    "softDelete": false
+   },
+   "annotations": {
+    "db": {
+     "tableName": "categories",
+     "indexes": []
+    },
+    "platform": {
+     "access": {
+      "read": {
+       "type": "public"
+      },
+      "create": {
+       "type": "role",
+       "roles": [
+        "admin",
+        "editor"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "Post",
+   "fields": {
+    "id": {
+     "kind": "uuid",
+     "primaryKey": true,
+     "required": true,
+     "default": {
+      "kind": "genRandomUuid"
+     },
+     "annotations": {
+      "db": {
+       "pgType": "UUID",
+       "unique": false
+      }
+     }
+    },
+    "title": {
+     "kind": "text",
+     "required": true,
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": false
+      }
+     }
+    },
+    "slug": {
+     "kind": "slug",
+     "required": true,
+     "from": "title",
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": true
+      }
+     }
+    },
+    "content": {
+     "kind": "richText",
+     "required": true,
+     "annotations": {
+      "db": {
+       "pgType": "JSONB",
+       "unique": false
+      },
+      "platform": {
+       "editor": "rich"
+      }
+     }
+    },
+    "authorId": {
+     "kind": "relation",
+     "cardinality": "belongsTo",
+     "target": "User",
+     "onDelete": "cascade",
+     "annotations": {
+      "db": {
+       "foreignKey": "author_id"
+      }
+     }
+    },
+    "categoryId": {
+     "kind": "relation",
+     "cardinality": "belongsTo",
+     "target": "Category",
+     "onDelete": "setNull",
+     "annotations": {
+      "db": {
+       "foreignKey": "category_id"
+      }
+     }
+    }
+   },
+   "options": {
+    "timestamps": true,
+    "softDelete": false
+   },
+   "annotations": {
+    "db": {
+     "tableName": "posts",
+     "indexes": [
+      {
+       "fields": [
+        "author_id"
+       ],
+       "unique": false,
+       "using": "btree"
+      }
+     ]
+    },
+    "platform": {
+     "access": {
+      "read": {
+       "type": "public"
+      },
+      "create": {
+       "type": "authenticated"
+      },
+      "update": {
+       "type": "owner",
+       "field": "authorId"
+      },
+      "delete": {
+       "type": "role",
+       "roles": [
+        "admin"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "Comment",
+   "fields": {
+    "id": {
+     "kind": "uuid",
+     "primaryKey": true,
+     "required": true,
+     "default": {
+      "kind": "genRandomUuid"
+     },
+     "annotations": {
+      "db": {
+       "pgType": "UUID",
+       "unique": false
+      }
+     }
+    },
+    "body": {
+     "kind": "text",
+     "required": true,
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": false
+      }
+     }
+    },
+    "postId": {
+     "kind": "relation",
+     "cardinality": "belongsTo",
+     "target": "Post",
+     "onDelete": "cascade",
+     "annotations": {
+      "db": {
+       "foreignKey": "post_id"
+      }
+     }
+    },
+    "authorId": {
+     "kind": "relation",
+     "cardinality": "belongsTo",
+     "target": "User",
+     "onDelete": "cascade",
+     "annotations": {
+      "db": {
+       "foreignKey": "author_id"
+      }
+     }
+    }
+   },
+   "options": {
+    "timestamps": true,
+    "softDelete": false
+   },
+   "annotations": {
+    "db": {
+     "tableName": "comments",
+     "indexes": []
+    },
+    "platform": {
+     "access": {
+      "read": {
+       "type": "authenticated"
+      },
+      "create": {
+       "type": "authenticated"
+      },
+      "update": {
+       "type": "owner",
+       "field": "authorId"
+      },
+      "delete": {
+       "type": "private"
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "Tag",
+   "fields": {
+    "id": {
+     "kind": "uuid",
+     "primaryKey": true,
+     "required": true,
+     "default": {
+      "kind": "genRandomUuid"
+     },
+     "annotations": {
+      "db": {
+       "pgType": "UUID",
+       "unique": false
+      }
+     }
+    },
+    "name": {
+     "kind": "text",
+     "required": true,
+     "annotations": {
+      "db": {
+       "pgType": "TEXT",
+       "unique": true
+      }
+     }
+    }
+   },
+   "options": {
+    "timestamps": false,
+    "softDelete": false
+   },
+   "annotations": {
+    "db": {
+     "tableName": "tags",
+     "indexes": []
+    },
+    "platform": {
+     "access": {
+      "read": {
+       "type": "public"
+      },
+      "create": {
+       "type": "role",
+       "roles": [
+        "admin"
+       ]
+      }
+     }
+    }
+   }
+  }
+ ]
+}

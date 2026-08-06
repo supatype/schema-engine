@@ -36,20 +36,34 @@ fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
 /// look changed on every push:
 ///   * boolean literals are stored lowercase — generated `FALSE` vs stored `false`
 ///     (Private/Public rules produce nothing but these, so they never converged);
-///   * literals gain an explicit cast — generated `'admin'` vs stored `'admin'::text`.
+///   * literals gain an explicit cast — generated `'admin'` vs stored `'admin'::text`;
+///   * a scalar subquery gains an output alias — generated `(SELECT auth.uid())` vs
+///     stored `( SELECT auth.uid() AS uid)`. Auth calls are wrapped in exactly that
+///     shape so the planner evaluates them once per query, so without this every
+///     policy would look changed on every push.
 fn normalise(s: &str, table: &str) -> String {
     let mut out = s.replace("auth.", "");
-    out.retain(|c| c != '(' && c != ')' && c != '"');
+    // Parens become spaces rather than vanishing. Deleting them welded tokens
+    // together on one side only: generated `ANY(ARRAY[…])` collapsed to
+    // `ANYARRAY[…]` while Postgres stores `ANY (ARRAY[…])`, which survives as
+    // `ANY ARRAY[…]` — so every multi-role policy was dropped and recreated on
+    // every push. The trailing whitespace collapse makes the substitution free.
+    out = out
+        .chars()
+        .map(|c| if c == '(' || c == ')' { ' ' } else { c })
+        .filter(|c| *c != '"')
+        .collect();
     let table_prefix = format!("{table}.");
     out = out.replace(&table_prefix, "");
     out = canonicalise_keywords_and_casts(&out);
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Single quote-aware pass that removes `::type` casts and lowercases the bare
-/// keywords `TRUE`/`FALSE`/`NULL`. String literals are copied verbatim, so a role
-/// name like `'Admin'` keeps its case and a `::` inside a literal is not treated
-/// as a cast. Only single-word type names are stripped — a multi-word cast such as
+/// Single quote-aware pass that removes `::type` casts, drops `AS <alias>` and
+/// lowercases the bare keywords `TRUE`/`FALSE`/`NULL`. String literals are copied
+/// verbatim, so a role name like `'Admin'` keeps its case, a `::` inside a literal
+/// is not treated as a cast, and the words "as" inside one are not mistaken for an
+/// alias. Only single-word type names are stripped — a multi-word cast such as
 /// `::timestamp with time zone` is left alone rather than risk swallowing the
 /// operator that follows it.
 fn canonicalise_keywords_and_casts(s: &str) -> String {
@@ -57,21 +71,43 @@ fn canonicalise_keywords_and_casts(s: &str) -> String {
         c.is_alphanumeric() || c == '_'
     }
 
-    fn flush(word: &mut String, out: &mut String) {
+    /// Returns true when the word was `AS`, meaning the *next* word is an alias
+    /// Postgres added and must be dropped too.
+    fn flush(word: &mut String, out: &mut String, skip_next: &mut bool) -> bool {
         if word.is_empty() {
-            return;
+            return false;
         }
-        match word.to_ascii_uppercase().as_str() {
+        let upper = word.to_ascii_uppercase();
+        if *skip_next {
+            // The alias itself, and whatever separator preceded it.
+            *skip_next = false;
+            word.clear();
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            return false;
+        }
+        match upper.as_str() {
             "TRUE" | "FALSE" | "NULL" => out.push_str(&word.to_ascii_lowercase()),
+            "AS" => {
+                word.clear();
+                while out.ends_with(' ') {
+                    out.pop();
+                }
+                *skip_next = true;
+                return true;
+            }
             _ => out.push_str(word),
         }
         word.clear();
+        false
     }
 
     let mut out = String::with_capacity(s.len());
     let mut word = String::new();
     let mut chars = s.chars().peekable();
     let mut in_string = false;
+    let mut skip_next = false;
 
     while let Some(c) = chars.next() {
         if in_string {
@@ -83,17 +119,31 @@ fn canonicalise_keywords_and_casts(s: &str) -> String {
         }
 
         if c == '\'' {
-            flush(&mut word, &mut out);
+            flush(&mut word, &mut out, &mut skip_next);
             out.push(c);
             in_string = true;
             continue;
         }
 
         if c == ':' && chars.peek() == Some(&':') {
-            flush(&mut word, &mut out);
+            flush(&mut word, &mut out, &mut skip_next);
             chars.next(); // second ':'
             while let Some(t) = chars.peek() {
-                if is_word_char(*t) || *t == '[' || *t == ']' {
+                if is_word_char(*t) {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            // An array type ends `[]`. Consume the pair, never a lone bracket:
+            // taking a bare `]` swallowed the one closing an enclosing
+            // `ARRAY['a'::text, 'b'::text]`, so the stored form of every
+            // multi-role policy lost its final bracket and never compared equal
+            // to the generated one — recreated on every push.
+            loop {
+                let mut ahead = chars.clone();
+                if ahead.next() == Some('[') && ahead.next() == Some(']') {
+                    chars.next();
                     chars.next();
                 } else {
                     break;
@@ -105,11 +155,11 @@ fn canonicalise_keywords_and_casts(s: &str) -> String {
         if is_word_char(c) {
             word.push(c);
         } else {
-            flush(&mut word, &mut out);
+            flush(&mut word, &mut out, &mut skip_next);
             out.push(c);
         }
     }
-    flush(&mut word, &mut out);
+    flush(&mut word, &mut out, &mut skip_next);
     out
 }
 
@@ -214,6 +264,71 @@ mod tests {
         assert_eq!(
             normalise("(status = 'live'::text AND deleted IS NULL)", "t"),
             "status = 'live' AND deleted IS null"
+        );
+    }
+
+    // Auth calls are wrapped in a scalar subquery so the planner evaluates them
+    // once per query rather than once per row. Postgres stores such a subquery
+    // with an output alias it invented, so without dropping `AS <alias>` every
+    // policy would look changed on every push — the convergence failure this
+    // differ has already been bitten by twice.
+    #[test]
+    fn normalise_matches_a_stored_scalar_subquery() {
+        let generated = "(SELECT auth.uid()) = user_id";
+        let stored = "(( SELECT auth.uid() AS uid) = post.user_id)";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    #[test]
+    fn normalise_matches_a_stored_role_subquery() {
+        let generated = "(SELECT auth.role()) = 'admin'";
+        let stored = "(( SELECT auth.role() AS role) = 'admin'::text)";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    #[test]
+    fn normalise_matches_a_wrapped_call_inside_a_subquery() {
+        let generated = "EXISTS (SELECT 1 FROM \"album\" WHERE \"album\".id = album_id AND (SELECT auth.uid()) = \"album\".owner_id)";
+        let stored = "(EXISTS ( SELECT 1 FROM album WHERE ((album.id = photo.album_id) AND (( SELECT auth.uid() AS uid) = album.owner_id))))";
+        assert_eq!(normalise(generated, "photo"), normalise(stored, "photo"));
+    }
+
+    // A wrapped call and a bare one are genuinely different SQL with different
+    // performance, so the differ must see the rewrite and apply it exactly once.
+    #[test]
+    fn normalise_still_distinguishes_a_wrapped_call_from_a_bare_one() {
+        assert_ne!(
+            normalise("(SELECT auth.uid()) = user_id", "post"),
+            normalise("auth.uid() = user_id", "post")
+        );
+    }
+
+    // Regression: the cast stripper consumed `[` and `]` freely to cope with array
+    // types like `::text[]`, which also ate the bracket closing the enclosing
+    // `ARRAY[…]`. Every multi-role policy therefore differed from its stored form
+    // and was dropped and recreated on every single push.
+    #[test]
+    fn normalise_matches_a_stored_role_array() {
+        let generated = "(SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])";
+        let stored = "(( SELECT auth.role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))";
+        assert_eq!(normalise(generated, "categories"), normalise(stored, "categories"));
+    }
+
+    #[test]
+    fn normalise_still_strips_array_type_casts() {
+        assert_eq!(
+            normalise("tags = '{a,b}'::text[]", "t"),
+            normalise("(t.tags = '{a,b}'::text[])", "t")
+        );
+        assert!(!normalise("tags = '{a}'::text[]", "t").contains("text"));
+    }
+
+    // "as" inside a string literal is not an alias.
+    #[test]
+    fn normalise_does_not_strip_as_inside_a_literal() {
+        assert_eq!(
+            normalise("name = 'flagged as spam'", "t"),
+            "name = 'flagged as spam'"
         );
     }
 }

@@ -176,23 +176,35 @@ pub(crate) fn render_delete_policy_sql(
     )
 }
 
+/// `auth.uid()` wrapped so Postgres evaluates it once per query, not once per row.
+///
+/// A bare `auth.uid()` in a policy is re-evaluated for every row the planner
+/// tests, because the function reference sits inside a per-row filter. Wrapping it
+/// in a scalar subquery makes the planner treat it as an InitPlan: computed once,
+/// then compared as a constant. On a table of any size this is the difference
+/// between a policy that scales and one that does not, and it costs nothing.
+pub const AUTH_UID: &str = "(SELECT auth.uid())";
+
+/// `auth.role()`, wrapped for the same reason as [`AUTH_UID`].
+pub const AUTH_ROLE: &str = "(SELECT auth.role())";
+
 /// Converts an AccessRule to a Postgres expression string for use in a USING / WITH CHECK clause.
 pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule) -> String {
     match rule {
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
-        AccessRule::Authenticated => "auth.uid() IS NOT NULL".to_string(),
+        AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
         AccessRule::Owner { field } => owner_access_expr(ast, model, field),
         AccessRule::Role { roles } => {
             if roles.len() == 1 {
-                format!("auth.role() = '{}'", roles[0])
+                format!("{AUTH_ROLE} = '{}'", roles[0])
             } else {
                 let arr = roles
                     .iter()
                     .map(|r| format!("'{r}'"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("auth.role() = ANY(ARRAY[{arr}])")
+                format!("{AUTH_ROLE} = ANY(ARRAY[{arr}])")
             }
         }
         AccessRule::Custom { expression } => expression.clone(),
@@ -216,7 +228,7 @@ pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule)
 /// Owner / OwnerFrom — compare auth.uid() to a row column or ownership via a related model.
 fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
     if kernel_field == "id" {
-        return "auth.uid() = id".to_string();
+        return format!("{AUTH_UID} = id");
     }
 
     if let Some((field_name, field)) = model.fields.get_key_value(kernel_field) {
@@ -227,25 +239,25 @@ fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> S
 
             if let Some(target) = ast.models.iter().find(|m| m.name == rel.target) {
                 if is_user_identity_model(target) {
-                    return format!("auth.uid() = {fk}");
+                    return format!("{AUTH_UID} = {fk}");
                 }
                 if let Some(owner_col) = owner_column_on_model(target) {
                     let table = db_table_name(target);
                     return format!(
-                        "EXISTS (SELECT 1 FROM \"{table}\" WHERE \"{table}\".id = {fk} AND auth.uid() = \"{table}\".{owner_col})"
+                        "EXISTS (SELECT 1 FROM \"{table}\" WHERE \"{table}\".id = {fk} AND {AUTH_UID} = \"{table}\".{owner_col})"
                     );
                 }
             }
 
-            return format!("auth.uid() = {fk}");
+            return format!("{AUTH_UID} = {fk}");
         }
 
         let column = resolve_owner_column(model, kernel_field);
-        return format!("auth.uid() = {column}");
+        return format!("{AUTH_UID} = {column}");
     }
 
     let column = resolve_owner_column(model, kernel_field);
-    format!("auth.uid() = {column}")
+    format!("{AUTH_UID} = {column}")
 }
 
 /// Models whose primary key is the auth user id (e.g. Profile), not a generated UUID.
