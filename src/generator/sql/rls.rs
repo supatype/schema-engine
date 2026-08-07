@@ -220,6 +220,9 @@ pub(crate) fn render_delete_policy_sql(
 /// between a policy that scales and one that does not, and it costs nothing.
 pub const AUTH_UID: &str = "(SELECT auth.uid())";
 
+/// The schema policies and affordance functions live in.
+pub const POLICY_SCHEMA: &str = "public";
+
 /// `auth.role()`, wrapped for the same reason as [`AUTH_UID`].
 pub const AUTH_ROLE: &str = "(SELECT auth.role())";
 
@@ -311,8 +314,14 @@ fn membership_to_expr(
         } => {
             let table_esc = table.replace('"', "\"\"");
             let col_esc = source_column.replace('"', "\"\"");
+            // Schema-qualified so the source is unambiguously the real table.
+            // Inside a `can_*` function the row is a derived table aliased with the
+            // model's own name, and a self-referential membership
+            // (`In<"parent_id", Rows<"posts", "id", …>>`) would otherwise resolve
+            // `FROM "posts"` to that single row instead of the table — quietly
+            // answering about one row when it should have searched all of them.
             let mut sql = format!(
-                "EXISTS (SELECT 1 FROM \"{table_esc}\" \
+                "EXISTS (SELECT 1 FROM \"{POLICY_SCHEMA}\".\"{table_esc}\" \
                  WHERE \"{table_esc}\".\"{col_esc}\" = {own_col}"
             );
             if let Some(rule) = filter {
@@ -608,19 +617,11 @@ pub fn generate_can_functions(ast: &SchemaAst) -> String {
                 continue;
             };
 
-            // A `Custom` predicate is raw SQL, so which of its identifiers are
-            // columns is unknowable — they cannot be qualified, and unqualified
-            // they have no `FROM` to resolve against inside a function body.
-            // Answering NULL says "unknown, ask the database", which is the same
-            // thing `/studio/session` reports for a Custom rule. Guessing either
-            // way would be a UI that lies; refusing to emit the function at all
-            // would make every caller special-case its absence.
-            if contains_custom(rule) {
-                out.push_str(&render_can_function(schema, table, op, "NULL::boolean"));
-                continue;
-            }
-
-            let expr = qualify_bare_columns(&access_rule_to_expr(ast, model, rule), table);
+            // The expression is used exactly as the policy uses it. The function
+            // body supplies a scope its column references resolve against, so
+            // nothing has to be rewritten — which is what lets a `Custom` rule's
+            // raw SQL answer definitively rather than "unknown".
+            let expr = access_rule_to_expr(ast, model, rule);
             out.push_str(&render_can_function(schema, table, op, &expr));
         }
     }
@@ -628,30 +629,25 @@ pub fn generate_can_functions(ast: &SchemaAst) -> String {
     out
 }
 
+/// The row is expanded into a one-row derived table aliased with the table's own
+/// name, so the policy expression works unchanged inside the function body.
+///
+/// This is why no rewriting of the expression is needed. Every reference resolves
+/// the way it does in the policy: a bare `title` against the derived table, a
+/// qualified `"posts"."site_id"` against the same alias. That includes the raw SQL
+/// of a `Custom` rule, whose identifiers cannot be rewritten because there is no
+/// way to know which of them are columns — the earlier approach rewrote the
+/// expression instead and so had to answer "unknown" for those, which is precisely
+/// the state these functions exist to eliminate.
 fn render_can_function(schema: &str, table: &str, op: &str, expr: &str) -> String {
     let name = format!("can_{op}_{table}");
+    let alias = table.replace('"', "\"\"");
     format!(
         "CREATE OR REPLACE FUNCTION \"{schema}\".\"{name}\"(\"{table}\" \"{schema}\".\"{table}\")\n  \
          RETURNS boolean LANGUAGE sql STABLE AS $can$\n    \
-         SELECT {expr};\n  \
+         SELECT {expr}\n      \
+         FROM (SELECT ($1).*) AS \"{alias}\";\n  \
          $can$;\n\n"
     )
 }
 
-/// Whether a rule tree contains raw SQL anywhere.
-fn contains_custom(rule: &AccessRule) -> bool {
-    match rule {
-        AccessRule::Custom { .. } => true,
-        AccessRule::Any { rules } | AccessRule::All { rules } => {
-            rules.iter().any(contains_custom)
-        }
-        AccessRule::Not { rule } => contains_custom(rule),
-        AccessRule::In { source, .. } => match source {
-            MembershipSource::Rows { filter, .. } => {
-                filter.as_deref().is_some_and(contains_custom)
-            }
-            _ => false,
-        },
-        _ => false,
-    }
-}

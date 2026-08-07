@@ -391,12 +391,32 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
         // which is the whole point of generating both from one AST.
         assert!(!can_delete, "delete is admin-only, so anon must be refused");
 
-        // `posts.read` contains a `Custom` branch. Its raw SQL cannot be qualified
-        // for a function body, so the honest answer is NULL: unknown, ask the
-        // database. Guessing either way would be a UI that lies.
+        // `posts.read` is Any<[Role<"admin">, Owner<…>, Custom<"title <> ''">]>.
+        // The seeded row has a non-empty title, so the Custom branch is true and the
+        // whole rule is true. Raw SQL resolves because the function body gives it a
+        // scope, rather than the expression being rewritten around it — there is no
+        // "unknown" answer here, which is the entire point of these functions.
         assert_eq!(
-            can_read, None,
-            "a rule containing Custom SQL must answer unknown, not guess"
+            can_read,
+            Some(true),
+            "Custom SQL must resolve against the row, not answer unknown"
+        );
+
+        // And it is really evaluating that predicate, not just returning true: the
+        // same row with an empty title fails the Custom branch, and with no admin
+        // role and a different author nothing else rescues it.
+        let can_read_empty: Option<bool> = sqlx::query_scalar(
+            "SELECT can_read_posts(ROW(p.id, '', p.slug, p.content, p.author_id,
+                                       p.category_id, p.created_at, p.updated_at)::posts)
+               FROM posts p LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("callable on a constructed row");
+        assert_eq!(
+            can_read_empty,
+            Some(false),
+            "the Custom predicate is not being evaluated against the row"
         );
 
         // A rule with no Custom anywhere answers definitively. `users.read` is

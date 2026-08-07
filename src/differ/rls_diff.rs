@@ -53,6 +53,14 @@ fn normalise(s: &str, table: &str) -> String {
         .map(|c| if c == '(' || c == ')' { ' ' } else { c })
         .filter(|c| *c != '"')
         .collect();
+    // Postgres drops a schema qualification when the schema is in the search path,
+    // so stored `FROM posts` has to match generated `FROM "public"."posts"`.
+    // Membership sources are generated schema-qualified so a `can_*` function's
+    // derived table cannot shadow the real one; without this, every policy with a
+    // membership test would look changed on every push. Stripped after the quotes
+    // are gone, since the generated form is `"public".` rather than `public.`.
+    out = out.replace("public.", "");
+
     let table_prefix = format!("{table}.");
     out = out.replace(&table_prefix, "");
     out = canonicalise_keywords_and_casts(&out);
