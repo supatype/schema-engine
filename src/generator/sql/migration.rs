@@ -205,6 +205,24 @@ fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
     lines
 }
 
+/// `can_*` affordance functions, appended after the tables they read exist.
+///
+/// Emitted at the end rather than in the preamble: each takes its table's composite
+/// type as a parameter, so the table has to exist first. `CREATE OR REPLACE` makes
+/// re-emission free, and emitting them on every push is what keeps them in step
+/// with the policies — a stale affordance function is a UI that lies.
+fn render_can_function_lines(ast: &SchemaAst) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_can_functions(ast);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Row-level affordance functions (PostgREST computed columns)".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
 fn render_forward_operation_lines(
     diff: &DiffOutput,
     schema: &str,
@@ -262,6 +280,7 @@ fn render_forward_operation_lines(
 fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
     let mut lines = render_forward_preamble(diff);
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
+    lines.extend(render_can_function_lines(ast));
     Ok(lines.join("\n"))
 }
 
@@ -270,6 +289,7 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     lines.push("BEGIN;".into());
     lines.push(String::new());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
+    lines.extend(render_can_function_lines(ast));
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }

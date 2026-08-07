@@ -309,3 +309,109 @@ async fn stored_policies_evaluate_auth_once_per_query() {
     })
     .await;
 }
+
+// Studio needs to know, per row, whether the delete button should be enabled. A
+// client-side SQL interpreter would be a second implementation of the rules that
+// drifts from the enforced one, and a round trip per row does not scale. These
+// functions are the answer, generated from the same AST as the policies, and
+// exposed by PostgREST as computed columns on the query Studio already runs.
+#[tokio::test]
+async fn can_functions_answer_per_row_from_the_same_rules() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        // One function per model per operation, including the operations a model
+        // does not declare -- a function that always answers false is easier for a
+        // UI than a missing one it has to special-case.
+        for name in [
+            "can_read_posts",
+            "can_create_posts",
+            "can_update_posts",
+            "can_delete_posts",
+            "can_read_comments",
+        ] {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                                 WHERE n.nspname = 'public' AND p.proname = $1)",
+            )
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert!(exists, "{name} was not generated");
+        }
+
+        // Takes exactly one argument of the table's composite type and returns
+        // boolean -- the shape PostgREST requires to expose it as
+        // `?select=*,can_delete_posts`. The parameter is *named* after the table
+        // (so the policy expression can be reused verbatim in the body), which is
+        // why the signature reads "posts posts".
+        let (args, returns, nargs): (String, String, i16) = sqlx::query_as(
+            "SELECT pg_get_function_identity_arguments(p.oid),
+                    pg_catalog.format_type(p.prorettype, NULL),
+                    p.pronargs
+               FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.proname = 'can_delete_posts'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(nargs, 1, "a computed column takes exactly the row: {args}");
+        assert!(args.ends_with("posts"), "argument is not the row type: {args}");
+        assert_eq!(returns, "boolean", "computed column must be boolean: {returns}");
+
+        // And it answers. `posts.delete` is Role<"admin">, so with no JWT claims set
+        // `auth.role()` is 'anon' and every row answers false -- the same answer the
+        // policy gives, which is the whole point.
+        sqlx::raw_sql(
+            "INSERT INTO users (id, email, name) VALUES
+               ('11111111-1111-1111-1111-111111111111', 'a@example.com', 'A');
+             INSERT INTO categories (id, name, slug) VALUES
+               ('22222222-2222-2222-2222-222222222222', 'General', 'general');
+             INSERT INTO posts (id, title, slug, content, author_id, category_id) VALUES
+               ('33333333-3333-3333-3333-333333333333', 'T', 't', '{}'::jsonb,
+                '11111111-1111-1111-1111-111111111111',
+                '22222222-2222-2222-2222-222222222222');",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed rows");
+
+        let (can_delete, can_read): (bool, Option<bool>) =
+            sqlx::query_as("SELECT can_delete_posts(p), can_read_posts(p) FROM posts p")
+                .fetch_one(&pool)
+                .await
+                .expect("the affordance functions are callable on a row");
+
+        // `posts.delete` is Role<"admin">. With no JWT claims set `auth.role()` is
+        // 'anon', so every row answers false -- the same answer the policy gives,
+        // which is the whole point of generating both from one AST.
+        assert!(!can_delete, "delete is admin-only, so anon must be refused");
+
+        // `posts.read` contains a `Custom` branch. Its raw SQL cannot be qualified
+        // for a function body, so the honest answer is NULL: unknown, ask the
+        // database. Guessing either way would be a UI that lies.
+        assert_eq!(
+            can_read, None,
+            "a rule containing Custom SQL must answer unknown, not guess"
+        );
+
+        // A rule with no Custom anywhere answers definitively. `users.read` is
+        // Public.
+        sqlx::raw_sql("INSERT INTO users (id, email, name) VALUES
+             ('44444444-4444-4444-4444-444444444444', 'b@example.com', 'B');")
+            .execute(&pool)
+            .await
+            .expect("seed a user");
+        let can_read_user: Option<bool> =
+            sqlx::query_scalar("SELECT can_read_users(u) FROM users u LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .expect("callable");
+        assert_eq!(can_read_user, Some(true), "a public read must answer true");
+    })
+    .await;
+}

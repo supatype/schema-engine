@@ -356,7 +356,16 @@ fn qualify_bare_columns(expr: &str, table: &str) -> String {
         // Already qualified (`"t"."c"`) if a dot follows, or if a dot preceded.
         let preceded_by_dot = out.ends_with('.');
         let followed_by_dot = tail.starts_with('.');
-        if preceded_by_dot || followed_by_dot {
+        // A quoted identifier straight after FROM or JOIN is a *table*, not a
+        // column. Qualifying it produced `"categories"."posts"`, which Postgres
+        // read as a schema-qualified relation that does not exist — so every
+        // membership rule broke the moment its expression was reused here.
+        let in_table_position = matches!(
+            last_word(&out).to_ascii_uppercase().as_str(),
+            "FROM" | "JOIN" | "INTO" | "UPDATE"
+        );
+
+        if preceded_by_dot || followed_by_dot || in_table_position {
             out.push('"');
             out.push_str(ident);
             out.push('"');
@@ -367,6 +376,16 @@ fn qualify_bare_columns(expr: &str, table: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// The last whitespace-delimited word emitted so far, for deciding whether the
+/// identifier about to be written sits in table position.
+fn last_word(out: &str) -> &str {
+    let trimmed = out.trim_end();
+    match trimmed.rfind(|c: char| c.is_whitespace() || c == '(') {
+        Some(i) => &trimmed[i + 1..],
+        None => trimmed,
+    }
 }
 
 fn literal_to_sql(value: &LiteralValue) -> String {
@@ -479,9 +498,19 @@ fn quote_literal(value: &str) -> String {
 }
 
 /// Owner / OwnerFrom — compare auth.uid() to a row column or ownership via a related model.
+/// Quotes a column so it is unambiguous as an identifier.
+///
+/// Also what lets `qualify_bare_columns` find these references when the same
+/// expression is reused inside a `can_*` function, where a bare column has no
+/// `FROM` clause to resolve against. Quoting changes no meaning and the differ's
+/// normaliser strips quotes, so no policy is recreated for it.
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
     if kernel_field == "id" {
-        return format!("{AUTH_UID} = id");
+        return format!("{AUTH_UID} = {}", quote_ident("id"));
     }
 
     if let Some((field_name, field)) = model.fields.get_key_value(kernel_field) {
@@ -492,25 +521,26 @@ fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> S
 
             if let Some(target) = ast.models.iter().find(|m| m.name == rel.target) {
                 if is_user_identity_model(target) {
-                    return format!("{AUTH_UID} = {fk}");
+                    return format!("{AUTH_UID} = {}", quote_ident(&fk));
                 }
                 if let Some(owner_col) = owner_column_on_model(target) {
                     let table = db_table_name(target);
                     return format!(
-                        "EXISTS (SELECT 1 FROM \"{table}\" WHERE \"{table}\".id = {fk} AND {AUTH_UID} = \"{table}\".{owner_col})"
+                        "EXISTS (SELECT 1 FROM \"{table}\" WHERE \"{table}\".\"id\" = {fk_q} AND {AUTH_UID} = \"{table}\".\"{owner_col}\")",
+                        fk_q = quote_ident(&fk)
                     );
                 }
             }
 
-            return format!("{AUTH_UID} = {fk}");
+            return format!("{AUTH_UID} = {}", quote_ident(&fk));
         }
 
         let column = resolve_owner_column(model, kernel_field);
-        return format!("{AUTH_UID} = {column}");
+        return format!("{AUTH_UID} = {}", quote_ident(&column));
     }
 
     let column = resolve_owner_column(model, kernel_field);
-    format!("{AUTH_UID} = {column}")
+    format!("{AUTH_UID} = {}", quote_ident(&column))
 }
 
 /// Models whose primary key is the auth user id (e.g. Profile), not a generated UUID.
@@ -535,4 +565,93 @@ fn owner_column_on_model(model: &ModelAst) -> Option<String> {
         return Some("id".to_string());
     }
     Some(resolve_owner_column(model, field))
+}
+
+// ─── Row-level affordances ───────────────────────────────────────────────────
+
+/// `can_<op>_<table>(row) RETURNS boolean` for every operation a model declares.
+///
+/// Studio needs to know, per row, whether the delete button should be enabled.
+/// The alternatives are all worse: a client-side SQL interpreter is a second
+/// implementation of the rules that drifts from the enforced one; a round trip per
+/// row does not scale; and an "unknown" state pushes the problem into the UI.
+///
+/// These functions are the answer, generated from the same AST as the policies, so
+/// there is exactly one definition of what access means. PostgREST exposes them as
+/// computed columns — `?select=*,can_delete_posts` — so Studio gets the affordance
+/// from the query it was already running, with no extra request and no per-row call
+/// from the client. They are also what `explain` and hand-written queries use.
+///
+/// The parameter is named after the table so the policy expression can be reused
+/// verbatim: inside the body `posts.author_id` resolves against the composite
+/// argument. Bare column references are qualified for the same reason — a function
+/// body has no `FROM` clause for them to resolve against.
+pub fn generate_can_functions(ast: &SchemaAst) -> String {
+    let mut out = String::new();
+    let schema = "public";
+
+    for model in &ast.models {
+        let access = platform_access(model);
+        let table = db_table_name(model);
+
+        for (op, rule) in [
+            ("read", access.read.as_ref()),
+            ("create", access.create.as_ref()),
+            ("update", access.update.as_ref()),
+            ("delete", access.delete.as_ref()),
+        ] {
+            let Some(rule) = rule else {
+                // An operation with no rule is denied, and a function that always
+                // returns false is more useful to a UI than a missing one it has to
+                // special-case.
+                out.push_str(&render_can_function(schema, table, op, "FALSE"));
+                continue;
+            };
+
+            // A `Custom` predicate is raw SQL, so which of its identifiers are
+            // columns is unknowable — they cannot be qualified, and unqualified
+            // they have no `FROM` to resolve against inside a function body.
+            // Answering NULL says "unknown, ask the database", which is the same
+            // thing `/studio/session` reports for a Custom rule. Guessing either
+            // way would be a UI that lies; refusing to emit the function at all
+            // would make every caller special-case its absence.
+            if contains_custom(rule) {
+                out.push_str(&render_can_function(schema, table, op, "NULL::boolean"));
+                continue;
+            }
+
+            let expr = qualify_bare_columns(&access_rule_to_expr(ast, model, rule), table);
+            out.push_str(&render_can_function(schema, table, op, &expr));
+        }
+    }
+
+    out
+}
+
+fn render_can_function(schema: &str, table: &str, op: &str, expr: &str) -> String {
+    let name = format!("can_{op}_{table}");
+    format!(
+        "CREATE OR REPLACE FUNCTION \"{schema}\".\"{name}\"(\"{table}\" \"{schema}\".\"{table}\")\n  \
+         RETURNS boolean LANGUAGE sql STABLE AS $can$\n    \
+         SELECT {expr};\n  \
+         $can$;\n\n"
+    )
+}
+
+/// Whether a rule tree contains raw SQL anywhere.
+fn contains_custom(rule: &AccessRule) -> bool {
+    match rule {
+        AccessRule::Custom { .. } => true,
+        AccessRule::Any { rules } | AccessRule::All { rules } => {
+            rules.iter().any(contains_custom)
+        }
+        AccessRule::Not { rule } => contains_custom(rule),
+        AccessRule::In { source, .. } => match source {
+            MembershipSource::Rows { filter, .. } => {
+                filter.as_deref().is_some_and(contains_custom)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
 }

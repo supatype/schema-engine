@@ -70,8 +70,10 @@ fn owner_rule_accepts_kernel_relation_field_name() {
     // evaluates it once per query, so match on the parts rather than one literal
     // rendering of them.
     let expr = access_rule_to_expr(&ast, post, rule);
+    // Columns are quoted so `qualify_bare_columns` can find them when the same
+    // expression is reused inside a `can_*` affordance function.
     assert!(
-        expr.contains("auth.uid()") && expr.ends_with("= author_id"),
+        expr.contains("auth.uid()") && expr.ends_with("= \"author_id\""),
         "RLS should resolve author to author_id column, got: {expr}"
     );
 }
