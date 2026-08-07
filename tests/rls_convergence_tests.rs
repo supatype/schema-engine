@@ -67,7 +67,7 @@ async fn policies_converge_after_the_first_push() {
 // Convergence alone would still pass if a rule were silently dropped, so assert
 // the composition actually reached the database.
 #[tokio::test]
-async fn or_composition_and_custom_sql_reach_the_database() {
+async fn or_composition_reaches_the_database() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
         let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
@@ -81,14 +81,13 @@ async fn or_composition_and_custom_sql_reach_the_database() {
         .await
         .expect("the Post read policy exists");
 
-        // Any<[Role<"admin">, Owner<"authorId">, Custom<"title <> ''">]>
+        // Any<[Role<"admin">, Owner<"authorId">, Neq<"title", Literal<"">>]>
         assert!(expr.contains(" OR "), "expected an OR-join, got: {expr}");
         assert!(expr.contains("auth.role()"), "role branch missing: {expr}");
         assert!(expr.contains("author_id"), "owner branch missing: {expr}");
         assert!(expr.contains("title"), "custom branch missing: {expr}");
 
-        // A Custom rule on its own is used verbatim rather than wrapped in
-        // anything that would change its meaning.
+        // A standalone rule is not wrapped in anything that changes its meaning.
         let tag_expr: String = sqlx::query_scalar(
             "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'tags_select'",
         )
@@ -96,8 +95,8 @@ async fn or_composition_and_custom_sql_reach_the_database() {
         .await
         .expect("the Tag read policy exists");
         assert!(
-            tag_expr.contains("name IS NOT NULL"),
-            "custom predicate altered: {tag_expr}"
+            tag_expr.contains("IS NOT NULL"),
+            "predicate altered: {tag_expr}"
         );
     })
     .await;
@@ -391,20 +390,15 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
         // which is the whole point of generating both from one AST.
         assert!(!can_delete, "delete is admin-only, so anon must be refused");
 
-        // `posts.read` is Any<[Role<"admin">, Owner<…>, Custom<"title <> ''">]>.
-        // The seeded row has a non-empty title, so the Custom branch is true and the
-        // whole rule is true. Raw SQL resolves because the function body gives it a
-        // scope, rather than the expression being rewritten around it — there is no
-        // "unknown" answer here, which is the entire point of these functions.
-        assert_eq!(
-            can_read,
-            Some(true),
-            "Custom SQL must resolve against the row, not answer unknown"
-        );
+        // `posts.read` is Any<[Role<"admin">, Owner<…>, Neq<"title", "">]>. The
+        // seeded row has a non-empty title, so the comparison branch is true. Every
+        // rule answers definitively — there is no "unknown" state here, which is the
+        // entire point of these functions.
+        assert_eq!(can_read, Some(true), "the comparison branch must resolve to true");
 
-        // And it is really evaluating that predicate, not just returning true: the
-        // same row with an empty title fails the Custom branch, and with no admin
-        // role and a different author nothing else rescues it.
+        // And it is really evaluating the predicate, not just returning true: the
+        // same row with an empty title fails that branch, and with no admin role and
+        // a different author nothing else rescues it.
         let can_read_empty: Option<bool> = sqlx::query_scalar(
             "SELECT can_read_posts(ROW(p.id, '', p.slug, p.content, p.author_id,
                                        p.category_id, p.created_at, p.updated_at)::posts)
@@ -416,7 +410,7 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
         assert_eq!(
             can_read_empty,
             Some(false),
-            "the Custom predicate is not being evaluated against the row"
+            "the predicate is not being evaluated against the row"
         );
 
         // A rule with no Custom anywhere answers definitively. `users.read` is

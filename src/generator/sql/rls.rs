@@ -245,7 +245,6 @@ pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule)
                 format!("{AUTH_ROLE} = ANY(ARRAY[{arr}])")
             }
         }
-        AccessRule::Custom { expression } => expression.clone(),
         AccessRule::Any { rules } => join_rules(ast, model, rules, "OR"),
         AccessRule::All { rules } => join_rules(ast, model, rules, "AND"),
         AccessRule::Not { rule } => {
@@ -466,7 +465,7 @@ fn join_rules(ast: &SchemaAst, model: &ModelAst, rules: &[AccessRule], joiner: &
             let expr = access_rule_to_expr(ast, model, r);
             if matches!(
                 r,
-                AccessRule::Any { .. } | AccessRule::All { .. } | AccessRule::Custom { .. }
+                AccessRule::Any { .. } | AccessRule::All { .. }
             ) {
                 format!("({expr})")
             } else {

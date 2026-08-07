@@ -224,7 +224,7 @@ mod tests {
         let owner = AccessRule::Owner { field: "user_id".into() };
         assert!(intersect_rule(Some(&owner), Some(&AccessRule::Public)).is_none());
         assert!(intersect_rule(
-            Some(&AccessRule::Custom { expression: "true".into() }),
+            Some(&AccessRule::Owner { field: "user_id".into() }),
             Some(&AccessRule::Public)
         )
         .is_none());
@@ -547,7 +547,7 @@ pub fn diff(
 ///
 /// Rule: a link is visible only if BOTH endpoints are readable, and writable
 /// only if BOTH endpoints are writable — the intersection of the parent models'
-/// rules. Where a parent rule depends on row data (Owner/OwnerFrom/Custom) the
+/// rules. Where a parent rule depends on row data (Owner, comparisons, membership) the
 /// expression references parent columns that do not exist on the junction table,
 /// so it cannot be applied directly; those fall back to deny-all with a warning
 /// rather than guessing.
@@ -688,7 +688,6 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
         // `None` into a deny plus a warning.
         (
             AccessRule::Owner { .. }
-            | AccessRule::Custom { .. }
             | AccessRule::Any { .. }
             | AccessRule::All { .. }
             | AccessRule::Not { .. }
@@ -700,7 +699,6 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
         | (
             _,
             AccessRule::Owner { .. }
-            | AccessRule::Custom { .. }
             | AccessRule::Any { .. }
             | AccessRule::All { .. }
             | AccessRule::Not { .. }

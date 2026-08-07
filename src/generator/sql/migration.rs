@@ -421,7 +421,7 @@ fn render_create_rls_policy_sql(
     // expression to reference. Assert that here rather than emit invalid SQL.
     if matches!(
         rule,
-        AccessRule::Owner { .. } | AccessRule::Custom { .. } | AccessRule::Any { .. }
+        AccessRule::Owner { .. } | AccessRule::Any { .. }
     ) {
         bail!(
             "CreateRlsPolicy: junction {table} derived a row-dependent rule for {suffix}; \

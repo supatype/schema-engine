@@ -413,9 +413,6 @@ pub enum AccessRule {
     Role {
         roles: Vec<String>,
     },
-    Custom {
-        expression: String,
-    },
     /// OR-join of multiple rules — any one matching grants access.
     Any {
         rules: Vec<AccessRule>,

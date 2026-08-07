@@ -115,7 +115,6 @@ fn normalize_and_validate_rule_inner(
             }
             Ok(())
         }
-        AccessRule::Custom { expression } => validate_custom_expression(model_name, expression),
         _ => Ok(()),
     }
 }
@@ -139,101 +138,4 @@ pub fn relation_fk_columns(model: &super::ast::ModelAst) -> HashSet<String> {
         }
     }
     cols
-}
-
-/// Rejects a `Custom<>` predicate that is not a self-contained expression.
-///
-/// The string is interpolated into `USING ( … )` on a policy and into the body of
-/// a `can_*` function. Both are *expression* positions, and neither is
-/// parameterised — this is the developer's own SQL, and there is no runtime input
-/// anywhere near it. So the risk is not injection in the usual sense; it is that a
-/// string which reads like a predicate can quietly stop being one.
-///
-/// A stray `)` closes the enclosing clause and everything after it becomes
-/// statement text that runs at push time with migration privileges. A `--` or an
-/// unterminated `/*` swallows the closing paren. A `;` ends the statement. None of
-/// these are visible as anything unusual in a schema diff, where a reviewer reads
-/// `Custom<"…">` as a condition rather than as arbitrary SQL.
-///
-/// Anyone who can edit the schema can already write a migration, so this does not
-/// draw a new trust boundary. What it does is make the boundary legible: a
-/// `Custom<>` that would escape its expression is refused by name, at push, with
-/// the reason, instead of executing.
-pub(crate) fn validate_custom_expression(model_name: &str, expression: &str) -> Result<()> {
-    let mut depth: i32 = 0;
-    let mut in_string = false;
-    let chars: Vec<char> = expression.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-
-        if in_string {
-            // '' is an escaped quote inside a literal, not the end of one.
-            if c == '\'' {
-                if chars.get(i + 1) == Some(&'\'') {
-                    i += 2;
-                    continue;
-                }
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
-
-        match c {
-            '\'' => in_string = true,
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth < 0 {
-                    bail!(
-                        "Model '{model_name}': Custom<\"{expression}\"> closes a parenthesis it \
-                         did not open. The expression is placed inside `USING ( … )`, so an \
-                         unbalanced `)` ends that clause and whatever follows runs as its own \
-                         SQL when the migration is applied."
-                    );
-                }
-            }
-            ';' => bail!(
-                "Model '{model_name}': Custom<\"{expression}\"> contains `;`. A rule is a single \
-                 expression, and a statement separator here would append SQL to the migration \
-                 that creates the policy."
-            ),
-            '-' if chars.get(i + 1) == Some(&'-') => bail!(
-                "Model '{model_name}': Custom<\"{expression}\"> contains a `--` comment, which \
-                 would comment out the rest of the generated statement, including the closing \
-                 parenthesis of the clause it sits in."
-            ),
-            '/' if chars.get(i + 1) == Some(&'*') => bail!(
-                "Model '{model_name}': Custom<\"{expression}\"> contains a block comment. Use a \
-                 plain expression; comments risk swallowing the generated SQL around it."
-            ),
-            // A dollar-quoted string would terminate the `$can$…$can$` body of the
-            // generated affordance function early.
-            '$' => bail!(
-                "Model '{model_name}': Custom<\"{expression}\"> contains `$`. Dollar quoting \
-                 would end the body of the generated `can_*` function early. Call a function \
-                 you define separately if the predicate needs one."
-            ),
-            _ => {}
-        }
-        i += 1;
-    }
-
-    if in_string {
-        bail!(
-            "Model '{model_name}': Custom<\"{expression}\"> has an unterminated string literal, \
-             so the generated SQL would continue inside it."
-        );
-    }
-    if depth != 0 {
-        bail!(
-            "Model '{model_name}': Custom<\"{expression}\"> leaves {depth} parenthesis(es) open."
-        );
-    }
-    if expression.trim().is_empty() {
-        bail!("Model '{model_name}': Custom<\"\"> is empty. Use Private to deny.");
-    }
-    Ok(())
 }

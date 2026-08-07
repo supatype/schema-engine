@@ -266,8 +266,16 @@
          "field": "authorId"
         },
         {
-         "type": "custom",
-         "expression": "title <> ''"
+         "type": "compare",
+         "op": "neq",
+         "left": {
+          "kind": "column",
+          "name": "title"
+         },
+         "right": {
+          "kind": "literal",
+          "value": ""
+         }
         }
        ]
       },
@@ -465,8 +473,12 @@
     "platform": {
      "access": {
       "read": {
-       "type": "custom",
-       "expression": "name IS NOT NULL"
+       "type": "nullCheck",
+       "operand": {
+        "kind": "column",
+        "name": "name"
+       },
+       "isNull": false
       },
       "create": {
        "type": "in",

@@ -149,8 +149,6 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
                 format!("auth.role() = ANY(ARRAY[{arr}])")
             }
         }
-        AccessRule::Custom { expression } => expression.clone(),
-
         // Storage policies run on `storage.objects`, which has none of the
         // model's columns. A rule naming one cannot be evaluated here, so it
         // denies rather than being rendered against a table where the column
