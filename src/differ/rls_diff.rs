@@ -667,7 +667,8 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
             | AccessRule::All { .. }
             | AccessRule::Not { .. }
             | AccessRule::Compare { .. }
-            | AccessRule::NullCheck { .. },
+            | AccessRule::NullCheck { .. }
+            | AccessRule::In { .. },
             _,
         )
         | (
@@ -678,7 +679,8 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
             | AccessRule::All { .. }
             | AccessRule::Not { .. }
             | AccessRule::Compare { .. }
-            | AccessRule::NullCheck { .. },
+            | AccessRule::NullCheck { .. }
+            | AccessRule::In { .. },
         ) => None,
 
         (AccessRule::Private, _) | (_, AccessRule::Private) => Some(AccessRule::Private),

@@ -159,7 +159,8 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
         AccessRule::All { .. }
         | AccessRule::Not { .. }
         | AccessRule::Compare { .. }
-        | AccessRule::NullCheck { .. } => "FALSE".to_string(),
+        | AccessRule::NullCheck { .. }
+        | AccessRule::In { .. } => "FALSE".to_string(),
     }
 }
 

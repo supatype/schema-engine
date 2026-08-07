@@ -118,7 +118,35 @@
     "platform": {
      "access": {
       "read": {
-       "type": "public"
+       "type": "any",
+       "rules": [
+        {
+         "type": "role",
+         "roles": [
+          "admin"
+         ]
+        },
+        {
+         "type": "in",
+         "column": "id",
+         "source": {
+          "kind": "rows",
+          "table": "posts",
+          "column": "category_id",
+          "where": {
+           "type": "compare",
+           "op": "eq",
+           "left": {
+            "kind": "column",
+            "name": "author_id"
+           },
+           "right": {
+            "kind": "authUid"
+           }
+          }
+         }
+        }
+       ]
       },
       "create": {
        "type": "role",
@@ -429,10 +457,15 @@
        "expression": "name IS NOT NULL"
       },
       "create": {
-       "type": "role",
-       "roles": [
-        "admin"
-       ]
+       "type": "in",
+       "column": "name",
+       "source": {
+        "kind": "literal",
+        "values": [
+         "featured",
+         "archive"
+        ]
+       }
       }
      }
     }

@@ -137,6 +137,76 @@ async fn composition_and_comparisons_reach_the_database() {
     .await;
 }
 
+// Membership is the reason the DSL exists: "the rows this caller belongs to".
+#[tokio::test]
+async fn membership_compiles_to_a_correlated_semi_join() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        let expr: String = sqlx::query_scalar(
+            "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'categories_select'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the Category read policy exists");
+
+        // EXISTS, not IN (SELECT …): the planner stops at the first matching row
+        // instead of materialising the whole set.
+        assert!(expr.contains("EXISTS"), "expected a semi-join, got: {expr}");
+        assert!(!expr.contains("IN (SELECT"), "materialises the set: {expr}");
+
+        // Correlated on the outer table, and the narrowing rule resolved against
+        // the *source* table. An unqualified `author_id` here would bind to
+        // whichever table Postgres found first.
+        assert!(
+            expr.contains("categories.id") || expr.contains("categories\".\"id"),
+            "not correlated to the outer row: {expr}"
+        );
+        assert!(
+            expr.contains("posts.author_id") || expr.contains("posts\".\"author_id"),
+            "narrowing rule not resolved against the source table: {expr}"
+        );
+
+        // A fixed set becomes an array test rather than a subquery.
+        let tag_expr: String = sqlx::query_scalar(
+            "SELECT pg_get_expr(polwithcheck, polrelid) FROM pg_policy WHERE polname = 'tags_insert'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the Tag create policy exists");
+        assert!(tag_expr.contains("ANY"), "expected an array test, got: {tag_expr}");
+    })
+    .await;
+}
+
+// The DSL names the join column, so the classic RLS trap — a membership subquery
+// scanning an unindexed join table once per row tested — becomes generated
+// infrastructure rather than something the developer has to know about.
+#[tokio::test]
+async fn membership_sources_get_their_index() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        let indexed: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+               SELECT 1 FROM pg_indexes
+                WHERE schemaname = 'public' AND tablename = 'posts'
+                  AND indexdef LIKE '%category_id%')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(indexed, "the Rows<> join column was left unindexed");
+    })
+    .await;
+}
+
 // Regression: the auth helpers had two definitions — one installed by a
 // migration, one reinstalled at bootstrap — and they had already diverged. A
 // fresh push installed a `role()` that ignored `app_metadata.role`, and helpers

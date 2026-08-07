@@ -388,7 +388,7 @@ pub struct AccessAst {
     pub delete: Option<AccessRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AccessRule {
     Public,
@@ -421,6 +421,15 @@ pub enum AccessRule {
         op: CompareOp,
         right: Operand,
     },
+    /// Membership: the column's value appears in a set.
+    ///
+    /// This is what makes "the sites this user belongs to" expressible. Compiles
+    /// to a semi-join (`EXISTS`), not `IN (SELECT ...)`, so the planner can stop
+    /// at the first match per row instead of materialising the whole set.
+    In {
+        column: String,
+        source: MembershipSource,
+    },
     /// `IS NULL` / `IS NOT NULL` on an operand.
     ///
     /// Its own variant rather than a `CompareOp`, because SQL null comparison is
@@ -436,6 +445,25 @@ pub enum AccessRule {
         #[serde(rename = "isNull")]
         is_null: bool,
     },
+}
+
+/// Where the set on the right of an `In` comes from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MembershipSource {
+    /// A JWT claim holding an array, e.g. `app_metadata.sites`.
+    Claim { path: String },
+    /// Rows of another table — a join table, typically. `where` narrows it to the
+    /// caller's own rows, which is what makes it a membership check rather than a
+    /// lookup of everything.
+    Rows {
+        table: String,
+        column: String,
+        #[serde(default, rename = "where")]
+        filter: Option<Box<AccessRule>>,
+    },
+    /// A fixed list written in the schema.
+    Literal { values: Vec<LiteralValue> },
 }
 
 /// One side of a comparison.

@@ -2,7 +2,8 @@ use crate::parser::accessors::{
     db_foreign_key, db_table_name, platform_access, resolve_owner_column,
 };
 use crate::parser::ast::{
-    AccessRule, DefaultValueAst, FieldAst, LiteralValue, ModelAst, Operand, SchemaAst,
+    AccessRule, DefaultValueAst, FieldAst, LiteralValue, MembershipSource, ModelAst, Operand,
+    SchemaAst,
 };
 use anyhow::Result;
 
@@ -113,8 +114,15 @@ pub fn render_policy_migration_sql(
     // user's own policy is dropped on the next push, and one that happens to
     // match our naming is silently replaced.
     let comment = crate::managed::managed_comment("rls_policy", table, &[suffix]);
+
+    // Index the join columns any membership test reads. Emitted with the policy
+    // because that is when the requirement appears; `IF NOT EXISTS` keeps a
+    // re-emission free. An index dropped by hand later is not restored until the
+    // policy itself changes, which is the known limit of doing it here.
+    let indexes = membership_index_sql(schema, rule);
+
     format!(
-        "{sql}COMMENT ON POLICY \"{table}_{suffix}\" ON \"{schema}\".\"{table}\" IS '{comment}';\n"
+        "{indexes}{sql}COMMENT ON POLICY \"{table}_{suffix}\" ON \"{schema}\".\"{table}\" IS '{comment}';\n"
     )
 }
 
@@ -231,7 +239,170 @@ pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule)
             let test = if *is_null { "IS NULL" } else { "IS NOT NULL" };
             format!("{} {test}", operand_to_expr(operand))
         }
+        AccessRule::In { column, source } => membership_to_expr(ast, model, column, source),
     }
+}
+
+/// Compiles a membership test.
+///
+/// Every form is a semi-join or an array test rather than `IN (SELECT …)`: the
+/// planner can stop at the first match per row instead of materialising the whole
+/// set, which is the difference between a policy that works on a large join table
+/// and one that does not.
+fn membership_to_expr(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    column: &str,
+    source: &MembershipSource,
+) -> String {
+    let own_table = db_table_name(model);
+    // Qualified so the correlated reference is unambiguous — the subquery's own
+    // table may well have a column of the same name, and an unqualified reference
+    // would silently bind to the *inner* one, making the test always true.
+    let own_col = format!("\"{own_table}\".\"{}\"", column.replace('"', "\"\""));
+
+    match source {
+        MembershipSource::Claim { path } => format!(
+            "EXISTS (SELECT 1 FROM jsonb_array_elements_text(\
+             COALESCE(auth.claim({}), '[]'::jsonb)) AS claim_value \
+             WHERE claim_value = {own_col}::text)",
+            quote_literal(path)
+        ),
+
+        MembershipSource::Literal { values } => {
+            if values.is_empty() {
+                // An empty set matches nothing. Emitted as FALSE rather than
+                // `= ANY(ARRAY[])`, which Postgres cannot type.
+                return "FALSE".to_string();
+            }
+            let items = values
+                .iter()
+                .map(literal_to_sql)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{own_col} = ANY(ARRAY[{items}])")
+        }
+
+        MembershipSource::Rows {
+            table,
+            column: source_column,
+            filter,
+        } => {
+            let table_esc = table.replace('"', "\"\"");
+            let col_esc = source_column.replace('"', "\"\"");
+            let mut sql = format!(
+                "EXISTS (SELECT 1 FROM \"{table_esc}\" \
+                 WHERE \"{table_esc}\".\"{col_esc}\" = {own_col}"
+            );
+            if let Some(rule) = filter {
+                // The filter is evaluated against the *source* table, so resolve
+                // its columns there rather than against the model the policy is
+                // attached to.
+                let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
+                let inner_expr = match inner_model {
+                    Some(m) => access_rule_to_expr(ast, m, rule),
+                    None => access_rule_to_expr(ast, model, rule),
+                };
+                sql.push_str(&format!(" AND ({})", qualify_bare_columns(&inner_expr, table)));
+            }
+            sql.push(')');
+            sql
+        }
+    }
+}
+
+/// Qualifies unqualified quoted columns in a subquery predicate with its table.
+///
+/// A filter like `Eq<"user_id", AuthUid>` renders as `"user_id" = …`, which inside
+/// the subquery would resolve against whichever table happens to have that column
+/// — and if both do, silently against the wrong one. Only already-unqualified
+/// references are touched, so an explicit `"other"."col"` is left alone.
+fn qualify_bare_columns(expr: &str, table: &str) -> String {
+    let table_esc = table.replace('"', "\"\"");
+    let mut out = String::with_capacity(expr.len());
+    let mut rest = expr;
+
+    while let Some(start) = rest.find('"') {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + 1..];
+        let Some(end) = after_open.find('"') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let ident = &after_open[..end];
+        let tail = &after_open[end + 1..];
+
+        // Already qualified (`"t"."c"`) if a dot follows, or if a dot preceded.
+        let preceded_by_dot = out.ends_with('.');
+        let followed_by_dot = tail.starts_with('.');
+        if preceded_by_dot || followed_by_dot {
+            out.push('"');
+            out.push_str(ident);
+            out.push('"');
+        } else {
+            out.push_str(&format!("\"{table_esc}\".\"{ident}\""));
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
+fn literal_to_sql(value: &LiteralValue) -> String {
+    match value {
+        LiteralValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
+        LiteralValue::Number(n) => format!("{n:?}").trim_end_matches(".0").to_string(),
+        LiteralValue::Text(t) => quote_literal(t),
+    }
+}
+
+/// Columns a `Rows<>` source joins on, as `(table, column)` pairs.
+///
+/// The DSL names the join columns, so the classic RLS performance footgun — a
+/// membership subquery scanning an unindexed join table for every row tested —
+/// becomes generated infrastructure instead of something the developer has to
+/// know about.
+pub fn membership_index_targets(rule: &AccessRule) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    collect_membership_targets(rule, &mut out);
+    out
+}
+
+fn collect_membership_targets(rule: &AccessRule, out: &mut Vec<(String, String)>) {
+    match rule {
+        AccessRule::In { source, .. } => {
+            if let MembershipSource::Rows { table, column, filter } = source {
+                let pair = (table.clone(), column.clone());
+                if !out.contains(&pair) {
+                    out.push(pair);
+                }
+                if let Some(inner) = filter {
+                    collect_membership_targets(inner, out);
+                }
+            }
+        }
+        AccessRule::Any { rules } | AccessRule::All { rules } => {
+            for r in rules {
+                collect_membership_targets(r, out);
+            }
+        }
+        AccessRule::Not { rule } => collect_membership_targets(rule, out),
+        _ => {}
+    }
+}
+
+/// `CREATE INDEX IF NOT EXISTS` for each join column a rule reads.
+pub fn membership_index_sql(schema: &str, rule: &AccessRule) -> String {
+    let mut sql = String::new();
+    for (table, column) in membership_index_targets(rule) {
+        let index = format!("idx_{table}_{column}_rls");
+        let t = table.replace('"', "\"\"");
+        let c = column.replace('"', "\"\"");
+        sql.push_str(&format!(
+            "CREATE INDEX IF NOT EXISTS \"{index}\" ON \"{schema}\".\"{t}\" (\"{c}\");\n"
+        ));
+    }
+    sql
 }
 
 /// Joins composed rules, parenthesising any child that is itself a composition.
