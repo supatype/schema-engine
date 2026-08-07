@@ -51,7 +51,24 @@
     "platform": {
      "access": {
       "read": {
-       "type": "public"
+       "type": "any",
+       "rules": [
+        {
+         "type": "public"
+        },
+        {
+         "type": "compare",
+         "op": "gte",
+         "left": {
+          "kind": "column",
+          "name": "created_at"
+         },
+         "right": {
+          "kind": "startOf",
+          "unit": "year"
+         }
+        }
+       ]
       },
       "update": {
        "type": "owner",
@@ -127,24 +144,48 @@
          ]
         },
         {
-         "type": "in",
-         "column": "id",
-         "source": {
-          "kind": "rows",
-          "table": "posts",
-          "column": "category_id",
-          "where": {
-           "type": "compare",
-           "op": "eq",
-           "left": {
-            "kind": "column",
-            "name": "author_id"
-           },
-           "right": {
-            "kind": "authUid"
+         "type": "all",
+         "rules": [
+          {
+           "type": "exists",
+           "source": {
+            "kind": "rows",
+            "table": "posts",
+            "column": "category_id",
+            "where": {
+             "type": "compare",
+             "op": "eq",
+             "left": {
+              "kind": "column",
+              "name": "author_id"
+             },
+             "right": {
+              "kind": "authUid"
+             }
+            }
+           }
+          },
+          {
+           "type": "in",
+           "column": "id",
+           "source": {
+            "kind": "rows",
+            "table": "posts",
+            "column": "category_id",
+            "where": {
+             "type": "compare",
+             "op": "eq",
+             "left": {
+              "kind": "column",
+              "name": "author_id"
+             },
+             "right": {
+              "kind": "authUid"
+             }
+            }
            }
           }
-         }
+         ]
         }
        ]
       },
@@ -258,24 +299,50 @@
         {
          "type": "role",
          "roles": [
-          "admin"
+          "editor"
          ]
         },
         {
-         "type": "owner",
-         "field": "authorId"
-        },
-        {
-         "type": "compare",
-         "op": "neq",
-         "left": {
-          "kind": "column",
-          "name": "title"
-         },
-         "right": {
-          "kind": "literal",
-          "value": ""
-         }
+         "type": "all",
+         "rules": [
+          {
+           "type": "compare",
+           "op": "lte",
+           "left": {
+            "kind": "column",
+            "name": "created_at"
+           },
+           "right": {
+            "kind": "now"
+           }
+          },
+          {
+           "type": "compare",
+           "op": "gte",
+           "left": {
+            "kind": "column",
+            "name": "created_at"
+           },
+           "right": {
+            "kind": "ago",
+            "amount": 30,
+            "unit": "days"
+           }
+          },
+          {
+           "type": "compare",
+           "op": "lte",
+           "left": {
+            "kind": "column",
+            "name": "updated_at"
+           },
+           "right": {
+            "kind": "fromNow",
+            "amount": 7,
+            "unit": "days"
+           }
+          }
+         ]
         }
        ]
       },

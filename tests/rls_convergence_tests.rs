@@ -81,22 +81,36 @@ async fn or_composition_reaches_the_database() {
         .await
         .expect("the Post read policy exists");
 
-        // Any<[Role<"admin">, Owner<"authorId">, Neq<"title", Literal<"">>]>
+        // The scheduled-publishing rule:
+        //   Any<[Role<"editor">, All<[Lte<"created_at", Now>,
+        //        Gte<"created_at", Ago<30,"days">>, Lte<"updated_at", FromNow<7,"days">>]>]>
+        //
+        // The staff branch is what keeps a scheduled row visible to its author in
+        // Studio. Without it, FORCE ROW LEVEL SECURITY hides the post the moment a
+        // future date is set, which reads as the product being broken.
         assert!(expr.contains(" OR "), "expected an OR-join, got: {expr}");
-        assert!(expr.contains("auth.role()"), "role branch missing: {expr}");
-        assert!(expr.contains("author_id"), "owner branch missing: {expr}");
-        assert!(expr.contains("title"), "custom branch missing: {expr}");
+        assert!(expr.contains("auth.role()"), "staff branch missing: {expr}");
+        assert!(expr.contains("now()"), "temporal branch missing: {expr}");
+        assert!(expr.contains("30 days"), "Ago interval missing: {expr}");
+        assert!(expr.contains("7 days"), "FromNow interval missing: {expr}");
 
-        // A standalone rule is not wrapped in anything that changes its meaning.
-        let tag_expr: String = sqlx::query_scalar(
-            "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'tags_select'",
+        // `now()`, never `clock_timestamp()` — the latter is VOLATILE and would make
+        // the affordance functions' STABLE declaration a lie.
+        assert!(
+            !expr.contains("clock_timestamp"),
+            "a volatile clock reached a policy: {expr}"
+        );
+
+        // StartOf on a model that has timestamps (Tag declares `timestamps: false`).
+        let user_expr: String = sqlx::query_scalar(
+            "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'users_select'",
         )
         .fetch_one(&pool)
         .await
-        .expect("the Tag read policy exists");
+        .expect("the User read policy exists");
         assert!(
-            tag_expr.contains("IS NOT NULL"),
-            "predicate altered: {tag_expr}"
+            user_expr.contains("date_trunc"),
+            "StartOf did not compile to date_trunc: {user_expr}"
         );
     })
     .await;
@@ -390,27 +404,29 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
         // which is the whole point of generating both from one AST.
         assert!(!can_delete, "delete is admin-only, so anon must be refused");
 
-        // `posts.read` is Any<[Role<"admin">, Owner<…>, Neq<"title", "">]>. The
-        // seeded row has a non-empty title, so the comparison branch is true. Every
-        // rule answers definitively — there is no "unknown" state here, which is the
-        // entire point of these functions.
-        assert_eq!(can_read, Some(true), "the comparison branch must resolve to true");
+        // `posts.read` is the scheduled-publishing rule. The seeded row was created
+        // just now, so it is inside the 30-day window and visible. Every rule answers
+        // definitively — there is no "unknown" state here, which is the entire point
+        // of these functions.
+        assert_eq!(can_read, Some(true), "a row created now must be visible");
 
-        // And it is really evaluating the predicate, not just returning true: the
-        // same row with an empty title fails that branch, and with no admin role and
-        // a different author nothing else rescues it.
-        let can_read_empty: Option<bool> = sqlx::query_scalar(
-            "SELECT can_read_posts(ROW(p.id, '', p.slug, p.content, p.author_id,
-                                       p.category_id, p.created_at, p.updated_at)::posts)
+        // And it is really evaluating the temporal predicate, not defaulting to true:
+        // the same row dated 60 days ago falls outside `Ago<30, "days">`, and with no
+        // editor role nothing else rescues it. This is what makes Studio able to say
+        // "scheduled, visible in N days" rather than just hiding the row.
+        let can_read_stale: Option<bool> = sqlx::query_scalar(
+            "SELECT can_read_posts(ROW(p.id, p.title, p.slug, p.content, p.author_id,
+                                       p.category_id, now() - INTERVAL '60 days',
+                                       p.updated_at)::posts)
                FROM posts p LIMIT 1",
         )
         .fetch_one(&pool)
         .await
         .expect("callable on a constructed row");
         assert_eq!(
-            can_read_empty,
+            can_read_stale,
             Some(false),
-            "the predicate is not being evaluated against the row"
+            "the temporal predicate is not being evaluated against the row"
         );
 
         // A rule with no Custom anywhere answers definitively. `users.read` is

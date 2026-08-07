@@ -97,6 +97,16 @@ fn canonicalise_keywords_and_casts(s: &str) -> String {
         }
         match upper.as_str() {
             "TRUE" | "FALSE" | "NULL" => out.push_str(&word.to_ascii_lowercase()),
+            // Postgres rewrites `INTERVAL '30 days'` as `'30 days'::interval`, and
+            // the cast is already stripped above — so the keyword has to go too or
+            // every temporal rule looks changed on every push.
+            "INTERVAL" => {
+                word.clear();
+                while out.ends_with(' ') {
+                    out.pop();
+                }
+                return false;
+            }
             "AS" => {
                 word.clear();
                 while out.ends_with(' ') {
@@ -329,6 +339,23 @@ mod tests {
             normalise("(t.tags = '{a,b}'::text[])", "t")
         );
         assert!(!normalise("tags = '{a}'::text[]", "t").contains("text"));
+    }
+
+    // Postgres rewrites `INTERVAL '30 days'` as `'30 days'::interval` — the keyword
+    // moves into a cast, and the cast is stripped. Without dropping the keyword too,
+    // every temporal rule looked changed on every push.
+    #[test]
+    fn normalise_matches_a_stored_interval() {
+        let generated = "created_at >= (SELECT now() - INTERVAL '30 days')";
+        let stored = "(post.created_at >= ( SELECT (now() - '30 days'::interval)))";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    #[test]
+    fn normalise_matches_a_stored_date_trunc() {
+        let generated = "created_at >= (SELECT date_trunc('week', now()))";
+        let stored = "(post.created_at >= ( SELECT date_trunc('week'::text, now()) AS date_trunc))";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
     }
 
     // "as" inside a string literal is not an alias.
@@ -693,7 +720,8 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
             | AccessRule::Not { .. }
             | AccessRule::Compare { .. }
             | AccessRule::NullCheck { .. }
-            | AccessRule::In { .. },
+            | AccessRule::In { .. }
+            | AccessRule::Exists { .. },
             _,
         )
         | (
@@ -704,7 +732,8 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
             | AccessRule::Not { .. }
             | AccessRule::Compare { .. }
             | AccessRule::NullCheck { .. }
-            | AccessRule::In { .. },
+            | AccessRule::In { .. }
+            | AccessRule::Exists { .. },
         ) => None,
 
         (AccessRule::Private, _) | (_, AccessRule::Private) => Some(AccessRule::Private),

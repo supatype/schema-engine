@@ -440,6 +440,15 @@ pub enum AccessRule {
         column: String,
         source: MembershipSource,
     },
+    /// The source set is non-empty, independent of any column.
+    ///
+    /// `In<>` can only ask "is this row's value in the set", which is not the same
+    /// question. Payload's site-access rule guards on `user.sites?.length > 0`
+    /// before granting either branch; without that guard an editor with no sites
+    /// still matches a sibling `IsNull<field>` branch and sees unassigned rows.
+    Exists {
+        source: MembershipSource,
+    },
     /// `IS NULL` / `IS NOT NULL` on an operand.
     ///
     /// Its own variant rather than a `CompareOp`, because SQL null comparison is
@@ -490,6 +499,74 @@ pub enum Operand {
     Claim { path: String },
     /// A constant supplied in the schema.
     Literal { value: LiteralValue },
+
+    /// `now()` — transaction start time.
+    ///
+    /// Deliberately not `clock_timestamp()`: that is VOLATILE, which would make the
+    /// generated `can_*` functions' `STABLE` declaration a lie and defeat the
+    /// scalar-subquery wrapping that has the planner evaluate this once per query.
+    /// A closed operand set is what prevents anyone reaching for the volatile one.
+    Now,
+
+    /// `date_trunc(unit, now())` — the start of the current day, week, month or year.
+    StartOf { unit: TruncUnit },
+
+    /// `now() - INTERVAL 'n unit'`.
+    Ago { amount: u32, unit: TimeUnit },
+
+    /// `now() + INTERVAL 'n unit'`.
+    FromNow { amount: u32, unit: TimeUnit },
+}
+
+/// Granularity for [`Operand::StartOf`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TruncUnit {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl TruncUnit {
+    pub fn sql(self) -> &'static str {
+        match self {
+            TruncUnit::Day => "day",
+            TruncUnit::Week => "week",
+            TruncUnit::Month => "month",
+            TruncUnit::Year => "year",
+        }
+    }
+}
+
+/// Interval unit for [`Operand::Ago`] / [`Operand::FromNow`].
+///
+/// A closed set, so the rendered interval is assembled from a parsed integer and a
+/// keyword chosen here — the author's text never reaches Postgres.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TimeUnit {
+    Seconds,
+    Minutes,
+    Hours,
+    Days,
+    Weeks,
+    Months,
+    Years,
+}
+
+impl TimeUnit {
+    pub fn sql(self) -> &'static str {
+        match self {
+            TimeUnit::Seconds => "seconds",
+            TimeUnit::Minutes => "minutes",
+            TimeUnit::Hours => "hours",
+            TimeUnit::Days => "days",
+            TimeUnit::Weeks => "weeks",
+            TimeUnit::Months => "months",
+            TimeUnit::Years => "years",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

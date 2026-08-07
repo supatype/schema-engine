@@ -263,6 +263,43 @@ pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule)
             format!("{} {test}", operand_to_expr(operand))
         }
         AccessRule::In { column, source } => membership_to_expr(ast, model, column, source),
+        AccessRule::Exists { source } => set_exists_expr(ast, model, source),
+    }
+}
+
+/// "The source set is non-empty" — no column involved.
+fn set_exists_expr(ast: &SchemaAst, model: &ModelAst, source: &MembershipSource) -> String {
+    match source {
+        MembershipSource::Claim { path } => format!(
+            "EXISTS (SELECT 1 FROM jsonb_array_elements_text(\
+             COALESCE(auth.claim({}), '[]'::jsonb)))",
+            quote_literal(path)
+        ),
+
+        // A fixed set's emptiness is known at generation time, so it folds to a
+        // constant rather than asking the database a question with one answer.
+        MembershipSource::Literal { values } => {
+            if values.is_empty() { "FALSE" } else { "TRUE" }.to_string()
+        }
+
+        MembershipSource::Rows { table, filter, .. } => {
+            let table_esc = table.replace('"', "\"\"");
+            let mut sql =
+                format!("EXISTS (SELECT 1 FROM \"{POLICY_SCHEMA}\".\"{table_esc}\"");
+            if let Some(rule) = filter {
+                let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
+                let inner_expr = match inner_model {
+                    Some(m) => access_rule_to_expr(ast, m, rule),
+                    None => access_rule_to_expr(ast, model, rule),
+                };
+                sql.push_str(&format!(
+                    " WHERE ({})",
+                    qualify_bare_columns(&inner_expr, table)
+                ));
+            }
+            sql.push(')');
+            sql
+        }
     }
 }
 
@@ -486,13 +523,24 @@ fn operand_to_expr(operand: &Operand) -> String {
         // as a *set* goes through the membership path instead, which needs the
         // jsonb form.
         Operand::Claim { path } => format!("auth.claim_text({})", quote_literal(path)),
-        Operand::Literal { value } => match value {
-            LiteralValue::Bool(b) => if *b { "TRUE" } else { "FALSE" }.to_string(),
-            // `{:?}` on f64 keeps integers as `1` rather than `1.0`, so a whole
-            // number compares against an integer column without a cast.
-            LiteralValue::Number(n) => format!("{n:?}").trim_end_matches(".0").to_string(),
-            LiteralValue::Text(t) => quote_literal(t),
-        },
+        Operand::Literal { value } => literal_to_sql(value),
+
+        // Each temporal operand is one scalar subquery, so the planner evaluates it
+        // once per query as an InitPlan rather than per row — the same reason
+        // `auth.uid()` is wrapped.
+        Operand::Now => "(SELECT now())".to_string(),
+        Operand::StartOf { unit } => {
+            format!("(SELECT date_trunc('{}', now()))", unit.sql())
+        }
+        // The interval is assembled from a parsed integer and a keyword from the
+        // closed unit set. No author-supplied text reaches Postgres here, which is
+        // what keeps this from being a small escape hatch.
+        Operand::Ago { amount, unit } => {
+            format!("(SELECT now() - INTERVAL '{amount} {}')", unit.sql())
+        }
+        Operand::FromNow { amount, unit } => {
+            format!("(SELECT now() + INTERVAL '{amount} {}')", unit.sql())
+        }
     }
 }
 
