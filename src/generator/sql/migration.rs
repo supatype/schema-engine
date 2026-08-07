@@ -223,6 +223,24 @@ fn render_can_function_lines(ast: &SchemaAst) -> Vec<String> {
     ]
 }
 
+/// Table privileges derived from the access rules.
+///
+/// Emitted after the tables exist, for the same reason the affordance functions
+/// are. Idempotent: a `REVOKE` of a privilege that is not held is a no-op, and the
+/// matching `GRANT` is what restores access when a rule is relaxed, so running this
+/// on every push is what keeps privileges tracking the schema.
+fn render_grant_lines(ast: &SchemaAst) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_table_grants(ast);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Table privileges derived from access rules (defence in depth)".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
 fn render_forward_operation_lines(
     diff: &DiffOutput,
     schema: &str,
@@ -290,6 +308,7 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     lines.push(String::new());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
     lines.extend(render_can_function_lines(ast));
+    lines.extend(render_grant_lines(ast));
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }

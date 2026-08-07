@@ -220,7 +220,7 @@ pub(crate) fn render_delete_policy_sql(
 /// between a policy that scales and one that does not, and it costs nothing.
 pub const AUTH_UID: &str = "(SELECT auth.uid())";
 
-/// The schema policies and affordance functions live in.
+/// The schema policies, affordance functions and grants live in.
 pub const POLICY_SCHEMA: &str = "public";
 
 /// `auth.role()`, wrapped for the same reason as [`AUTH_UID`].
