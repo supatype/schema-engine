@@ -137,6 +137,38 @@ async fn composition_and_comparisons_reach_the_database() {
     .await;
 }
 
+// An update policy has two halves. With one rule for both, "you may edit your own
+// posts" also decides what they may become, so a distinct result constraint has to
+// arrive as a distinct WITH CHECK.
+#[tokio::test]
+async fn update_using_and_check_are_separate_clauses() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        let (using_expr, check_expr): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)
+               FROM pg_policy WHERE polname = 'posts_update'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the Post update policy exists");
+
+        let using_expr = using_expr.unwrap_or_default();
+        let check_expr = check_expr.unwrap_or_default();
+
+        assert!(using_expr.contains("author_id"), "USING lost the row selection: {using_expr}");
+        assert!(check_expr.contains("title"), "WITH CHECK lost the constraint: {check_expr}");
+        assert_ne!(
+            using_expr, check_expr,
+            "the two halves collapsed into one predicate"
+        );
+    })
+    .await;
+}
+
 // Membership is the reason the DSL exists: "the rows this caller belongs to".
 #[tokio::test]
 async fn membership_compiles_to_a_correlated_semi_join() {

@@ -384,7 +384,20 @@ pub enum DefaultValueAst {
 pub struct AccessAst {
     pub read: Option<AccessRule>,
     pub create: Option<AccessRule>,
+    /// The `USING` clause of the update policy: which existing rows the caller
+    /// may modify.
     pub update: Option<AccessRule>,
+    /// The `WITH CHECK` clause, when it differs from `update`.
+    ///
+    /// An update policy has both: `USING` picks the rows that may be changed and
+    /// `WITH CHECK` constrains what they may be changed *into*. With one rule for
+    /// both, "you may edit your own posts" also silently means "you may reassign
+    /// one to somebody else" is refused — usually right, but it makes rules like
+    /// "an editor may move a post between their own sites" inexpressible. When
+    /// absent, `update` is used for both, which is the safe default and what every
+    /// existing schema means.
+    #[serde(default)]
+    pub update_check: Option<AccessRule>,
     pub delete: Option<AccessRule>,
 }
 

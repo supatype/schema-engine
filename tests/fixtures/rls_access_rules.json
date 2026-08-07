@@ -283,6 +283,18 @@
        "roles": [
         "admin"
        ]
+      },
+      "updateCheck": {
+       "type": "compare",
+       "op": "neq",
+       "left": {
+        "kind": "column",
+        "name": "title"
+       },
+       "right": {
+        "kind": "literal",
+        "value": ""
+       }
       }
      }
     }

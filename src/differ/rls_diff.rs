@@ -416,11 +416,25 @@ pub fn diff(
                     };
                     let db_expr_norm = normalise(db_expr, table);
 
+                    // An update policy has two halves. Comparing only USING meant a
+                    // change to the result constraint alone was invisible, so the
+                    // policy stayed as it was while the schema said otherwise.
+                    let check_differs = suffix == "update" && {
+                        let access = model.access();
+                        let expected_check = access
+                            .update_check
+                            .as_ref()
+                            .map(|c| normalise(&access_rule_to_expr(ast, model, c), table))
+                            .unwrap_or_else(|| expected_expr.clone());
+                        normalise(db_pol.check_expr.as_deref().unwrap_or(""), table)
+                            != expected_check
+                    };
+
                     // Adopt policies created before ownership markers existed: an
                     // unmarked policy sitting on a name we own gets rewritten (which
                     // stamps it), otherwise the differ would abandon every policy in
                     // every pre-existing project.
-                    if db_expr_norm != expected_expr || !db_pol.managed {
+                    if db_expr_norm != expected_expr || check_differs || !db_pol.managed {
                         // Expression changed — recreate. CreateRlsPolicy already renders
                         // idempotent SQL (DROP POLICY IF EXISTS + CREATE POLICY), so we must
                         // NOT also emit a separate DropRlsPolicy here: operation ordering runs
@@ -645,6 +659,10 @@ pub(crate) fn intersect_access(a: &AccessAst, b: &AccessAst) -> AccessAst {
         read: intersect_rule(a.read.as_ref(), b.read.as_ref()),
         create: intersect_rule(a.create.as_ref(), b.create.as_ref()),
         update: intersect_rule(a.update.as_ref(), b.update.as_ref()),
+        // A junction row has no columns of its own to constrain, so splitting the
+        // result constraint from the row selection has nothing to say here. The
+        // intersected `update` governs both halves.
+        update_check: None,
         delete: intersect_rule(a.delete.as_ref(), b.delete.as_ref()),
     }
 }

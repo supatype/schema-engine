@@ -45,7 +45,14 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             out.push_str(&render_insert_policy_sql(schema, table, ast, model, rule));
         }
         if let Some(rule) = &access.update {
-            out.push_str(&render_update_policy_sql(schema, table, ast, model, rule));
+            out.push_str(&render_update_policy_sql(
+                schema,
+                table,
+                ast,
+                model,
+                rule,
+                access.update_check.as_ref(),
+            ));
         }
         if let Some(rule) = &access.delete {
             out.push_str(&render_delete_policy_sql(schema, table, ast, model, rule));
@@ -101,10 +108,17 @@ pub fn render_policy_migration_sql(
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
+    // The update policy's WITH CHECK comes from the model rather than the caller:
+    // the differ works one policy at a time and has only the USING rule to hand,
+    // so reading the pair here keeps the two halves from drifting apart.
+    let update_check = platform_access(model).update_check.clone();
+
     let sql = match suffix {
         "select" => render_select_policy_sql(schema, table, ast, model, rule),
         "insert" => render_insert_policy_sql(schema, table, ast, model, rule),
-        "update" => render_update_policy_sql(schema, table, ast, model, rule),
+        "update" => {
+            render_update_policy_sql(schema, table, ast, model, rule, update_check.as_ref())
+        }
         "delete" => render_delete_policy_sql(schema, table, ast, model, rule),
         other => return format!("-- unknown RLS policy suffix: {other}\n"),
     };
@@ -158,19 +172,26 @@ pub(crate) fn render_insert_policy_sql(
     )
 }
 
+/// `check` splits the result constraint from the row selection. `None` uses the
+/// same rule for both, which is what a schema written as a single rule means.
 pub(crate) fn render_update_policy_sql(
     schema: &str,
     table: &str,
     ast: &SchemaAst,
     model: &ModelAst,
     rule: &AccessRule,
+    check: Option<&AccessRule>,
 ) -> String {
-    let expr = access_rule_to_expr(ast, model, rule);
+    let using_expr = access_rule_to_expr(ast, model, rule);
+    let check_expr = match check {
+        Some(c) => access_rule_to_expr(ast, model, c),
+        None => using_expr.clone(),
+    };
     let name = format!("{table}_update");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
          CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
-           FOR UPDATE USING (\n    {expr}\n  ) WITH CHECK (\n    {expr}\n  );\n\n"
+           FOR UPDATE USING (\n    {using_expr}\n  ) WITH CHECK (\n    {check_expr}\n  );\n\n"
     )
 }
 
