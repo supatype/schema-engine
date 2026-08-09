@@ -347,7 +347,12 @@ async fn seed_promotes_only_real_admin_claims() {
             .expect("seed tolerates a missing auth.users");
 
         sqlx::raw_sql(
-            r#"CREATE SCHEMA auth;
+            // The integration database is shared, so this fixture must be able to
+            // run after another test has already created the auth schema. Without
+            // this the suite passes or fails on ordering, which is worse than a
+            // failure -- it makes a real regression indistinguishable from a race.
+            r#"CREATE SCHEMA IF NOT EXISTS auth;
+               DROP TABLE IF EXISTS auth.users CASCADE;
                CREATE TABLE auth.users (
                  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                  email TEXT UNIQUE,

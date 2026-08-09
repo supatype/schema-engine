@@ -74,10 +74,22 @@ async fn or_composition_reaches_the_database() {
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
         sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
 
+        // `pg_get_expr` qualifies a name only when it is not visible on the
+        // session's search_path, so with `auth` on the path it deparses
+        // `auth.role()` as bare `role()` and an assertion naming the schema fails
+        // against an expression that is perfectly correct. Emptying the path on the
+        // connection doing the read forces full qualification, so the assertion can
+        // check the schema it means rather than being loosened to tolerate both.
+        let mut conn = pool.acquire().await.expect("connection");
+        sqlx::raw_sql("SET search_path TO ''")
+            .execute(&mut *conn)
+            .await
+            .expect("search_path set");
+
         let expr: String = sqlx::query_scalar(
             "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'posts_select'",
         )
-        .fetch_one(&pool)
+        .fetch_one(&mut *conn)
         .await
         .expect("the Post read policy exists");
 
@@ -302,12 +314,20 @@ async fn stored_policies_evaluate_auth_once_per_query() {
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
         sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
 
+        // Same reason as above: force full qualification so `SELECT auth.uid()` is
+        // what the catalog hands back, rather than a search_path-dependent `uid()`.
+        let mut conn = pool.acquire().await.expect("connection");
+        sqlx::raw_sql("SET search_path TO ''")
+            .execute(&mut *conn)
+            .await
+            .expect("search_path set");
+
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
             "SELECT polname, pg_get_expr(polqual, polrelid)
                FROM pg_policy
               WHERE pg_get_expr(polqual, polrelid) LIKE '%uid()%'",
         )
-        .fetch_all(&pool)
+        .fetch_all(&mut *conn)
         .await
         .unwrap();
 
