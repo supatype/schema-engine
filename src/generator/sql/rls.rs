@@ -671,9 +671,89 @@ pub fn generate_can_functions(ast: &SchemaAst) -> String {
             let expr = access_rule_to_expr(ast, model, rule);
             out.push_str(&render_can_function(schema, table, op, &expr));
         }
+
+        out.push_str(&render_field_can_functions(ast, model, schema, table));
     }
 
     out
+}
+
+/// Per-column affordance functions, one pair per field rule.
+///
+/// These are the functions the masking rewrite calls: `can_read_posts__salary(posts)`
+/// decides whether a caller sees the column at all, `can_write_posts__salary(posts)`
+/// whether they may change it. Studio calls the same functions to decide whether to
+/// render a value, a lock, or a disabled input, so what the UI shows and what the
+/// database enforces are one expression rather than two that drift.
+///
+/// **Write implies read, by construction.** The write body is conjoined with the read
+/// rule rather than checked against it: "does this write rule imply this read rule" is
+/// an implication between two arbitrary predicates and is not decidable in general.
+/// Conjoining makes write-without-read unrepresentable, which in turn removes the
+/// hazard that a caller who owns a row can hold write permission on a column they
+/// cannot see -- round-tripping a value they were never shown and destroying it.
+fn render_field_can_functions(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    schema: &str,
+    table: &str,
+) -> String {
+    let mut out = String::new();
+
+    for (column, rules) in &platform_access(model).fields {
+        let read_expr = rules
+            .read
+            .as_ref()
+            .map(|rule| access_rule_to_expr(ast, model, rule));
+
+        // No `read` rule means the column is as readable as the table, so the
+        // affordance is unconditionally true rather than absent -- a UI should never
+        // have to distinguish "allowed" from "no function".
+        out.push_str(&render_field_can_function(
+            schema,
+            table,
+            "read",
+            column,
+            read_expr.as_deref().unwrap_or("TRUE"),
+        ));
+
+        if let Some(rule) = rules.write.as_ref() {
+            let write_expr = access_rule_to_expr(ast, model, rule);
+            let conjoined = match read_expr.as_deref() {
+                Some(read) => format!("({write_expr}) AND ({read})"),
+                None => write_expr,
+            };
+            out.push_str(&render_field_can_function(
+                schema, table, "write", column, &conjoined,
+            ));
+        }
+    }
+
+    out
+}
+
+/// `can_<op>_<table>__<column>`.
+///
+/// Double underscore between table and column so a table named `posts_salary`
+/// cannot collide with column `salary` of table `posts`.
+fn render_field_can_function(
+    schema: &str,
+    table: &str,
+    op: &str,
+    column: &str,
+    expr: &str,
+) -> String {
+    let name = format!("can_{op}_{table}__{column}");
+    let alias = table.replace('"', "\"\"");
+    format!(
+        "CREATE OR REPLACE FUNCTION \"{schema}\".\"{name}\"(\"{table}\" \"{schema}\".\"{table}\")
+           RETURNS boolean LANGUAGE sql STABLE AS $can$
+             SELECT {expr}
+               FROM (SELECT ($1).*) AS \"{alias}\";
+           $can$;
+
+"
+    )
 }
 
 /// The row is expanded into a one-row derived table aliased with the table's own
