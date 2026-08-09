@@ -699,6 +699,9 @@ pub(crate) fn intersect_access(a: &AccessAst, b: &AccessAst) -> AccessAst {
         // intersected `update` governs both halves.
         update_check: None,
         delete: intersect_rule(a.delete.as_ref(), b.delete.as_ref()),
+        // A junction row carries no columns of its own, so there is nothing for a
+        // field rule to narrow. Neither parent's field rules can apply here.
+        fields: Default::default(),
     }
 }
 

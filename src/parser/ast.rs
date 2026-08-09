@@ -399,6 +399,24 @@ pub struct AccessAst {
     #[serde(default)]
     pub update_check: Option<AccessRule>,
     pub delete: Option<AccessRule>,
+    /// Per-column rules, keyed by column name.
+    ///
+    /// Enforced by column privileges, which belong to a database role -- so the
+    /// only distinction available is `anon` against `authenticated`. The CLI
+    /// rejects anything finer at extract, so whatever arrives here is compilable.
+    #[serde(default)]
+    pub fields: IndexMap<String, FieldAccessAst>,
+}
+
+/// `read` / `write` rules for one column.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldAccessAst {
+    pub read: Option<AccessRule>,
+    /// Covers `INSERT` and `UPDATE` together: a column a caller may not set is one
+    /// they may not set on either path, and splitting them would let a row be
+    /// created with a value its author could never have edited in.
+    pub write: Option<AccessRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
