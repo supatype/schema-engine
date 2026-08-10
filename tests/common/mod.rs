@@ -106,6 +106,35 @@ where
     drop(container);
 }
 
+/// Create `supatype_mask`, as a provisioned project does through its bootstrap migration.
+///
+/// Returns false when the image cannot provide it, so a test that needs field-level access
+/// can skip rather than fail. Deliberately not fatal and deliberately not called for every
+/// pool: the extension ships from **`supatype-postgres`**, so requiring it here would make
+/// this whole suite red until that image is republished — and the tests that would break
+/// are the policy-convergence ones, which have nothing to do with field rules.
+///
+/// A schema that declares `fields` rules genuinely refuses to apply without it. That is the
+/// capability probe working, not an accident, which is why only the field-access tests are
+/// gated on this.
+pub async fn mask_extension_available(pool: &sqlx::PgPool) -> bool {
+    match sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS supatype_mask")
+        .execute(pool)
+        .await
+    {
+        Ok(_) => true,
+        Err(e) => {
+            eprintln!(
+                "SKIP field-level access: image {} cannot provide supatype_mask ({e}). \
+                 Point INTEGRATION_POSTGRES_IMAGE at an image built from supatype-postgres \
+                 at or after the extension landed.",
+                integration_postgres_image()
+            );
+            false
+        }
+    }
+}
+
 async fn with_ephemeral_database<F, Fut>(f: F)
 where
     F: FnOnce(sqlx::PgPool) -> Fut,

@@ -259,6 +259,18 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         return Err(engine_error(e));
     }
 
+    // Which mechanism is enforcing the field rules, probed rather than assumed. A failure
+    // here is a missing diagnostic, not a broken push: the enforcement itself is the
+    // labels, which are already applied in this transaction.
+    if let Err(e) = migration_history::record_field_enforcement(
+        &mut *tx,
+        migration_history::labelled_column_count(&ast),
+    )
+    .await
+    {
+        eprintln!("Warning: failed to record field-enforcement capability: {e}");
+    }
+
     let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
     let studio_metadata = admin_cfg
         .clone()

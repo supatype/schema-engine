@@ -154,3 +154,145 @@ fn privilege_stmt(privilege: &str, table: &str, role: &str, allowed: bool) -> St
         format!("REVOKE {privilege} ON {table} FROM {role}")
     }
 }
+
+// ─── Column privileges for field write rules (defence in depth) ──────────────
+
+/// `fields.write` as column privileges, layered under the masking extension.
+///
+/// **Writes only.** A column `REVOKE` for reads makes `GET /table` with no `select` return
+/// 403 for the whole table, which is the break the field-access design exists to avoid.
+/// Writes have no such problem: `PATCH`/`POST` naming a column the role may not write is
+/// *supposed* to fail.
+///
+/// This is a second layer, not the mechanism. Enforcement is the query rewrite, which can
+/// express `Role<"admin">`; a column privilege cannot, because an application role is a JWT
+/// claim and an admin still connects as `authenticated`. So only what a *database role*
+/// provably can never write is revoked here.
+pub fn generate_column_grants(ast: &SchemaAst) -> String {
+    let schema = super::rls::POLICY_SCHEMA;
+    let mut blocks: Vec<String> = Vec::new();
+
+    for model in &ast.models {
+        let access = platform_access(model);
+        if access.fields.is_empty() {
+            continue;
+        }
+        let table = db_table_name(model);
+
+        for (op, table_rule) in [
+            ("INSERT", access.create.as_ref()),
+            ("UPDATE", access.update.as_ref()),
+        ] {
+            // No table-level rule means `generate_table_grants` revoked the operation from
+            // both roles. Granting a column complement back would *widen* what the table
+            // rules just closed, so there is nothing to do.
+            let Some(table_rule) = table_rule else { continue };
+
+            for role in ["anon", "authenticated"] {
+                if role == "anon" && !reachable_by_anon(table_rule) {
+                    // Same reason: `anon` does not hold the operation at table level.
+                    continue;
+                }
+
+                let excluded: Vec<&str> = access
+                    .fields
+                    .iter()
+                    .filter(|(_, rules)| {
+                        rules
+                            .write
+                            .as_ref()
+                            .is_some_and(|write| !write_satisfiable(op, role, write))
+                    })
+                    .map(|(column, _)| column.as_str())
+                    .collect();
+
+                if excluded.is_empty() {
+                    continue;
+                }
+
+                blocks.push(render_column_grant(schema, table, op, role, &excluded));
+            }
+        }
+    }
+
+    if blocks.is_empty() {
+        return String::new();
+    }
+
+    format!(
+        "DO $colgrants$
+DECLARE
+  granted text;
+BEGIN
+{}END
+$colgrants$;
+",
+        blocks.join("")
+    )
+}
+
+/// Whether any caller connecting as `role` could ever satisfy this write rule for `op`.
+///
+/// Conservative in one direction only, like the table grants: a wrong revoke breaks a working
+/// app, a missed one just leaves today's behaviour. So this answers true unless the rule
+/// *proves* otherwise.
+fn write_satisfiable(op: &str, role: &str, write: &AccessRule) -> bool {
+    if role == "anon" {
+        return reachable_by_anon(write);
+    }
+
+    // `authenticated` is every signed-in caller, so an application-role or ownership rule is
+    // satisfiable by *some* of them and the column privilege must stay.
+    if matches!(write, AccessRule::Private) {
+        return false;
+    }
+
+    // On INSERT there is no row yet: the masking extension evaluates the write predicate
+    // against `NULL::t`, so a rule that reads the row yields NULL for every caller. Nobody
+    // can write the column on this path, which makes the privilege provably unusable —
+    // whereas on UPDATE the same rule is satisfiable and the privilege must stay.
+    if op == "INSERT" && crate::differ::field_access_diff::rule_is_row_dependent(write) {
+        return false;
+    }
+
+    true
+}
+
+/// The complement is computed from `information_schema.columns` at apply time, not from the
+/// AST.
+///
+/// A column this generator never saw — added out of band, or by a plugin — must still be
+/// granted, or the layer meant to be defence in depth silently becomes the thing that breaks
+/// writes. Reading the live column list also makes the statement converge on every push
+/// without tracking what it granted last time.
+fn render_column_grant(
+    schema: &str,
+    table: &str,
+    op: &str,
+    role: &str,
+    excluded: &[&str],
+) -> String {
+    let quoted_table = table.replace('"', "\"\"");
+    let exclusion_list = excluded
+        .iter()
+        .map(|column| format!("'{}'", column.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+    SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
+      INTO granted
+      FROM information_schema.columns
+     WHERE table_schema = '{schema}'
+       AND table_name = '{table_literal}'
+       AND column_name NOT IN ({exclusion_list});
+    EXECUTE 'REVOKE {op} ON \"{schema}\".\"{quoted_table}\" FROM {role}';
+    IF granted IS NOT NULL THEN
+      EXECUTE format('GRANT {op} (%s) ON \"{schema}\".\"{quoted_table}\" TO {role}', granted);
+    END IF;
+  END IF;
+",
+        table_literal = table.replace('\'', "''")
+    )
+}

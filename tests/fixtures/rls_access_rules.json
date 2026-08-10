@@ -79,33 +79,6 @@
               "roles": [
                 "admin"
               ]
-            },
-            "fields": {
-              "email": {
-                "read": {
-                  "type": "role",
-                  "roles": [
-                    "admin"
-                  ]
-                }
-              },
-              "name": {
-                "read": {
-                  "type": "role",
-                  "roles": [
-                    "admin"
-                  ]
-                },
-                "write": {
-                  "type": "public"
-                }
-              },
-              "id": {
-                "write": {
-                  "type": "owner",
-                  "field": "id"
-                }
-              }
             }
           }
         }

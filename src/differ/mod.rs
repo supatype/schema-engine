@@ -3,6 +3,7 @@ pub mod constraint_diff;
 pub mod doctor;
 pub mod enum_diff;
 pub mod index_diff;
+pub mod field_access_diff;
 pub mod integrity;
 pub mod ordering;
 pub mod risk_analyser;
@@ -243,6 +244,7 @@ pub fn diff_with_previous(
     constraint_diff::diff(ast, db, &mut ops)?;
     index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
+    field_access_diff::validate(ast, db, &mut warnings)?;
     trigger_diff::diff(ast, db, &mut ops)?;
 
     let ordered_ops = ordering::topological_sort(ops)?;

@@ -756,6 +756,168 @@ fn render_field_can_function(
     )
 }
 
+// ─── Field-level enforcement: security labels ────────────────────────────────
+
+/// The extension that enforces field rules, and the label provider it registers.
+pub const MASK_EXTENSION: &str = "supatype_mask";
+pub const MASK_PROVIDER: &str = "supatype";
+
+/// A qualified, quoted reference to a generated per-column predicate.
+fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> String {
+    format!(
+        "{schema}.\"can_{op}_{t}__{c}\"",
+        t = table.replace('"', "\"\""),
+        c = column.replace('"', "\"\"")
+    )
+}
+
+/// `SECURITY LABEL FOR supatype` per field rule — what makes a `fields` rule actually
+/// enforced rather than merely described.
+///
+/// The label points the extension at the predicates [`generate_can_functions`] already
+/// emits, so the rule language stays here in Rust and the extension stays a rewrite.
+/// `pg_dump` carries security labels, so a masked column stays masked across a
+/// dump/restore without a push.
+///
+/// **A read rule is named only when one exists.** A `write`-only rule leaves reads
+/// unrestricted, and labelling it with a trivially-true `READ` predicate would cost a
+/// function call per row per read to answer a question nobody asked. The `can_read_*`
+/// function is still generated — Studio wants a uniform affordance surface — it just
+/// does not appear in the label.
+pub fn generate_security_labels(ast: &SchemaAst) -> String {
+    let schema = POLICY_SCHEMA;
+    let mut statements: Vec<String> = Vec::new();
+    let mut keep: Vec<String> = Vec::new();
+
+    for model in &ast.models {
+        let table = db_table_name(model);
+
+        for (column, rules) in &platform_access(model).fields {
+            let mut parts: Vec<String> = Vec::new();
+
+            if rules.read.is_some() {
+                parts.push(format!(
+                    "READ {}",
+                    field_predicate_ref(schema, "read", table, column)
+                ));
+            }
+            if rules.write.is_some() {
+                parts.push(format!(
+                    "WRITE {}",
+                    field_predicate_ref(schema, "write", table, column)
+                ));
+            }
+            if parts.is_empty() {
+                continue;
+            }
+
+            keep.push(format!(
+                "({}, {})",
+                sql_string(table),
+                sql_string(column)
+            ));
+            statements.push(format!(
+                "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN \"{schema}\".\"{t}\".\"{c}\"\n  \
+                 IS 'MASK {body}';",
+                t = table.replace('"', "\"\""),
+                c = column.replace('"', "\"\""),
+                body = parts.join(" ")
+            ));
+        }
+    }
+
+    let mut out = String::new();
+
+    // Refusing the push is the third tier in the field-access plan, and the only honest
+    // answer: a schema that declares a column masked, applied to a database that cannot
+    // mask it, is a database whose security posture silently differs from its source.
+    // Never silently unmask.
+    if !statements.is_empty() {
+        out.push_str(&format!(
+            "DO $mask_probe$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = '{MASK_EXTENSION}') THEN
+    RAISE EXCEPTION 'field-level access requires the {MASK_EXTENSION} extension'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL  = '{n} column rule(s) in this schema would not be enforced.',
+            HINT    = 'Use the supatype/postgres image, or: add {MASK_EXTENSION} to shared_preload_libraries, restart, then CREATE EXTENSION {MASK_EXTENSION};';
+  END IF;
+END
+$mask_probe$;
+
+",
+            n = statements.len()
+        ));
+    }
+
+    out.push_str(&render_stale_label_clear(&keep));
+
+    for statement in &statements {
+        out.push_str(statement);
+        out.push_str("\n\n");
+    }
+
+    out
+}
+
+/// Drop every label this push does not re-assert, so removing a field rule stops the
+/// masking rather than leaving a column masked by a rule that no longer exists.
+///
+/// **Every label under our provider is ours.** Policies need a managed-object marker
+/// because `pg_policy` is a shared namespace where a developer's hand-written policy has
+/// to survive a push; a security label provider is a namespace this extension owns
+/// outright, so there is no hand-written label under `supatype` to protect. Labels under
+/// any other provider, and in any other schema, are untouched.
+///
+/// Emitted even when the schema has no field rules at all — that is exactly the case
+/// where the last rule was just removed. Guarded on the extension existing, because
+/// without the provider registered a `SECURITY LABEL` statement cannot even parse; and
+/// without the provider there can be no labels to clear.
+fn render_stale_label_clear(keep: &[String]) -> String {
+    let schema = POLICY_SCHEMA;
+    let exclusion = if keep.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "
+         AND (c.relname, a.attname) NOT IN ({})",
+            keep.join(", ")
+        )
+    };
+
+    format!(
+        "DO $mask_clear$
+DECLARE
+  stale record;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = '{MASK_EXTENSION}') THEN
+    RETURN;
+  END IF;
+
+  FOR stale IN
+    SELECT c.relname AS tbl, a.attname AS col
+      FROM pg_seclabel l
+      JOIN pg_class c ON c.oid = l.objoid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      JOIN pg_attribute a ON a.attrelid = l.objoid AND a.attnum = l.objsubid
+     WHERE l.provider = '{MASK_PROVIDER}'
+       AND l.classoid = 'pg_class'::regclass
+       AND n.nspname = '{schema}'{exclusion}
+  LOOP
+    EXECUTE format('SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN %I.%I.%I IS NULL',
+                   '{schema}', stale.tbl, stale.col);
+  END LOOP;
+END
+$mask_clear$;
+
+"
+    )
+}
+
+fn sql_string(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 /// The row is expanded into a one-row derived table aliased with the table's own
 /// name, so the policy expression works unchanged inside the function body.
 ///

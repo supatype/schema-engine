@@ -465,3 +465,154 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
     })
     .await;
 }
+
+// ─── Field-level access ──────────────────────────────────────────────────────
+
+/// Read one column as a given application role, through the same path an app takes:
+/// claims in the GUC the generated `auth.role()` reads, and the switched database role.
+///
+/// Selected by `id`, not by `name`: `name` carries a read rule of its own, so for a
+/// non-admin it masks to NULL and `WHERE name = 'probe'` matches nothing. That is the
+/// oracle-closing working as intended, and it makes a masked column useless as a filter.
+async fn read_email_as(pool: &sqlx::PgPool, app_role: &str, id: &str) -> Option<String> {
+    let mut tx = pool.begin().await.expect("begin");
+    let claims = format!(r#"{{"role":"{app_role}","app_metadata":{{"role":"{app_role}"}}}}"#);
+    sqlx::raw_sql(&format!(
+        "SET LOCAL request.jwt.claims = '{claims}'; SET LOCAL ROLE authenticated;"
+    ))
+    .execute(&mut *tx)
+    .await
+    .expect("assume the caller's identity");
+
+    let email: Option<String> =
+        sqlx::query_scalar("SELECT email FROM public.users WHERE id = $1::uuid")
+            .bind(id)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("the probe row is readable");
+
+    tx.rollback().await.expect("rollback");
+    email
+}
+
+async fn supatype_labels(pool: &sqlx::PgPool) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT a.attname::text, l.label
+           FROM pg_seclabel l
+           JOIN pg_attribute a ON a.attrelid = l.objoid AND a.attnum = l.objsubid
+          WHERE l.provider = 'supatype'
+          ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read security labels")
+}
+
+/// A generated `can_read_*` function nobody points the extension at enforces nothing, so
+/// this asserts the whole chain: rule -> predicate -> security label -> masked value.
+/// The field-rule fixture. Separate from [`FIXTURE`] because a schema declaring field rules
+/// refuses to apply without `supatype_mask`, and the convergence tests must not depend on an
+/// extension that ships from another repo.
+const FIELD_FIXTURE: &str = include_str!("fixtures/rls_field_rules.json");
+
+#[tokio::test]
+async fn field_rules_mask_a_column_end_to_end() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            return;
+        }
+        let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("migration applies");
+
+        let labels = supatype_labels(&pool).await;
+        assert!(
+            labels
+                .iter()
+                .any(|(col, label)| col == "email" && label.contains("can_read_users__email")),
+            "the read rule on users.email produced no security label, got: {labels:#?}"
+        );
+        // A write-only rule must not name a read predicate, or every read of the column
+        // pays for a predicate that always answers true.
+        assert!(
+            labels
+                .iter()
+                .any(|(col, label)| col == "id" && !label.contains("READ")),
+            "the write-only rule on users.id named a read predicate, got: {labels:#?}"
+        );
+
+        let probe: String = sqlx::query_scalar(
+            "INSERT INTO public.users (email, name) VALUES ('probe@example.com', 'probe')              RETURNING id::text",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("seed a probe row");
+
+        // The rule is `Role<"admin">`, so identity decides, and the column is present
+        // either way -- never an error, which is what would break `SELECT *`.
+        assert_eq!(
+            read_email_as(&pool, "admin", &probe).await.as_deref(),
+            Some("probe@example.com"),
+            "an admin could not read a column their own rule allows"
+        );
+        assert_eq!(
+            read_email_as(&pool, "authenticated", &probe).await,
+            None,
+            "a non-admin read the column the field rule restricts"
+        );
+    })
+    .await;
+}
+
+/// Removing a rule has to stop the masking. Nothing diffs labels, so this is the only
+/// thing standing between a deleted rule and a column masked forever by a rule that no
+/// longer exists.
+#[tokio::test]
+async fn removing_a_field_rule_clears_its_label() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            return;
+        }
+        let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
+        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("first push");
+        let probe: String = sqlx::query_scalar(
+            "INSERT INTO public.users (email, name) VALUES ('probe@example.com', 'probe')              RETURNING id::text",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("seed a probe row");
+        assert!(!supatype_labels(&pool).await.is_empty(), "first push set no labels");
+
+        let mut relaxed = parser::parse(FIELD_FIXTURE).expect("fixture parses");
+        for model in &mut relaxed.models {
+            supatype_engine::parser::accessors::platform_access_mut(model)
+                .fields
+                .clear();
+        }
+
+        let db = introspector::introspect(&pool, "public").await.unwrap();
+        let second = differ::diff(&relaxed, &db).unwrap();
+        let sql = migration::forward_sql(&second, false, "public", &relaxed).unwrap();
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("second push applies");
+
+        assert!(
+            supatype_labels(&pool).await.is_empty(),
+            "labels survived the removal of every field rule"
+        );
+        assert_eq!(
+            read_email_as(&pool, "authenticated", &probe).await.as_deref(),
+            Some("probe@example.com"),
+            "the column stayed masked after its rule was removed"
+        );
+    })
+    .await;
+}

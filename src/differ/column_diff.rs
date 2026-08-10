@@ -67,7 +67,7 @@ fn has_index_flag(field: &FieldAst) -> bool {
     }
 }
 
-fn field_required(field: &FieldAst) -> Option<bool> {
+pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
     match field {
         FieldAst::Text(f)
         | FieldAst::Email(f)
@@ -430,7 +430,7 @@ fn detect_changes(
 ) -> serde_json::Value {
     let mut changes = serde_json::Map::new();
 
-    if let Some(required) = field_required(field) {
+    if let Some(required) = field_is_required(field) {
         let schema_nullable = !required;
         let db_nullable = db_col.nullable;
         if schema_nullable != db_nullable {
@@ -814,7 +814,7 @@ pub fn diff(
     for col in &added {
         if !renamed_added.contains(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
-                if field_required(field) == Some(true)
+                if field_is_required(field) == Some(true)
                     && add_column_backfill_default(field).is_none()
                 {
                     warnings.push(required_field_existing_table_warning(
@@ -905,7 +905,7 @@ pub fn diff(
                 .and_then(|n| n.get("to"))
                 .and_then(|v| v.as_str())
                 == Some("not_null")
-                && field_required(field) == Some(true)
+                && field_is_required(field) == Some(true)
                 && add_column_backfill_default(field).is_none()
             {
                 warnings.push(required_field_existing_table_warning(

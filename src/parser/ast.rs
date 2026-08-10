@@ -401,9 +401,16 @@ pub struct AccessAst {
     pub delete: Option<AccessRule>,
     /// Per-column rules, keyed by column name.
     ///
-    /// Enforced by column privileges, which belong to a database role -- so the
-    /// only distinction available is `anon` against `authenticated`. The CLI
-    /// rejects anything finer at extract, so whatever arrives here is compilable.
+    /// Enforced by a query rewrite in the `supatype_mask` extension, not by column
+    /// privileges: privileges belong to a database role and every signed-in caller
+    /// connects as the same `authenticated`, so an application role like
+    /// `Role<"admin">` cannot be expressed as one. A column `REVOKE` also makes
+    /// `GET /table` with no `select` return 403 for the whole table, which is a
+    /// break, not a restriction.
+    ///
+    /// So the full rule language is available here. The engine compiles each rule to
+    /// a `can_read_<table>__<column>` / `can_write_<table>__<column>` predicate and a
+    /// `SECURITY LABEL` pointing the extension at it.
     #[serde(default)]
     pub fields: IndexMap<String, FieldAccessAst>,
 }

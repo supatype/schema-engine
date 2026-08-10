@@ -359,6 +359,80 @@ pub fn ensure_schema_state_studio_columns_sql() -> String {
     )
 }
 
+/// What this database can actually enforce, as opposed to what the schema declares.
+pub fn ensure_schema_state_capabilities_column_sql() -> String {
+    format!("ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS capabilities JSONB")
+}
+
+/// Record how field-level access is enforced here, from a live probe rather than an
+/// assumption.
+///
+/// Studio and `explain` need to state which mechanism is in force, and a value derived
+/// on demand is a value that can disagree with the push that actually applied the
+/// schema. Writing it makes the tier a recorded fact.
+///
+/// A database with field rules cannot reach here without the extension — the migration
+/// refuses to apply first — so `unenforced` means only "no field rules in this schema".
+/// That distinction is the point: a deployment that quietly stopped enforcing must be
+/// visible, not inferred.
+pub async fn record_field_enforcement(
+    conn: &mut sqlx::PgConnection,
+    labelled_columns: usize,
+) -> Result<()> {
+    let extension: Option<String> = sqlx::query_scalar(
+        "SELECT extversion FROM pg_extension WHERE extname = $1",
+    )
+    .bind(crate::generator::sql::rls::MASK_EXTENSION)
+    .fetch_optional(&mut *conn)
+    .await?
+    .flatten();
+
+    let tier = if labelled_columns == 0 {
+        "unenforced"
+    } else if extension.is_some() {
+        "extension"
+    } else {
+        // Unreachable via a push, which refuses first. Reachable if someone dropped the
+        // extension afterwards, and worth recording honestly rather than asserting.
+        "broken"
+    };
+
+    let record = serde_json::json!({
+        "fieldMasking": {
+            "tier": tier,
+            "extension": crate::generator::sql::rls::MASK_EXTENSION,
+            "extensionVersion": extension,
+            "labelledColumns": labelled_columns,
+        }
+    });
+
+    // Merged rather than replaced, so a future capability recorded elsewhere survives.
+    let sql = format!(
+        "UPDATE {SCHEMA}.schema_state \
+         SET capabilities = COALESCE(capabilities, '{{}}'::jsonb) || $1::jsonb \
+         WHERE id = 1"
+    );
+    sqlx::query(&sql).bind(record).execute(&mut *conn).await?;
+
+    Ok(())
+}
+
+/// How many columns the schema declares field rules for — the number recorded alongside
+/// the tier, and what makes "no field rules" distinguishable from "rules that stopped
+/// being enforced".
+pub fn labelled_column_count(ast: &crate::parser::ast::SchemaAst) -> usize {
+    ast.models
+        .iter()
+        .map(|model| {
+            crate::parser::accessors::platform_access(model)
+                .fields
+                .values()
+                .filter(|rules| rules.read.is_some() || rules.write.is_some())
+                .count()
+        })
+        .sum()
+}
+
 fn snapshot_hash(schema_snapshot: &serde_json::Value) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
@@ -888,6 +962,7 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     }
     sqlx::raw_sql(&create_schema_state_table_sql()).execute(pool).await?;
     sqlx::raw_sql(&ensure_schema_state_studio_columns_sql()).execute(pool).await?;
+    sqlx::raw_sql(&ensure_schema_state_capabilities_column_sql()).execute(pool).await?;
 
     for sql in ensure_all_migration_columns_sql() {
         sqlx::raw_sql(&sql).execute(pool).await?;

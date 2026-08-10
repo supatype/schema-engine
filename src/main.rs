@@ -501,6 +501,18 @@ async fn main() -> Result<()> {
                 return Err(e.context("Failed to save schema state cache"));
             }
 
+            // Which mechanism is enforcing the field rules, probed rather than assumed.
+            // A failure here is a missing diagnostic, not a broken push: the enforcement
+            // itself is the labels, which are already applied in this transaction.
+            if let Err(e) = migration_history::record_field_enforcement(
+                &mut *tx,
+                migration_history::labelled_column_count(&ast),
+            )
+            .await
+            {
+                eprintln!("Warning: failed to record field-enforcement capability: {e}");
+            }
+
             let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
             // Kept for the schema_state refresh after commit: Studio reads its schema
             // from `_supatype.schema_state`, which was only written on the up-to-date

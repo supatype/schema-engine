@@ -241,6 +241,59 @@ fn render_grant_lines(ast: &SchemaAst) -> Vec<String> {
     ]
 }
 
+/// Security labels for the field rules, emitted after the affordance functions they
+/// point at.
+///
+/// Includes the capability probe: a schema that declares a masked column, pushed to a
+/// database without the masking extension, fails here rather than applying and leaving
+/// the column readable.
+fn render_security_label_lines(ast: &SchemaAst) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_security_labels(ast);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Field-level access: security labels read by supatype_mask".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
+/// Everything re-asserted on every push rather than diffed.
+///
+/// These three are idempotent by construction — `CREATE OR REPLACE`, `GRANT`/`REVOKE`
+/// pairs, and `SECURITY LABEL` upserts — so re-running them is what keeps them tracking
+/// the schema instead of drifting from it.
+///
+/// Shared by both forward paths deliberately. They diverged before: the wrapped path
+/// applied the derived privileges and the outer-body path did not, and the outer body is
+/// what every real push actually runs (`push_storage_and_model_apply_body`), so the
+/// privileges were generated and never applied. Anything in this list belongs on every
+/// path that applies a migration.
+fn render_reasserted_lines(ast: &SchemaAst) -> Vec<String> {
+    let mut lines = render_can_function_lines(ast);
+    lines.extend(render_grant_lines(ast));
+    // Strictly after the table grants: these narrow a table-level write privilege to a
+    // column list, and the table grants would hand the whole table back if they ran after.
+    lines.extend(render_column_grant_lines(ast));
+    lines.extend(render_security_label_lines(ast));
+    lines
+}
+
+/// Column-level write privileges derived from the field rules — a second layer under the
+/// masking extension, for what a database role provably can never write.
+fn render_column_grant_lines(ast: &SchemaAst) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_column_grants(ast);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Column write privileges derived from field rules (defence in depth)".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
 fn render_forward_operation_lines(
     diff: &DiffOutput,
     schema: &str,
@@ -298,7 +351,7 @@ fn render_forward_operation_lines(
 fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
     let mut lines = render_forward_preamble(diff);
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_can_function_lines(ast));
+    lines.extend(render_reasserted_lines(ast));
     Ok(lines.join("\n"))
 }
 
@@ -307,8 +360,7 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     lines.push("BEGIN;".into());
     lines.push(String::new());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_can_function_lines(ast));
-    lines.extend(render_grant_lines(ast));
+    lines.extend(render_reasserted_lines(ast));
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }
