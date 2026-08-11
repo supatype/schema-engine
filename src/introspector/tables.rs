@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 
-const TABLES_QUERY: &str = "SELECT t.table_name
+const TABLES_QUERY: &str = "SELECT t.table_name,
+                obj_description(c.oid, 'pg_class') AS comment
          FROM information_schema.tables t
          JOIN pg_catalog.pg_namespace n
            ON n.nspname = t.table_schema
@@ -26,6 +27,12 @@ pub struct DbTable {
     pub schema: String,
     pub name: String,
     pub columns: Vec<DbColumn>,
+    /// The table's `COMMENT ON TABLE`, which is where Supatype records ownership.
+    ///
+    /// Read so the differ can tell a table it created from one it merely found. Without it,
+    /// pointing a push at someone else's database dropped every table not in the schema.
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,18 +47,19 @@ pub struct DbColumn {
 }
 
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTable>> {
-    let table_rows: Vec<(String,)> = sqlx::query_as(TABLES_QUERY)
+    let table_rows: Vec<(String, Option<String>)> = sqlx::query_as(TABLES_QUERY)
         .bind(schema)
         .fetch_all(&mut *conn)
         .await?;
 
     let mut tables = Vec::new();
-    for (name,) in table_rows {
+    for (name, comment) in table_rows {
         let columns = read_columns(conn, schema, &name).await?;
         tables.push(DbTable {
             schema: schema.to_string(),
             name,
             columns,
+            comment,
         });
     }
     Ok(tables)

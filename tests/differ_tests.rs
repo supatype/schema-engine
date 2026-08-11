@@ -38,6 +38,7 @@ fn test_timestamp_option_columns_not_treated_as_dropped() {
             DbTable {
                 schema: "public".into(),
                 name: "users".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![
                     col("id", "uuid"),
                     col("email", "text"),
@@ -49,6 +50,7 @@ fn test_timestamp_option_columns_not_treated_as_dropped() {
             DbTable {
                 schema: "public".into(),
                 name: "posts".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![
                     col("id", "uuid"),
                     col("title", "text"),
@@ -124,6 +126,7 @@ fn test_soft_delete_option_column_not_treated_as_dropped() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "articles".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 col("deleted_at", "timestamp with time zone"),
@@ -159,6 +162,7 @@ fn test_existing_index_not_regenerated_when_name_matches() {
             .map(|m| DbTable {
                 schema: "public".into(),
                 name: m.table_name().to_string(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("id", "uuid")],
             })
             .collect(),

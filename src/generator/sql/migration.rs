@@ -776,12 +776,17 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
         } => {
             let (ref_table_a, pk_a, type_a) = junction_ref_for_model(ast, table_a);
             let (ref_table_b, pk_b, type_b) = junction_ref_for_model(ast, table_b);
+            // Stamped like any other table Supatype creates. A junction table is *entirely* ours —
+            // it has no model of its own — so without the marker the ownership gate would refuse to
+            // drop it ever, and a removed many-to-many would leave its junction behind for good.
+            let marker = managed_comment("table", table, &[]);
             Ok(format!(
                 "CREATE TABLE IF NOT EXISTS \"{schema}\".\"{table}\" (\n    \
                  \"{fk_a}\" {type_a} NOT NULL REFERENCES \"{schema}\".\"{ref_table_a}\" (\"{pk_a}\") ON DELETE CASCADE,\n    \
                  \"{fk_b}\" {type_b} NOT NULL REFERENCES \"{schema}\".\"{ref_table_b}\" (\"{pk_b}\") ON DELETE CASCADE,\n    \
                  PRIMARY KEY (\"{fk_a}\", \"{fk_b}\")\n\
-                 );"
+                 );\n\n\
+                 COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{marker}';"
             ))
         }
         Operation::EnableExtension { name, .. } => {
@@ -945,6 +950,16 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         let comment = managed_comment("unique_index", table, &[]);
         statements.push(comment_on_index_sql(&idx_name, &comment, schema));
     }
+
+    // Stamp ownership, exactly as indexes, constraints and RLS policies already do.
+    //
+    // This is what lets the differ destroy this table later and refuse to destroy one it merely
+    // found. Without it, every table in the managed schema was a drop candidate — which on a
+    // database Supatype did not create is someone else's data.
+    let table_marker = managed_comment("table", table, &[]);
+    statements.push(format!(
+        "COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{table_marker}';"
+    ));
 
     Ok(statements.join("\n\n"))
 }

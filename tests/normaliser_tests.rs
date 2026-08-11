@@ -190,6 +190,7 @@ fn test_no_drop_id_on_noop_diff() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "article".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col_pk("id", "uuid", "gen_random_uuid()"),
                 col("title", "text"),
@@ -489,6 +490,7 @@ fn test_rename_column_comment_uses_ascii_arrow() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "thing".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col_pk("id", "uuid", "gen_random_uuid()"),
                 col("old_name", "text"),

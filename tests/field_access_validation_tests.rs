@@ -51,6 +51,7 @@ fn db_with_posts() -> DatabaseState {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: Vec::new(),
         }],
         ..Default::default()
