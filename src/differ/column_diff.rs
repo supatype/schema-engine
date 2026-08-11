@@ -928,6 +928,23 @@ pub fn diff(
                 ));
             }
 
+            // Modifying a column on a table Supatype did not create is the same class of loss as
+            // dropping one. `RecreateColumn` literally drops and re-adds the column, and an
+            // `AlterColumn` type change either rewrites the operator's data or fails outright —
+            // which is how this was found: a model declaring `id: UUID` against an existing
+            // `id serial` produced `cannot cast type integer to uuid` mid-migration, from a table
+            // the gate was supposed to be protecting.
+            //
+            // Additive stays allowed, as for `DropColumn` above: a table you do not own may gain a
+            // column; it may not have one changed underneath it.
+            if !managed {
+                warnings.push(format!(
+                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed                      by Supatype (no ownership marker) — leaving it alone. Run `supatype adopt` to                      bring the table under management, or point the model at a different table with                      `tableName`.",
+                    db_table.name, col_name
+                ));
+                continue;
+            }
+
             if conversion_strategy_name(&changes) == Some("recreate_column") {
                 let dependencies = discover_column_dependencies(model.table_name(), col_name, db);
                 ops.push(Operation::RecreateColumn {

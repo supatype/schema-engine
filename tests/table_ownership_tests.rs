@@ -193,3 +193,79 @@ async fn a_table_the_engine_creates_is_stamped() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_column_is_not_retyped_on_an_unmanaged_table() {
+    common::with_integration_pool(|pool| async move {
+        // Their table, under the name a model declares, with an incompatible column type: `id serial`
+        // where the model says UUID. Modifying it is the same class of loss as dropping it —
+        // `RecreateColumn` literally drops and re-adds the column, and an `AlterColumn` type change
+        // rewrites their data or fails outright. This was found by rehearsing a push against a real
+        // external Postgres: the migration aborted with `cannot cast type integer to uuid`, from a
+        // table the gate was supposed to be protecting.
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE public.widget (id serial PRIMARY KEY, name text);
+            INSERT INTO public.widget (name) VALUES ('theirs');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("fixture applies");
+
+        const UUID_ID: &str = r#"{
+          "astVersion": 2,
+          "models": [{
+            "name": "Widget",
+            "fields": {
+              "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                      "default": { "kind": "genRandomUuid" },
+                      "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+              "name": { "kind": "text",
+                      "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+            },
+            "options": {},
+            "annotations": { "db": { "tableName": "widget", "indexes": [] }, "platform": {} }
+          }]
+        }"#;
+
+        let ast = parser::parse(UUID_ID).expect("fixture parses");
+        let db = introspector::introspect(&pool, "public").await.unwrap();
+        let diff = differ::diff(&ast, &db).unwrap();
+        let ops = op_names(&diff.operations);
+
+        assert!(
+            !ops.iter().any(|o| o.contains("RecreateColumn")),
+            "a column was scheduled for drop-and-recreate on a table Supatype does not own: {ops:?}"
+        );
+        assert!(
+            !ops.iter().any(|o| o.contains("AlterColumn")),
+            "a column type change was scheduled on a table Supatype does not own: {ops:?}"
+        );
+        assert!(
+            diff.warnings.iter().any(|w| w.contains("widget") && w.contains("adopt")),
+            "the skipped column change must be reported, and say how to opt in; warnings: {:?}",
+            diff.warnings
+        );
+
+        // And the migration still applies — the point is that it neither touches their column nor
+        // fails trying.
+        let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+
+        let kind: String = sqlx::query_scalar(
+            "SELECT data_type FROM information_schema.columns              WHERE table_schema = 'public' AND table_name = 'widget' AND column_name = 'id'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("their column still exists");
+        assert_eq!(kind, "integer", "their column type was changed underneath them");
+
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM public.widget")
+            .fetch_one(&pool)
+            .await
+            .expect("their rows survive");
+        assert_eq!(rows, 1, "their data went missing");
+    })
+    .await;
+}
