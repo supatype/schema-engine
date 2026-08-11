@@ -341,7 +341,7 @@ pub async fn generate(Json(req): Json<GenerateRequest>) -> EngineResponse<CodeRe
 pub async fn triggers(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
-    let sql = crate::generator::sql::triggers::generate(&ast).map_err(engine_error)?;
+    let sql = crate::generator::sql::triggers::generate(&ast, &req.schema).map_err(engine_error)?;
     Ok(Json(SqlResponse { sql }))
 }
 
@@ -351,7 +351,7 @@ pub async fn rls(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
     let helpers = crate::generator::sql::rls::generate_auth_helpers();
-    let policies = crate::generator::sql::rls::generate(&ast).map_err(engine_error)?;
+    let policies = crate::generator::sql::rls::generate(&ast, &req.schema).map_err(engine_error)?;
     let sql = format!("{helpers}\n{policies}");
     Ok(Json(SqlResponse { sql }))
 }
@@ -370,7 +370,7 @@ pub async fn storage(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse>
 pub async fn postgrest(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Value> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
-    let config = crate::generator::config::postgrest::generate(&ast).map_err(engine_error)?;
+    let config = crate::generator::config::postgrest::generate(&ast, &req.schema).map_err(engine_error)?;
     Ok(Json(config))
 }
 

@@ -69,7 +69,7 @@ pub fn push_storage_and_model_apply_body(
     // populated by triggers (e.g. `Slug<...>`) fail on insert. The per-operation
     // renderer only emits a placeholder comment for CreateTrigger, so apply the
     // generated trigger SQL here.
-    let triggers = super::triggers::generate(ast)?;
+    let triggers = super::triggers::generate(ast, schema)?;
     Ok(format!(
         "{}\n{}\n{}",
         storage_sql.trim(),
@@ -211,8 +211,8 @@ fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
 /// type as a parameter, so the table has to exist first. `CREATE OR REPLACE` makes
 /// re-emission free, and emitting them on every push is what keeps them in step
 /// with the policies — a stale affordance function is a UI that lies.
-fn render_can_function_lines(ast: &SchemaAst) -> Vec<String> {
-    let sql = crate::generator::sql::rls::generate_can_functions(ast);
+fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_can_functions(ast, schema);
     if sql.trim().is_empty() {
         return Vec::new();
     }
@@ -229,8 +229,8 @@ fn render_can_function_lines(ast: &SchemaAst) -> Vec<String> {
 /// are. Idempotent: a `REVOKE` of a privilege that is not held is a no-op, and the
 /// matching `GRANT` is what restores access when a rule is relaxed, so running this
 /// on every push is what keeps privileges tracking the schema.
-fn render_grant_lines(ast: &SchemaAst) -> Vec<String> {
-    let sql = crate::generator::sql::grants::generate_table_grants(ast);
+fn render_grant_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_table_grants(ast, schema);
     if sql.trim().is_empty() {
         return Vec::new();
     }
@@ -247,8 +247,8 @@ fn render_grant_lines(ast: &SchemaAst) -> Vec<String> {
 /// Includes the capability probe: a schema that declares a masked column, pushed to a
 /// database without the masking extension, fails here rather than applying and leaving
 /// the column readable.
-fn render_security_label_lines(ast: &SchemaAst) -> Vec<String> {
-    let sql = crate::generator::sql::rls::generate_security_labels(ast);
+fn render_security_label_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_security_labels(ast, schema);
     if sql.trim().is_empty() {
         return Vec::new();
     }
@@ -270,20 +270,20 @@ fn render_security_label_lines(ast: &SchemaAst) -> Vec<String> {
 /// what every real push actually runs (`push_storage_and_model_apply_body`), so the
 /// privileges were generated and never applied. Anything in this list belongs on every
 /// path that applies a migration.
-fn render_reasserted_lines(ast: &SchemaAst) -> Vec<String> {
-    let mut lines = render_can_function_lines(ast);
-    lines.extend(render_grant_lines(ast));
+fn render_reasserted_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let mut lines = render_can_function_lines(ast, schema);
+    lines.extend(render_grant_lines(ast, schema));
     // Strictly after the table grants: these narrow a table-level write privilege to a
     // column list, and the table grants would hand the whole table back if they ran after.
-    lines.extend(render_column_grant_lines(ast));
-    lines.extend(render_security_label_lines(ast));
+    lines.extend(render_column_grant_lines(ast, schema));
+    lines.extend(render_security_label_lines(ast, schema));
     lines
 }
 
 /// Column-level write privileges derived from the field rules — a second layer under the
 /// masking extension, for what a database role provably can never write.
-fn render_column_grant_lines(ast: &SchemaAst) -> Vec<String> {
-    let sql = crate::generator::sql::grants::generate_column_grants(ast);
+fn render_column_grant_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_column_grants(ast, schema);
     if sql.trim().is_empty() {
         return Vec::new();
     }
@@ -351,7 +351,7 @@ fn render_forward_operation_lines(
 fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
     let mut lines = render_forward_preamble(diff);
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(ast));
+    lines.extend(render_reasserted_lines(ast, schema));
     Ok(lines.join("\n"))
 }
 
@@ -360,7 +360,7 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     lines.push("BEGIN;".into());
     lines.push(String::new());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(ast));
+    lines.extend(render_reasserted_lines(ast, schema));
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }

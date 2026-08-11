@@ -2370,7 +2370,7 @@ fn test_rls_any_rule_generates_or_expression() {
         sso: None,
         warnings: vec![],
     };
-    let expr = access_rule_to_expr(&ast, &model, &rule);
+    let expr = access_rule_to_expr(&ast, &model, &rule, "public");
     assert!(expr.contains("OR"), "any() rule must produce OR expression");
     assert!(
         expr.contains("auth.uid()"),
@@ -2671,7 +2671,7 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
 }"#;
 
     let ast = parser::parse(ast_json).unwrap();
-    let sql = rls::generate(&ast).unwrap();
+    let sql = rls::generate(&ast, "public").unwrap();
 
     assert!(sql.contains("ENABLE ROW LEVEL SECURITY"), "must enable RLS");
     assert!(sql.contains("FORCE ROW LEVEL SECURITY"), "must force RLS");

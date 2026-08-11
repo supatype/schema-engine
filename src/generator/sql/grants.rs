@@ -82,10 +82,9 @@ fn operand_reachable_by_anon(operand: &Operand) -> bool {
 ///
 /// Emitted on every push and idempotent: revoking a privilege that is not held is a
 /// no-op, and the matching grant is what restores access when a rule is relaxed.
-pub fn generate_table_grants(ast: &SchemaAst) -> String {
+pub fn generate_table_grants(ast: &SchemaAst, schema: &str) -> String {
     let mut anon_stmts: Vec<String> = Vec::new();
     let mut authed_stmts: Vec<String> = Vec::new();
-    let schema = super::rls::POLICY_SCHEMA;
 
     for model in &ast.models {
         let access = platform_access(model);
@@ -168,8 +167,7 @@ fn privilege_stmt(privilege: &str, table: &str, role: &str, allowed: bool) -> St
 /// express `Role<"admin">`; a column privilege cannot, because an application role is a JWT
 /// claim and an admin still connects as `authenticated`. So only what a *database role*
 /// provably can never write is revoked here.
-pub fn generate_column_grants(ast: &SchemaAst) -> String {
-    let schema = super::rls::POLICY_SCHEMA;
+pub fn generate_column_grants(ast: &SchemaAst, schema: &str) -> String {
     let mut blocks: Vec<String> = Vec::new();
 
     for model in &ast.models {

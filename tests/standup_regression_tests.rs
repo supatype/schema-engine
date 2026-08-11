@@ -79,7 +79,7 @@ fn generated_types_do_not_duplicate_fk_column() {
 #[test]
 fn triggers_create_platform_schema_with_grants_and_slug_trigger() {
     let ast = parser::parse(FIXTURE).unwrap();
-    let sql = triggers::generate(&ast).unwrap();
+    let sql = triggers::generate(&ast, "public").unwrap();
     assert!(sql.contains("CREATE SCHEMA IF NOT EXISTS _platform"));
     assert!(sql.contains("GRANT USAGE ON SCHEMA _platform TO PUBLIC"));
     assert!(sql.contains("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC"));

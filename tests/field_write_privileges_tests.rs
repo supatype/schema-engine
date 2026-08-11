@@ -50,7 +50,7 @@ const SCHEMA: &str = r#"{
 
 fn column_grants() -> String {
     let ast = parser::parse(SCHEMA).expect("schema parses");
-    grants::generate_column_grants(&ast)
+    grants::generate_column_grants(&ast, "public")
 }
 
 /// The excluded-column list for one (operation, role) pair.
@@ -182,7 +182,7 @@ fn a_table_with_no_write_rule_gets_no_column_grants() {
         .replace("\"update\": { \"type\": \"public\" },", "");
     let ast = parser::parse(&schema).expect("schema parses");
     assert!(
-        grants::generate_column_grants(&ast).trim().is_empty(),
+        grants::generate_column_grants(&ast, "public").trim().is_empty(),
         "nothing may be granted where the table rules granted nothing"
     );
 }
@@ -195,5 +195,5 @@ fn no_field_rules_means_no_column_grants() {
             .fields
             .clear();
     }
-    assert!(grants::generate_column_grants(&ast).trim().is_empty());
+    assert!(grants::generate_column_grants(&ast, "public").trim().is_empty());
 }

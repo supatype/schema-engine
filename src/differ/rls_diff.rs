@@ -374,6 +374,15 @@ pub fn diff(
     ops: &mut Vec<Operation>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    // Comparison is textual, so the expected expression has to name the same schema the stored one
+    // does. `DatabaseState::default()` carries no schema (unit tests, an empty target), and there
+    // are no stored policies to compare against in that case either.
+    let schema = if db.schema.is_empty() {
+        crate::generator::sql::rls::DEFAULT_POLICY_SCHEMA
+    } else {
+        db.schema.as_str()
+    };
+
     // Index DB policies by table name for fast lookup.
     let mut db_policies_by_table: std::collections::HashMap<
         &str,
@@ -441,7 +450,7 @@ pub fn diff(
             for (suffix, rule_opt) in &expected {
                 let policy_name = format!("{table}_{suffix}");
                 let expected_expr =
-                    normalise(&access_rule_to_expr(ast, model, rule_opt.unwrap()), table);
+                    normalise(&access_rule_to_expr(ast, model, rule_opt.unwrap(), schema), table);
 
                 if let Some(db_pol) = db_pol_map.get(policy_name.as_str()) {
                     // Policy exists — compare the USING or WITH CHECK expression.
@@ -459,7 +468,7 @@ pub fn diff(
                         let expected_check = access
                             .update_check
                             .as_ref()
-                            .map(|c| normalise(&access_rule_to_expr(ast, model, c), table))
+                            .map(|c| normalise(&access_rule_to_expr(ast, model, c, schema), table))
                             .unwrap_or_else(|| expected_expr.clone());
                         normalise(db_pol.check_expr.as_deref().unwrap_or(""), table)
                             != expected_check
@@ -556,7 +565,7 @@ pub fn diff(
         ));
     }
 
-    junction_diff(ast, &rls_enabled_tables, &db_policies_by_table, ops, warnings);
+    junction_diff(ast, &rls_enabled_tables, &db_policies_by_table, ops, warnings, schema);
 
     // ── Tables in DB with RLS but not in schema (dropped models) ─────────────
     // These are handled by DropTable in table_diff — no need to drop policies separately.
@@ -587,6 +596,7 @@ fn junction_diff(
     >,
     ops: &mut Vec<Operation>,
     warnings: &mut Vec<String>,
+    schema: &str,
 ) {
     for junction in &ast.junction_tables {
         let table = junction.name.as_str();
@@ -633,7 +643,7 @@ fn junction_diff(
             // Compare against what is already in the database, exactly as the
             // model path does — emitting the create unconditionally left every
             // diff reporting the same four policies forever.
-            let expected_expr = normalise(&access_rule_to_expr(ast, parent_a, rule), table);
+            let expected_expr = normalise(&access_rule_to_expr(ast, parent_a, rule, schema), table);
             let existing = db_policies.iter().find(|p| p.name == policy_name);
             let needs_write = match existing {
                 Some(db_pol) => {

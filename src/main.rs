@@ -94,13 +94,22 @@ enum Command {
         lang: String,
     },
     /// Generate trigger SQL (updated_at + slug)
-    Triggers,
+    Triggers {
+        #[arg(long, default_value = "public")]
+        schema: String,
+    },
     /// Generate RLS policy SQL
-    Rls,
+    Rls {
+        #[arg(long, default_value = "public")]
+        schema: String,
+    },
     /// Generate storage schema SQL (bucket DDL + storage RLS)
     Storage,
     /// Generate PostgREST configuration
-    Postgrest,
+    Postgrest {
+        #[arg(long, default_value = "public")]
+        schema: String,
+    },
     /// Generate admin panel configuration JSON
     Admin,
     /// Generate auth helper SQL functions (auth.uid, auth.role, auth.email, auth.jwt)
@@ -345,7 +354,7 @@ async fn main() -> Result<()> {
                 // Trigger functions (slug / updated_at) are idempotent and not part of
                 // the model diff — ensure they exist on every push so an up-to-date
                 // schema still gets its slug/updated_at triggers installed.
-                let triggers_sql = supatype_engine::generator::sql::triggers::generate(&ast)?;
+                let triggers_sql = supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
                 sqlx::raw_sql(&triggers_sql)
                     .execute(&pool)
                     .await
@@ -576,27 +585,27 @@ async fn main() -> Result<()> {
             };
             println!("{output}");
         }
-        Command::Triggers => {
+        Command::Triggers { schema } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let sql = supatype_engine::generator::sql::triggers::generate(&ast)?;
+            let sql = supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
             println!("{sql}");
         }
-        Command::Rls => {
+        Command::Rls { schema } => {
             let ast = supatype_engine::parser::parse(&input)?;
             println!(
                 "{}",
                 supatype_engine::generator::sql::rls::generate_auth_helpers()
             );
-            println!("{}", supatype_engine::generator::sql::rls::generate(&ast)?);
+            println!("{}", supatype_engine::generator::sql::rls::generate(&ast, &schema)?);
         }
         Command::Storage => {
             let ast = supatype_engine::parser::parse(&input)?;
             let sql = supatype_engine::generator::sql::storage::generate(&ast)?;
             println!("{sql}");
         }
-        Command::Postgrest => {
+        Command::Postgrest { schema } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let config = supatype_engine::generator::config::postgrest::generate(&ast)?;
+            let config = supatype_engine::generator::config::postgrest::generate(&ast, &schema)?;
             println!("{}", serde_json::to_string_pretty(&config)?);
         }
         Command::AuthFunctions {

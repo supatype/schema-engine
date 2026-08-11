@@ -9,7 +9,12 @@ use anyhow::Result;
 
 /// Generates RLS policy SQL for all models that have access rules.
 /// Policy naming convention: `{table}_select`, `{table}_insert`, `{table}_update`, `{table}_delete`.
-pub fn generate(ast: &SchemaAst) -> Result<String> {
+/// `schema` is the schema Supatype manages (`schema.pg_schema`). It used to be a literal `"public"`
+/// here and in five other generators, which meant a project pointed at its own schema created its
+/// tables in the right place and then attached its policies, grants, labels and membership
+/// subqueries to `public` — either erroring, or silently reading a same-named table belonging to
+/// whoever else is in that schema. The second case is the one this parameter exists for.
+pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
     let mut out = String::new();
 
     for model in &ast.models {
@@ -30,7 +35,6 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             model.name
         ));
 
-        let schema = "public";
         out.push_str(&format!(
             "ALTER TABLE \"{schema}\".\"{table}\" ENABLE ROW LEVEL SECURITY;\n"
         ));
@@ -147,7 +151,7 @@ pub(crate) fn render_select_policy_sql(
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    let expr = access_rule_to_expr(ast, model, rule);
+    let expr = access_rule_to_expr(ast, model, rule, schema);
     let name = format!("{table}_select");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
@@ -163,7 +167,7 @@ pub(crate) fn render_insert_policy_sql(
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    let expr = access_rule_to_expr(ast, model, rule);
+    let expr = access_rule_to_expr(ast, model, rule, schema);
     let name = format!("{table}_insert");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
@@ -182,9 +186,9 @@ pub(crate) fn render_update_policy_sql(
     rule: &AccessRule,
     check: Option<&AccessRule>,
 ) -> String {
-    let using_expr = access_rule_to_expr(ast, model, rule);
+    let using_expr = access_rule_to_expr(ast, model, rule, schema);
     let check_expr = match check {
-        Some(c) => access_rule_to_expr(ast, model, c),
+        Some(c) => access_rule_to_expr(ast, model, c, schema),
         None => using_expr.clone(),
     };
     let name = format!("{table}_update");
@@ -202,7 +206,7 @@ pub(crate) fn render_delete_policy_sql(
     model: &ModelAst,
     rule: &AccessRule,
 ) -> String {
-    let expr = access_rule_to_expr(ast, model, rule);
+    let expr = access_rule_to_expr(ast, model, rule, schema);
     let name = format!("{table}_delete");
     format!(
         "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
@@ -220,14 +224,23 @@ pub(crate) fn render_delete_policy_sql(
 /// between a policy that scales and one that does not, and it costs nothing.
 pub const AUTH_UID: &str = "(SELECT auth.uid())";
 
-/// The schema policies, affordance functions and grants live in.
-pub const POLICY_SCHEMA: &str = "public";
+/// Default schema for policies, affordance functions and grants.
+///
+/// A fallback, not the answer: the generators here take the managed schema as a parameter. This
+/// covers callers with genuinely nothing to pass — an introspected `DatabaseState` whose `schema` is
+/// empty, for instance.
+pub const DEFAULT_POLICY_SCHEMA: &str = "public";
 
 /// `auth.role()`, wrapped for the same reason as [`AUTH_UID`].
 pub const AUTH_ROLE: &str = "(SELECT auth.role())";
 
 /// Converts an AccessRule to a Postgres expression string for use in a USING / WITH CHECK clause.
-pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule) -> String {
+pub fn access_rule_to_expr(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    rule: &AccessRule,
+    schema: &str,
+) -> String {
     match rule {
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
@@ -245,10 +258,10 @@ pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule)
                 format!("{AUTH_ROLE} = ANY(ARRAY[{arr}])")
             }
         }
-        AccessRule::Any { rules } => join_rules(ast, model, rules, "OR"),
-        AccessRule::All { rules } => join_rules(ast, model, rules, "AND"),
+        AccessRule::Any { rules } => join_rules(ast, model, rules, "OR", schema),
+        AccessRule::All { rules } => join_rules(ast, model, rules, "AND", schema),
         AccessRule::Not { rule } => {
-            format!("NOT ({})", access_rule_to_expr(ast, model, rule))
+            format!("NOT ({})", access_rule_to_expr(ast, model, rule, schema))
         }
         AccessRule::Compare { left, op, right } => {
             format!(
@@ -262,13 +275,18 @@ pub fn access_rule_to_expr(ast: &SchemaAst, model: &ModelAst, rule: &AccessRule)
             let test = if *is_null { "IS NULL" } else { "IS NOT NULL" };
             format!("{} {test}", operand_to_expr(operand))
         }
-        AccessRule::In { column, source } => membership_to_expr(ast, model, column, source),
-        AccessRule::Exists { source } => set_exists_expr(ast, model, source),
+        AccessRule::In { column, source } => membership_to_expr(ast, model, column, source, schema),
+        AccessRule::Exists { source } => set_exists_expr(ast, model, source, schema),
     }
 }
 
 /// "The source set is non-empty" — no column involved.
-fn set_exists_expr(ast: &SchemaAst, model: &ModelAst, source: &MembershipSource) -> String {
+fn set_exists_expr(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    source: &MembershipSource,
+    schema: &str,
+) -> String {
     match source {
         MembershipSource::Claim { path } => format!(
             "EXISTS (SELECT 1 FROM jsonb_array_elements_text(\
@@ -285,12 +303,12 @@ fn set_exists_expr(ast: &SchemaAst, model: &ModelAst, source: &MembershipSource)
         MembershipSource::Rows { table, filter, .. } => {
             let table_esc = table.replace('"', "\"\"");
             let mut sql =
-                format!("EXISTS (SELECT 1 FROM \"{POLICY_SCHEMA}\".\"{table_esc}\"");
+                format!("EXISTS (SELECT 1 FROM \"{schema}\".\"{table_esc}\"");
             if let Some(rule) = filter {
                 let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
                 let inner_expr = match inner_model {
-                    Some(m) => access_rule_to_expr(ast, m, rule),
-                    None => access_rule_to_expr(ast, model, rule),
+                    Some(m) => access_rule_to_expr(ast, m, rule, schema),
+                    None => access_rule_to_expr(ast, model, rule, schema),
                 };
                 sql.push_str(&format!(
                     " WHERE ({})",
@@ -314,6 +332,7 @@ fn membership_to_expr(
     model: &ModelAst,
     column: &str,
     source: &MembershipSource,
+    schema: &str,
 ) -> String {
     let own_table = db_table_name(model);
     // Qualified so the correlated reference is unambiguous — the subquery's own
@@ -357,7 +376,7 @@ fn membership_to_expr(
             // `FROM "posts"` to that single row instead of the table — quietly
             // answering about one row when it should have searched all of them.
             let mut sql = format!(
-                "EXISTS (SELECT 1 FROM \"{POLICY_SCHEMA}\".\"{table_esc}\" \
+                "EXISTS (SELECT 1 FROM \"{schema}\".\"{table_esc}\" \
                  WHERE \"{table_esc}\".\"{col_esc}\" = {own_col}"
             );
             if let Some(rule) = filter {
@@ -366,8 +385,8 @@ fn membership_to_expr(
                 // attached to.
                 let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
                 let inner_expr = match inner_model {
-                    Some(m) => access_rule_to_expr(ast, m, rule),
-                    None => access_rule_to_expr(ast, model, rule),
+                    Some(m) => access_rule_to_expr(ast, m, rule, schema),
+                    None => access_rule_to_expr(ast, model, rule, schema),
                 };
                 sql.push_str(&format!(" AND ({})", qualify_bare_columns(&inner_expr, table)));
             }
@@ -495,11 +514,17 @@ pub fn membership_index_sql(schema: &str, rule: &AccessRule) -> String {
 /// Without the parentheses `Any<[a, All<[b, c]>]>` would render as `a OR b AND c`,
 /// which Postgres reads as `a OR (b AND c)` — correct by luck here, and wrong the
 /// moment the nesting is the other way round. Precedence is never left to chance.
-fn join_rules(ast: &SchemaAst, model: &ModelAst, rules: &[AccessRule], joiner: &str) -> String {
+fn join_rules(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    rules: &[AccessRule],
+    joiner: &str,
+    schema: &str,
+) -> String {
     let parts: Vec<String> = rules
         .iter()
         .map(|r| {
-            let expr = access_rule_to_expr(ast, model, r);
+            let expr = access_rule_to_expr(ast, model, r, schema);
             if matches!(
                 r,
                 AccessRule::Any { .. } | AccessRule::All { .. }
@@ -642,9 +667,8 @@ fn owner_column_on_model(model: &ModelAst) -> Option<String> {
 /// verbatim: inside the body `posts.author_id` resolves against the composite
 /// argument. Bare column references are qualified for the same reason — a function
 /// body has no `FROM` clause for them to resolve against.
-pub fn generate_can_functions(ast: &SchemaAst) -> String {
+pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
     let mut out = String::new();
-    let schema = "public";
 
     for model in &ast.models {
         let access = platform_access(model);
@@ -668,7 +692,7 @@ pub fn generate_can_functions(ast: &SchemaAst) -> String {
             // body supplies a scope its column references resolve against, so
             // nothing has to be rewritten — which is what lets a `Custom` rule's
             // raw SQL answer definitively rather than "unknown".
-            let expr = access_rule_to_expr(ast, model, rule);
+            let expr = access_rule_to_expr(ast, model, rule, schema);
             out.push_str(&render_can_function(schema, table, op, &expr));
         }
 
@@ -704,7 +728,7 @@ fn render_field_can_functions(
         let read_expr = rules
             .read
             .as_ref()
-            .map(|rule| access_rule_to_expr(ast, model, rule));
+            .map(|rule| access_rule_to_expr(ast, model, rule, schema));
 
         // No `read` rule means the column is as readable as the table, so the
         // affordance is unconditionally true rather than absent -- a UI should never
@@ -718,7 +742,7 @@ fn render_field_can_functions(
         ));
 
         if let Some(rule) = rules.write.as_ref() {
-            let write_expr = access_rule_to_expr(ast, model, rule);
+            let write_expr = access_rule_to_expr(ast, model, rule, schema);
             let conjoined = match read_expr.as_deref() {
                 Some(read) => format!("({write_expr}) AND ({read})"),
                 None => write_expr,
@@ -784,8 +808,7 @@ fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> Str
 /// function call per row per read to answer a question nobody asked. The `can_read_*`
 /// function is still generated — Studio wants a uniform affordance surface — it just
 /// does not appear in the label.
-pub fn generate_security_labels(ast: &SchemaAst) -> String {
-    let schema = POLICY_SCHEMA;
+pub fn generate_security_labels(ast: &SchemaAst, schema: &str) -> String {
     let mut statements: Vec<String> = Vec::new();
     let mut keep: Vec<String> = Vec::new();
 
@@ -850,7 +873,7 @@ $mask_probe$;
         ));
     }
 
-    out.push_str(&render_stale_label_clear(&keep));
+    out.push_str(&render_stale_label_clear(&keep, schema));
 
     for statement in &statements {
         out.push_str(statement);
@@ -873,8 +896,7 @@ $mask_probe$;
 /// where the last rule was just removed. Guarded on the extension existing, because
 /// without the provider registered a `SECURITY LABEL` statement cannot even parse; and
 /// without the provider there can be no labels to clear.
-fn render_stale_label_clear(keep: &[String]) -> String {
-    let schema = POLICY_SCHEMA;
+fn render_stale_label_clear(keep: &[String], schema: &str) -> String {
     let exclusion = if keep.is_empty() {
         String::new()
     } else {

@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize)]
 pub struct AstRequest {
     pub ast: serde_json::Value,
+    /// Schema Supatype manages. Defaults to `public`, so an older client keeps working — the DB
+    /// endpoints have always carried this, and the previews rendered `public` regardless.
+    #[serde(default = "default_schema")]
+    pub schema: String,
 }
 
 /// Request body for /generate endpoint.

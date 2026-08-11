@@ -1,7 +1,11 @@
 use crate::parser::ast::{FieldAst, SchemaAst};
 use anyhow::Result;
 
-pub fn generate(ast: &SchemaAst) -> Result<String> {
+/// `schema` is the schema Supatype manages. The trigger targets used to be a literal
+/// `"public"."{table}"`, so a project pointed at its own schema attached its `updated_at` and slug
+/// triggers to whatever sat in `public` under the same name — someone else's table, on a database
+/// Supatype did not create.
+pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
     let mut out = String::new();
 
     // Trigger functions live in the _platform schema — ensure it exists and is
@@ -20,12 +24,12 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             || model.fields.contains_key("updated_at");
 
         if needs_updated_at {
-            out.push_str(&updated_at_trigger(model.table_name()));
+            out.push_str(&updated_at_trigger(schema, model.table_name()));
         }
 
         for (field_name, field) in &model.fields {
             if let FieldAst::Slug(slug) = field {
-                out.push_str(&slug_trigger(model.table_name(), field_name, &slug.from));
+                out.push_str(&slug_trigger(schema, model.table_name(), field_name, &slug.from));
             }
         }
     }
@@ -69,10 +73,10 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 
 "#;
 
-fn updated_at_trigger(table: &str) -> String {
+fn updated_at_trigger(schema: &str, table: &str) -> String {
     format!(
         "CREATE OR REPLACE TRIGGER \"{table}_updated_at_trigger\"\n\
-         BEFORE UPDATE ON \"public\".\"{table}\"\n\
+         BEFORE UPDATE ON \"{schema}\".\"{table}\"\n\
          FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();\n\n"
     )
 }
@@ -85,9 +89,9 @@ fn updated_at_trigger(table: &str) -> String {
 ///
 /// This is called for every table unconditionally (all tables are subscription-enabled
 /// until a per-model subscription flag is added to the AST).
-pub fn generate_realtime_triggers(table_name: &str) -> String {
+pub fn generate_realtime_triggers(schema: &str, table_name: &str) -> String {
     format!(
-        r#"CREATE OR REPLACE FUNCTION notify_{table_name}_changes() RETURNS trigger AS $$
+        r#"CREATE OR REPLACE FUNCTION _platform.notify_{table_name}_changes() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify('supatype_{table_name}',
     json_build_object('table', '{table_name}', 'event', TG_OP, 'id',
@@ -96,22 +100,26 @@ BEGIN
 END; $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE TRIGGER {table_name}_changes_trigger
-AFTER INSERT OR UPDATE OR DELETE ON {table_name}
-FOR EACH ROW EXECUTE FUNCTION notify_{table_name}_changes();
+AFTER INSERT OR UPDATE OR DELETE ON "{schema}"."{table_name}"
+FOR EACH ROW EXECUTE FUNCTION _platform.notify_{table_name}_changes();
 
 "#
     )
 }
 
 /// Generate DROP statements to remove the realtime trigger and function for `table_name`.
-pub fn generate_realtime_trigger_drop(table_name: &str) -> String {
+///
+/// Drops the pre-schema-isolation name too: the create was unqualified, so it landed in whatever
+/// `public` the connection's search path resolved to, and a qualified drop alone would leave it.
+pub fn generate_realtime_trigger_drop(schema: &str, table_name: &str) -> String {
     format!(
-        "DROP TRIGGER IF EXISTS {table_name}_changes_trigger ON {table_name};\n\
-         DROP FUNCTION IF EXISTS notify_{table_name}_changes();\n\n"
+        "DROP TRIGGER IF EXISTS {table_name}_changes_trigger ON \"{schema}\".\"{table_name}\";\n\
+         DROP FUNCTION IF EXISTS _platform.notify_{table_name}_changes();\n\
+         DROP FUNCTION IF EXISTS public.notify_{table_name}_changes();\n\n"
     )
 }
 
-fn slug_trigger(table: &str, slug_field: &str, source_field: &str) -> String {
+fn slug_trigger(schema: &str, table: &str, slug_field: &str, source_field: &str) -> String {
     let fn_name = format!("_platform.set_{table}_{slug_field}");
     format!(
         r#"CREATE OR REPLACE FUNCTION {fn_name}()
@@ -133,7 +141,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE TRIGGER "{table}_{slug_field}_trigger"
-BEFORE INSERT OR UPDATE ON "public"."{table}"
+BEFORE INSERT OR UPDATE ON "{schema}"."{table}"
 FOR EACH ROW EXECUTE FUNCTION {fn_name}();
 
 "#

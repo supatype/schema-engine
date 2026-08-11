@@ -69,7 +69,7 @@ fn owner_rule_accepts_kernel_relation_field_name() {
     // `author_id`. The auth call is wrapped in a scalar subquery so the planner
     // evaluates it once per query, so match on the parts rather than one literal
     // rendering of them.
-    let expr = access_rule_to_expr(&ast, post, rule);
+    let expr = access_rule_to_expr(&ast, post, rule, "public");
     // Columns are quoted so `qualify_bare_columns` can find them when the same
     // expression is reused inside a `can_*` affordance function.
     assert!(
@@ -234,7 +234,7 @@ fn owner_from_nested_relation_generates_exists_subquery() {
         .find(|m| m.name == "Photo")
         .expect("Photo model must exist");
     let rule = photo.access().read.as_ref().expect("read rule must exist");
-    let expr = access_rule_to_expr(&ast, photo, rule);
+    let expr = access_rule_to_expr(&ast, photo, rule, "public");
     assert!(
         expr.contains("EXISTS (SELECT 1 FROM \"album\""),
         "OwnerFrom<album> must check ownership via album table, got: {expr}"
