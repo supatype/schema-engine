@@ -387,13 +387,25 @@ pub async fn record_field_enforcement(
     .await?
     .flatten();
 
+    // Tier 2 is real enforcement, not a failure — but only if the views are actually there. Asking
+    // the database rather than assuming: a schema that *should* have views and does not is exactly
+    // the state worth recording as broken.
+    let views_present: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_class c            JOIN pg_namespace n ON n.oid = c.relnamespace           WHERE n.nspname = $1 AND c.relkind = 'v')",
+    )
+    .bind(crate::generator::sql::field_views::VIEW_SCHEMA)
+    .fetch_one(&mut *conn)
+    .await?;
+
     let tier = if labelled_columns == 0 {
         "unenforced"
     } else if extension.is_some() {
         "extension"
+    } else if views_present {
+        "views"
     } else {
-        // Unreachable via a push, which refuses first. Reachable if someone dropped the
-        // extension afterwards, and worth recording honestly rather than asserting.
+        // The extension is gone and no views stand in for it. Reachable by dropping the extension
+        // under a tier-1 database, and worth recording honestly rather than asserting.
         "broken"
     };
 

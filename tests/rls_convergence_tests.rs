@@ -522,7 +522,11 @@ async fn field_rules_mask_a_column_end_to_end() {
             return;
         }
         let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        // Introspected, not `DatabaseState::default()`: the field-masking tier is chosen from the
+        // database's extension list, and a default state claims there are none — which selects
+        // tier 2 and emits views instead of the labels this test is about.
+        let db = introspector::introspect(&pool, "public").await.expect("introspect");
+        let diff = differ::diff(&ast, &db).unwrap();
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
         sqlx::raw_sql(&sql)
             .execute(&pool)
@@ -578,7 +582,11 @@ async fn removing_a_field_rule_clears_its_label() {
             return;
         }
         let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+        // Introspected, not `DatabaseState::default()`: the field-masking tier is chosen from the
+        // database's extension list, and a default state claims there are none — which selects
+        // tier 2 and emits views instead of the labels this test is about.
+        let db = introspector::introspect(&pool, "public").await.expect("introspect");
+        let diff = differ::diff(&ast, &db).unwrap();
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
         sqlx::raw_sql(&sql).execute(&pool).await.expect("first push");
         let probe: String = sqlx::query_scalar(

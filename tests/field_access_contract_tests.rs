@@ -94,7 +94,7 @@ async fn install_tier_two(pool: &sqlx::PgPool) {
     let db = introspector::introspect(pool, "public")
         .await
         .expect("introspect for the view generator");
-    let sql = field_views::generate_field_views(&ast, &db, "public");
+    let sql = field_views::render_field_views(&ast, &field_views::field_view_plan(&ast, &db), "public");
     assert!(
         !sql.is_empty(),
         "the generator produced nothing for a schema that masks a column"
@@ -479,7 +479,7 @@ async fn a_masked_view_does_not_bypass_row_level_security() {
         .expect("rls view schema parses");
 
         let db = introspector::introspect(&pool, "public").await.expect("introspect");
-        let sql = field_views::generate_field_views(&ast, &db, "public");
+        let sql = field_views::render_field_views(&ast, &field_views::field_view_plan(&ast, &db), "public");
         sqlx::raw_sql(&sql)
             .execute(&pool)
             .await

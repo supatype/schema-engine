@@ -12,7 +12,7 @@ pub fn enrich_migration_error(raw: &str, diff: Option<&DiffOutput>) -> String {
         let site = diff.and_then(|d| find_type_change(d, from, to));
         let what = match &site {
             Some((table, column)) => format!("column \"{table}\".\"{column}\""),
-            None => format!("a column"),
+            None => "a column".to_string(),
         };
         let field_hint = match &site {
             Some((table, column)) => format!(
@@ -178,6 +178,8 @@ mod tests {
             },
             warnings: vec![],
             unmanaged_model_tables: vec![],
+            field_masking: crate::differ::FieldMaskingTier::None,
+            field_view_plan: Vec::new(),
         };
 
         let msg = enrich_migration_error("cannot cast type integer to uuid", Some(&diff));

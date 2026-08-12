@@ -87,7 +87,21 @@ fn operand_reachable_by_anon(operand: &Operand) -> bool {
 /// Their privileges are not ours to change: a `REVOKE` would take access away from whatever else
 /// uses the table, and a `GRANT` would hand Supatype's API a table whose access rules were never
 /// applied. Skipping leaves it inaccessible to the API, which is the safe direction.
-pub fn generate_table_grants(ast: &SchemaAst, schema: &str, skip: &[String]) -> String {
+/// `serve_from` is the schema the API actually reads. Under tier-2 field masking that is `api`, and
+/// the privileges have to follow: schema exposure is PostgREST configuration, not a boundary, so a
+/// mask that lives in a view is only as strong as the roles' inability to read the table behind it.
+/// The base-table privileges are revoked from `anon` and `authenticated` in the same breath.
+///
+/// `service_role` keeps its base-table access, per this module's standing policy — it is the escape
+/// hatch that has to keep working. One consequence to know: tier 1 masks a `service_role` caller like
+/// any other (the read predicate simply fails for it), while under tier 2 that caller reads the table
+/// directly and sees everything. Deliberate, and recorded rather than quietly true.
+pub fn generate_table_grants(
+    ast: &SchemaAst,
+    schema: &str,
+    skip: &[String],
+    serve_from: Option<&str>,
+) -> String {
     let mut anon_stmts: Vec<String> = Vec::new();
     let mut authed_stmts: Vec<String> = Vec::new();
 
@@ -97,7 +111,18 @@ pub fn generate_table_grants(ast: &SchemaAst, schema: &str, skip: &[String]) -> 
         if skip.iter().any(|t| t == table) {
             continue;
         }
-        let qualified = format!("\"{schema}\".\"{}\"", table.replace('"', "\"\""));
+        let escaped = table.replace('"', "\"\"");
+        let base = format!("\"{schema}\".\"{escaped}\"");
+        let qualified = match serve_from {
+            Some(view_schema) => format!("\"{view_schema}\".\"{escaped}\""),
+            None => base.clone(),
+        };
+        // Tier 2 only: take the API roles off the table the view reads, so `Accept-Profile` cannot be
+        // used to go round the mask and neither can a stray credential.
+        if serve_from.is_some() {
+            anon_stmts.push(format!("REVOKE ALL PRIVILEGES ON {base} FROM anon"));
+            authed_stmts.push(format!("REVOKE ALL PRIVILEGES ON {base} FROM authenticated"));
+        }
 
         let read_anon = access.read.as_ref().is_some_and(reachable_by_anon);
         anon_stmts.push(privilege_stmt("SELECT", &qualified, "anon", read_anon));

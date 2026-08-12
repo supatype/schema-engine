@@ -88,6 +88,25 @@ fn quoted(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// The primary key a model declares, for a table that does not exist yet.
+///
+/// Read from the serialised field rather than through an accessor: `primaryKey` lives on the payload
+/// of some thirty `FieldAst` variants and there is no `is_primary_key` helper, so matching on all of
+/// them here would be a lot of code to say one thing. Generation-time only.
+fn ast_primary_key(model: &ModelAst) -> Vec<String> {
+    model
+        .fields
+        .iter()
+        .filter(|(_, field)| {
+            serde_json::to_value(field)
+                .ok()
+                .and_then(|v| v.get("primaryKey").and_then(|p| p.as_bool()))
+                .unwrap_or(false)
+        })
+        .flat_map(|(name, field)| crate::differ::column_diff::column_names_for(name, field))
+        .collect()
+}
+
 /// The primary-key columns of a table, in order.
 ///
 /// Row identity for the write trigger. `ctid` was the first attempt and it silently does not work: a
@@ -106,43 +125,138 @@ fn primary_key_columns(db: &DatabaseState, table: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// SQL for every `api` view the schema needs, plus the triggers that carry the write contract.
+/// The columns a model declares, in declaration order.
+///
+/// Used for a table that does not exist *yet*: on a first push the diff is computed against an empty
+/// database, so there are no introspected columns — but the `CREATE TABLE` runs earlier in the same
+/// migration, so by the time the view is created the table is there. Without this the first push
+/// emitted an empty view layer and then granted on `api.<table>`, failing with `relation
+/// "api.tier_employee" does not exist`.
+fn ast_columns(model: &ModelAst) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (field_name, field) in &model.fields {
+        for column in crate::differ::column_diff::column_names_for(field_name, field) {
+            if !column.is_empty() && !out.contains(&column) {
+                out.push(column);
+            }
+        }
+    }
+    // Option-driven columns, mirroring `column_diff` — a model can ask for these without declaring a
+    // field for them.
+    if model.options.timestamps && !model.fields.contains_key("timestamps") {
+        for column in ["created_at", "updated_at"] {
+            if !out.iter().any(|c| c == column) {
+                out.push(column.to_string());
+            }
+        }
+    }
+    if model.options.soft_delete
+        && !model.fields.contains_key("softDelete")
+        && !out.iter().any(|c| c == "deleted_at")
+    {
+        out.push("deleted_at".to_string());
+    }
+    out
+}
+
+/// SQL for the whole `api` view layer, plus the triggers that carry the write contract.
+///
+/// **Every** model gets a view, not only the ones that mask a column. Under tier 2 the managed schema
+/// is not exposed to PostgREST at all — it cannot be, because a client picks its schema per request
+/// with `Accept-Profile`, so leaving `public` on the list lets any caller read the unmasked table and
+/// makes the mask opt-out. With only `api` exposed, a model without a view simply disappears from the
+/// API, so the unmasked ones are passed through verbatim.
 ///
 /// Driven by the **database's** columns rather than the AST's, so a table carrying columns the schema
 /// does not declare — an adopted table, say — keeps serving them instead of losing them from the API
 /// the moment tier 2 is switched on.
-pub fn generate_field_views(ast: &SchemaAst, db: &DatabaseState, schema: &str) -> String {
-    if !has_field_rules(ast) {
-        return String::new();
-    }
+/// One table's shape, as the view generator needs it.
+///
+/// Carried in the diff so the renderer can build the SQL with the schema *it* was given. Generating
+/// the SQL in the differ instead meant reaching for `db.schema`, which is empty on a
+/// `DatabaseState::default()` — and every view came out as `FROM ""."users"`, a zero-length
+/// identifier that Postgres rejects. Data here, SQL in the renderer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldViewTable {
+    pub table: String,
+    pub columns: Vec<String>,
+    /// Primary key, for the write trigger's row identity. Empty means the view is read-only.
+    pub key: Vec<String>,
+}
 
-    let mut out = preamble();
-
+/// What the `api` layer needs to cover, read from the database (and from the schema for tables this
+/// migration is about to create).
+pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTable> {
+    let mut plan = Vec::new();
     for model in &ast.models {
         let table = db_table_name(model);
-        let Some(db_table) = db.tables.iter().find(|t| t.name == table) else {
-            // Nothing to build a view over yet. The next push, after the table exists, emits it.
+        let db_table = db.tables.iter().find(|t| t.name == table);
+
+        // The database's columns when the table exists — so a table carrying columns the schema does
+        // not declare keeps serving them — and the schema's own when it is being created by this very
+        // migration.
+        let columns: Vec<String> = match db_table {
+            Some(t) => t.columns.iter().map(|c| c.name.clone()).collect(),
+            None => ast_columns(model),
+        };
+        if columns.is_empty() {
+            continue;
+        }
+
+        let key = match primary_key_columns(db, table) {
+            k if !k.is_empty() => k,
+            // Not introspectable on a first push, for the same reason as the columns.
+            _ => ast_primary_key(model),
+        };
+
+        plan.push(FieldViewTable {
+            table: table.to_string(),
+            columns,
+            key,
+        });
+    }
+    plan
+}
+
+pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str) -> String {
+    if plan.is_empty() {
+        return String::new();
+    }
+    let mut out = preamble();
+
+    for entry in plan {
+        let Some(model) = ast.models.iter().find(|m| db_table_name(m) == entry.table) else {
             continue;
         };
+        let table = entry.table.as_str();
+        let columns = &entry.columns;
 
         let masked: Vec<&String> = platform_access(model).fields.keys().collect();
         let mut projections: Vec<String> = Vec::new();
-        for column in &db_table.columns {
-            let qualified = format!("{}.{}", quoted(table), quoted(&column.name));
-            match read_predicate(ast, model, schema, &column.name) {
+        for column in columns {
+            let qualified = format!("{}.{}", quoted(table), quoted(column));
+            match read_predicate(ast, model, schema, column) {
                 Some(predicate) => projections.push(format!(
                     // NULL rather than an error, so `SELECT *` — what PostgREST sends by default —
                     // keeps working for a caller who may not read one column.
                     "    CASE WHEN {predicate} THEN {qualified} ELSE NULL END AS {}",
-                    quoted(&column.name)
+                    quoted(column)
                 )),
                 None => projections.push(format!("    {qualified}")),
             }
         }
 
+        // Dropped and recreated, not `CREATE OR REPLACE`: replace refuses anything but appending
+        // columns at the end, so a renamed or removed column would break every later push. The `api`
+        // schema is generated in full by Supatype, so there is nothing of the operator's to lose —
+        // and the trigger, which belongs to the view, is recreated below.
         out.push_str(&format!(
-            "CREATE OR REPLACE VIEW {}.{} WITH (security_invoker = true) AS\n\
+            "DROP VIEW IF EXISTS {}.{};\n\
+             CREATE VIEW {}.{} WITH (security_invoker = true) AS\n\
              SELECT\n{}\n  FROM {}.{};\n",
+            quoted(VIEW_SCHEMA),
+            quoted(table),
             quoted(VIEW_SCHEMA),
             quoted(table),
             projections.join(",\n"),
@@ -156,8 +270,7 @@ pub fn generate_field_views(ast: &SchemaAst, db: &DatabaseState, schema: &str) -
         ));
 
         if !masked.is_empty() {
-            let key = primary_key_columns(db, table);
-            if key.is_empty() {
+            if entry.key.is_empty() {
                 // Without a key there is no way to say *which* row an INSTEAD OF trigger should
                 // write, so the view is left read-only rather than given a trigger that guesses.
                 // PostgREST cannot update a keyless relation either, so nothing is lost that worked.
@@ -167,7 +280,7 @@ pub fn generate_field_views(ast: &SchemaAst, db: &DatabaseState, schema: &str) -
                 ));
                 continue;
             }
-            out.push_str(&render_write_trigger(ast, model, db, schema, table, &key));
+            out.push_str(&render_write_trigger(ast, model, schema, table, &entry.key, columns));
         }
     }
 
@@ -182,17 +295,12 @@ pub fn generate_field_views(ast: &SchemaAst, db: &DatabaseState, schema: &str) -
 fn render_write_trigger(
     ast: &SchemaAst,
     model: &ModelAst,
-    db: &DatabaseState,
     schema: &str,
     table: &str,
     key: &[String],
+    all_columns: &[String],
 ) -> String {
-    let db_table = db
-        .tables
-        .iter()
-        .find(|t| t.name == table)
-        .expect("caller checked the table exists");
-    let columns: Vec<&str> = db_table.columns.iter().map(|c| c.name.as_str()).collect();
+    let columns: Vec<&str> = all_columns.iter().map(String::as_str).collect();
     let fn_name = format!("{table}__write");
     let access = platform_access(model);
 
@@ -286,7 +394,7 @@ fn render_write_trigger(
          \x20 RETURN NEW;\n\
          END $trg$;\n\
          \n\
-         CREATE OR REPLACE TRIGGER {trigger_name}\n\
+         CREATE TRIGGER {trigger_name}\n\
          \x20 INSTEAD OF INSERT OR UPDATE OR DELETE ON {view_schema}.{table_quoted}\n\
          \x20 FOR EACH ROW EXECUTE FUNCTION {view_schema}.{fn_quoted}();\n\n",
         view_schema = quoted(VIEW_SCHEMA),

@@ -348,6 +348,28 @@ async fn main() -> Result<()> {
             // in the API with none of its rules applied.
             supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)?;
 
+            // The field-masking tier is decided from the introspected extension list. A cached schema
+            // state that predates extension introspection would claim there are none, silently
+            // switching a tier-1 database to views *and* revoking the API roles' access to its base
+            // tables. Cheap to rule out while a connection is open, and not something to discover
+            // afterwards.
+            if diff.field_masking == supatype_engine::differ::FieldMaskingTier::Views {
+                let installed: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)",
+                )
+                .bind(supatype_engine::generator::sql::rls::MASK_EXTENSION)
+                .fetch_one(&pool)
+                .await?;
+                if installed {
+                    anyhow::bail!(
+                        "This database has {ext} installed, but the schema state used for this diff                          says otherwise — so the push was about to switch field masking to generated                          views and take the API roles off your tables.
+                         
+                         Re-run with --no-cache to diff against the live database.",
+                        ext = supatype_engine::generator::sql::rls::MASK_EXTENSION
+                    );
+                }
+            }
+
             if diff.operations.is_empty() {
                 // Storage materialization is not part of the model diff; apply it before the
                 // admin-only migration refresh path.
@@ -1069,6 +1091,8 @@ mod tests {
             },
             warnings: vec![],
             unmanaged_model_tables: vec![],
+            field_masking: supatype_engine::differ::FieldMaskingTier::None,
+            field_view_plan: Vec::new(),
         };
         assert!(has_destructive_ops(&diff));
     }
