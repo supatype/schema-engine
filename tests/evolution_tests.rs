@@ -6989,3 +6989,60 @@ fn test_drop_managed_model_index_removed_from_ast() {
         diff.operations
     );
 }
+
+/// `Code<"sql">` and `Currency<"USD">` reach the engine as `kind: "json"` carrying an extra
+/// `tsType` — a fact only the TypeScript generator needs. The engine must ignore it and still emit
+/// `JSONB`; if serde ever rejected the unknown field instead, every schema using either type would
+/// fail to parse rather than to compile, which is a much worse error to debug.
+#[test]
+fn test_json_field_with_ts_type_annotation_is_parsed_as_jsonb() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Snippet",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "body": {
+          "kind": "json",
+          "required": true,
+          "tsType": "{ lang: \"sql\"; source: string }",
+          "annotations": { "db": { "pgType": "JSONB", "unique": false } }
+        },
+        "price": {
+          "kind": "json",
+          "required": false,
+          "tsType": "{ amount: string; code: \"USD\" }",
+          "annotations": { "db": { "pgType": "JSONB", "unique": false } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "snippets", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).expect("tsType must not break parsing");
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("\"body\" JSONB NOT NULL"),
+        "Code<> must become a required JSONB column, got:\n{sql}"
+    );
+    assert!(
+        sql.contains("\"price\" JSONB"),
+        "Currency<> must become a JSONB column, got:\n{sql}"
+    );
+}
