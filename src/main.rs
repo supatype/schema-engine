@@ -343,6 +343,11 @@ async fn main() -> Result<()> {
                 confirm_risky_changes(&diff)?;
             }
 
+            // Before either branch: an unchanged schema produces an empty diff, so the renderer's
+            // own check would never run and the push would report success while a declared table sat
+            // in the API with none of its rules applied.
+            supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)?;
+
             if diff.operations.is_empty() {
                 // Storage materialization is not part of the model diff; apply it before the
                 // admin-only migration refresh path.
@@ -1062,6 +1067,7 @@ mod tests {
                 is_destructive: true,
             },
             warnings: vec![],
+            unmanaged_model_tables: vec![],
         };
         assert!(has_destructive_ops(&diff));
     }

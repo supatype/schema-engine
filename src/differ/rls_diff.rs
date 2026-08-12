@@ -414,6 +414,26 @@ pub fn diff(
 
     for model in &ast.models {
         let table = model.table_name();
+
+        // A table the schema declares but Supatype did not create is left entirely alone.
+        //
+        // `ENABLE ROW LEVEL SECURITY` on someone else's table changes what every role except its
+        // owner can read — an existing application can stop seeing its own rows. Skipping is also
+        // fail-closed for Supatype's API: without the grants (skipped for the same reason) the API
+        // has no privileges on the table, so nothing is exposed under rules that are not enforced.
+        if let Some(db_table) = db.tables.iter().find(|t| t.name == table) {
+            if !crate::managed::is_managed_comment(db_table.comment.as_deref()) {
+                warnings.push(format!(
+                    "Table \"{table}\" already exists and is not managed by Supatype, so its \
+                     access rules were NOT applied — no row level security, policies, privileges or \
+                     field labels were changed. Run `supatype adopt` to take ownership of it, or \
+                     point the model at another table with `tableName`. Until then the API has no \
+                     access to it."
+                ));
+                continue;
+            }
+        }
+
         let has_access_rules = model.access().read.is_some()
             || model.access().create.is_some()
             || model.access().update.is_some()

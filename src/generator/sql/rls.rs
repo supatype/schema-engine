@@ -808,12 +808,18 @@ fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> Str
 /// function call per row per read to answer a question nobody asked. The `can_read_*`
 /// function is still generated — Studio wants a uniform affordance surface — it just
 /// does not appear in the label.
-pub fn generate_security_labels(ast: &SchemaAst, schema: &str) -> String {
+/// `skip` names tables the schema declares but Supatype did not create — see
+/// [`crate::differ::DiffOutput::unmanaged_model_tables`]. A `SECURITY LABEL` on their column is a
+/// change to their table.
+pub fn generate_security_labels(ast: &SchemaAst, schema: &str, skip: &[String]) -> String {
     let mut statements: Vec<String> = Vec::new();
     let mut keep: Vec<String> = Vec::new();
 
     for model in &ast.models {
         let table = db_table_name(model);
+        if skip.iter().any(|t| t == table) {
+            continue;
+        }
 
         for (column, rules) in &platform_access(model).fields {
             let mut parts: Vec<String> = Vec::new();

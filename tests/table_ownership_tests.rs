@@ -248,10 +248,17 @@ async fn a_column_is_not_retyped_on_an_unmanaged_table() {
             diff.warnings
         );
 
-        // And the migration still applies — the point is that it neither touches their column nor
-        // fails trying.
-        let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        // And the push refuses outright, naming the table. Applying the rest while silently leaving
+        // their column behind would put the schema and the database permanently out of step — and
+        // `--force` must not buy its way past this: forcing is for data loss you understand, not for
+        // taking ownership of someone else's table.
+        let refusal = migration::forward_sql(&diff, true, "public", &ast)
+            .expect_err("a push over an unmanaged model table must refuse");
+        let message = format!("{refusal:#}");
+        assert!(
+            message.contains("widget") && message.contains("adopt"),
+            "the refusal must name the table and the way out: {message}"
+        );
 
         let kind: String = sqlx::query_scalar(
             "SELECT data_type FROM information_schema.columns              WHERE table_schema = 'public' AND table_name = 'widget' AND column_name = 'id'",
@@ -266,6 +273,119 @@ async fn a_column_is_not_retyped_on_an_unmanaged_table() {
             .await
             .expect("their rows survive");
         assert_eq!(rows, 1, "their data went missing");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn access_rules_are_not_applied_to_an_unowned_table() {
+    common::with_integration_pool(|pool| async move {
+        // Declaring a model for a table that already exists is not permission to change it.
+        // `ENABLE ROW LEVEL SECURITY` on someone else's table changes what every role except its
+        // owner can read — an existing application can stop seeing its own rows — and revoking or
+        // granting privileges on it is the same intrusion by another route.
+        //
+        // Skipping is also fail-closed for Supatype: without the grants, the API has no access to the
+        // table, so nothing is served under rules that were never applied.
+        sqlx::raw_sql(
+            r#"
+            CREATE TABLE public.widget (id int primary key, name text);
+            GRANT SELECT ON public.widget TO PUBLIC;
+            INSERT INTO public.widget VALUES (1, 'theirs');
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("fixture applies");
+
+        const WITH_RULES: &str = r#"{
+          "astVersion": 2,
+          "models": [{
+            "name": "Widget",
+            "fields": {
+              "id": { "kind": "integer", "primaryKey": true, "required": true,
+                      "annotations": { "db": { "pgType": "INTEGER", "unique": false } } },
+              "name": { "kind": "text",
+                      "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+            },
+            "options": {},
+            "annotations": {
+              "db": { "tableName": "widget", "indexes": [] },
+              "platform": { "access": { "read": { "type": "authenticated" },
+                                        "create": { "type": "authenticated" } } }
+            }
+          }]
+        }"#;
+
+        let ast = parser::parse(WITH_RULES).expect("fixture parses");
+        let db = introspector::introspect(&pool, "public").await.unwrap();
+        let diff = differ::diff(&ast, &db).unwrap();
+
+        assert_eq!(
+            diff.unmanaged_model_tables,
+            vec!["widget".to_string()],
+            "the differ must tell the generators which declared tables are not ours"
+        );
+        let ops = op_names(&diff.operations);
+        assert!(
+            !ops.iter().any(|o| o.contains("EnableRls") || o.contains("Rls")),
+            "row level security was scheduled on a table Supatype does not own: {ops:?}"
+        );
+        assert!(
+            diff.warnings.iter().any(|w| w.contains("widget") && w.contains("adopt")),
+            "the skipped rules must be reported, and say how to opt in; warnings: {:?}",
+            diff.warnings
+        );
+
+        // The push refuses. Skipping the rules alone is not enough: PostgREST serves any table in
+        // an exposed schema that the request role can already read, so a table the operator had
+        // granted to PUBLIC would get an endpoint with none of the declared rules applied. Measured
+        // on a rehearsal — `GET /rest/v1/post` returned their rows as `anon`.
+        let refusal = migration::forward_sql(&diff, true, "public", &ast)
+            .expect_err("a push over an unmanaged model table must refuse");
+        let message = format!("{refusal:#}");
+        assert!(
+            message.contains("widget") && message.contains("adopt"),
+            "the refusal must name the table and the way out: {message}"
+        );
+
+        // Their table is exactly as they left it.
+        let rls: bool = sqlx::query_scalar(
+            "SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace              WHERE n.nspname = 'public' AND c.relname = 'widget'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("their table still exists");
+        assert!(!rls, "row level security was forced on a table Supatype does not own");
+
+        let policies: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'widget'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count policies");
+        assert_eq!(policies, 0, "policies were attached to a table Supatype does not own");
+
+        // And after adoption the rules do apply — the gate must be an opt-in, not a dead end.
+        for statement in supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db, "public") {
+            sqlx::raw_sql(&statement).execute(&pool).await.expect("stamp applies");
+        }
+        let adopted_db = introspector::introspect(&pool, "public").await.unwrap();
+        let adopted = differ::diff(&ast, &adopted_db).unwrap();
+        assert!(
+            adopted.unmanaged_model_tables.is_empty(),
+            "the table is still reported as unowned after adoption"
+        );
+        let sql = migration::forward_sql(&adopted, true, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies after adoption");
+
+        let rls: bool = sqlx::query_scalar(
+            "SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace              WHERE n.nspname = 'public' AND c.relname = 'widget'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read rls flag");
+        assert!(rls, "adoption did not make the access rules apply");
     })
     .await;
 }

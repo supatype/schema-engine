@@ -90,7 +90,7 @@ fn a_model_with_no_field_rules_emits_no_field_functions() {
 
 fn security_labels() -> String {
     let ast = parser::parse(FIXTURE).expect("fixture parses");
-    rls::generate_security_labels(&ast, "public")
+    rls::generate_security_labels(&ast, "public", &[])
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn a_schema_with_no_field_rules_clears_but_does_not_probe() {
             .fields
             .clear();
     }
-    let sql = rls::generate_security_labels(&ast, "public");
+    let sql = rls::generate_security_labels(&ast, "public", &[]);
 
     assert!(
         sql.contains("IS NULL"),

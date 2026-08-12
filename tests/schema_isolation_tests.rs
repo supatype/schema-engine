@@ -144,9 +144,9 @@ fn policies_grants_labels_and_triggers_all_name_the_managed_schema() {
 
     let policies = rls::generate(&ast, MANAGED).expect("policies render");
     let can = rls::generate_can_functions(&ast, MANAGED);
-    let labels = rls::generate_security_labels(&ast, MANAGED);
-    let table_grants = grants::generate_table_grants(&ast, MANAGED);
-    let column_grants = grants::generate_column_grants(&ast, MANAGED);
+    let labels = rls::generate_security_labels(&ast, MANAGED, &[]);
+    let table_grants = grants::generate_table_grants(&ast, MANAGED, &[]);
+    let column_grants = grants::generate_column_grants(&ast, MANAGED, &[]);
     let trigger_sql = triggers::generate(&ast, MANAGED).expect("triggers render");
 
     for (what, sql) in [

@@ -82,13 +82,21 @@ fn operand_reachable_by_anon(operand: &Operand) -> bool {
 ///
 /// Emitted on every push and idempotent: revoking a privilege that is not held is a
 /// no-op, and the matching grant is what restores access when a rule is relaxed.
-pub fn generate_table_grants(ast: &SchemaAst, schema: &str) -> String {
+/// `skip` names tables the schema declares but Supatype did not create.
+///
+/// Their privileges are not ours to change: a `REVOKE` would take access away from whatever else
+/// uses the table, and a `GRANT` would hand Supatype's API a table whose access rules were never
+/// applied. Skipping leaves it inaccessible to the API, which is the safe direction.
+pub fn generate_table_grants(ast: &SchemaAst, schema: &str, skip: &[String]) -> String {
     let mut anon_stmts: Vec<String> = Vec::new();
     let mut authed_stmts: Vec<String> = Vec::new();
 
     for model in &ast.models {
         let access = platform_access(model);
         let table = db_table_name(model);
+        if skip.iter().any(|t| t == table) {
+            continue;
+        }
         let qualified = format!("\"{schema}\".\"{}\"", table.replace('"', "\"\""));
 
         let read_anon = access.read.as_ref().is_some_and(reachable_by_anon);
@@ -167,12 +175,15 @@ fn privilege_stmt(privilege: &str, table: &str, role: &str, allowed: bool) -> St
 /// express `Role<"admin">`; a column privilege cannot, because an application role is a JWT
 /// claim and an admin still connects as `authenticated`. So only what a *database role*
 /// provably can never write is revoked here.
-pub fn generate_column_grants(ast: &SchemaAst, schema: &str) -> String {
+pub fn generate_column_grants(ast: &SchemaAst, schema: &str, skip: &[String]) -> String {
     let mut blocks: Vec<String> = Vec::new();
 
     for model in &ast.models {
         let access = platform_access(model);
         if access.fields.is_empty() {
+            continue;
+        }
+        if skip.iter().any(|t| t == db_table_name(model)) {
             continue;
         }
         let table = db_table_name(model);

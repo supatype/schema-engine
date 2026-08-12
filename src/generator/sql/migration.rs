@@ -16,7 +16,29 @@ use crate::parser::ast::{
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 
+/// Refuse a push whose schema declares a table Supatype does not manage.
+///
+/// Public because the check has to happen at the *entry* to a push, not only where SQL is rendered:
+/// an unchanged schema produces an empty diff, skips the renderer, and would otherwise report
+/// "schema pushed" while a declared table sat in the API with none of its rules applied.
+pub fn assert_no_unmanaged_model_tables(diff: &DiffOutput) -> Result<()> {
+    if diff.unmanaged_model_tables.is_empty() {
+        return Ok(());
+    }
+    let tables = diff.unmanaged_model_tables.join(", ");
+    bail!(
+        "Your schema declares model(s) for table(s) Supatype does not manage: {tables}.
+         
+         Nothing was applied. These tables already exist without Supatype's ownership marker, so a          push may neither alter them nor attach access rules to them — and leaving them in the API          without those rules would serve them under whatever privileges they already have.
+         
+         Run `supatype adopt` to bring them under management (it shows the SQL first), or point the          model at a different table with `tableName`. If these tables were created by an older          Supatype that did not stamp tables, `adopt` is also the right move."
+    );
+}
+
 fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
+    // Defence in depth for library callers that render SQL without going through a push entry point.
+    assert_no_unmanaged_model_tables(diff)?;
+
     if diff.summary.is_destructive && !force {
         bail!(
             "{} destructive operation(s) detected. Use --force to proceed.",
@@ -229,8 +251,8 @@ fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
 /// are. Idempotent: a `REVOKE` of a privilege that is not held is a no-op, and the
 /// matching `GRANT` is what restores access when a rule is relaxed, so running this
 /// on every push is what keeps privileges tracking the schema.
-fn render_grant_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
-    let sql = crate::generator::sql::grants::generate_table_grants(ast, schema);
+fn render_grant_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_table_grants(ast, schema, skip);
     if sql.trim().is_empty() {
         return Vec::new();
     }
@@ -247,8 +269,8 @@ fn render_grant_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
 /// Includes the capability probe: a schema that declares a masked column, pushed to a
 /// database without the masking extension, fails here rather than applying and leaving
 /// the column readable.
-fn render_security_label_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
-    let sql = crate::generator::sql::rls::generate_security_labels(ast, schema);
+fn render_security_label_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_security_labels(ast, schema, skip);
     if sql.trim().is_empty() {
         return Vec::new();
     }
@@ -270,20 +292,22 @@ fn render_security_label_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
 /// what every real push actually runs (`push_storage_and_model_apply_body`), so the
 /// privileges were generated and never applied. Anything in this list belongs on every
 /// path that applies a migration.
-fn render_reasserted_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+fn render_reasserted_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
+    // `can_*` functions are not skipped: they live in the managed schema and read the table, they do
+    // not change it. A Studio affordance for a table the API cannot reach is useless but harmless.
     let mut lines = render_can_function_lines(ast, schema);
-    lines.extend(render_grant_lines(ast, schema));
+    lines.extend(render_grant_lines(ast, schema, skip));
     // Strictly after the table grants: these narrow a table-level write privilege to a
     // column list, and the table grants would hand the whole table back if they ran after.
-    lines.extend(render_column_grant_lines(ast, schema));
-    lines.extend(render_security_label_lines(ast, schema));
+    lines.extend(render_column_grant_lines(ast, schema, skip));
+    lines.extend(render_security_label_lines(ast, schema, skip));
     lines
 }
 
 /// Column-level write privileges derived from the field rules — a second layer under the
 /// masking extension, for what a database role provably can never write.
-fn render_column_grant_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
-    let sql = crate::generator::sql::grants::generate_column_grants(ast, schema);
+fn render_column_grant_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_column_grants(ast, schema, skip);
     if sql.trim().is_empty() {
         return Vec::new();
     }
@@ -351,7 +375,7 @@ fn render_forward_operation_lines(
 fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
     let mut lines = render_forward_preamble(diff);
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(ast, schema));
+    lines.extend(render_reasserted_lines(ast, schema, &diff.unmanaged_model_tables));
     Ok(lines.join("\n"))
 }
 
@@ -360,7 +384,7 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     lines.push("BEGIN;".into());
     lines.push(String::new());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(ast, schema));
+    lines.extend(render_reasserted_lines(ast, schema, &diff.unmanaged_model_tables));
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }

@@ -141,6 +141,10 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
         .map_err(engine_error)?;
 
+    // Same reason as the CLI path: an empty diff must not report success over a table whose rules
+    // were never applied.
+    crate::generator::sql::migration::assert_no_unmanaged_model_tables(&diff).map_err(engine_error)?;
+
     if diff.operations.is_empty() {
         sqlx::raw_sql(&storage_sql)
             .execute(&pool)

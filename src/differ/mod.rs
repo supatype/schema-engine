@@ -22,6 +22,16 @@ pub struct DiffOutput {
     pub operations: Vec<Operation>,
     pub summary: DiffSummary,
     pub warnings: Vec<String>,
+    /// Tables a model declares that already exist **and** carry no ownership marker.
+    ///
+    /// Nothing that changes them may be emitted — not RLS, not policies, not grants, not security
+    /// labels. Declaring a model is not permission to alter a table Supatype did not create: enabling
+    /// row level security on it can stop another application reading its own data, and it is the same
+    /// argument that would license dropping its columns.
+    ///
+    /// Computed here because the generators see only the AST, and the marker lives in the database.
+    #[serde(default)]
+    pub unmanaged_model_tables: Vec<String>,
 }
 
 /// Each operation carries enough data for the SQL generator to produce DDL
@@ -249,6 +259,21 @@ pub fn diff_with_previous(
 
     let ordered_ops = ordering::topological_sort(ops)?;
 
+    // Model tables that already exist without an ownership marker. The security apparatus — grants,
+    // column privileges, field labels — is re-asserted from the AST alone on every push, so the
+    // renderer has no way to know which tables are ours unless it is told.
+    let unmanaged_model_tables: Vec<String> = ast
+        .models
+        .iter()
+        .filter_map(|m| {
+            db.tables
+                .iter()
+                .find(|t| t.name == m.table_name())
+                .filter(|t| !crate::managed::is_managed_comment(t.comment.as_deref()))
+                .map(|t| t.name.clone())
+        })
+        .collect();
+
     let safe = ordered_ops
         .iter()
         .filter(|o| matches!(risk_of(o), Risk::Safe))
@@ -264,6 +289,7 @@ pub fn diff_with_previous(
 
     Ok(DiffOutput {
         operations: ordered_ops,
+        unmanaged_model_tables,
         summary: DiffSummary {
             safe,
             cautious,
