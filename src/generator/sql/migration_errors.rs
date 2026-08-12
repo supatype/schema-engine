@@ -54,7 +54,7 @@ fn parse_impossible_cast(raw: &str) -> Option<(&str, &str)> {
     let (from, rest) = tail.split_once(" to ")?;
     // The type name ends at the first delimiter Postgres adds after it.
     let to = rest
-        .split(|c: char| c == '\n' || c == '"' || c == ',')
+        .split(['\n', '"', ','])
         .next()?
         .trim();
     if from.is_empty() || to.is_empty() {
