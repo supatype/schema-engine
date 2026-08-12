@@ -458,6 +458,7 @@ async fn main() -> Result<()> {
                 .await;
                 let msg = supatype_engine::generator::sql::migration_errors::enrich_migration_error(
                     &e.to_string(),
+                    Some(&diff),
                 );
                 return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
             }

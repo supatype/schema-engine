@@ -219,7 +219,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
             &e.to_string(),
         )
         .await;
-        let msg = crate::generator::sql::migration_errors::enrich_migration_error(&e.to_string());
+        let msg = crate::generator::sql::migration_errors::enrich_migration_error(&e.to_string(), Some(&diff));
         return Err(engine_error(anyhow::anyhow!(msg)));
     }
 

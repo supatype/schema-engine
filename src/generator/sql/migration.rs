@@ -27,11 +27,15 @@ pub fn assert_no_unmanaged_model_tables(diff: &DiffOutput) -> Result<()> {
     }
     let tables = diff.unmanaged_model_tables.join(", ");
     bail!(
-        "Your schema declares model(s) for table(s) Supatype does not manage: {tables}.
-         
-         Nothing was applied. These tables already exist without Supatype's ownership marker, so a          push may neither alter them nor attach access rules to them — and leaving them in the API          without those rules would serve them under whatever privileges they already have.
-         
-         Run `supatype adopt` to bring them under management (it shows the SQL first), or point the          model at a different table with `tableName`. If these tables were created by an older          Supatype that did not stamp tables, `adopt` is also the right move."
+        "Your schema declares model(s) for table(s) Supatype does not manage: {tables}.\n\n\
+         Nothing was applied. These tables already exist without Supatype's ownership marker, so a \
+         push may neither alter them nor attach access rules to them — and leaving them in the API \
+         without those rules would serve them under whatever privileges they already have.\n\n\
+         What to do:\n\
+         • Run `supatype adopt` to bring them under management (it shows the SQL first)\n\
+         • Or point the model at a different table with `tableName`\n\n\
+         If these tables were created by an older Supatype that did not stamp tables, `adopt` is \
+         the right move — one run and pushes work as before."
     );
 }
 

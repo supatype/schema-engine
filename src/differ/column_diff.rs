@@ -939,7 +939,7 @@ pub fn diff(
             // column; it may not have one changed underneath it.
             if !managed {
                 warnings.push(format!(
-                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed                      by Supatype (no ownership marker) — leaving it alone. Run `supatype adopt` to                      bring the table under management, or point the model at a different table with                      `tableName`.",
+                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed by Supatype (no ownership marker) — leaving it alone. Run `supatype adopt` to bring the table under management, or point the model at a different table with `tableName`.",
                     db_table.name, col_name
                 ));
                 continue;

@@ -425,10 +425,10 @@ pub fn diff(
             if !crate::managed::is_managed_comment(db_table.comment.as_deref()) {
                 warnings.push(format!(
                     "Table \"{table}\" already exists and is not managed by Supatype, so its \
-                     access rules were NOT applied — no row level security, policies, privileges or \
-                     field labels were changed. Run `supatype adopt` to take ownership of it, or \
-                     point the model at another table with `tableName`. Until then the API has no \
-                     access to it."
+                     access rules cannot be applied — a push may not attach row level security, \
+                     policies, privileges or field labels to a table it did not create. `supatype \
+                     push` refuses until you run `supatype adopt` to take ownership of it, or point \
+                     the model at another table with `tableName`."
                 ));
                 continue;
             }
@@ -579,7 +579,7 @@ pub fn diff(
 
     if !unmanaged.is_empty() {
         warnings.push(format!(
-            "{} hand-written policy/policies on managed tables were left untouched: {}.              Postgres combines permissive policies with OR, so these may grant access the              schema does not declare.",
+            "{} hand-written policy/policies on managed tables were left untouched: {}. Postgres combines permissive policies with OR, so these may grant access the schema does not declare.",
             unmanaged.len(),
             unmanaged.join(", "),
         ));
