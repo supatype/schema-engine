@@ -207,9 +207,15 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
                 continue;
             }
             FieldAst::Relation(rel) => {
-                // Only BelongsTo/HasOne produce a real FK column
+                // Only BelongsTo owns a column here, and this must agree with the migration
+                // generator or the document describes a table that does not exist. It used to
+                // include HasOne, which `generator/sql/migration.rs` explicitly does not emit a
+                // column for — HasOne is the *inverse* side, and the foreign key (with its UNIQUE)
+                // belongs to whichever model declares the RelatedTo. So the spec advertised an
+                // `<name>_id` that was never created, and a client generated from it sent a column
+                // PostgREST rejects.
                 match rel.cardinality {
-                    RelationCardinality::BelongsTo | RelationCardinality::HasOne => {
+                    RelationCardinality::BelongsTo => {
                         let fk_default = format!("{name}_id");
                         let fk_col = rel.foreign_key.as_deref().unwrap_or(&fk_default);
                         properties.insert(
@@ -222,7 +228,7 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
                             }),
                         );
                     }
-                    _ => {} // HasMany / ManyToMany are virtual
+                    _ => {} // HasOne / HasMany / ManyToMany hold no column on this table
                 }
                 continue;
             }

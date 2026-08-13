@@ -7046,3 +7046,81 @@ fn test_json_field_with_ts_type_annotation_is_parsed_as_jsonb() {
         "Currency<> must become a JSONB column, got:\n{sql}"
     );
 }
+
+/// The OpenAPI document must agree with the migration generator about who owns a foreign key.
+///
+/// `HasOne` is the *inverse* side: the column (and its UNIQUE) belongs to whichever model declares
+/// the `RelatedTo`, and `generator/sql/migration.rs` emits nothing for `hasOne`. The spec generator
+/// used to emit an `<name>_id` property for it anyway, so a client generated from the document sent
+/// a column PostgREST rejects — and the document described a table that does not exist.
+#[test]
+fn test_openapi_omits_column_for_inverse_relations() {
+    use supatype_engine::generator::openapi;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "settings": { "kind": "relation", "cardinality": "hasOne", "target": "Settings" },
+        "comments": { "kind": "relation", "cardinality": "hasMany", "target": "Comment" }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "posts", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    },
+    {
+      "name": "Settings",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "post": { "kind": "relation", "cardinality": "belongsTo", "target": "Post" }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "settings", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let spec = openapi::generate(&ast).unwrap();
+
+    let post_props = spec["components"]["schemas"]["Post"]["properties"]
+        .as_object()
+        .expect("Post schema must have properties");
+    assert!(
+        !post_props.contains_key("settings_id"),
+        "hasOne owns no column, so the spec must not advertise settings_id: {post_props:?}"
+    );
+    assert!(
+        !post_props.contains_key("comments_id"),
+        "hasMany owns no column: {post_props:?}"
+    );
+
+    // The owning side still carries its foreign key, or the fix would have removed real columns.
+    let settings_props = spec["components"]["schemas"]["Settings"]["properties"]
+        .as_object()
+        .expect("Settings schema must have properties");
+    assert!(
+        settings_props.contains_key("post_id"),
+        "belongsTo owns the column and must still appear: {settings_props:?}"
+    );
+}
