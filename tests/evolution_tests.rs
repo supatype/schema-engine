@@ -7124,3 +7124,75 @@ fn test_openapi_omits_column_for_inverse_relations() {
         "belongsTo owns the column and must still appear: {settings_props:?}"
     );
 }
+
+/// A field can name its Studio widget, and an unknown name is ignored rather than trusted.
+///
+/// `Code<"sql">`, `Currency<"USD">` and `Duration` are all stored as JSONB, so a widget chosen from
+/// the column kind alone gives all three the raw JSON editor. `annotations.platform.editor` was
+/// parsed by this engine and read by nothing; this is what makes it mean something.
+#[test]
+fn test_admin_config_honours_declared_editor_widget() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Snippet",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "body": {
+          "kind": "json",
+          "required": true,
+          "annotations": { "db": { "pgType": "JSONB" }, "platform": { "editor": "code" } }
+        },
+        "price": {
+          "kind": "json",
+          "required": false,
+          "annotations": { "db": { "pgType": "JSONB" }, "platform": { "editor": "currency" } }
+        },
+        "payload": {
+          "kind": "json",
+          "required": false,
+          "annotations": { "db": { "pgType": "JSONB" } }
+        },
+        "unknown_widget": {
+          "kind": "json",
+          "required": false,
+          "annotations": { "db": { "pgType": "JSONB" }, "platform": { "editor": "hologram" } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "snippets", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let widget_of = |name: &str| -> String {
+        fields
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap_or_else(|| panic!("field {name} missing from admin config"))["widget"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    assert_eq!(widget_of("body"), "code");
+    assert_eq!(widget_of("price"), "currency");
+    // No declaration: the kind still decides.
+    assert_eq!(widget_of("payload"), "json");
+    // A widget Studio cannot render would leave the field with no editor, so it falls back.
+    assert_eq!(widget_of("unknown_widget"), "json");
+}
