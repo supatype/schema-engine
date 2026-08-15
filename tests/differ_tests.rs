@@ -256,7 +256,11 @@ fn test_rls_not_re_enabled_when_already_on() {
     let ast = parser::parse(&blog_ast_without_access()).unwrap();
 
     let db = DatabaseState {
-        rls_enabled_tables: ast.models.iter().map(|m| m.table_name().to_string()).collect(),
+        rls_enabled_tables: ast
+            .models
+            .iter()
+            .map(|m| m.table_name().to_string())
+            .collect(),
         ..DatabaseState::default()
     };
 

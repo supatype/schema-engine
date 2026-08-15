@@ -96,11 +96,7 @@ fn a_row_dependent_write_rule_on_a_required_column_is_refused() {
 
 #[test]
 fn a_write_rule_denying_everyone_is_refused() {
-    let schema = schema_with(
-        r#"{ "type": "private" }"#,
-        r#"{ "type": "public" }"#,
-        "",
-    );
+    let schema = schema_with(r#"{ "type": "private" }"#, r#"{ "type": "public" }"#, "");
     let error = diff_error(&schema, &db_with_posts()).expect("expected a refusal");
     assert!(
         error.contains("denies every caller"),
@@ -143,7 +139,10 @@ fn an_optional_column_is_not_a_problem() {
         r#"{ "type": "public" }"#,
         "",
     )
-    .replace(r#""kind": "text", "required": true"#, r#""kind": "text", "required": false"#);
+    .replace(
+        r#""kind": "text", "required": true"#,
+        r#""kind": "text", "required": false"#,
+    );
     assert!(diff_error(&schema, &db_with_posts()).is_none());
 }
 
@@ -182,23 +181,17 @@ fn an_undecidable_narrowing_is_not_refused() {
 
 #[test]
 fn a_public_write_rule_is_not_a_problem() {
-    let schema = schema_with(
-        r#"{ "type": "public" }"#,
-        r#"{ "type": "public" }"#,
-        "",
-    );
+    let schema = schema_with(r#"{ "type": "public" }"#, r#"{ "type": "public" }"#, "");
     assert!(diff_error(&schema, &db_with_posts()).is_none());
 }
 
 // A column with only a read rule says nothing about who may write it.
 #[test]
 fn a_read_only_field_rule_is_not_a_problem() {
-    let schema = schema_with(
-        r#"{ "type": "public" }"#,
-        r#"{ "type": "public" }"#,
-        "",
-    )
-    .replace(r#""write": { "type": "public" }"#, r#""read": { "type": "private" }"#);
+    let schema = schema_with(r#"{ "type": "public" }"#, r#"{ "type": "public" }"#, "").replace(
+        r#""write": { "type": "public" }"#,
+        r#""read": { "type": "private" }"#,
+    );
     assert!(diff_error(&schema, &db_with_posts()).is_none());
 }
 
@@ -220,7 +213,9 @@ fn an_unintrospected_table_warns_instead_of_refusing() {
     );
     let warnings = diff_warnings(&schema, &empty);
     assert!(
-        warnings.iter().any(|w| w.contains("no caller can ever insert a row")),
+        warnings
+            .iter()
+            .any(|w| w.contains("no caller can ever insert a row")),
         "expected a warning, got: {warnings:#?}"
     );
     assert!(

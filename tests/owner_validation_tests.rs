@@ -350,7 +350,7 @@ fn owner_rule_fk_column_name_generates_correct_rls() {
     let ast = parser::parse(schema).expect("schema with FK-column Owner must parse");
     let message = ast.models.iter().find(|m| m.name == "Message").unwrap();
     let delete_rule = message.access().delete.as_ref().expect("delete rule");
-    let expr = access_rule_to_expr(&ast, message, delete_rule);
+    let expr = access_rule_to_expr(&ast, message, delete_rule, "public");
     assert!(
         expr.contains("auth.uid() = author_id"),
         "RLS must compare auth.uid() to the author_id FK column, got: {expr}"

@@ -35,7 +35,10 @@ fn members_table_tags_the_identity_space_of_every_row() {
 fn seed_carries_forward_existing_admin_claims() {
     let sql = migration_history::seed_studio_members_from_claims_sql();
 
-    assert!(sql.contains("INSERT INTO _supatype.studio_members"), "got: {sql}");
+    assert!(
+        sql.contains("INSERT INTO _supatype.studio_members"),
+        "got: {sql}"
+    );
     assert!(sql.contains("raw_app_meta_data->>'role'"), "got: {sql}");
 }
 

@@ -190,8 +190,9 @@ fn a_full_migration_script_never_mentions_public() {
     // the trigger SQL goes, so a trigger qualified with `public` would slip past this check.
     let storage_sql =
         supatype_engine::generator::sql::storage::generate(&ast).expect("storage sql renders");
-    let sql = migration::push_storage_and_model_batch_sql(&storage_sql, &diff, false, MANAGED, &ast)
-        .expect("script renders");
+    let sql =
+        migration::push_storage_and_model_batch_sql(&storage_sql, &diff, false, MANAGED, &ast)
+            .expect("script renders");
 
     // `public` legitimately appears in `GRANT USAGE ... TO PUBLIC` (the role) and in the realtime
     // drop's legacy-name cleanup, so match the qualified-identifier form only.

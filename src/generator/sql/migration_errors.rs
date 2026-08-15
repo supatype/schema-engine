@@ -53,10 +53,7 @@ fn parse_impossible_cast(raw: &str) -> Option<(&str, &str)> {
     let tail = raw.split("cannot cast type ").nth(1)?;
     let (from, rest) = tail.split_once(" to ")?;
     // The type name ends at the first delimiter Postgres adds after it.
-    let to = rest
-        .split(['\n', '"', ','])
-        .next()?
-        .trim();
+    let to = rest.split(['\n', '"', ',']).next()?.trim();
     if from.is_empty() || to.is_empty() {
         return None;
     }
@@ -69,11 +66,7 @@ fn parse_impossible_cast(raw: &str) -> Option<(&str, &str)> {
 /// there is no statement-level error to attribute. Two columns converting between the same pair in
 /// one push are indistinguishable — the first is named, which is still incomparably better than
 /// naming none.
-fn find_type_change<'a>(
-    diff: &'a DiffOutput,
-    from: &str,
-    to: &str,
-) -> Option<(&'a str, &'a str)> {
+fn find_type_change<'a>(diff: &'a DiffOutput, from: &str, to: &str) -> Option<(&'a str, &'a str)> {
     diff.operations.iter().find_map(|op| {
         let (table, column, changes) = match op {
             Operation::AlterColumn {
@@ -183,10 +176,22 @@ mod tests {
         };
 
         let msg = enrich_migration_error("cannot cast type integer to uuid", Some(&diff));
-        assert!(msg.contains("\"post\".\"id\""), "the column is not named: {msg}");
-        assert!(msg.contains("integer") && msg.contains("uuid"), "the types are not named: {msg}");
-        assert!(msg.contains("rolled back"), "the message must say nothing was applied: {msg}");
-        assert!(msg.contains("post.id"), "the remedy must name the field to change: {msg}");
+        assert!(
+            msg.contains("\"post\".\"id\""),
+            "the column is not named: {msg}"
+        );
+        assert!(
+            msg.contains("integer") && msg.contains("uuid"),
+            "the types are not named: {msg}"
+        );
+        assert!(
+            msg.contains("rolled back"),
+            "the message must say nothing was applied: {msg}"
+        );
+        assert!(
+            msg.contains("post.id"),
+            "the remedy must name the field to change: {msg}"
+        );
     }
 
     #[test]

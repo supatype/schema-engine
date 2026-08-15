@@ -94,7 +94,8 @@ async fn install_tier_two(pool: &sqlx::PgPool) {
     let db = introspector::introspect(pool, "public")
         .await
         .expect("introspect for the view generator");
-    let sql = field_views::render_field_views(&ast, &field_views::field_view_plan(&ast, &db), "public");
+    let sql =
+        field_views::render_field_views(&ast, &field_views::field_view_plan(&ast, &db), "public");
     assert!(
         !sql.is_empty(),
         "the generator produced nothing for a schema that masks a column"
@@ -196,7 +197,10 @@ async fn as_caller(pool: &sqlx::PgPool, uid: &str, sql: &str) -> Result<(), Stri
          SET LOCAL \"request.jwt.claims\" = '{{\"uid\": \"{uid}\"}}'; \
          SET LOCAL ROLE contract_app;"
     );
-    sqlx::raw_sql(&prelude).execute(&mut *tx).await.expect("assume identity");
+    sqlx::raw_sql(&prelude)
+        .execute(&mut *tx)
+        .await
+        .expect("assume identity");
 
     let result = sqlx::raw_sql(sql).execute(&mut *tx).await;
     let answer = match result {
@@ -369,7 +373,10 @@ async fn both_tiers_present_the_same_contract() {
         if !common::mask_extension_available(&pool).await {
             return;
         }
-        sqlx::raw_sql(SETUP).execute(&pool).await.expect("contract fixture applies");
+        sqlx::raw_sql(SETUP)
+            .execute(&pool)
+            .await
+            .expect("contract fixture applies");
 
         assert_contract(&pool, Tier::Extension).await;
 

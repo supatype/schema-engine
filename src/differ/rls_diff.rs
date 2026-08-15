@@ -181,193 +181,6 @@ fn canonicalise_keywords_and_casts(s: &str) -> String {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{intersect_rule, normalise};
-    use crate::parser::ast::AccessRule;
-
-    // Junction semantics: a link is only as accessible as its least-accessible
-    // endpoint, and a rule that depends on row data cannot be applied to a
-    // junction table (it has none of the parents' columns) so it must deny.
-    #[test]
-    fn intersect_takes_the_stricter_of_two_rules() {
-        let public = AccessRule::Public;
-        let admin = AccessRule::Role { roles: vec!["admin".into()] };
-        let authed = AccessRule::Authenticated;
-
-        assert!(matches!(
-            intersect_rule(Some(&public), Some(&admin)),
-            Some(AccessRule::Role { ref roles }) if roles == &vec!["admin".to_string()]
-        ));
-        assert!(matches!(
-            intersect_rule(Some(&public), Some(&authed)),
-            Some(AccessRule::Authenticated)
-        ));
-        assert!(matches!(
-            intersect_rule(Some(&public), Some(&public)),
-            Some(AccessRule::Public)
-        ));
-        assert!(matches!(
-            intersect_rule(Some(&AccessRule::Private), Some(&public)),
-            Some(AccessRule::Private)
-        ));
-    }
-
-    #[test]
-    fn intersect_denies_when_no_role_satisfies_both_parents() {
-        let editor = AccessRule::Role { roles: vec!["editor".into()] };
-        let admin = AccessRule::Role { roles: vec!["admin".into()] };
-        assert!(matches!(
-            intersect_rule(Some(&editor), Some(&admin)),
-            Some(AccessRule::Private)
-        ));
-        // Overlapping role sets keep only the shared roles.
-        let a = AccessRule::Role { roles: vec!["admin".into(), "editor".into()] };
-        assert!(matches!(
-            intersect_rule(Some(&a), Some(&admin)),
-            Some(AccessRule::Role { ref roles }) if roles == &vec!["admin".to_string()]
-        ));
-    }
-
-    #[test]
-    fn intersect_yields_none_for_row_dependent_rules() {
-        let owner = AccessRule::Owner { field: "user_id".into() };
-        assert!(intersect_rule(Some(&owner), Some(&AccessRule::Public)).is_none());
-        assert!(intersect_rule(
-            Some(&AccessRule::Owner { field: "user_id".into() }),
-            Some(&AccessRule::Public)
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn intersect_denies_when_either_parent_omits_the_operation() {
-        assert!(intersect_rule(None, Some(&AccessRule::Public)).is_none());
-        assert!(intersect_rule(Some(&AccessRule::Public), None).is_none());
-    }
-
-    #[test]
-    fn normalise_strips_own_table_column_prefix() {
-        let generated = "EXISTS (SELECT 1 FROM \"album\" WHERE \"album\".id = album_id AND auth.uid() = \"album\".owner_id)";
-        let stored = "(EXISTS ( SELECT 1 FROM album WHERE ((album.id = photo.album_id) AND (uid() = album.owner_id))))";
-        assert_eq!(normalise(generated, "photo"), normalise(stored, "photo"));
-    }
-
-    // Regression: Private/Public rules generate nothing but a boolean literal, and
-    // Postgres stores it lowercase — so every push re-created these policies.
-    #[test]
-    fn normalise_matches_boolean_literal_case() {
-        assert_eq!(normalise("FALSE", "setup_bundle_versions"), normalise("false", "setup_bundle_versions"));
-        assert_eq!(normalise("TRUE", "setup_bundle_versions"), normalise("(true)", "setup_bundle_versions"));
-    }
-
-    // Regression: Postgres adds an explicit cast to stored literals.
-    #[test]
-    fn normalise_ignores_stored_casts() {
-        let generated = "auth.role() = 'admin'";
-        let stored = "(role() = 'admin'::text)";
-        assert_eq!(normalise(generated, "setup_bundle_versions"), normalise(stored, "setup_bundle_versions"));
-    }
-
-    #[test]
-    fn normalise_preserves_string_literal_case_and_contents() {
-        // A role literal that happens to spell a keyword must not be case-folded
-        // into a different value, and `::` inside a literal is not a cast.
-        assert_ne!(normalise("auth.role() = 'Admin'", "t"), normalise("auth.role() = 'admin'", "t"));
-        assert_eq!(normalise("x = 'a::b'", "t"), "x = 'a::b'");
-    }
-
-    #[test]
-    fn normalise_keeps_operator_after_cast() {
-        assert_eq!(
-            normalise("(status = 'live'::text AND deleted IS NULL)", "t"),
-            "status = 'live' AND deleted IS null"
-        );
-    }
-
-    // Auth calls are wrapped in a scalar subquery so the planner evaluates them
-    // once per query rather than once per row. Postgres stores such a subquery
-    // with an output alias it invented, so without dropping `AS <alias>` every
-    // policy would look changed on every push — the convergence failure this
-    // differ has already been bitten by twice.
-    #[test]
-    fn normalise_matches_a_stored_scalar_subquery() {
-        let generated = "(SELECT auth.uid()) = user_id";
-        let stored = "(( SELECT auth.uid() AS uid) = post.user_id)";
-        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
-    }
-
-    #[test]
-    fn normalise_matches_a_stored_role_subquery() {
-        let generated = "(SELECT auth.role()) = 'admin'";
-        let stored = "(( SELECT auth.role() AS role) = 'admin'::text)";
-        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
-    }
-
-    #[test]
-    fn normalise_matches_a_wrapped_call_inside_a_subquery() {
-        let generated = "EXISTS (SELECT 1 FROM \"album\" WHERE \"album\".id = album_id AND (SELECT auth.uid()) = \"album\".owner_id)";
-        let stored = "(EXISTS ( SELECT 1 FROM album WHERE ((album.id = photo.album_id) AND (( SELECT auth.uid() AS uid) = album.owner_id))))";
-        assert_eq!(normalise(generated, "photo"), normalise(stored, "photo"));
-    }
-
-    // A wrapped call and a bare one are genuinely different SQL with different
-    // performance, so the differ must see the rewrite and apply it exactly once.
-    #[test]
-    fn normalise_still_distinguishes_a_wrapped_call_from_a_bare_one() {
-        assert_ne!(
-            normalise("(SELECT auth.uid()) = user_id", "post"),
-            normalise("auth.uid() = user_id", "post")
-        );
-    }
-
-    // Regression: the cast stripper consumed `[` and `]` freely to cope with array
-    // types like `::text[]`, which also ate the bracket closing the enclosing
-    // `ARRAY[…]`. Every multi-role policy therefore differed from its stored form
-    // and was dropped and recreated on every single push.
-    #[test]
-    fn normalise_matches_a_stored_role_array() {
-        let generated = "(SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])";
-        let stored = "(( SELECT auth.role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))";
-        assert_eq!(normalise(generated, "categories"), normalise(stored, "categories"));
-    }
-
-    #[test]
-    fn normalise_still_strips_array_type_casts() {
-        assert_eq!(
-            normalise("tags = '{a,b}'::text[]", "t"),
-            normalise("(t.tags = '{a,b}'::text[])", "t")
-        );
-        assert!(!normalise("tags = '{a}'::text[]", "t").contains("text"));
-    }
-
-    // Postgres rewrites `INTERVAL '30 days'` as `'30 days'::interval` — the keyword
-    // moves into a cast, and the cast is stripped. Without dropping the keyword too,
-    // every temporal rule looked changed on every push.
-    #[test]
-    fn normalise_matches_a_stored_interval() {
-        let generated = "created_at >= (SELECT now() - INTERVAL '30 days')";
-        let stored = "(post.created_at >= ( SELECT (now() - '30 days'::interval)))";
-        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
-    }
-
-    #[test]
-    fn normalise_matches_a_stored_date_trunc() {
-        let generated = "created_at >= (SELECT date_trunc('week', now()))";
-        let stored = "(post.created_at >= ( SELECT date_trunc('week'::text, now()) AS date_trunc))";
-        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
-    }
-
-    // "as" inside a string literal is not an alias.
-    #[test]
-    fn normalise_does_not_strip_as_inside_a_literal() {
-        assert_eq!(
-            normalise("name = 'flagged as spam'", "t"),
-            "name = 'flagged as spam'"
-        );
-    }
-}
-
 pub fn diff(
     ast: &SchemaAst,
     db: &DatabaseState,
@@ -469,8 +282,10 @@ pub fn diff(
 
             for (suffix, rule_opt) in &expected {
                 let policy_name = format!("{table}_{suffix}");
-                let expected_expr =
-                    normalise(&access_rule_to_expr(ast, model, rule_opt.unwrap(), schema), table);
+                let expected_expr = normalise(
+                    &access_rule_to_expr(ast, model, rule_opt.unwrap(), schema),
+                    table,
+                );
 
                 if let Some(db_pol) = db_pol_map.get(policy_name.as_str()) {
                     // Policy exists — compare the USING or WITH CHECK expression.
@@ -585,7 +400,14 @@ pub fn diff(
         ));
     }
 
-    junction_diff(ast, &rls_enabled_tables, &db_policies_by_table, ops, warnings, schema);
+    junction_diff(
+        ast,
+        &rls_enabled_tables,
+        &db_policies_by_table,
+        ops,
+        warnings,
+        schema,
+    );
 
     // ── Tables in DB with RLS but not in schema (dropped models) ─────────────
     // These are handled by DropTable in table_diff — no need to drop policies separately.
@@ -786,5 +608,219 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
                 Some(AccessRule::Role { roles: shared })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{intersect_rule, normalise};
+    use crate::parser::ast::AccessRule;
+
+    // Junction semantics: a link is only as accessible as its least-accessible
+    // endpoint, and a rule that depends on row data cannot be applied to a
+    // junction table (it has none of the parents' columns) so it must deny.
+    #[test]
+    fn intersect_takes_the_stricter_of_two_rules() {
+        let public = AccessRule::Public;
+        let admin = AccessRule::Role {
+            roles: vec!["admin".into()],
+        };
+        let authed = AccessRule::Authenticated;
+
+        assert!(matches!(
+            intersect_rule(Some(&public), Some(&admin)),
+            Some(AccessRule::Role { ref roles }) if roles == &vec!["admin".to_string()]
+        ));
+        assert!(matches!(
+            intersect_rule(Some(&public), Some(&authed)),
+            Some(AccessRule::Authenticated)
+        ));
+        assert!(matches!(
+            intersect_rule(Some(&public), Some(&public)),
+            Some(AccessRule::Public)
+        ));
+        assert!(matches!(
+            intersect_rule(Some(&AccessRule::Private), Some(&public)),
+            Some(AccessRule::Private)
+        ));
+    }
+
+    #[test]
+    fn intersect_denies_when_no_role_satisfies_both_parents() {
+        let editor = AccessRule::Role {
+            roles: vec!["editor".into()],
+        };
+        let admin = AccessRule::Role {
+            roles: vec!["admin".into()],
+        };
+        assert!(matches!(
+            intersect_rule(Some(&editor), Some(&admin)),
+            Some(AccessRule::Private)
+        ));
+        // Overlapping role sets keep only the shared roles.
+        let a = AccessRule::Role {
+            roles: vec!["admin".into(), "editor".into()],
+        };
+        assert!(matches!(
+            intersect_rule(Some(&a), Some(&admin)),
+            Some(AccessRule::Role { ref roles }) if roles == &vec!["admin".to_string()]
+        ));
+    }
+
+    #[test]
+    fn intersect_yields_none_for_row_dependent_rules() {
+        let owner = AccessRule::Owner {
+            field: "user_id".into(),
+        };
+        assert!(intersect_rule(Some(&owner), Some(&AccessRule::Public)).is_none());
+        assert!(intersect_rule(
+            Some(&AccessRule::Owner {
+                field: "user_id".into()
+            }),
+            Some(&AccessRule::Public)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn intersect_denies_when_either_parent_omits_the_operation() {
+        assert!(intersect_rule(None, Some(&AccessRule::Public)).is_none());
+        assert!(intersect_rule(Some(&AccessRule::Public), None).is_none());
+    }
+
+    #[test]
+    fn normalise_strips_own_table_column_prefix() {
+        let generated = "EXISTS (SELECT 1 FROM \"album\" WHERE \"album\".id = album_id AND auth.uid() = \"album\".owner_id)";
+        let stored = "(EXISTS ( SELECT 1 FROM album WHERE ((album.id = photo.album_id) AND (uid() = album.owner_id))))";
+        assert_eq!(normalise(generated, "photo"), normalise(stored, "photo"));
+    }
+
+    // Regression: Private/Public rules generate nothing but a boolean literal, and
+    // Postgres stores it lowercase — so every push re-created these policies.
+    #[test]
+    fn normalise_matches_boolean_literal_case() {
+        assert_eq!(
+            normalise("FALSE", "setup_bundle_versions"),
+            normalise("false", "setup_bundle_versions")
+        );
+        assert_eq!(
+            normalise("TRUE", "setup_bundle_versions"),
+            normalise("(true)", "setup_bundle_versions")
+        );
+    }
+
+    // Regression: Postgres adds an explicit cast to stored literals.
+    #[test]
+    fn normalise_ignores_stored_casts() {
+        let generated = "auth.role() = 'admin'";
+        let stored = "(role() = 'admin'::text)";
+        assert_eq!(
+            normalise(generated, "setup_bundle_versions"),
+            normalise(stored, "setup_bundle_versions")
+        );
+    }
+
+    #[test]
+    fn normalise_preserves_string_literal_case_and_contents() {
+        // A role literal that happens to spell a keyword must not be case-folded
+        // into a different value, and `::` inside a literal is not a cast.
+        assert_ne!(
+            normalise("auth.role() = 'Admin'", "t"),
+            normalise("auth.role() = 'admin'", "t")
+        );
+        assert_eq!(normalise("x = 'a::b'", "t"), "x = 'a::b'");
+    }
+
+    #[test]
+    fn normalise_keeps_operator_after_cast() {
+        assert_eq!(
+            normalise("(status = 'live'::text AND deleted IS NULL)", "t"),
+            "status = 'live' AND deleted IS null"
+        );
+    }
+
+    // Auth calls are wrapped in a scalar subquery so the planner evaluates them
+    // once per query rather than once per row. Postgres stores such a subquery
+    // with an output alias it invented, so without dropping `AS <alias>` every
+    // policy would look changed on every push — the convergence failure this
+    // differ has already been bitten by twice.
+    #[test]
+    fn normalise_matches_a_stored_scalar_subquery() {
+        let generated = "(SELECT auth.uid()) = user_id";
+        let stored = "(( SELECT auth.uid() AS uid) = post.user_id)";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    #[test]
+    fn normalise_matches_a_stored_role_subquery() {
+        let generated = "(SELECT auth.role()) = 'admin'";
+        let stored = "(( SELECT auth.role() AS role) = 'admin'::text)";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    #[test]
+    fn normalise_matches_a_wrapped_call_inside_a_subquery() {
+        let generated = "EXISTS (SELECT 1 FROM \"album\" WHERE \"album\".id = album_id AND (SELECT auth.uid()) = \"album\".owner_id)";
+        let stored = "(EXISTS ( SELECT 1 FROM album WHERE ((album.id = photo.album_id) AND (( SELECT auth.uid() AS uid) = album.owner_id))))";
+        assert_eq!(normalise(generated, "photo"), normalise(stored, "photo"));
+    }
+
+    // A wrapped call and a bare one are genuinely different SQL with different
+    // performance, so the differ must see the rewrite and apply it exactly once.
+    #[test]
+    fn normalise_still_distinguishes_a_wrapped_call_from_a_bare_one() {
+        assert_ne!(
+            normalise("(SELECT auth.uid()) = user_id", "post"),
+            normalise("auth.uid() = user_id", "post")
+        );
+    }
+
+    // Regression: the cast stripper consumed `[` and `]` freely to cope with array
+    // types like `::text[]`, which also ate the bracket closing the enclosing
+    // `ARRAY[…]`. Every multi-role policy therefore differed from its stored form
+    // and was dropped and recreated on every single push.
+    #[test]
+    fn normalise_matches_a_stored_role_array() {
+        let generated = "(SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])";
+        let stored = "(( SELECT auth.role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))";
+        assert_eq!(
+            normalise(generated, "categories"),
+            normalise(stored, "categories")
+        );
+    }
+
+    #[test]
+    fn normalise_still_strips_array_type_casts() {
+        assert_eq!(
+            normalise("tags = '{a,b}'::text[]", "t"),
+            normalise("(t.tags = '{a,b}'::text[])", "t")
+        );
+        assert!(!normalise("tags = '{a}'::text[]", "t").contains("text"));
+    }
+
+    // Postgres rewrites `INTERVAL '30 days'` as `'30 days'::interval` — the keyword
+    // moves into a cast, and the cast is stripped. Without dropping the keyword too,
+    // every temporal rule looked changed on every push.
+    #[test]
+    fn normalise_matches_a_stored_interval() {
+        let generated = "created_at >= (SELECT now() - INTERVAL '30 days')";
+        let stored = "(post.created_at >= ( SELECT (now() - '30 days'::interval)))";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    #[test]
+    fn normalise_matches_a_stored_date_trunc() {
+        let generated = "created_at >= (SELECT date_trunc('week', now()))";
+        let stored = "(post.created_at >= ( SELECT date_trunc('week'::text, now()) AS date_trunc))";
+        assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    // "as" inside a string literal is not an alias.
+    #[test]
+    fn normalise_does_not_strip_as_inside_a_literal() {
+        assert_eq!(
+            normalise("name = 'flagged as spam'", "t"),
+            "name = 'flagged as spam'"
+        );
     }
 }

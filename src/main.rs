@@ -381,7 +381,8 @@ async fn main() -> Result<()> {
                 // Trigger functions (slug / updated_at) are idempotent and not part of
                 // the model diff — ensure they exist on every push so an up-to-date
                 // schema still gets its slug/updated_at triggers installed.
-                let triggers_sql = supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
+                let triggers_sql =
+                    supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
                 sqlx::raw_sql(&triggers_sql)
                     .execute(&pool)
                     .await
@@ -542,7 +543,7 @@ async fn main() -> Result<()> {
             // A failure here is a missing diagnostic, not a broken push: the enforcement
             // itself is the labels, which are already applied in this transaction.
             if let Err(e) = migration_history::record_field_enforcement(
-                &mut *tx,
+                &mut tx,
                 migration_history::labelled_column_count(&ast),
             )
             .await
@@ -586,9 +587,12 @@ async fn main() -> Result<()> {
             tx.commit().await.context("commit migration transaction")?;
 
             if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
-                if let Err(e) =
-                    migration_history::save_studio_metadata_if_present(&pool, admin_cfg, schema_snap)
-                        .await
+                if let Err(e) = migration_history::save_studio_metadata_if_present(
+                    &pool,
+                    admin_cfg,
+                    schema_snap,
+                )
+                .await
                 {
                     eprintln!("Warning: failed to refresh Studio metadata: {e}");
                 }
@@ -624,7 +628,10 @@ async fn main() -> Result<()> {
                 "{}",
                 supatype_engine::generator::sql::rls::generate_auth_helpers()
             );
-            println!("{}", supatype_engine::generator::sql::rls::generate(&ast, &schema)?);
+            println!(
+                "{}",
+                supatype_engine::generator::sql::rls::generate(&ast, &schema)?
+            );
         }
         Command::Storage => {
             let ast = supatype_engine::parser::parse(&input)?;

@@ -227,17 +227,6 @@ fn previous_model<'a>(
         .find(|m| m.table_name() == table_name)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::is_extension_managed_table;
-
-    #[test]
-    fn ignores_known_extension_managed_tables() {
-        assert!(is_extension_managed_table("spatial_ref_sys"));
-        assert!(!is_extension_managed_table("post"));
-    }
-}
-
 /// Emit AddForeignKey ops for all belongsTo relations on a model that don't already exist in the DB.
 fn emit_fk_ops_for_model(
     model: &crate::parser::ast::ModelAst,
@@ -319,5 +308,16 @@ fn drop_removed_fks(
                 risk: Risk::Safe,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_extension_managed_table;
+
+    #[test]
+    fn ignores_known_extension_managed_tables() {
+        assert!(is_extension_managed_table("spatial_ref_sys"));
+        assert!(!is_extension_managed_table("post"));
     }
 }

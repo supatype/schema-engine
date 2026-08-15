@@ -338,7 +338,9 @@ pub fn adopt_stamp_sql(ast: &SchemaAst, db: &DatabaseState, schema: &str) -> Vec
         // The same marker `CREATE TABLE` writes. A different shape would leave the table
         // permanently undroppable and the differ unable to converge.
         let comment = managed_comment("table", table, &[]);
-        lines.push(crate::managed::comment_on_table_sql(table, &comment, schema));
+        lines.push(crate::managed::comment_on_table_sql(
+            table, &comment, schema,
+        ));
     }
 
     for junction in &ast.junction_tables {

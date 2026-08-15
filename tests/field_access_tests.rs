@@ -196,4 +196,3 @@ fn a_schema_with_no_field_rules_clears_but_does_not_probe() {
         "emitted a label with no rule to back it:\n{sql}"
     );
 }
-

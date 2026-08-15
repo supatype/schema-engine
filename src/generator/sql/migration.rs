@@ -425,7 +425,12 @@ fn render_forward_operation_lines(
 fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
     let mut lines = render_forward_preamble(diff);
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(diff, ast, schema, &diff.unmanaged_model_tables));
+    lines.extend(render_reasserted_lines(
+        diff,
+        ast,
+        schema,
+        &diff.unmanaged_model_tables,
+    ));
     Ok(lines.join("\n"))
 }
 
@@ -434,7 +439,12 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     lines.push("BEGIN;".into());
     lines.push(String::new());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(diff, ast, schema, &diff.unmanaged_model_tables));
+    lines.extend(render_reasserted_lines(
+        diff,
+        ast,
+        schema,
+        &diff.unmanaged_model_tables,
+    ));
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }
@@ -543,12 +553,22 @@ fn render_create_rls_policy_sql(
         .models
         .iter()
         .find(|m| m.name == junction.model_a)
-        .ok_or_else(|| anyhow!("CreateRlsPolicy: junction {table} parent {} not found", junction.model_a))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "CreateRlsPolicy: junction {table} parent {} not found",
+                junction.model_a
+            )
+        })?;
     let parent_b = ast
         .models
         .iter()
         .find(|m| m.name == junction.model_b)
-        .ok_or_else(|| anyhow!("CreateRlsPolicy: junction {table} parent {} not found", junction.model_b))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "CreateRlsPolicy: junction {table} parent {} not found",
+                junction.model_b
+            )
+        })?;
 
     let derived = crate::differ::rls_diff::intersect_access(parent_a.access(), parent_b.access());
     let rule = match suffix {
@@ -564,10 +584,7 @@ fn render_create_rls_policy_sql(
     // The differ only derives row-independent rules for junctions, because the
     // junction table has none of the parents' columns for a row-dependent
     // expression to reference. Assert that here rather than emit invalid SQL.
-    if matches!(
-        rule,
-        AccessRule::Owner { .. } | AccessRule::Any { .. }
-    ) {
+    if matches!(rule, AccessRule::Owner { .. } | AccessRule::Any { .. }) {
         bail!(
             "CreateRlsPolicy: junction {table} derived a row-dependent rule for {suffix}; \
              it cannot reference parent columns"

@@ -379,13 +379,12 @@ pub async fn record_field_enforcement(
     conn: &mut sqlx::PgConnection,
     labelled_columns: usize,
 ) -> Result<()> {
-    let extension: Option<String> = sqlx::query_scalar(
-        "SELECT extversion FROM pg_extension WHERE extname = $1",
-    )
-    .bind(crate::generator::sql::rls::MASK_EXTENSION)
-    .fetch_optional(&mut *conn)
-    .await?
-    .flatten();
+    let extension: Option<String> =
+        sqlx::query_scalar("SELECT extversion FROM pg_extension WHERE extname = $1")
+            .bind(crate::generator::sql::rls::MASK_EXTENSION)
+            .fetch_optional(&mut *conn)
+            .await?
+            .flatten();
 
     // Tier 2 is real enforcement, not a failure — but only if the views are actually there. Asking
     // the database rather than assuming: a schema that *should* have views and does not is exactly
@@ -932,12 +931,11 @@ pub async fn load_migration_sources(
 /// Skipped when there is no `auth` schema (a plain Postgres target), rather than
 /// failing a push that has nothing to do with auth.
 pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bool> {
-    let exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1",
-    )
-    .bind(auth_schema)
-    .fetch_optional(pool)
-    .await?;
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1")
+            .bind(auth_schema)
+            .fetch_optional(pool)
+            .await?;
     if exists.is_none() {
         return Ok(false);
     }
@@ -961,20 +959,41 @@ pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bo
 /// accumulating (a migrations table with no `hash`, RLS state that never
 /// converged, Studio metadata written on only one code path).
 pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(create_internal_schema_sql()).execute(pool).await?;
-    sqlx::raw_sql(&create_migrations_table_sql()).execute(pool).await?;
-    sqlx::raw_sql(&create_studio_members_table_sql()).execute(pool).await?;
-    sqlx::raw_sql(&ensure_studio_members_platform_identity_sql()).execute(pool).await?;
-    sqlx::raw_sql(&create_studio_audit_table_sql()).execute(pool).await?;
-    sqlx::raw_sql(&ensure_studio_audit_columns_sql()).execute(pool).await?;
+    sqlx::raw_sql(create_internal_schema_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&create_migrations_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&create_studio_members_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_studio_members_platform_identity_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&create_studio_audit_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_studio_audit_columns_sql())
+        .execute(pool)
+        .await?;
     // Migrating an existing project: carry forward the admins who only have the
     // old `app_metadata.role` claim, before that claim stops meaning anything.
-    if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql()).execute(pool).await {
+    if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql())
+        .execute(pool)
+        .await
+    {
         eprintln!("Warning: failed to seed Studio membership from existing admin roles: {e}");
     }
-    sqlx::raw_sql(&create_schema_state_table_sql()).execute(pool).await?;
-    sqlx::raw_sql(&ensure_schema_state_studio_columns_sql()).execute(pool).await?;
-    sqlx::raw_sql(&ensure_schema_state_capabilities_column_sql()).execute(pool).await?;
+    sqlx::raw_sql(&create_schema_state_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_schema_state_studio_columns_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_schema_state_capabilities_column_sql())
+        .execute(pool)
+        .await?;
 
     for sql in ensure_all_migration_columns_sql() {
         sqlx::raw_sql(&sql).execute(pool).await?;

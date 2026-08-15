@@ -33,7 +33,9 @@ const ONE_MODEL: &str = r#"{
 const NO_MODELS: &str = r#"{ "astVersion": 2, "models": [] }"#;
 
 fn op_names(ops: &[differ::Operation]) -> Vec<String> {
-    ops.iter().map(|op| format!("{op:?}").chars().take(140).collect()).collect()
+    ops.iter()
+        .map(|op| format!("{op:?}").chars().take(140).collect())
+        .collect()
 }
 
 #[tokio::test]
@@ -167,7 +169,10 @@ async fn a_table_the_engine_creates_is_stamped() {
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
         let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("migration applies");
 
         let comment: Option<String> =
             sqlx::query_scalar("SELECT obj_description('public.widget'::regclass, 'pg_class')")
@@ -176,7 +181,10 @@ async fn a_table_the_engine_creates_is_stamped() {
                 .expect("the table exists");
 
         assert!(
-            comment.as_deref().unwrap_or("").starts_with("supatype:managed"),
+            comment
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("supatype:managed"),
             "a table the engine created carries no ownership marker, so it could never be dropped \
              again; comment was {comment:?}"
         );
@@ -186,7 +194,9 @@ async fn a_table_the_engine_creates_is_stamped() {
         let db = introspector::introspect(&pool, "public").await.unwrap();
         let second = differ::diff(&empty, &db).unwrap();
         assert!(
-            op_names(&second.operations).iter().any(|o| o.contains("DropTable") && o.contains("widget")),
+            op_names(&second.operations)
+                .iter()
+                .any(|o| o.contains("DropTable") && o.contains("widget")),
             "the gate must not make our own tables undroppable; ops: {:?}",
             op_names(&second.operations)
         );

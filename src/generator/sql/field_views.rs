@@ -74,7 +74,12 @@ fn read_predicate(ast: &SchemaAst, model: &ModelAst, schema: &str, column: &str)
 ///
 /// Writing a column you cannot read is not a right the schema can express, and allowing it would let
 /// a caller discover the old value by trial: attempt a write, observe whether it was refused.
-fn write_predicate(ast: &SchemaAst, model: &ModelAst, schema: &str, column: &str) -> Option<String> {
+fn write_predicate(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    schema: &str,
+    column: &str,
+) -> Option<String> {
     let rules = platform_access(model).fields.get(column)?;
     let write = rules.write.as_ref()?;
     let write_expr = crate::generator::sql::rls::access_rule_to_expr(ast, model, write, schema);
@@ -280,7 +285,9 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
                 ));
                 continue;
             }
-            out.push_str(&render_write_trigger(ast, model, schema, table, &entry.key, columns));
+            out.push_str(&render_write_trigger(
+                ast, model, schema, table, &entry.key, columns,
+            ));
         }
     }
 
@@ -359,7 +366,11 @@ fn render_write_trigger(
         .map(|c| format!("{} = NEW.{}", quoted(c), quoted(c)))
         .collect::<Vec<_>>()
         .join(",\n           ");
-    let insert_cols = columns.iter().map(|c| quoted(c)).collect::<Vec<_>>().join(", ");
+    let insert_cols = columns
+        .iter()
+        .map(|c| quoted(c))
+        .collect::<Vec<_>>()
+        .join(", ");
     let insert_vals = columns
         .iter()
         .map(|c| format!("NEW.{}", quoted(c)))

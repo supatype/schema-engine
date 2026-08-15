@@ -50,7 +50,11 @@ GRANT USAGE ON SCHEMA public TO tamper_app;
 "#;
 
 /// Run SQL as `tamper_app` with a given identity. Returns rows, or the error text.
-async fn attempt(pool: &sqlx::PgPool, uid: &str, sql: &str) -> Result<Vec<sqlx::postgres::PgRow>, String> {
+async fn attempt(
+    pool: &sqlx::PgPool,
+    uid: &str,
+    sql: &str,
+) -> Result<Vec<sqlx::postgres::PgRow>, String> {
     let mut tx = pool.begin().await.expect("begin");
     sqlx::raw_sql(&format!(
         "SET LOCAL tamper.uid = '{uid}'; SET LOCAL ROLE tamper_app;"
@@ -190,12 +194,26 @@ async fn aggregates_over_an_unreadable_column_error_rather_than_undercount() {
             eprintln!("SKIP field-access tamper suite: supatype_mask is not installed");
             return;
         }
-        sqlx::raw_sql(SETUP).execute(&pool).await.expect("tamper fixture applies");
+        sqlx::raw_sql(SETUP)
+            .execute(&pool)
+            .await
+            .expect("tamper fixture applies");
 
         // A quietly partial total is worse than an error: `sum` skipping the rows a caller cannot
         // read looks like an answer and is not one.
-        for agg in ["sum(salary)", "avg(salary)", "min(salary)", "max(salary)", "count(salary)"] {
-            let result = attempt(&pool, "bob", &format!("SELECT {agg} FROM public.tamper_staff")).await;
+        for agg in [
+            "sum(salary)",
+            "avg(salary)",
+            "min(salary)",
+            "max(salary)",
+            "count(salary)",
+        ] {
+            let result = attempt(
+                &pool,
+                "bob",
+                &format!("SELECT {agg} FROM public.tamper_staff"),
+            )
+            .await;
             assert!(
                 result.is_err(),
                 "{agg} returned a value for a caller who cannot read every row — that is a \
@@ -205,9 +223,13 @@ async fn aggregates_over_an_unreadable_column_error_rather_than_undercount() {
 
         // Restricted to rows the caller *can* read, an aggregate is correct and must still work —
         // otherwise the rule has broken legitimate use rather than restricted it.
-        let rows = attempt(&pool, "bob", "SELECT sum(salary) AS total FROM public.tamper_staff WHERE id = 2")
-            .await
-            .expect("an aggregate over readable rows must still work");
+        let rows = attempt(
+            &pool,
+            "bob",
+            "SELECT sum(salary) AS total FROM public.tamper_staff WHERE id = 2",
+        )
+        .await
+        .expect("an aggregate over readable rows must still work");
         assert_eq!(rows[0].get::<Option<i64>, _>("total"), Some(200));
     })
     .await;
@@ -220,7 +242,10 @@ async fn a_masked_value_cannot_be_smuggled_out_through_a_projection() {
             eprintln!("SKIP field-access tamper suite: supatype_mask is not installed");
             return;
         }
-        sqlx::raw_sql(SETUP).execute(&pool).await.expect("tamper fixture applies");
+        sqlx::raw_sql(SETUP)
+            .execute(&pool)
+            .await
+            .expect("tamper fixture applies");
 
         // Casting, concatenating or arithmetic on the column operates on the substituted NULL,
         // not the stored value — so each of these must be NULL for a row bob cannot read.
@@ -240,9 +265,16 @@ async fn a_masked_value_cannot_be_smuggled_out_through_a_projection() {
             .await
             .unwrap_or_else(|e| panic!("{expr} errored unexpectedly: {e}"));
 
-            let v: Option<String> = rows[0].try_get::<Option<String>, _>("v").unwrap_or_else(|_| {
-                rows[0].try_get::<Option<i32>, _>("v").ok().flatten().map(|n| n.to_string())
-            });
+            let v: Option<String> =
+                rows[0]
+                    .try_get::<Option<String>, _>("v")
+                    .unwrap_or_else(|_| {
+                        rows[0]
+                            .try_get::<Option<i32>, _>("v")
+                            .ok()
+                            .flatten()
+                            .map(|n| n.to_string())
+                    });
 
             // `coalesce` and `greatest` legitimately turn NULL into their fallback — the point is
             // that the fallback is what appears, never 300.
@@ -254,7 +286,12 @@ async fn a_masked_value_cannot_be_smuggled_out_through_a_projection() {
 
         // A whole-row reference bypasses per-column rewriting by construction, so it is refused
         // outright rather than masked.
-        let whole_row = attempt(&pool, "bob", "SELECT to_jsonb(t) FROM public.tamper_staff t WHERE id = 3").await;
+        let whole_row = attempt(
+            &pool,
+            "bob",
+            "SELECT to_jsonb(t) FROM public.tamper_staff t WHERE id = 3",
+        )
+        .await;
         assert!(
             whole_row.is_err(),
             "a whole-row reference returned a row — every column would be in it, unmasked"
@@ -270,7 +307,10 @@ async fn writes_cannot_destroy_a_value_the_caller_never_saw() {
             eprintln!("SKIP field-access tamper suite: supatype_mask is not installed");
             return;
         }
-        sqlx::raw_sql(SETUP).execute(&pool).await.expect("tamper fixture applies");
+        sqlx::raw_sql(SETUP)
+            .execute(&pool)
+            .await
+            .expect("tamper fixture applies");
 
         // The round-trip: bob reads row 3, gets NULL for salary, and writes the whole object back.
         // The value must survive, and the write must not error — a whole-object client is not
@@ -280,17 +320,23 @@ async fn writes_cannot_destroy_a_value_the_caller_never_saw() {
             .execute(&mut *tx)
             .await
             .expect("assume identity");
-        sqlx::raw_sql("UPDATE public.tamper_staff SET salary = NULL, name = 'carol edited' WHERE id = 3")
+        sqlx::raw_sql(
+            "UPDATE public.tamper_staff SET salary = NULL, name = 'carol edited' WHERE id = 3",
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("a round-tripped null must not error");
+        // Read it back as the owner *inside the same transaction* to see the stored value.
+        sqlx::raw_sql("RESET ROLE")
             .execute(&mut *tx)
             .await
-            .expect("a round-tripped null must not error");
-        // Read it back as the owner *inside the same transaction* to see the stored value.
-        sqlx::raw_sql("RESET ROLE").execute(&mut *tx).await.expect("reset");
-        let stored: Option<i32> = sqlx::query("SELECT salary FROM public.tamper_staff WHERE id = 3")
-            .fetch_one(&mut *tx)
-            .await
-            .expect("read back")
-            .get("salary");
+            .expect("reset");
+        let stored: Option<i32> =
+            sqlx::query("SELECT salary FROM public.tamper_staff WHERE id = 3")
+                .fetch_one(&mut *tx)
+                .await
+                .expect("read back")
+                .get("salary");
         assert_eq!(
             stored,
             Some(300),
@@ -314,7 +360,11 @@ async fn writes_cannot_destroy_a_value_the_caller_never_saw() {
             .await
             .expect("read back")
             .get("salary");
-        assert_eq!(after, Some(300), "an unreadable column was overwritten by a caller who cannot read it");
+        assert_eq!(
+            after,
+            Some(300),
+            "an unreadable column was overwritten by a caller who cannot read it"
+        );
 
         // RETURNING must not become a read channel either.
         let returned = attempt(

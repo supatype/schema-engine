@@ -302,8 +302,7 @@ fn set_exists_expr(
 
         MembershipSource::Rows { table, filter, .. } => {
             let table_esc = table.replace('"', "\"\"");
-            let mut sql =
-                format!("EXISTS (SELECT 1 FROM \"{schema}\".\"{table_esc}\"");
+            let mut sql = format!("EXISTS (SELECT 1 FROM \"{schema}\".\"{table_esc}\"");
             if let Some(rule) = filter {
                 let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
                 let inner_expr = match inner_model {
@@ -388,7 +387,10 @@ fn membership_to_expr(
                     Some(m) => access_rule_to_expr(ast, m, rule, schema),
                     None => access_rule_to_expr(ast, model, rule, schema),
                 };
-                sql.push_str(&format!(" AND ({})", qualify_bare_columns(&inner_expr, table)));
+                sql.push_str(&format!(
+                    " AND ({})",
+                    qualify_bare_columns(&inner_expr, table)
+                ));
             }
             sql.push(')');
             sql
@@ -474,15 +476,21 @@ pub fn membership_index_targets(rule: &AccessRule) -> Vec<(String, String)> {
 
 fn collect_membership_targets(rule: &AccessRule, out: &mut Vec<(String, String)>) {
     match rule {
-        AccessRule::In { source, .. } => {
-            if let MembershipSource::Rows { table, column, filter } = source {
-                let pair = (table.clone(), column.clone());
-                if !out.contains(&pair) {
-                    out.push(pair);
-                }
-                if let Some(inner) = filter {
-                    collect_membership_targets(inner, out);
-                }
+        AccessRule::In {
+            source:
+                MembershipSource::Rows {
+                    table,
+                    column,
+                    filter,
+                },
+            ..
+        } => {
+            let pair = (table.clone(), column.clone());
+            if !out.contains(&pair) {
+                out.push(pair);
+            }
+            if let Some(inner) = filter {
+                collect_membership_targets(inner, out);
             }
         }
         AccessRule::Any { rules } | AccessRule::All { rules } => {
@@ -525,10 +533,7 @@ fn join_rules(
         .iter()
         .map(|r| {
             let expr = access_rule_to_expr(ast, model, r, schema);
-            if matches!(
-                r,
-                AccessRule::Any { .. } | AccessRule::All { .. }
-            ) {
+            if matches!(r, AccessRule::Any { .. } | AccessRule::All { .. }) {
                 format!("({expr})")
             } else {
                 expr
@@ -840,11 +845,7 @@ pub fn generate_security_labels(ast: &SchemaAst, schema: &str, skip: &[String]) 
                 continue;
             }
 
-            keep.push(format!(
-                "({}, {})",
-                sql_string(table),
-                sql_string(column)
-            ));
+            keep.push(format!("({}, {})", sql_string(table), sql_string(column)));
             statements.push(format!(
                 "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN \"{schema}\".\"{t}\".\"{c}\"\n  \
                  IS 'MASK {body}';",
@@ -967,4 +968,3 @@ fn render_can_function(schema: &str, table: &str, op: &str, expr: &str) -> Strin
          $can$;\n\n"
     )
 }
-

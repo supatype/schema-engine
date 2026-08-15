@@ -118,7 +118,10 @@ fn normalize_and_validate_rule_inner(
             normalize_and_validate_rule_inner(rule, model_name, owner_eligible)
         }
         AccessRule::In { source, .. } => {
-            if let crate::parser::ast::MembershipSource::Rows { filter: Some(f), .. } = source {
+            if let crate::parser::ast::MembershipSource::Rows {
+                filter: Some(f), ..
+            } = source
+            {
                 normalize_and_validate_rule_inner(f, model_name, owner_eligible)?;
             }
             Ok(())

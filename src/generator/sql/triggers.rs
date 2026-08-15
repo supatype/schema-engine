@@ -29,7 +29,12 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
 
         for (field_name, field) in &model.fields {
             if let FieldAst::Slug(slug) = field {
-                out.push_str(&slug_trigger(schema, model.table_name(), field_name, &slug.from));
+                out.push_str(&slug_trigger(
+                    schema,
+                    model.table_name(),
+                    field_name,
+                    &slug.from,
+                ));
             }
         }
     }

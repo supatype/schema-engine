@@ -199,8 +199,12 @@ mod tests {
     #[test]
     fn test_role_prefers_app_metadata_over_postgrest_role_claim() {
         let sql = generate_role_function("auth", "abc123");
-        let app_idx = sql.find("'app_metadata' ->> 'role'").expect("app_metadata lookup");
-        let claim_idx = sql.find("::jsonb ->> 'role'").expect("top-level role fallback");
+        let app_idx = sql
+            .find("'app_metadata' ->> 'role'")
+            .expect("app_metadata lookup");
+        let claim_idx = sql
+            .find("::jsonb ->> 'role'")
+            .expect("top-level role fallback");
         assert!(
             app_idx < claim_idx,
             "app role must take precedence over the PostgREST role claim",

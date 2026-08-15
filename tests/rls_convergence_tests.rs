@@ -11,11 +11,7 @@
 mod common;
 
 use supatype_engine::{
-    differ,
-    generator::sql::migration,
-    introspector,
-    parser,
-    state::database_state::DatabaseState,
+    differ, generator::sql::migration, introspector, parser, state::database_state::DatabaseState,
 };
 
 // Five models with access rules covering owner, role and multi-role shapes, and
@@ -72,7 +68,10 @@ async fn or_composition_reaches_the_database() {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
         let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("migration applies");
 
         // `pg_get_expr` qualifies a name only when it is not visible on the
         // session's search_path, so with `auth` on the path it deparses
@@ -171,7 +170,10 @@ async fn update_using_and_check_are_separate_clauses() {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
         let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("migration applies");
 
         let (using_expr, check_expr): (Option<String>, Option<String>) = sqlx::query_as(
             "SELECT pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)
@@ -184,8 +186,14 @@ async fn update_using_and_check_are_separate_clauses() {
         let using_expr = using_expr.unwrap_or_default();
         let check_expr = check_expr.unwrap_or_default();
 
-        assert!(using_expr.contains("author_id"), "USING lost the row selection: {using_expr}");
-        assert!(check_expr.contains("title"), "WITH CHECK lost the constraint: {check_expr}");
+        assert!(
+            using_expr.contains("author_id"),
+            "USING lost the row selection: {using_expr}"
+        );
+        assert!(
+            check_expr.contains("title"),
+            "WITH CHECK lost the constraint: {check_expr}"
+        );
         assert_ne!(
             using_expr, check_expr,
             "the two halves collapsed into one predicate"
@@ -248,7 +256,10 @@ async fn membership_sources_get_their_index() {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
         let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("migration applies");
 
         let indexed: bool = sqlx::query_scalar(
             "SELECT EXISTS (
@@ -312,7 +323,10 @@ async fn stored_policies_evaluate_auth_once_per_query() {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
         let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
         let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("migration applies");
 
         // Same reason as above: force full qualification so `SELECT auth.uid()` is
         // what the catalog hands back, rather than a search_path-dependent `uid()`.

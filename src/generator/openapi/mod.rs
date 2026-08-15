@@ -214,21 +214,19 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
                 // belongs to whichever model declares the RelatedTo. So the spec advertised an
                 // `<name>_id` that was never created, and a client generated from it sent a column
                 // PostgREST rejects.
-                match rel.cardinality {
-                    RelationCardinality::BelongsTo => {
-                        let fk_default = format!("{name}_id");
-                        let fk_col = rel.foreign_key.as_deref().unwrap_or(&fk_default);
-                        properties.insert(
-                            fk_col.to_string(),
-                            json!({
-                                "type": "string",
-                                "format": "uuid",
-                                "nullable": true,
-                                "description": format!("FK -> {}", rel.target)
-                            }),
-                        );
-                    }
-                    _ => {} // HasOne / HasMany / ManyToMany hold no column on this table
+                // BelongsTo only: HasOne, HasMany and ManyToMany hold no column on this table.
+                if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
+                    let fk_default = format!("{name}_id");
+                    let fk_col = rel.foreign_key.as_deref().unwrap_or(&fk_default);
+                    properties.insert(
+                        fk_col.to_string(),
+                        json!({
+                            "type": "string",
+                            "format": "uuid",
+                            "nullable": true,
+                            "description": format!("FK -> {}", rel.target)
+                        }),
+                    );
                 }
                 continue;
             }

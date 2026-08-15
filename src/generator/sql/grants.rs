@@ -121,7 +121,9 @@ pub fn generate_table_grants(
         // used to go round the mask and neither can a stray credential.
         if serve_from.is_some() {
             anon_stmts.push(format!("REVOKE ALL PRIVILEGES ON {base} FROM anon"));
-            authed_stmts.push(format!("REVOKE ALL PRIVILEGES ON {base} FROM authenticated"));
+            authed_stmts.push(format!(
+                "REVOKE ALL PRIVILEGES ON {base} FROM authenticated"
+            ));
         }
 
         let read_anon = access.read.as_ref().is_some_and(reachable_by_anon);
@@ -147,7 +149,12 @@ pub fn generate_table_grants(
                 "anon",
                 rule.is_some_and(reachable_by_anon),
             ));
-            authed_stmts.push(privilege_stmt(op, &qualified, "authenticated", rule.is_some()));
+            authed_stmts.push(privilege_stmt(
+                op,
+                &qualified,
+                "authenticated",
+                rule.is_some(),
+            ));
         }
     }
 
@@ -155,14 +162,18 @@ pub fn generate_table_grants(
         return String::new();
     }
 
-    let mut out = String::from("DO $grants$
+    let mut out = String::from(
+        "DO $grants$
 BEGIN
-");
+",
+    );
     out.push_str(&guarded_block("anon", &anon_stmts));
     out.push_str(&guarded_block("authenticated", &authed_stmts));
-    out.push_str("END
+    out.push_str(
+        "END
 $grants$;
-");
+",
+    );
     out
 }
 
@@ -174,9 +185,11 @@ fn guarded_block(role: &str, statements: &[String]) -> String {
         .iter()
         .map(|s| format!("    EXECUTE '{}';\n", s.replace('\'', "''")))
         .collect::<String>();
-    format!("  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+    format!(
+        "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
 {body}  END IF;
-")
+"
+    )
 }
 
 fn privilege_stmt(privilege: &str, table: &str, role: &str, allowed: bool) -> String {
@@ -220,7 +233,9 @@ pub fn generate_column_grants(ast: &SchemaAst, schema: &str, skip: &[String]) ->
             // No table-level rule means `generate_table_grants` revoked the operation from
             // both roles. Granting a column complement back would *widen* what the table
             // rules just closed, so there is nothing to do.
-            let Some(table_rule) = table_rule else { continue };
+            let Some(table_rule) = table_rule else {
+                continue;
+            };
 
             for role in ["anon", "authenticated"] {
                 if role == "anon" && !reachable_by_anon(table_rule) {

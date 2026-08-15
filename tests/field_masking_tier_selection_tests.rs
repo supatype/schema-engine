@@ -85,11 +85,14 @@ async fn prepare(pool: &sqlx::PgPool) {
 /// Apply the schema the way a push does, returning the diff that produced it.
 async fn push(pool: &sqlx::PgPool) -> differ::DiffOutput {
     let ast = parser::parse(SCHEMA).expect("schema parses");
-    let db = introspector::introspect(pool, "public").await.expect("introspect");
+    let db = introspector::introspect(pool, "public")
+        .await
+        .expect("introspect");
     let diff = differ::diff(&ast, &db).expect("diff");
     let storage_sql = storage::generate(&ast).expect("storage sql");
-    let sql = migration::push_storage_and_model_batch_sql(&storage_sql, &diff, true, "public", &ast)
-        .expect("migration renders");
+    let sql =
+        migration::push_storage_and_model_batch_sql(&storage_sql, &diff, true, "public", &ast)
+            .expect("migration renders");
     sqlx::raw_sql(&sql)
         .execute(pool)
         .await
@@ -101,7 +104,9 @@ async fn push(pool: &sqlx::PgPool) -> differ::DiffOutput {
 async fn a_database_without_the_extension_gets_views_instead_of_a_refusal() {
     common::with_integration_pool(|pool| async move {
         if common::mask_extension_available(&pool).await {
-            eprintln!("SKIP: this image has supatype_mask, so tier 1 applies; see the contract suite");
+            eprintln!(
+                "SKIP: this image has supatype_mask, so tier 1 applies; see the contract suite"
+            );
             return;
         }
         prepare(&pool).await;
@@ -129,10 +134,11 @@ async fn a_database_without_the_extension_gets_views_instead_of_a_refusal() {
         );
 
         // And the masking is in the definition, not merely implied.
-        let def: String = sqlx::query_scalar("SELECT pg_get_viewdef('api.tier_employee'::regclass)")
-            .fetch_one(&pool)
-            .await
-            .expect("read the view definition");
+        let def: String =
+            sqlx::query_scalar("SELECT pg_get_viewdef('api.tier_employee'::regclass)")
+                .fetch_one(&pool)
+                .await
+                .expect("read the view definition");
         assert!(
             def.contains("CASE") && def.contains("claim_text"),
             "the masked column is not masked in the view: {def}"
@@ -174,7 +180,10 @@ async fn tier_two_takes_the_api_roles_off_the_base_tables() {
                     .fetch_one(&pool)
                     .await
                     .expect("read view privilege");
-            assert!(view, "{role} cannot read the view, so the API would serve nothing");
+            assert!(
+                view,
+                "{role} cannot read the view, so the API would serve nothing"
+            );
         }
 
         // `service_role` keeps its base access by standing policy — it is the escape hatch. Asserted

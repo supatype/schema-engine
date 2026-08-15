@@ -89,7 +89,10 @@ fn grants_come_after_table_creation() {
     let sql = forward_sql();
     let first_create = sql.find("CREATE TABLE").expect("fixture creates tables");
     let first_grant = sql.find("DO $grants$").expect("fixture emits privileges");
-    assert!(first_grant > first_create, "privileges emitted before the tables exist");
+    assert!(
+        first_grant > first_create,
+        "privileges emitted before the tables exist"
+    );
 }
 
 // Re-running a push must not need the previous state: REVOKE of a privilege that is
@@ -103,9 +106,12 @@ fn every_privilege_is_stated_either_way() {
         ("posts", "UPDATE"),
         ("posts", "DELETE"),
     ] {
-        let granted = sql.contains(&format!(r#"GRANT {privilege} ON "public"."{table}" TO anon"#));
-        let revoked =
-            sql.contains(&format!(r#"REVOKE {privilege} ON "public"."{table}" FROM anon"#));
+        let granted = sql.contains(&format!(
+            r#"GRANT {privilege} ON "public"."{table}" TO anon"#
+        ));
+        let revoked = sql.contains(&format!(
+            r#"REVOKE {privilege} ON "public"."{table}" FROM anon"#
+        ));
         assert!(
             granted || revoked,
             "{table}.{privilege} for anon was left to whatever it was before"

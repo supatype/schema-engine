@@ -143,7 +143,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
 
     // Same reason as the CLI path: an empty diff must not report success over a table whose rules
     // were never applied.
-    crate::generator::sql::migration::assert_no_unmanaged_model_tables(&diff).map_err(engine_error)?;
+    crate::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
+        .map_err(engine_error)?;
 
     if diff.operations.is_empty() {
         sqlx::raw_sql(&storage_sql)
@@ -219,7 +220,10 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
             &e.to_string(),
         )
         .await;
-        let msg = crate::generator::sql::migration_errors::enrich_migration_error(&e.to_string(), Some(&diff));
+        let msg = crate::generator::sql::migration_errors::enrich_migration_error(
+            &e.to_string(),
+            Some(&diff),
+        );
         return Err(engine_error(anyhow::anyhow!(msg)));
     }
 
@@ -267,7 +271,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     // here is a missing diagnostic, not a broken push: the enforcement itself is the
     // labels, which are already applied in this transaction.
     if let Err(e) = migration_history::record_field_enforcement(
-        &mut *tx,
+        &mut tx,
         migration_history::labelled_column_count(&ast),
     )
     .await
@@ -276,9 +280,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     }
 
     let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
-    let studio_metadata = admin_cfg
-        .clone()
-        .zip(serde_json::to_value(&ast).ok());
+    let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
     if let Err(e) = migration_history::insert_applied_migration(
         &mut *tx,
         &migration_name,
@@ -374,7 +376,8 @@ pub async fn storage(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse>
 pub async fn postgrest(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Value> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
-    let config = crate::generator::config::postgrest::generate(&ast, &req.schema).map_err(engine_error)?;
+    let config =
+        crate::generator::config::postgrest::generate(&ast, &req.schema).map_err(engine_error)?;
     Ok(Json(config))
 }
 
