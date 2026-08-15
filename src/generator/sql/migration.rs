@@ -1,4 +1,4 @@
-use crate::differ::column_diff::column_names_for;
+use crate::differ::column_diff::{column_names_for, field_pg_type};
 use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
 use crate::generator::sql::column_conversion::{
     add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
@@ -10,13 +10,39 @@ use crate::managed::{
 };
 use crate::parser::accessors::db_unique;
 use crate::parser::ast::{
-    DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
+    AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst, SchemaAst,
 };
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 
+/// Refuse a push whose schema declares a table Supatype does not manage.
+///
+/// Public because the check has to happen at the *entry* to a push, not only where SQL is rendered:
+/// an unchanged schema produces an empty diff, skips the renderer, and would otherwise report
+/// "schema pushed" while a declared table sat in the API with none of its rules applied.
+pub fn assert_no_unmanaged_model_tables(diff: &DiffOutput) -> Result<()> {
+    if diff.unmanaged_model_tables.is_empty() {
+        return Ok(());
+    }
+    let tables = diff.unmanaged_model_tables.join(", ");
+    bail!(
+        "Your schema declares model(s) for table(s) Supatype does not manage: {tables}.\n\n\
+         Nothing was applied. These tables already exist without Supatype's ownership marker, so a \
+         push may neither alter them nor attach access rules to them — and leaving them in the API \
+         without those rules would serve them under whatever privileges they already have.\n\n\
+         What to do:\n\
+         • Run `supatype adopt` to bring them under management (it shows the SQL first)\n\
+         • Or point the model at a different table with `tableName`\n\n\
+         If these tables were created by an older Supatype that did not stamp tables, `adopt` is \
+         the right move — one run and pushes work as before."
+    );
+}
+
 fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
+    // Defence in depth for library callers that render SQL without going through a push entry point.
+    assert_no_unmanaged_model_tables(diff)?;
+
     if diff.summary.is_destructive && !force {
         bail!(
             "{} destructive operation(s) detected. Use --force to proceed.",
@@ -69,7 +95,7 @@ pub fn push_storage_and_model_apply_body(
     // populated by triggers (e.g. `Slug<...>`) fail on insert. The per-operation
     // renderer only emits a placeholder comment for CreateTrigger, so apply the
     // generated trigger SQL here.
-    let triggers = super::triggers::generate(ast)?;
+    let triggers = super::triggers::generate(ast, schema)?;
     Ok(format!(
         "{}\n{}\n{}",
         storage_sql.trim(),
@@ -205,6 +231,143 @@ fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
     lines
 }
 
+/// `can_*` affordance functions, appended after the tables they read exist.
+///
+/// Emitted at the end rather than in the preamble: each takes its table's composite
+/// type as a parameter, so the table has to exist first. `CREATE OR REPLACE` makes
+/// re-emission free, and emitting them on every push is what keeps them in step
+/// with the policies — a stale affordance function is a UI that lies.
+fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_can_functions(ast, schema);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Row-level affordance functions (PostgREST computed columns)".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
+/// Table privileges derived from the access rules.
+///
+/// Emitted after the tables exist, for the same reason the affordance functions
+/// are. Idempotent: a `REVOKE` of a privilege that is not held is a no-op, and the
+/// matching `GRANT` is what restores access when a rule is relaxed, so running this
+/// on every push is what keeps privileges tracking the schema.
+fn render_grant_lines(
+    ast: &SchemaAst,
+    schema: &str,
+    skip: &[String],
+    serve_from: Option<&str>,
+) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_table_grants(ast, schema, skip, serve_from);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Table privileges derived from access rules (defence in depth)".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
+/// Security labels for the field rules, emitted after the affordance functions they
+/// point at.
+///
+/// Includes the capability probe: a schema that declares a masked column, pushed to a
+/// database without the masking extension, fails here rather than applying and leaving
+/// the column readable.
+fn render_security_label_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_security_labels(ast, schema, skip);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Field-level access: security labels read by supatype_mask".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
+/// Everything re-asserted on every push rather than diffed.
+///
+/// These three are idempotent by construction — `CREATE OR REPLACE`, `GRANT`/`REVOKE`
+/// pairs, and `SECURITY LABEL` upserts — so re-running them is what keeps them tracking
+/// the schema instead of drifting from it.
+///
+/// Shared by both forward paths deliberately. They diverged before: the wrapped path
+/// applied the derived privileges and the outer-body path did not, and the outer body is
+/// what every real push actually runs (`push_storage_and_model_apply_body`), so the
+/// privileges were generated and never applied. Anything in this list belongs on every
+/// path that applies a migration.
+fn render_reasserted_lines(
+    diff: &DiffOutput,
+    ast: &SchemaAst,
+    schema: &str,
+    skip: &[String],
+) -> Vec<String> {
+    let views = diff.field_masking == crate::differ::FieldMaskingTier::Views;
+
+    // `can_*` functions are not skipped: they live in the managed schema and read the table, they do
+    // not change it. A Studio affordance for a table the API cannot reach is useless but harmless.
+    let mut lines = render_can_function_lines(ast, schema);
+
+    // Tier 2's views come **before** the grants, which name `api.<table>` and would otherwise run
+    // against a schema that does not exist yet.
+    //
+    // One tier or the other, never both. Labels *and* views would give every deployment the views'
+    // weaker aggregate behaviour, and the extension rejects the whole-row references the write trigger
+    // needs.
+    if views {
+        let sql = crate::generator::sql::field_views::render_field_views(
+            ast,
+            &diff.field_view_plan,
+            schema,
+        );
+        if !sql.trim().is_empty() {
+            lines.push(
+                "-- Field-level access, tier 2: api views (this database cannot load supatype_mask)"
+                    .into(),
+            );
+            lines.push(sql.trim_end().into());
+            lines.push(String::new());
+        }
+    }
+
+    // Under tier 2 the API reads the `api` views, so that is where the privileges belong — and the
+    // base tables lose theirs, or `Accept-Profile: public` walks straight round the mask.
+    let serve_from = views.then_some(crate::generator::sql::field_views::VIEW_SCHEMA);
+    lines.extend(render_grant_lines(ast, schema, skip, serve_from));
+
+    if views {
+        // Column privileges are tier 1's second layer, for what a *database role* provably can never
+        // write. Under tier 2 `anon` and `authenticated` hold no privilege on the base table at all,
+        // so narrowing one would be describing access that does not exist.
+    } else {
+        // Strictly after the table grants: these narrow a table-level write privilege to a
+        // column list, and the table grants would hand the whole table back if they ran after.
+        lines.extend(render_column_grant_lines(ast, schema, skip));
+        lines.extend(render_security_label_lines(ast, schema, skip));
+    }
+
+    lines
+}
+
+/// Column-level write privileges derived from the field rules — a second layer under the
+/// masking extension, for what a database role provably can never write.
+fn render_column_grant_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
+    let sql = crate::generator::sql::grants::generate_column_grants(ast, schema, skip);
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- Column write privileges derived from field rules (defence in depth)".into(),
+        sql.trim().into(),
+        String::new(),
+    ]
+}
+
 fn render_forward_operation_lines(
     diff: &DiffOutput,
     schema: &str,
@@ -262,6 +425,12 @@ fn render_forward_operation_lines(
 fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
     let mut lines = render_forward_preamble(diff);
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
+    lines.extend(render_reasserted_lines(
+        diff,
+        ast,
+        schema,
+        &diff.unmanaged_model_tables,
+    ));
     Ok(lines.join("\n"))
 }
 
@@ -270,6 +439,12 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     lines.push("BEGIN;".into());
     lines.push(String::new());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
+    lines.extend(render_reasserted_lines(
+        diff,
+        ast,
+        schema,
+        &diff.unmanaged_model_tables,
+    ));
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }
@@ -343,33 +518,87 @@ fn render_create_rls_policy_sql(
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<String> {
-    let model = ast
-        .models
-        .iter()
-        .find(|m| m.table_name() == table)
-        .ok_or_else(|| anyhow!("CreateRlsPolicy: unknown table {table}"))?;
     let prefix = format!("{table}_");
     if !policy.starts_with(&prefix) {
         bail!("CreateRlsPolicy: policy name {policy} does not start with expected prefix {prefix}");
     }
     let suffix = &policy[prefix.len()..];
+    if !matches!(suffix, "select" | "insert" | "update" | "delete") {
+        bail!("CreateRlsPolicy: unknown policy suffix {suffix}");
+    }
+
+    if let Some(model) = ast.models.iter().find(|m| m.table_name() == table) {
+        let rule = match suffix {
+            "select" => model.access().read.as_ref(),
+            "insert" => model.access().create.as_ref(),
+            "update" => model.access().update.as_ref(),
+            _ => model.access().delete.as_ref(),
+        };
+        let rule = rule.ok_or_else(|| {
+            anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}")
+        })?;
+        return Ok(crate::generator::sql::rls::render_policy_migration_sql(
+            schema, table, suffix, ast, model, rule,
+        ));
+    }
+
+    // Junction tables have no model of their own — their policies are derived
+    // from the intersection of both parents' rules (see differ::rls_diff).
+    let junction = ast
+        .junction_tables
+        .iter()
+        .find(|j| j.name == table)
+        .ok_or_else(|| anyhow!("CreateRlsPolicy: unknown table {table}"))?;
+    let parent_a = ast
+        .models
+        .iter()
+        .find(|m| m.name == junction.model_a)
+        .ok_or_else(|| {
+            anyhow!(
+                "CreateRlsPolicy: junction {table} parent {} not found",
+                junction.model_a
+            )
+        })?;
+    let parent_b = ast
+        .models
+        .iter()
+        .find(|m| m.name == junction.model_b)
+        .ok_or_else(|| {
+            anyhow!(
+                "CreateRlsPolicy: junction {table} parent {} not found",
+                junction.model_b
+            )
+        })?;
+
+    let derived = crate::differ::rls_diff::intersect_access(parent_a.access(), parent_b.access());
     let rule = match suffix {
-        "select" => model.access().read.as_ref(),
-        "insert" => model.access().create.as_ref(),
-        "update" => model.access().update.as_ref(),
-        "delete" => model.access().delete.as_ref(),
-        _ => bail!("CreateRlsPolicy: unknown policy suffix {suffix}"),
-    };
-    let rule = rule
-        .ok_or_else(|| anyhow!("CreateRlsPolicy: table {table} has no access rule for {suffix}"))?;
+        "select" => derived.read,
+        "insert" => derived.create,
+        "update" => derived.update,
+        _ => derived.delete,
+    }
+    .ok_or_else(|| {
+        anyhow!("CreateRlsPolicy: junction {table} has no derivable access rule for {suffix}")
+    })?;
+
+    // The differ only derives row-independent rules for junctions, because the
+    // junction table has none of the parents' columns for a row-dependent
+    // expression to reference. Assert that here rather than emit invalid SQL.
+    if matches!(rule, AccessRule::Owner { .. } | AccessRule::Any { .. }) {
+        bail!(
+            "CreateRlsPolicy: junction {table} derived a row-dependent rule for {suffix}; \
+             it cannot reference parent columns"
+        );
+    }
+
     Ok(crate::generator::sql::rls::render_policy_migration_sql(
-        schema, table, suffix, ast, model, rule,
+        schema, table, suffix, ast, parent_a, &rule,
     ))
 }
 
 fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {
     match op {
-        Operation::CreateTable { model, .. } => create_table_sql(model, schema),
+        Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast),
         Operation::DropTable { table, .. } => Ok(format!(
             "DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;"
         )),
@@ -382,14 +611,15 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             field,
             ..
         } => {
-            // BelongsTo relations produce a UUID FK column; the FK constraint is
-            // a separate AddForeignKey operation emitted after all table changes.
+            // BelongsTo relations produce an FK column typed like the target PK;
+            // the FK constraint is a separate AddForeignKey operation.
             if let FieldAst::Relation(rel) = field.as_ref() {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                     let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
                     let req = if rel.required { " NOT NULL" } else { "" };
+                    let pg_type = fk_pg_type_for_model(ast, &rel.target);
                     return Ok(format!(
-                        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN \"{column}\" UUID{uniq}{req};"
+                        "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN \"{column}\" {pg_type}{uniq}{req};"
                     ));
                 }
             }
@@ -635,14 +865,19 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             table_b,
             ..
         } => {
-            let table_a_snake = to_snake_case(table_a);
-            let table_b_snake = to_snake_case(table_b);
+            let (ref_table_a, pk_a, type_a) = junction_ref_for_model(ast, table_a);
+            let (ref_table_b, pk_b, type_b) = junction_ref_for_model(ast, table_b);
+            // Stamped like any other table Supatype creates. A junction table is *entirely* ours —
+            // it has no model of its own — so without the marker the ownership gate would refuse to
+            // drop it ever, and a removed many-to-many would leave its junction behind for good.
+            let marker = managed_comment("table", table, &[]);
             Ok(format!(
                 "CREATE TABLE IF NOT EXISTS \"{schema}\".\"{table}\" (\n    \
-                 \"{fk_a}\" UUID NOT NULL REFERENCES \"{schema}\".\"{table_a_snake}\" (\"id\") ON DELETE CASCADE,\n    \
-                 \"{fk_b}\" UUID NOT NULL REFERENCES \"{schema}\".\"{table_b_snake}\" (\"id\") ON DELETE CASCADE,\n    \
+                 \"{fk_a}\" {type_a} NOT NULL REFERENCES \"{schema}\".\"{ref_table_a}\" (\"{pk_a}\") ON DELETE CASCADE,\n    \
+                 \"{fk_b}\" {type_b} NOT NULL REFERENCES \"{schema}\".\"{ref_table_b}\" (\"{pk_b}\") ON DELETE CASCADE,\n    \
                  PRIMARY KEY (\"{fk_a}\", \"{fk_b}\")\n\
-                 );"
+                 );\n\n\
+                 COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{marker}';"
             ))
         }
         Operation::EnableExtension { name, .. } => {
@@ -653,7 +888,7 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
 
 // ─── CREATE TABLE ────────────────────────────────────────────────────────────
 
-fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
+fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<String> {
     let table = &model.table_name();
     let mut col_defs: Vec<String> = Vec::new();
 
@@ -678,7 +913,8 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
                     if !explicitly_declared {
                         let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
                         let req = if rel.required { " NOT NULL" } else { "" };
-                        col_defs.push(format!("    \"{fk_col}\" UUID{uniq}{req}"));
+                        let pg_type = fk_pg_type_for_model(ast, &rel.target);
+                        col_defs.push(format!("    \"{fk_col}\" {pg_type}{uniq}{req}"));
                     }
                     // FK constraint is a separate AddForeignKey operation (emitted after all tables).
                 }
@@ -805,6 +1041,16 @@ fn create_table_sql(model: &ModelAst, schema: &str) -> Result<String> {
         let comment = managed_comment("unique_index", table, &[]);
         statements.push(comment_on_index_sql(&idx_name, &comment, schema));
     }
+
+    // Stamp ownership, exactly as indexes, constraints and RLS policies already do.
+    //
+    // This is what lets the differ destroy this table later and refuse to destroy one it merely
+    // found. Without it, every table in the managed schema was a drop candidate — which on a
+    // database Supatype did not create is someone else's data.
+    let table_marker = managed_comment("table", table, &[]);
+    statements.push(format!(
+        "COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{table_marker}';"
+    ));
 
     Ok(statements.join("\n\n"))
 }
@@ -1347,6 +1593,66 @@ fn add_fk_sql(
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 
+/// FK column SQL type for a target model PK (SERIAL → INTEGER, UUID → UUID, …).
+fn fk_pg_type_for_model(ast: &SchemaAst, model_name: &str) -> String {
+    match model_primary_key(ast, model_name) {
+        Some((_, field)) => field_pg_type(field),
+        None => "UUID".into(),
+    }
+}
+
+/// `(table_name, pk_column, fk_pg_type)` for junction REFERENCES clauses.
+fn junction_ref_for_model(ast: &SchemaAst, model_name: &str) -> (String, String, String) {
+    let Some(model) = ast.models.iter().find(|m| m.name == model_name) else {
+        return (to_snake_case(model_name), "id".into(), "UUID".into());
+    };
+    let (pk_col, pk_type) = match model_primary_key(ast, model_name) {
+        Some((col, field)) => (col.to_string(), field_pg_type(field)),
+        None => ("id".into(), "UUID".into()),
+    };
+    (model.table_name().to_string(), pk_col, pk_type)
+}
+
+fn model_primary_key<'a>(ast: &'a SchemaAst, model_name: &str) -> Option<(&'a str, &'a FieldAst)> {
+    let model = ast.models.iter().find(|m| m.name == model_name)?;
+    model
+        .fields
+        .iter()
+        .find(|(_, f)| field_is_primary_key(f))
+        .map(|(name, field)| (name.as_str(), field))
+}
+
+fn field_is_primary_key(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(s)
+        | FieldAst::RichText(s)
+        | FieldAst::Integer(s)
+        | FieldAst::Float(s)
+        | FieldAst::Boolean(s)
+        | FieldAst::Datetime(s)
+        | FieldAst::Uuid(s)
+        | FieldAst::Email(s)
+        | FieldAst::BigInt(s)
+        | FieldAst::Bytes(s)
+        | FieldAst::SmallInt(s)
+        | FieldAst::Date(s)
+        | FieldAst::Timestamp(s)
+        | FieldAst::Serial(s)
+        | FieldAst::BigSerial(s)
+        | FieldAst::Money(s)
+        | FieldAst::Url(s)
+        | FieldAst::Ip(s)
+        | FieldAst::Cidr(s)
+        | FieldAst::Macaddr(s)
+        | FieldAst::Interval(s)
+        | FieldAst::TsQuery(s)
+        | FieldAst::TsVector(s)
+        | FieldAst::Xml(s)
+        | FieldAst::Color(s) => s.primary_key,
+        _ => false,
+    }
+}
+
 fn to_snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -1362,4 +1668,84 @@ fn migration_hash(sql: &str) -> String {
     let mut h = Sha256::new();
     h.update(sql.as_bytes());
     format!("sha256:{}", hex::encode(h.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser;
+
+    #[test]
+    fn junction_fk_columns_match_serial_primary_keys() {
+        let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Platform",
+      "fields": {
+        "id": {
+          "kind": "serial",
+          "primaryKey": true,
+          "required": true,
+          "annotations": { "db": { "pgType": "SERIAL", "unique": true } }
+        },
+        "games": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Game"
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "platform", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    },
+    {
+      "name": "Game",
+      "fields": {
+        "id": {
+          "kind": "serial",
+          "primaryKey": true,
+          "required": true,
+          "annotations": { "db": { "pgType": "SERIAL", "unique": true } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "game", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+        let ast = parser::parse(ast_json).unwrap();
+        assert!(
+            !ast.junction_tables.is_empty(),
+            "expected junction tables, models={:?}",
+            ast.models.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+        let jt = &ast.junction_tables[0];
+        let op = Operation::CreateJunctionTable {
+            table: jt.name.clone(),
+            fk_a: jt.fk_a.clone(),
+            table_a: jt.model_a.clone(),
+            fk_b: jt.fk_b.clone(),
+            table_b: jt.model_b.clone(),
+            risk: Risk::Safe,
+        };
+        let sql = render_operation(&op, "public", &ast).unwrap();
+        assert!(
+            sql.contains("INTEGER NOT NULL REFERENCES \"public\".\"game\""),
+            "expected INTEGER FK to game, got:\n{sql}"
+        );
+        assert!(
+            sql.contains("INTEGER NOT NULL REFERENCES \"public\".\"platform\""),
+            "expected INTEGER FK to platform, got:\n{sql}"
+        );
+        assert!(
+            !sql.contains("UUID NOT NULL REFERENCES"),
+            "must not hardcode UUID for serial PKs:\n{sql}"
+        );
+    }
 }

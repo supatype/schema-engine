@@ -62,6 +62,7 @@ fn make_db_with_enum(enum_name: &str, values: &[&str]) -> DatabaseState {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 DbColumn {
                     name: "id".into(),

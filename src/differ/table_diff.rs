@@ -13,6 +13,17 @@ fn is_extension_managed_table(name: &str) -> bool {
     EXTENSION_MANAGED_TABLES.contains(&name)
 }
 
+/// **Ownership gate.** Destructive operations here are conditional on a table carrying Supatype's
+/// `COMMENT ON TABLE` marker — see `crate::managed::is_managed_comment`.
+///
+/// Indexes, constraints and RLS policies have been gated this way for a long time; `doctor` even
+/// reports an unmanaged index as "push will not drop; manual decision required". Tables were never
+/// wired into the same mechanism, so **any** table in the managed schema absent from
+/// `schema/index.ts` was dropped. On a database Supatype did not create, that is someone else's
+/// data.
+///
+/// Additive operations are deliberately not gated: a table you do not own may gain a column, which
+/// is intrusive but recoverable — it may not lose one.
 pub fn diff(
     ast: &SchemaAst,
     db: &DatabaseState,
@@ -23,8 +34,15 @@ pub fn diff(
     let db_table_names: std::collections::HashSet<&str> =
         db.tables.iter().map(|t| t.name.as_str()).collect();
 
-    let schema_table_names: std::collections::HashSet<&str> =
-        ast.models.iter().map(|m| m.table_name()).collect();
+    // Junction tables are first-class schema objects — include them so the
+    // "removed table" pass does not drop live M2M tables as orphans (and then
+    // skip recreate because they still appear in the initial db snapshot).
+    let schema_table_names: std::collections::HashSet<&str> = ast
+        .models
+        .iter()
+        .map(|m| m.table_name())
+        .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
+        .collect();
 
     // Build a set of existing FK constraint names for fast lookup
     let db_fk_names: std::collections::HashSet<&str> = db
@@ -42,12 +60,19 @@ pub fn diff(
         .map(|m| m.table_name())
         .collect();
 
+    // Only tables Supatype owns are rename *candidates*.
+    //
+    // Rename detection is a similarity heuristic (jaro-winkler ≥ 0.7), so an unmanaged table whose
+    // name merely resembles a new model would be renamed into it — quietly taking over someone
+    // else's table, and taking its data with it. That is worse than the drop this gate was written
+    // for, because the result looks like a successful migration.
     let removed_tables: Vec<&str> = db
         .tables
         .iter()
         .filter(|t| {
             !schema_table_names.contains(t.name.as_str())
                 && !is_extension_managed_table(t.name.as_str())
+                && crate::managed::is_managed_comment(t.comment.as_deref())
         })
         .map(|t| t.name.as_str())
         .collect();
@@ -143,6 +168,20 @@ pub fn diff(
             && !is_extension_managed_table(db_table.name.as_str())
             && !renamed_from.contains(db_table.name.as_str())
         {
+            // Never destroy a table Supatype did not create.
+            //
+            // Reported, not skipped in silence: a drop that quietly does nothing is how an operator
+            // concludes push is broken. The message names the table and the way out.
+            if !crate::managed::is_managed_comment(db_table.comment.as_deref()) {
+                warnings.push(format!(
+                    "Table \"{}\" is not managed by Supatype (no ownership marker) and is not in \
+                     your schema — leaving it alone. Run `supatype adopt` to bring it under \
+                     management, or remove it by hand.",
+                    db_table.name
+                ));
+                continue;
+            }
+
             // Genuinely removed table — drop FKs then drop table
             for constraint in &db.constraints {
                 if constraint.table == db_table.name
@@ -186,17 +225,6 @@ fn previous_model<'a>(
         .models
         .iter()
         .find(|m| m.table_name() == table_name)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_extension_managed_table;
-
-    #[test]
-    fn ignores_known_extension_managed_tables() {
-        assert!(is_extension_managed_table("spatial_ref_sys"));
-        assert!(!is_extension_managed_table("post"));
-    }
 }
 
 /// Emit AddForeignKey ops for all belongsTo relations on a model that don't already exist in the DB.
@@ -280,5 +308,16 @@ fn drop_removed_fks(
                 risk: Risk::Safe,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_extension_managed_table;
+
+    #[test]
+    fn ignores_known_extension_managed_tables() {
+        assert!(is_extension_managed_table("spatial_ref_sys"));
+        assert!(!is_extension_managed_table("post"));
     }
 }

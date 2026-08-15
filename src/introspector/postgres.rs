@@ -8,6 +8,7 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
     let db_indexes = indexes::read(conn, schema).await?;
     let db_constraints = constraints::read(conn, schema).await?;
     let db_rls = rls::read(conn, schema).await?;
+    let db_rls_enabled = rls::read_rls_enabled_tables(conn, schema).await?;
     let db_triggers = triggers::read(conn, schema).await?;
     let db_extensions = extensions::read(conn).await?;
     let db_enums = enums::read(conn, schema).await?;
@@ -21,5 +22,6 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
         triggers: db_triggers,
         extensions: db_extensions,
         enums: db_enums,
+        rls_enabled_tables: db_rls_enabled,
     })
 }

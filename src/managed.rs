@@ -38,6 +38,16 @@ pub fn comment_on_constraint_sql(
     format!("COMMENT ON CONSTRAINT \"{constraint}\" ON \"{schema}\".\"{table}\" IS '{escaped}';")
 }
 
+/// SQL to stamp a table comment.
+///
+/// The stamp is what the ownership gate reads, so adoption and creation must produce the same
+/// marker — `migration.rs` writes exactly this on `CREATE TABLE`. A table adopted with a different
+/// shape would stay undroppable forever, and the differ could never converge.
+pub fn comment_on_table_sql(table: &str, comment: &str, schema: &str) -> String {
+    let escaped = comment.replace('\'', "''");
+    format!("COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{escaped}';")
+}
+
 /// SQL to stamp an index comment.
 pub fn comment_on_index_sql(index_name: &str, comment: &str, schema: &str) -> String {
     let escaped = comment.replace('\'', "''");

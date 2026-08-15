@@ -17,4 +17,8 @@ pub struct DatabaseState {
     /// Postgres enum types discovered in this schema.
     #[serde(default)]
     pub enums: Vec<DbEnum>,
+    /// Tables with row level security enabled, independent of whether they have
+    /// any policies. Defaulted for snapshots written before this was recorded.
+    #[serde(default)]
+    pub rls_enabled_tables: Vec<String>,
 }

@@ -82,33 +82,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
 
-    // Ensure _supatype schema and internal tables exist
-    sqlx::raw_sql(migration_history::create_internal_schema_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_migrations_admin_config_column_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_migrations_sql_up_column_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_migrations_status_columns_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
-        .execute(&pool)
+    // Internal bookkeeping + auth helpers (shared with the CLI push path).
+    migration_history::bootstrap_internal_state(&pool)
         .await
         .map_err(engine_error)?;
 
@@ -164,6 +139,11 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         None
     };
     let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
+        .map_err(engine_error)?;
+
+    // Same reason as the CLI path: an empty diff must not report success over a table whose rules
+    // were never applied.
+    crate::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
         .map_err(engine_error)?;
 
     if diff.operations.is_empty() {
@@ -240,7 +220,10 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
             &e.to_string(),
         )
         .await;
-        let msg = crate::generator::sql::migration_errors::enrich_migration_error(&e.to_string());
+        let msg = crate::generator::sql::migration_errors::enrich_migration_error(
+            &e.to_string(),
+            Some(&diff),
+        );
         return Err(engine_error(anyhow::anyhow!(msg)));
     }
 
@@ -284,7 +267,20 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         return Err(engine_error(e));
     }
 
+    // Which mechanism is enforcing the field rules, probed rather than assumed. A failure
+    // here is a missing diagnostic, not a broken push: the enforcement itself is the
+    // labels, which are already applied in this transaction.
+    if let Err(e) = migration_history::record_field_enforcement(
+        &mut tx,
+        migration_history::labelled_column_count(&ast),
+    )
+    .await
+    {
+        eprintln!("Warning: failed to record field-enforcement capability: {e}");
+    }
+
     let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
+    let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
     if let Err(e) = migration_history::insert_applied_migration(
         &mut *tx,
         &migration_name,
@@ -309,6 +305,19 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     }
 
     tx.commit().await.map_err(engine_error)?;
+
+    // Studio metadata was previously persisted to `_supatype.schema_state` only on
+    // the up-to-date branch above, so any project whose last push applied a
+    // migration had null `ast_snapshot`/`admin_config` — leaving Studio with no
+    // server-side schema source. Refresh it here too; failure must not undo an
+    // applied migration, so it only warns.
+    if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
+        if let Err(e) =
+            migration_history::save_studio_metadata_if_present(&pool, admin_cfg, schema_snap).await
+        {
+            tracing::warn!(error = %e, "failed to refresh Studio metadata after migration");
+        }
+    }
 
     info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
     Ok(Json(serde_json::json!({
@@ -338,7 +347,7 @@ pub async fn generate(Json(req): Json<GenerateRequest>) -> EngineResponse<CodeRe
 pub async fn triggers(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
-    let sql = crate::generator::sql::triggers::generate(&ast).map_err(engine_error)?;
+    let sql = crate::generator::sql::triggers::generate(&ast, &req.schema).map_err(engine_error)?;
     Ok(Json(SqlResponse { sql }))
 }
 
@@ -348,7 +357,7 @@ pub async fn rls(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
     let helpers = crate::generator::sql::rls::generate_auth_helpers();
-    let policies = crate::generator::sql::rls::generate(&ast).map_err(engine_error)?;
+    let policies = crate::generator::sql::rls::generate(&ast, &req.schema).map_err(engine_error)?;
     let sql = format!("{helpers}\n{policies}");
     Ok(Json(SqlResponse { sql }))
 }
@@ -367,7 +376,8 @@ pub async fn storage(Json(req): Json<AstRequest>) -> EngineResponse<SqlResponse>
 pub async fn postgrest(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Value> {
     let input = serde_json::to_string(&req.ast).unwrap_or_default();
     let ast = parse_ast(&input)?;
-    let config = crate::generator::config::postgrest::generate(&ast).map_err(engine_error)?;
+    let config =
+        crate::generator::config::postgrest::generate(&ast, &req.schema).map_err(engine_error)?;
     Ok(Json(config))
 }
 
@@ -551,16 +561,10 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
 
-    sqlx::raw_sql(migration_history::create_internal_schema_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-        .execute(&pool)
+    // Adopt hand-wrote this sequence and had already fallen behind it (no
+    // `schema_state` studio columns, no migrations-column repairs) — the exact
+    // drift `bootstrap_internal_state` exists to prevent.
+    migration_history::bootstrap_internal_state(&pool)
         .await
         .map_err(engine_error)?;
 

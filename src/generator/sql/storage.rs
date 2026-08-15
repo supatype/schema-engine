@@ -149,7 +149,17 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
                 format!("auth.role() = ANY(ARRAY[{arr}])")
             }
         }
-        AccessRule::Custom { expression } => expression.clone(),
+        // Storage policies run on `storage.objects`, which has none of the
+        // model's columns. A rule naming one cannot be evaluated here, so it
+        // denies rather than being rendered against a table where the column
+        // means something else or nothing at all. `Bucket*` rules are the
+        // supported vocabulary for buckets.
+        AccessRule::All { .. }
+        | AccessRule::Not { .. }
+        | AccessRule::Compare { .. }
+        | AccessRule::NullCheck { .. }
+        | AccessRule::In { .. }
+        | AccessRule::Exists { .. } => "FALSE".to_string(),
     }
 }
 

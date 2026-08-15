@@ -115,6 +115,7 @@ fn test_add_column_nullable() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("title", "text")],
         }],
         ..DatabaseState::default()
@@ -190,6 +191,7 @@ fn test_drop_column() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 col("title", "text"),
@@ -269,6 +271,7 @@ fn test_rename_column_detected() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("body_text", "text")],
         }],
         ..DatabaseState::default()
@@ -400,11 +403,13 @@ fn test_add_fk_on_existing_table() {
             DbTable {
                 schema: "public".into(),
                 name: "users".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("id", "uuid")],
             },
             DbTable {
                 schema: "public".into(),
                 name: "posts".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("id", "uuid"), col("author_id", "uuid")],
             },
         ],
@@ -517,15 +522,20 @@ fn test_fk_already_exists_no_op() {
             DbTable {
                 schema: "public".into(),
                 name: "users".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col_nn("id", "uuid")],
             },
             DbTable {
                 schema: "public".into(),
                 name: "posts".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col_nn("id", "uuid"), col("author_id", "uuid")],
             },
         ],
         constraints: vec![fk("posts", "author_id", "users")], // already applied
+        // These models declare no access rules, so a fully-applied schema now
+        // also has RLS enabled on them (deny-all default).
+        rls_enabled_tables: vec!["users".into(), "posts".into()],
         ..DatabaseState::default()
     };
 
@@ -604,6 +614,7 @@ fn test_drop_fk_when_relation_removed() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("author_id", "uuid")],
         }],
         constraints: vec![fk("posts", "author_id", "users")], // stale FK
@@ -716,6 +727,7 @@ fn test_new_table_added() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "users".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         ..DatabaseState::default()
@@ -791,11 +803,13 @@ fn test_drop_table_when_model_removed() {
             DbTable {
                 schema: "public".into(),
                 name: "users".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("id", "uuid")],
             },
             DbTable {
                 schema: "public".into(),
                 name: "legacy_sessions".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("id", "uuid")],
             },
         ],
@@ -901,16 +915,19 @@ fn test_junction_table_not_recreated() {
             DbTable {
                 schema: "public".into(),
                 name: "students".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("id", "uuid")],
             },
             DbTable {
                 schema: "public".into(),
                 name: "courses".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("id", "uuid")],
             },
             DbTable {
                 schema: "public".into(),
                 name: "enrollments".into(),
+                comment: Some("supatype:managed;kind=table".into()),
                 columns: vec![col("student_id", "uuid"), col("course_id", "uuid")],
             },
         ],
@@ -924,6 +941,94 @@ fn test_junction_table_not_recreated() {
     assert!(
         jt_ops.is_empty(),
         "junction table already exists — must not recreate"
+    );
+}
+
+#[test]
+fn test_junction_table_not_dropped_as_orphan() {
+    // Junction tables are not models; the removed-table pass must not treat them
+    // as orphans when they are present in ast.junction_tables.
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Student",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "courses": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Course",
+          "through": "enrollments"
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "students", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    },
+    {
+      "name": "Course",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "courses", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![
+            DbTable {
+                schema: "public".into(),
+                name: "students".into(),
+                comment: Some("supatype:managed;kind=table".into()),
+                columns: vec![col("id", "uuid")],
+            },
+            DbTable {
+                schema: "public".into(),
+                name: "courses".into(),
+                comment: Some("supatype:managed;kind=table".into()),
+                columns: vec![col("id", "uuid")],
+            },
+            DbTable {
+                schema: "public".into(),
+                name: "enrollments".into(),
+                comment: Some("supatype:managed;kind=table".into()),
+                columns: vec![col("student_id", "uuid"), col("course_id", "uuid")],
+            },
+        ],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let drops: Vec<_> = diff
+        .operations
+        .iter()
+        .filter(|op| matches!(op, Operation::DropTable { table, .. } if table == "enrollments"))
+        .collect();
+    assert!(
+        drops.is_empty(),
+        "existing junction must not be dropped as an orphan table: {:?}",
+        diff.operations
     );
 }
 
@@ -984,6 +1089,7 @@ fn test_timestamps_option_idempotency() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 col("title", "text"),
@@ -1056,6 +1162,7 @@ fn test_soft_delete_option_idempotency() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 col("deleted_at", "timestamp with time zone"),
@@ -1134,6 +1241,7 @@ fn test_auto_index_emitted_with_new_indexed_column() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")], // authorId not yet present
         }],
         ..DatabaseState::default()
@@ -1389,6 +1497,7 @@ fn test_add_column_not_null_with_default() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         ..DatabaseState::default()
@@ -1468,6 +1577,7 @@ fn test_add_required_richtext_column_backfills_empty_lexical() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "_global_homepage".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         ..DatabaseState::default()
@@ -1530,6 +1640,7 @@ fn test_alter_nullable_richtext_to_required_has_preflight_guard() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "_global_homepage".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("someField", "jsonb")],
         }],
         ..DatabaseState::default()
@@ -1613,6 +1724,7 @@ fn test_add_required_richtext_column_with_string_default() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "_global_homepage".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         ..DatabaseState::default()
@@ -1710,6 +1822,7 @@ fn test_change_column_type_safe_widening() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "counters".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             // DB has value as SMALLINT (int2); id is PK so NOT NULL
             columns: vec![col_nn("id", "uuid"), col("value", "int2")],
         }],
@@ -1793,6 +1906,7 @@ fn test_change_column_type_lossy() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "counters".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             // DB has value as BIGINT (int8) — narrowing to int4; id is PK so NOT NULL
             columns: vec![col_nn("id", "uuid"), col("value", "int8")],
         }],
@@ -1874,6 +1988,7 @@ fn test_add_not_null_to_existing_nullable_column() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             // id is PK (NOT NULL); title is currently nullable
             columns: vec![col_nn("id", "uuid"), col("title", "text")],
         }],
@@ -1955,6 +2070,7 @@ fn test_drop_not_null_from_existing_column() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             // id is PK (NOT NULL); title is NOT NULL in DB, schema wants nullable
             columns: vec![col_nn("id", "uuid"), col_nn("title", "text")],
         }],
@@ -2043,6 +2159,7 @@ fn test_alter_column_not_null_sql_has_preflight_guard() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             // id is PK (NOT NULL); title is nullable → schema wants NOT NULL
             columns: vec![col_nn("id", "uuid"), col("title", "text")],
         }],
@@ -2122,6 +2239,7 @@ fn test_alter_column_rollback_reverses_nullability() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             // id is PK (NOT NULL); title is nullable → schema wants NOT NULL → rollback drops NOT NULL
             columns: vec![col_nn("id", "uuid"), col("title", "text")],
         }],
@@ -2190,6 +2308,7 @@ fn test_rls_fresh_model_authenticated() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         ..DatabaseState::default()
@@ -2251,7 +2370,7 @@ fn test_rls_any_rule_generates_or_expression() {
         sso: None,
         warnings: vec![],
     };
-    let expr = access_rule_to_expr(&ast, &model, &rule);
+    let expr = access_rule_to_expr(&ast, &model, &rule, "public");
     assert!(expr.contains("OR"), "any() rule must produce OR expression");
     assert!(
         expr.contains("auth.uid()"),
@@ -2317,6 +2436,7 @@ fn test_rls_changed_expression_triggers_recreate() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         rls_policies: vec![DbRlsPolicy {
@@ -2327,6 +2447,7 @@ fn test_rls_changed_expression_triggers_recreate() {
             // Old expression: true (public access)
             using_expr: Some("true".into()),
             check_expr: None,
+            managed: true,
         }],
         ..DatabaseState::default()
     };
@@ -2399,6 +2520,7 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         rls_policies: vec![DbRlsPolicy {
@@ -2408,6 +2530,7 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
             permissive: true,
             using_expr: Some("auth.uid() IS NOT NULL".into()),
             check_expr: None,
+            managed: true,
         }],
         ..DatabaseState::default()
     };
@@ -2548,7 +2671,7 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
 }"#;
 
     let ast = parser::parse(ast_json).unwrap();
-    let sql = rls::generate(&ast).unwrap();
+    let sql = rls::generate(&ast, "public").unwrap();
 
     assert!(sql.contains("ENABLE ROW LEVEL SECURITY"), "must enable RLS");
     assert!(sql.contains("FORCE ROW LEVEL SECURITY"), "must force RLS");
@@ -4354,6 +4477,7 @@ fn test_plugin_custom_field_diff() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "contacts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid")],
         }],
         ..DatabaseState::default()
@@ -5028,6 +5152,7 @@ fn test_enum_add_value_safe() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5112,6 +5237,7 @@ fn test_enum_add_value_generates_alter_type_sql() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5191,6 +5317,7 @@ fn test_enum_remove_value_destructive() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5287,6 +5414,7 @@ fn test_enum_remove_value_requires_force() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5375,6 +5503,7 @@ fn test_enum_remove_value_warning_message() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5456,6 +5585,7 @@ fn test_enum_rename_value_detected_via_similarity() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5550,6 +5680,7 @@ fn test_enum_rename_value_generates_alter_type_rename_sql() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5630,6 +5761,7 @@ fn test_enum_reorder_values_detected() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5723,6 +5855,7 @@ fn test_enum_reorder_values_generates_recreate_sql() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5812,6 +5945,7 @@ fn test_enum_no_change_produces_no_ops() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("status", "text")],
         }],
         enums: vec![DbEnum {
@@ -5907,6 +6041,7 @@ fn test_alter_column_text_to_richtext_uses_lexical_wrap() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "homepage".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("story1_para1", "text")],
         }],
         ..DatabaseState::default()
@@ -6044,6 +6179,7 @@ fn test_alter_column_richtext_to_text_extracts_lexical_plain_text() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "_global_homepage".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 DbColumn {
@@ -6195,6 +6331,7 @@ fn test_alter_column_json_to_richtext_migrates_jsonb_data() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "homepage".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("story1_para1", "jsonb")],
         }],
         ..DatabaseState::default()
@@ -6279,6 +6416,7 @@ fn test_alter_column_integer_to_richtext_uses_lexical_wrap() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "counter".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("value", "int4")],
         }],
         ..DatabaseState::default()
@@ -6352,6 +6490,7 @@ fn test_alter_column_integer_to_json_uses_to_jsonb() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "counter".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("value", "int4")],
         }],
         ..DatabaseState::default()
@@ -6423,6 +6562,7 @@ fn test_alter_column_localization_add_wraps_default_locale() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("title", "text")],
         }],
         ..DatabaseState::default()
@@ -6542,6 +6682,7 @@ fn test_geo_to_json_emits_recreate_column() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "places".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 DbColumn {
@@ -6626,6 +6767,7 @@ fn test_array_element_type_change_detected() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "tags".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("names", "_text")],
         }],
         ..DatabaseState::default()
@@ -6689,6 +6831,7 @@ fn test_drop_managed_slug_unique_when_removed_from_ast() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "album".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 col("owner_id", "uuid"),
@@ -6757,6 +6900,7 @@ fn test_unmanaged_slug_unique_never_auto_dropped() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "album".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("title", "text"), col("slug", "text")],
         }],
         constraints: vec![constraint],
@@ -6811,6 +6955,7 @@ fn test_drop_managed_model_index_removed_from_ast() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: "album".into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns: vec![
                 col("id", "uuid"),
                 col("owner_id", "uuid"),
@@ -6843,4 +6988,211 @@ fn test_drop_managed_model_index_removed_from_ast() {
         "expected DropIndex for stale managed index; got {:?}",
         diff.operations
     );
+}
+
+/// `Code<"sql">` and `Currency<"USD">` reach the engine as `kind: "json"` carrying an extra
+/// `tsType` — a fact only the TypeScript generator needs. The engine must ignore it and still emit
+/// `JSONB`; if serde ever rejected the unknown field instead, every schema using either type would
+/// fail to parse rather than to compile, which is a much worse error to debug.
+#[test]
+fn test_json_field_with_ts_type_annotation_is_parsed_as_jsonb() {
+    use supatype_engine::generator::sql::migration;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Snippet",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "body": {
+          "kind": "json",
+          "required": true,
+          "tsType": "{ lang: \"sql\"; source: string }",
+          "annotations": { "db": { "pgType": "JSONB", "unique": false } }
+        },
+        "price": {
+          "kind": "json",
+          "required": false,
+          "tsType": "{ amount: string; code: \"USD\" }",
+          "annotations": { "db": { "pgType": "JSONB", "unique": false } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "snippets", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).expect("tsType must not break parsing");
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let sql = migration::generate(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        sql.contains("\"body\" JSONB NOT NULL"),
+        "Code<> must become a required JSONB column, got:\n{sql}"
+    );
+    assert!(
+        sql.contains("\"price\" JSONB"),
+        "Currency<> must become a JSONB column, got:\n{sql}"
+    );
+}
+
+/// The OpenAPI document must agree with the migration generator about who owns a foreign key.
+///
+/// `HasOne` is the *inverse* side: the column (and its UNIQUE) belongs to whichever model declares
+/// the `RelatedTo`, and `generator/sql/migration.rs` emits nothing for `hasOne`. The spec generator
+/// used to emit an `<name>_id` property for it anyway, so a client generated from the document sent
+/// a column PostgREST rejects — and the document described a table that does not exist.
+#[test]
+fn test_openapi_omits_column_for_inverse_relations() {
+    use supatype_engine::generator::openapi;
+
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "settings": { "kind": "relation", "cardinality": "hasOne", "target": "Settings" },
+        "comments": { "kind": "relation", "cardinality": "hasMany", "target": "Comment" }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "posts", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    },
+    {
+      "name": "Settings",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "post": { "kind": "relation", "cardinality": "belongsTo", "target": "Post" }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "settings", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let spec = openapi::generate(&ast).unwrap();
+
+    let post_props = spec["components"]["schemas"]["Post"]["properties"]
+        .as_object()
+        .expect("Post schema must have properties");
+    assert!(
+        !post_props.contains_key("settings_id"),
+        "hasOne owns no column, so the spec must not advertise settings_id: {post_props:?}"
+    );
+    assert!(
+        !post_props.contains_key("comments_id"),
+        "hasMany owns no column: {post_props:?}"
+    );
+
+    // The owning side still carries its foreign key, or the fix would have removed real columns.
+    let settings_props = spec["components"]["schemas"]["Settings"]["properties"]
+        .as_object()
+        .expect("Settings schema must have properties");
+    assert!(
+        settings_props.contains_key("post_id"),
+        "belongsTo owns the column and must still appear: {settings_props:?}"
+    );
+}
+
+/// A field can name its Studio widget, and an unknown name is ignored rather than trusted.
+///
+/// `Code<"sql">`, `Currency<"USD">` and `Duration` are all stored as JSONB, so a widget chosen from
+/// the column kind alone gives all three the raw JSON editor. `annotations.platform.editor` was
+/// parsed by this engine and read by nothing; this is what makes it mean something.
+#[test]
+fn test_admin_config_honours_declared_editor_widget() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Snippet",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "body": {
+          "kind": "json",
+          "required": true,
+          "annotations": { "db": { "pgType": "JSONB" }, "platform": { "editor": "code" } }
+        },
+        "price": {
+          "kind": "json",
+          "required": false,
+          "annotations": { "db": { "pgType": "JSONB" }, "platform": { "editor": "currency" } }
+        },
+        "payload": {
+          "kind": "json",
+          "required": false,
+          "annotations": { "db": { "pgType": "JSONB" } }
+        },
+        "unknown_widget": {
+          "kind": "json",
+          "required": false,
+          "annotations": { "db": { "pgType": "JSONB" }, "platform": { "editor": "hologram" } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "snippets", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let widget_of = |name: &str| -> String {
+        fields
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap_or_else(|| panic!("field {name} missing from admin config"))["widget"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    assert_eq!(widget_of("body"), "code");
+    assert_eq!(widget_of("price"), "currency");
+    // No declaration: the kind still decides.
+    assert_eq!(widget_of("payload"), "json");
+    // A widget Studio cannot render would leave the field with no editor, so it falls back.
+    assert_eq!(widget_of("unknown_widget"), "json");
 }

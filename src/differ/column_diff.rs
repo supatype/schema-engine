@@ -67,7 +67,7 @@ fn has_index_flag(field: &FieldAst) -> bool {
     }
 }
 
-fn field_required(field: &FieldAst) -> Option<bool> {
+pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
     match field {
         FieldAst::Text(f)
         | FieldAst::Email(f)
@@ -318,7 +318,8 @@ pub fn column_type_matches_introspected(field: &FieldAst, db_col: &DbColumn) -> 
     column_type_matches(field, db_col)
 }
 
-fn field_pg_type(field: &FieldAst) -> String {
+/// Postgres type used for columns / FK references (SERIAL → INTEGER, etc.).
+pub(crate) fn field_pg_type(field: &FieldAst) -> String {
     if is_localized(field) {
         return "JSONB".into();
     }
@@ -429,7 +430,7 @@ fn detect_changes(
 ) -> serde_json::Value {
     let mut changes = serde_json::Map::new();
 
-    if let Some(required) = field_required(field) {
+    if let Some(required) = field_is_required(field) {
         let schema_nullable = !required;
         let db_nullable = db_col.nullable;
         if schema_nullable != db_nullable {
@@ -813,7 +814,7 @@ pub fn diff(
     for col in &added {
         if !renamed_added.contains(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
-                if field_required(field) == Some(true)
+                if field_is_required(field) == Some(true)
                     && add_column_backfill_default(field).is_none()
                 {
                     warnings.push(required_field_existing_table_warning(
@@ -844,8 +845,22 @@ pub fn diff(
         }
     }
 
+    // Dropping a column from a table Supatype did not create is the same class of data loss as
+    // dropping the table — smaller, and easier to miss. Gated on the same ownership marker, and
+    // reported rather than skipped quietly. Additive changes are deliberately still allowed: a
+    // table you do not own may gain a column, it may not lose one.
+    let managed = crate::managed::is_managed_comment(db_table.comment.as_deref());
     for col in &dropped {
         if !renamed_dropped.contains(*col) {
+            if !managed {
+                warnings.push(format!(
+                    "Column \"{}\".\"{}\" is gone from your schema, but the table is not managed by \
+                     Supatype (no ownership marker) — leaving it alone. Run `supatype adopt` to \
+                     bring the table under management, or drop the column by hand.",
+                    db_table.name, col
+                ));
+                continue;
+            }
             ops.push(Operation::DropColumn {
                 table: model.table_name().to_string(),
                 column: col.to_string(),
@@ -904,13 +919,30 @@ pub fn diff(
                 .and_then(|n| n.get("to"))
                 .and_then(|v| v.as_str())
                 == Some("not_null")
-                && field_required(field) == Some(true)
+                && field_is_required(field) == Some(true)
                 && add_column_backfill_default(field).is_none()
             {
                 warnings.push(required_field_existing_table_warning(
                     model.table_name(),
                     col_name,
                 ));
+            }
+
+            // Modifying a column on a table Supatype did not create is the same class of loss as
+            // dropping one. `RecreateColumn` literally drops and re-adds the column, and an
+            // `AlterColumn` type change either rewrites the operator's data or fails outright —
+            // which is how this was found: a model declaring `id: UUID` against an existing
+            // `id serial` produced `cannot cast type integer to uuid` mid-migration, from a table
+            // the gate was supposed to be protecting.
+            //
+            // Additive stays allowed, as for `DropColumn` above: a table you do not own may gain a
+            // column; it may not have one changed underneath it.
+            if !managed {
+                warnings.push(format!(
+                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed by Supatype (no ownership marker) — leaving it alone. Run `supatype adopt` to bring the table under management, or point the model at a different table with `tableName`.",
+                    db_table.name, col_name
+                ));
+                continue;
             }
 
             if conversion_strategy_name(&changes) == Some("recreate_column") {

@@ -65,9 +65,15 @@ fn owner_rule_accepts_kernel_relation_field_name() {
         serialized.contains("\"field\":\"author\""),
         "owner field should keep kernel name author, got: {serialized}"
     );
-    let expr = access_rule_to_expr(&ast, post, rule);
+    // The point of the assertion is the column resolution — `author` becomes
+    // `author_id`. The auth call is wrapped in a scalar subquery so the planner
+    // evaluates it once per query, so match on the parts rather than one literal
+    // rendering of them.
+    let expr = access_rule_to_expr(&ast, post, rule, "public");
+    // Columns are quoted so `qualify_bare_columns` can find them when the same
+    // expression is reused inside a `can_*` affordance function.
     assert!(
-        expr.contains("auth.uid() = author_id"),
+        expr.contains("auth.uid()") && expr.ends_with("= \"author_id\""),
         "RLS should resolve author to author_id column, got: {expr}"
     );
 }
@@ -228,7 +234,7 @@ fn owner_from_nested_relation_generates_exists_subquery() {
         .find(|m| m.name == "Photo")
         .expect("Photo model must exist");
     let rule = photo.access().read.as_ref().expect("read rule must exist");
-    let expr = access_rule_to_expr(&ast, photo, rule);
+    let expr = access_rule_to_expr(&ast, photo, rule, "public");
     assert!(
         expr.contains("EXISTS (SELECT 1 FROM \"album\""),
         "OwnerFrom<album> must check ownership via album table, got: {expr}"
@@ -344,9 +350,13 @@ fn owner_rule_fk_column_name_generates_correct_rls() {
     let ast = parser::parse(schema).expect("schema with FK-column Owner must parse");
     let message = ast.models.iter().find(|m| m.name == "Message").unwrap();
     let delete_rule = message.access().delete.as_ref().expect("delete rule");
-    let expr = access_rule_to_expr(&ast, message, delete_rule);
+    let expr = access_rule_to_expr(&ast, message, delete_rule, "public");
+    // Asserted as two parts rather than one SQL string: the identity comes from `auth.uid()` and the
+    // column must be the `author_id` FK, but the exact rendering is not this test's business. It is
+    // now `(SELECT auth.uid()) = "author_id"` — the call is wrapped in a scalar subquery so the
+    // planner evaluates it once per query instead of once per row, and identifiers are quoted.
     assert!(
-        expr.contains("auth.uid() = author_id"),
+        expr.contains("auth.uid()") && expr.contains("author_id"),
         "RLS must compare auth.uid() to the author_id FK column, got: {expr}"
     );
 }

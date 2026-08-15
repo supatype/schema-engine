@@ -13,6 +13,7 @@ async fn integer_to_jsonb_preserves_numeric_json() {
     with_integration_pool(|pool| async move {
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS conv_test (id serial PRIMARY KEY, value integer); \
+             COMMENT ON TABLE conv_test IS 'supatype:managed;kind=table;table=conv_test;fields=;v=1'; \
              TRUNCATE conv_test; \
              INSERT INTO conv_test (value) VALUES (42);",
         )
@@ -87,6 +88,7 @@ async fn text_to_richtext_wraps_lexical_document() {
     with_integration_pool(|pool| async move {
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS rt_test (id serial PRIMARY KEY, body text); \
+             COMMENT ON TABLE rt_test IS 'supatype:managed;kind=table;table=rt_test;fields=;v=1'; \
              TRUNCATE rt_test; \
              INSERT INTO rt_test (body) VALUES ('Hello world');",
         )
@@ -184,6 +186,7 @@ async fn richtext_to_text_extracts_plain_text() {
 
         sqlx::raw_sql(
             "CREATE TABLE IF NOT EXISTS rt_back_test (id serial PRIMARY KEY, body jsonb); \
+             COMMENT ON TABLE rt_back_test IS 'supatype:managed;kind=table;table=rt_back_test;fields=;v=1'; \
              TRUNCATE rt_back_test;",
         )
         .execute(&pool)

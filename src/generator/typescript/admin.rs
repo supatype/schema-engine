@@ -1,3 +1,4 @@
+use crate::parser::accessors::field_annotations;
 use crate::parser::ast::{
     DefaultValueAst, FieldAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst,
 };
@@ -465,8 +466,28 @@ fn field_widget(field: &FieldAst) -> &'static str {
     }
 }
 
+/// A widget named by the schema, overriding the kind-based choice.
+///
+/// `annotations.platform.editor` has been parsed by this engine and read by nothing. It is the right
+/// hook for a presentation choice the column type cannot express: `Code<"sql">` and
+/// `Currency<"USD">` are both JSONB, so a widget picked from the kind alone gives them both the raw
+/// JSON editor. An unknown value is ignored rather than trusted, since a widget name that Studio
+/// cannot render would leave the field with no editor at all.
+fn declared_widget(field: &FieldAst) -> Option<&'static str> {
+    match field_annotations(field).platform.editor.as_deref() {
+        Some("code") => Some("code"),
+        Some("currency") => Some("currency"),
+        Some("duration") => Some("duration"),
+        Some("rich") => Some("richtext"),
+        _ => None,
+    }
+}
+
 /// Like `field_widget` but also applies name-based heuristics (e.g. colour picker).
 fn field_widget_named(field: &FieldAst, name: &str) -> &'static str {
+    if let Some(widget) = declared_widget(field) {
+        return widget;
+    }
     if let FieldAst::Text(s) = field {
         if !s.sources.is_empty() || s.template.is_some() {
             return "derivedText";

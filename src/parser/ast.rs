@@ -384,11 +384,49 @@ pub enum DefaultValueAst {
 pub struct AccessAst {
     pub read: Option<AccessRule>,
     pub create: Option<AccessRule>,
+    /// The `USING` clause of the update policy: which existing rows the caller
+    /// may modify.
     pub update: Option<AccessRule>,
+    /// The `WITH CHECK` clause, when it differs from `update`.
+    ///
+    /// An update policy has both: `USING` picks the rows that may be changed and
+    /// `WITH CHECK` constrains what they may be changed *into*. With one rule for
+    /// both, "you may edit your own posts" also silently means "you may reassign
+    /// one to somebody else" is refused — usually right, but it makes rules like
+    /// "an editor may move a post between their own sites" inexpressible. When
+    /// absent, `update` is used for both, which is the safe default and what every
+    /// existing schema means.
+    #[serde(default)]
+    pub update_check: Option<AccessRule>,
     pub delete: Option<AccessRule>,
+    /// Per-column rules, keyed by column name.
+    ///
+    /// Enforced by a query rewrite in the `supatype_mask` extension, not by column
+    /// privileges: privileges belong to a database role and every signed-in caller
+    /// connects as the same `authenticated`, so an application role like
+    /// `Role<"admin">` cannot be expressed as one. A column `REVOKE` also makes
+    /// `GET /table` with no `select` return 403 for the whole table, which is a
+    /// break, not a restriction.
+    ///
+    /// So the full rule language is available here. The engine compiles each rule to
+    /// a `can_read_<table>__<column>` / `can_write_<table>__<column>` predicate and a
+    /// `SECURITY LABEL` pointing the extension at it.
+    #[serde(default)]
+    pub fields: IndexMap<String, FieldAccessAst>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `read` / `write` rules for one column.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldAccessAst {
+    pub read: Option<AccessRule>,
+    /// Covers `INSERT` and `UPDATE` together: a column a caller may not set is one
+    /// they may not set on either path, and splitting them would let a row be
+    /// created with a value its author could never have edited in.
+    pub write: Option<AccessRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AccessRule {
     Public,
@@ -400,13 +438,194 @@ pub enum AccessRule {
     Role {
         roles: Vec<String>,
     },
-    Custom {
-        expression: String,
-    },
     /// OR-join of multiple rules — any one matching grants access.
     Any {
         rules: Vec<AccessRule>,
     },
+    /// AND-join — every rule must match.
+    All {
+        rules: Vec<AccessRule>,
+    },
+    /// Negation of a rule.
+    Not {
+        rule: Box<AccessRule>,
+    },
+    /// A binary comparison between two operands.
+    Compare {
+        left: Operand,
+        op: CompareOp,
+        right: Operand,
+    },
+    /// Membership: the column's value appears in a set.
+    ///
+    /// This is what makes "the sites this user belongs to" expressible. Compiles
+    /// to a semi-join (`EXISTS`), not `IN (SELECT ...)`, so the planner can stop
+    /// at the first match per row instead of materialising the whole set.
+    In {
+        column: String,
+        source: MembershipSource,
+    },
+    /// The source set is non-empty, independent of any column.
+    ///
+    /// `In<>` can only ask "is this row's value in the set", which is not the same
+    /// question. Payload's site-access rule guards on `user.sites?.length > 0`
+    /// before granting either branch; without that guard an editor with no sites
+    /// still matches a sibling `IsNull<field>` branch and sees unassigned rows.
+    Exists {
+        source: MembershipSource,
+    },
+    /// `IS NULL` / `IS NOT NULL` on an operand.
+    ///
+    /// Its own variant rather than a `CompareOp`, because SQL null comparison is
+    /// not an equality: `col = NULL` is null, never true, so rendering it through
+    /// the comparison path would produce a policy that silently denies everything.
+    NullCheck {
+        operand: Operand,
+        /// true for `IS NULL`, false for `IS NOT NULL`.
+        ///
+        /// Renamed explicitly: `rename_all` on an enum renames its *variants*, not
+        /// the fields inside them, and the AST JSON the CLI emits is camelCase
+        /// throughout.
+        #[serde(rename = "isNull")]
+        is_null: bool,
+    },
+}
+
+/// Where the set on the right of an `In` comes from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MembershipSource {
+    /// A JWT claim holding an array, e.g. `app_metadata.sites`.
+    Claim { path: String },
+    /// Rows of another table — a join table, typically. `where` narrows it to the
+    /// caller's own rows, which is what makes it a membership check rather than a
+    /// lookup of everything.
+    Rows {
+        table: String,
+        column: String,
+        #[serde(default, rename = "where")]
+        filter: Option<Box<AccessRule>>,
+    },
+    /// A fixed list written in the schema.
+    Literal { values: Vec<LiteralValue> },
+}
+
+/// One side of a comparison.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Operand {
+    /// A column on the model the policy is attached to.
+    Column { name: String },
+    /// `auth.uid()`, wrapped so the planner evaluates it once per query.
+    AuthUid,
+    /// `auth.role()`, wrapped for the same reason.
+    AuthRole,
+    /// A nested JWT claim by dotted path, e.g. `app_metadata.tier`.
+    Claim { path: String },
+    /// A constant supplied in the schema.
+    Literal { value: LiteralValue },
+
+    /// `now()` — transaction start time.
+    ///
+    /// Deliberately not `clock_timestamp()`: that is VOLATILE, which would make the
+    /// generated `can_*` functions' `STABLE` declaration a lie and defeat the
+    /// scalar-subquery wrapping that has the planner evaluate this once per query.
+    /// A closed operand set is what prevents anyone reaching for the volatile one.
+    Now,
+
+    /// `date_trunc(unit, now())` — the start of the current day, week, month or year.
+    StartOf { unit: TruncUnit },
+
+    /// `now() - INTERVAL 'n unit'`.
+    Ago { amount: u32, unit: TimeUnit },
+
+    /// `now() + INTERVAL 'n unit'`.
+    FromNow { amount: u32, unit: TimeUnit },
+}
+
+/// Granularity for [`Operand::StartOf`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TruncUnit {
+    Day,
+    Week,
+    Month,
+    Year,
+}
+
+impl TruncUnit {
+    pub fn sql(self) -> &'static str {
+        match self {
+            TruncUnit::Day => "day",
+            TruncUnit::Week => "week",
+            TruncUnit::Month => "month",
+            TruncUnit::Year => "year",
+        }
+    }
+}
+
+/// Interval unit for [`Operand::Ago`] / [`Operand::FromNow`].
+///
+/// A closed set, so the rendered interval is assembled from a parsed integer and a
+/// keyword chosen here — the author's text never reaches Postgres.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TimeUnit {
+    Seconds,
+    Minutes,
+    Hours,
+    Days,
+    Weeks,
+    Months,
+    Years,
+}
+
+impl TimeUnit {
+    pub fn sql(self) -> &'static str {
+        match self {
+            TimeUnit::Seconds => "seconds",
+            TimeUnit::Minutes => "minutes",
+            TimeUnit::Hours => "hours",
+            TimeUnit::Days => "days",
+            TimeUnit::Weeks => "weeks",
+            TimeUnit::Months => "months",
+            TimeUnit::Years => "years",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum LiteralValue {
+    Bool(bool),
+    Number(f64),
+    Text(String),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CompareOp {
+    Eq,
+    Neq,
+    Gt,
+    Gte,
+    Lt,
+    Lte,
+    Like,
+}
+
+impl CompareOp {
+    pub fn sql(self) -> &'static str {
+        match self {
+            CompareOp::Eq => "=",
+            CompareOp::Neq => "<>",
+            CompareOp::Gt => ">",
+            CompareOp::Gte => ">=",
+            CompareOp::Lt => "<",
+            CompareOp::Lte => "<=",
+            CompareOp::Like => "LIKE",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

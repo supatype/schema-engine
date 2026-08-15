@@ -159,6 +159,69 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
         }
     }
 
+    // Tables, which the report never covered.
+    //
+    // Indexes and constraints have been reported this way for a long time; tables were not, so the
+    // ownership gate could silently decline to drop a table and `doctor` would say nothing. An
+    // operator seeing a clean report and a push that leaves a table behind concludes push is broken.
+    // Wording matches the constraint and index cases deliberately — the mechanism is the same one.
+    let schema_owned: HashSet<&str> = ast
+        .models
+        .iter()
+        .map(|m| m.table_name())
+        .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
+        .collect();
+
+    for table in &db.tables {
+        let managed = is_managed_comment(table.comment.as_deref());
+        let in_schema = schema_owned.contains(table.name.as_str());
+
+        // In the schema and unmarked: the table is diffed normally, but the gate declines to drop a
+        // column the schema no longer declares. That is the difference `adopt` resolves.
+        if in_schema && !managed {
+            unmanaged_drift.push(DoctorItem {
+                kind: "table".into(),
+                table: table.name.clone(),
+                name: table.name.clone(),
+                fields: Vec::new(),
+                message: format!(
+                    "Table {} matches a model but is not managed — push will not drop its columns; \
+                     run `supatype adopt` to bring it under management",
+                    table.name
+                ),
+            });
+            continue;
+        }
+
+        if in_schema {
+            continue;
+        }
+
+        // Absent from the schema. Marked means push will drop it; unmarked means push will not.
+        let item = DoctorItem {
+            kind: "table".into(),
+            table: table.name.clone(),
+            name: table.name.clone(),
+            fields: Vec::new(),
+            message: if managed {
+                format!(
+                    "Managed table {} is not in AST — review before push",
+                    table.name
+                )
+            } else {
+                format!(
+                    "Unmanaged table {} — push will not drop; manual decision required",
+                    table.name
+                )
+            },
+        };
+        if managed {
+            stale_managed.push(item);
+        } else {
+            unmanaged_drift.push(item);
+        }
+    }
+
     DoctorReport {
         missing,
         stale_managed,
@@ -249,11 +312,51 @@ fn doctor_constraint_item(constraint: &DbConstraint) -> DoctorItem {
     }
 }
 
-/// SQL statements to stamp matching constraints/indexes during adoption (comments only).
+/// SQL statements to stamp matching tables/constraints/indexes during adoption (comments only).
+///
+/// Tables are stamped **first**: the ownership gate is what makes an unmarked table safe from
+/// `DropTable` and its columns safe from `DropColumn`, and until a table carries the marker, adopting
+/// only its indexes leaves the confusing half-state where push manages the indexes on a table it
+/// will not otherwise touch.
+///
+/// Only tables the schema actually declares are stamped. Adoption is an opt-in ceremony for objects
+/// the operator has decided belong to Supatype — stamping anything found in the schema would make the
+/// gate meaningless on its first run, which is the one case it exists for.
 pub fn adopt_stamp_sql(ast: &SchemaAst, db: &DatabaseState, schema: &str) -> Vec<String> {
     let expected_uniques = expected_column_uniques(ast);
     let expected_indexes = expected_model_indexes(ast);
     let mut lines = Vec::new();
+
+    for model in &ast.models {
+        let table = model.table_name();
+        let Some(db_table) = db.tables.iter().find(|t| t.name == table) else {
+            continue;
+        };
+        if is_managed_comment(db_table.comment.as_deref()) {
+            continue;
+        }
+        // The same marker `CREATE TABLE` writes. A different shape would leave the table
+        // permanently undroppable and the differ unable to converge.
+        let comment = managed_comment("table", table, &[]);
+        lines.push(crate::managed::comment_on_table_sql(
+            table, &comment, schema,
+        ));
+    }
+
+    for junction in &ast.junction_tables {
+        let Some(db_table) = db.tables.iter().find(|t| t.name == junction.name) else {
+            continue;
+        };
+        if is_managed_comment(db_table.comment.as_deref()) {
+            continue;
+        }
+        let comment = managed_comment("table", &junction.name, &[]);
+        lines.push(crate::managed::comment_on_table_sql(
+            &junction.name,
+            &comment,
+            schema,
+        ));
+    }
 
     for exp in &expected_uniques {
         let constraint = db.constraints.iter().find(|c| {

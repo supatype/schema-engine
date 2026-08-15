@@ -163,6 +163,7 @@ fn test_geo_user_defined_geography_matches_no_type_drift() {
         tables: vec![DbTable {
             schema: "public".into(),
             name: model.table_name().into(),
+            comment: Some("supatype:managed;kind=table".into()),
             columns,
         }],
         ..DatabaseState::default()

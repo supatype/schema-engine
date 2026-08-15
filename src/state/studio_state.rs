@@ -64,16 +64,30 @@ GRANT EXECUTE ON FUNCTION {SCHEMA}.db_stats() TO anon, authenticated, service_ro
 }
 
 pub fn create_daily_signups_function_sql() -> String {
+    // plpgsql for the same reason as `storage_stats` below: it defers the table reference to
+    // runtime. As `LANGUAGE sql` this validated `auth.users` at creation time, so the first push to
+    // a database GoTrue had not yet booted against failed outright — `relation "auth.users" does not
+    // exist`, from a Studio analytics helper, aborting a migration that had nothing to do with auth.
+    // `supatype/postgres` bootstraps the auth schema in its image, which is why this only showed up
+    // on a database Supatype did not create.
     format!(
         r#"CREATE OR REPLACE FUNCTION {SCHEMA}.daily_signups(days INT DEFAULT 30)
 RETURNS TABLE(day DATE, count INT)
-LANGUAGE sql SECURITY DEFINER STABLE AS $$
-    SELECT date_trunc('day', created_at)::date AS day,
-           count(*)::int
-    FROM auth.users
-    WHERE created_at > now() - (days || ' days')::interval
-    GROUP BY day
-    ORDER BY day
+LANGUAGE plpgsql SECURITY DEFINER STABLE AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'auth' AND table_name = 'users'
+    ) THEN
+        RETURN QUERY
+            SELECT date_trunc('day', created_at)::date AS day,
+                   count(*)::int
+            FROM auth.users
+            WHERE created_at > now() - (days || ' days')::interval
+            GROUP BY day
+            ORDER BY day;
+    END IF;
+END
 $$;
 GRANT EXECUTE ON FUNCTION {SCHEMA}.daily_signups(INT) TO anon, authenticated, service_role"#
     )

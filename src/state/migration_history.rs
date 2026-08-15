@@ -82,6 +82,180 @@ pub fn create_schema_state_table_sql() -> String {
     )
 }
 
+/// Studio membership — who may use the admin UI, and with what capability set.
+///
+/// Deliberately NOT a JWT claim and NOT in the `public` schema: `_supatype` is
+/// absent from PGRST_DB_SCHEMAS, so nothing the developer's app or API surface
+/// does can read or write it. Studio roles are Supatype's namespace; the
+/// developer's own app roles live in their claims/tables and are unrelated.
+///
+/// A row identifies its holder by exactly one of two identities:
+///
+/// * `user_id` — a project `auth.users` id. How self-host grants access, and how
+///   a project's own users are admitted in either host.
+/// * `platform_user_id` — a Supatype Cloud account. Cloud callers are platform
+///   accounts, not project users, so they cannot be looked up by `user_id`.
+///
+/// Keeping both in one table means "who may use Studio for this project" has a
+/// single answer wherever the project runs, and the grants survive an export from
+/// cloud to self-host. The CHECK makes the identity space of every row explicit,
+/// so neither lookup can ever match a row it was not meant to.
+pub fn create_studio_members_table_sql() -> String {
+    format!(
+        r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.studio_members (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID UNIQUE,
+    platform_user_id  UUID UNIQUE,
+    role              TEXT NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT studio_members_one_identity
+        CHECK (num_nonnulls(user_id, platform_user_id) = 1)
+)"#
+    )
+}
+
+/// Audit trail for Studio membership changes and elevated data access.
+///
+/// Access-control changes need a durable record, not a log line that rotates
+/// away: "who gave this person admin, and when" has to be answerable months
+/// later. Lives in `_supatype` for the same reason `studio_members` does —
+/// nothing reachable through the data plane can read or rewrite it.
+///
+/// `actor_id` is nullable because a change can come from the CLI against the
+/// database directly, where there is no signed-in actor to attribute it to.
+/// `target_id` is nullable because not every audited event is *about* someone:
+/// an elevated request has an actor and no target. `detail` carries the shape of
+/// whatever the action was — the method and path of an elevated request, say.
+pub fn create_studio_audit_table_sql() -> String {
+    format!(
+        r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.studio_audit (
+    id          BIGSERIAL PRIMARY KEY,
+    actor_id    UUID,
+    target_id   UUID,
+    action      TEXT NOT NULL,
+    role        TEXT,
+    detail      JSONB,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)"#
+    )
+}
+
+/// Bring an audit table created for membership changes only up to the shape that
+/// also records elevated access.
+pub fn ensure_studio_audit_columns_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    IF to_regclass('{SCHEMA}.studio_audit') IS NULL THEN
+        RETURN;
+    END IF;
+    ALTER TABLE {SCHEMA}.studio_audit ADD COLUMN IF NOT EXISTS detail JSONB;
+    ALTER TABLE {SCHEMA}.studio_audit ALTER COLUMN target_id DROP NOT NULL;
+END $$"#
+    )
+}
+
+/// Migrate a `studio_members` table created before cloud accounts could hold a
+/// membership: `user_id` was the primary key and the only identity.
+///
+/// Written as a guarded DO block rather than plain `ALTER`s because the target
+/// shape has to be reached from either starting point — the pre-cloud table or
+/// the current one — and a push must never fail on a table that is already right.
+pub fn ensure_studio_members_platform_identity_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    IF to_regclass('{SCHEMA}.studio_members') IS NULL THEN
+        RETURN;
+    END IF;
+
+    ALTER TABLE {SCHEMA}.studio_members
+        ADD COLUMN IF NOT EXISTS platform_user_id UUID;
+
+    -- `user_id` becomes optional, so the primary key has to move off it.
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_members'::regclass
+           AND contype = 'p'
+           AND conkey = ARRAY[(SELECT attnum FROM pg_attribute
+                                WHERE attrelid = '{SCHEMA}.studio_members'::regclass
+                                  AND attname = 'user_id')]::smallint[]
+    ) THEN
+        ALTER TABLE {SCHEMA}.studio_members DROP CONSTRAINT studio_members_pkey;
+        ALTER TABLE {SCHEMA}.studio_members
+            ADD COLUMN IF NOT EXISTS id UUID NOT NULL DEFAULT gen_random_uuid();
+        ALTER TABLE {SCHEMA}.studio_members ADD PRIMARY KEY (id);
+        ALTER TABLE {SCHEMA}.studio_members ALTER COLUMN user_id DROP NOT NULL;
+        ALTER TABLE {SCHEMA}.studio_members ADD CONSTRAINT studio_members_user_id_key
+            UNIQUE (user_id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_members'::regclass
+           AND conname = 'studio_members_platform_user_id_key'
+    ) THEN
+        ALTER TABLE {SCHEMA}.studio_members
+            ADD CONSTRAINT studio_members_platform_user_id_key UNIQUE (platform_user_id);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_members'::regclass
+           AND conname = 'studio_members_one_identity'
+    ) THEN
+        ALTER TABLE {SCHEMA}.studio_members
+            ADD CONSTRAINT studio_members_one_identity
+            CHECK (num_nonnulls(user_id, platform_user_id) = 1);
+    END IF;
+END $$"#
+    )
+}
+
+/// Seed `studio_members` from the admin roles that used to live in
+/// `app_metadata`.
+///
+/// Studio access moved out of JWT claims and into this table. Without a seed,
+/// the first push after that change locks every existing admin out of their own
+/// Studio: their claim no longer grants anything and they have no membership
+/// row. Runs only while the table is empty, so it cannot resurrect access that
+/// was deliberately revoked later.
+///
+/// Only the roles that actually admitted anyone are carried over, and they all
+/// become the Studio role `admin`:
+///
+/// * `app_metadata.role` was the developer's own namespace, so it holds arbitrary
+///   application roles — `moderator`, `staff`, whatever their app needed. Those
+///   never granted Studio access (`STUDIO_ADMIN_ROLES` did, defaulting to `admin`
+///   and `supatype_admin`), so seeding them would *hand out* access rather than
+///   preserve it.
+/// * A Studio role has to be one the deployment understands, or the capability
+///   check refuses it. Copying claim strings verbatim would seed rows that deny.
+///
+/// A deployment that customised `STUDIO_ADMIN_ROLES` seeds nobody and falls
+/// through to the CLI's first-admin prompt, which is the right recovery — better
+/// than guessing which app roles were meant to be administrators.
+pub fn seed_studio_members_from_claims_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM {SCHEMA}.studio_members) THEN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'auth' AND table_name = 'users'
+        ) THEN
+            INSERT INTO {SCHEMA}.studio_members (user_id, platform_user_id, role)
+            SELECT id, NULL, 'admin'
+              FROM auth.users
+             WHERE raw_app_meta_data->>'role' IN ('admin', 'supatype_admin')
+            ON CONFLICT (user_id) DO NOTHING;
+        END IF;
+    END IF;
+END $$"#
+    )
+}
+
 pub fn ensure_migrations_admin_config_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS admin_config JSONB")
 }
@@ -101,8 +275,68 @@ pub fn ensure_migrations_schema_sources_column_sql() -> String {
     )
 }
 
+/// Repair a `migrations` table that predates this engine's layout.
+///
+/// [`create_migrations_table_sql`] uses CREATE TABLE IF NOT EXISTS, so a table
+/// created by anything else (e.g. an older engine, or a provisioner that
+/// pre-created it) silently wins and every insert then fails on a missing
+/// column. These columns are NOT NULL at creation time; added after the fact
+/// they must be nullable, which is harmless because every insert supplies them.
+pub fn ensure_migrations_core_columns_sql() -> String {
+    format!(
+        "ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS hash TEXT;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS engine_version TEXT;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW();\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS rolled_back BOOLEAN NOT NULL DEFAULT FALSE;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS rolled_back_at TIMESTAMPTZ;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS schema_snapshot JSONB"
+    )
+}
+
+/// A foreign `migrations` table may carry NOT NULL columns this engine never
+/// writes (a legacy layout used `version`, `sql`, `checksum`), and may lack the
+/// UNIQUE constraint on `name` that failed-migration upserts rely on. Relax the
+/// columns we don't own and restore the constraint so inserts can succeed.
+pub fn ensure_migrations_writable_sql() -> String {
+    format!(
+        "DO $$
+DECLARE
+  col RECORD;
+BEGIN
+  FOR col IN
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = '{SCHEMA}'
+      AND table_name = 'migrations'
+      AND is_nullable = 'NO'
+      AND column_default IS NULL
+      AND column_name <> ALL (ARRAY['id', 'name', 'hash', 'engine_version'])
+  LOOP
+    EXECUTE format('ALTER TABLE {SCHEMA}.migrations ALTER COLUMN %I DROP NOT NULL', col.column_name);
+  END LOOP;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_index i
+    JOIN pg_class c ON c.oid = i.indrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY (i.indkey)
+    WHERE n.nspname = '{SCHEMA}'
+      AND c.relname = 'migrations'
+      AND i.indisunique
+      AND i.indnatts = 1
+      AND a.attname = 'name'
+  ) THEN
+    EXECUTE 'CREATE UNIQUE INDEX migrations_name_key ON {SCHEMA}.migrations (name)';
+  END IF;
+END $$"
+    )
+}
+
 pub fn ensure_all_migration_columns_sql() -> Vec<String> {
     vec![
+        ensure_migrations_core_columns_sql(),
+        ensure_migrations_writable_sql(),
         ensure_migrations_admin_config_column_sql(),
         ensure_migrations_sql_up_column_sql(),
         ensure_migrations_status_columns_sql(),
@@ -123,6 +357,91 @@ pub fn ensure_schema_state_studio_columns_sql() -> String {
         "ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS ast_snapshot JSONB;\
          ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS admin_config JSONB"
     )
+}
+
+/// What this database can actually enforce, as opposed to what the schema declares.
+pub fn ensure_schema_state_capabilities_column_sql() -> String {
+    format!("ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS capabilities JSONB")
+}
+
+/// Record how field-level access is enforced here, from a live probe rather than an
+/// assumption.
+///
+/// Studio and `explain` need to state which mechanism is in force, and a value derived
+/// on demand is a value that can disagree with the push that actually applied the
+/// schema. Writing it makes the tier a recorded fact.
+///
+/// A database with field rules cannot reach here without the extension — the migration
+/// refuses to apply first — so `unenforced` means only "no field rules in this schema".
+/// That distinction is the point: a deployment that quietly stopped enforcing must be
+/// visible, not inferred.
+pub async fn record_field_enforcement(
+    conn: &mut sqlx::PgConnection,
+    labelled_columns: usize,
+) -> Result<()> {
+    let extension: Option<String> =
+        sqlx::query_scalar("SELECT extversion FROM pg_extension WHERE extname = $1")
+            .bind(crate::generator::sql::rls::MASK_EXTENSION)
+            .fetch_optional(&mut *conn)
+            .await?
+            .flatten();
+
+    // Tier 2 is real enforcement, not a failure — but only if the views are actually there. Asking
+    // the database rather than assuming: a schema that *should* have views and does not is exactly
+    // the state worth recording as broken.
+    let views_present: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_class c            JOIN pg_namespace n ON n.oid = c.relnamespace           WHERE n.nspname = $1 AND c.relkind = 'v')",
+    )
+    .bind(crate::generator::sql::field_views::VIEW_SCHEMA)
+    .fetch_one(&mut *conn)
+    .await?;
+
+    let tier = if labelled_columns == 0 {
+        "unenforced"
+    } else if extension.is_some() {
+        "extension"
+    } else if views_present {
+        "views"
+    } else {
+        // The extension is gone and no views stand in for it. Reachable by dropping the extension
+        // under a tier-1 database, and worth recording honestly rather than asserting.
+        "broken"
+    };
+
+    let record = serde_json::json!({
+        "fieldMasking": {
+            "tier": tier,
+            "extension": crate::generator::sql::rls::MASK_EXTENSION,
+            "extensionVersion": extension,
+            "labelledColumns": labelled_columns,
+        }
+    });
+
+    // Merged rather than replaced, so a future capability recorded elsewhere survives.
+    let sql = format!(
+        "UPDATE {SCHEMA}.schema_state \
+         SET capabilities = COALESCE(capabilities, '{{}}'::jsonb) || $1::jsonb \
+         WHERE id = 1"
+    );
+    sqlx::query(&sql).bind(record).execute(&mut *conn).await?;
+
+    Ok(())
+}
+
+/// How many columns the schema declares field rules for — the number recorded alongside
+/// the tier, and what makes "no field rules" distinguishable from "rules that stopped
+/// being enforced".
+pub fn labelled_column_count(ast: &crate::parser::ast::SchemaAst) -> usize {
+    ast.models
+        .iter()
+        .map(|model| {
+            crate::parser::accessors::platform_access(model)
+                .fields
+                .values()
+                .filter(|rules| rules.read.is_some() || rules.write.is_some())
+                .count()
+        })
+        .sum()
 }
 
 fn snapshot_hash(schema_snapshot: &serde_json::Value) -> String {
@@ -599,4 +918,91 @@ pub async fn load_migration_sources(
     let row: Option<(Option<Vec<u8>>, Option<serde_json::Value>)> =
         sqlx::query_as(&sql).bind(name).fetch_optional(pool).await?;
     Ok(row.and_then(|(sources, manifest)| sources.map(|s| (s, manifest))))
+}
+
+/// Re-apply the `auth.*` helper functions used by RLS policies.
+///
+/// These were only ever written at provision time, so an engine change to
+/// `auth.role()` (for example, resolving application roles from
+/// `app_metadata.role`) never reached an existing project — its policies kept
+/// calling the old definition indefinitely. They are CREATE OR REPLACE, so
+/// re-applying on every push is cheap and idempotent.
+///
+/// Skipped when there is no `auth` schema (a plain Postgres target), rather than
+/// failing a push that has nothing to do with auth.
+pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bool> {
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1")
+            .bind(auth_schema)
+            .fetch_optional(pool)
+            .await?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+
+    let config = crate::generator::sql::auth_functions::AuthFunctionConfig {
+        project_ref: String::new(),
+        auth_schema: auth_schema.to_string(),
+    };
+    let sql = crate::generator::sql::auth_functions::generate_auth_functions(&config);
+    sqlx::raw_sql(&sql).execute(pool).await?;
+    Ok(true)
+}
+
+/// Create and repair everything the engine owns inside `_supatype`, and re-apply
+/// the auth helper functions.
+///
+/// Both push implementations — the CLI binary (`main.rs`) and the HTTP server
+/// (`server/routes.rs`) — call this. They previously each wrote out the same
+/// sequence by hand, so every new internal object or repair had to be added
+/// twice; forgetting one produced exactly the silent drift this engine has been
+/// accumulating (a migrations table with no `hash`, RLS state that never
+/// converged, Studio metadata written on only one code path).
+pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
+    sqlx::raw_sql(create_internal_schema_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&create_migrations_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&create_studio_members_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_studio_members_platform_identity_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&create_studio_audit_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_studio_audit_columns_sql())
+        .execute(pool)
+        .await?;
+    // Migrating an existing project: carry forward the admins who only have the
+    // old `app_metadata.role` claim, before that claim stops meaning anything.
+    if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql())
+        .execute(pool)
+        .await
+    {
+        eprintln!("Warning: failed to seed Studio membership from existing admin roles: {e}");
+    }
+    sqlx::raw_sql(&create_schema_state_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_schema_state_studio_columns_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_schema_state_capabilities_column_sql())
+        .execute(pool)
+        .await?;
+
+    for sql in ensure_all_migration_columns_sql() {
+        sqlx::raw_sql(&sql).execute(pool).await?;
+    }
+
+    // Helper functions are cosmetic to a migration's success, so a failure here
+    // must not abort the push.
+    if let Err(e) = reapply_auth_helpers(pool, "auth").await {
+        eprintln!("Warning: failed to reapply auth helper functions: {e}");
+    }
+    Ok(())
 }

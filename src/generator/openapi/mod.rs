@@ -207,22 +207,26 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
                 continue;
             }
             FieldAst::Relation(rel) => {
-                // Only BelongsTo/HasOne produce a real FK column
-                match rel.cardinality {
-                    RelationCardinality::BelongsTo | RelationCardinality::HasOne => {
-                        let fk_default = format!("{name}_id");
-                        let fk_col = rel.foreign_key.as_deref().unwrap_or(&fk_default);
-                        properties.insert(
-                            fk_col.to_string(),
-                            json!({
-                                "type": "string",
-                                "format": "uuid",
-                                "nullable": true,
-                                "description": format!("FK -> {}", rel.target)
-                            }),
-                        );
-                    }
-                    _ => {} // HasMany / ManyToMany are virtual
+                // Only BelongsTo owns a column here, and this must agree with the migration
+                // generator or the document describes a table that does not exist. It used to
+                // include HasOne, which `generator/sql/migration.rs` explicitly does not emit a
+                // column for — HasOne is the *inverse* side, and the foreign key (with its UNIQUE)
+                // belongs to whichever model declares the RelatedTo. So the spec advertised an
+                // `<name>_id` that was never created, and a client generated from it sent a column
+                // PostgREST rejects.
+                // BelongsTo only: HasOne, HasMany and ManyToMany hold no column on this table.
+                if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
+                    let fk_default = format!("{name}_id");
+                    let fk_col = rel.foreign_key.as_deref().unwrap_or(&fk_default);
+                    properties.insert(
+                        fk_col.to_string(),
+                        json!({
+                            "type": "string",
+                            "format": "uuid",
+                            "nullable": true,
+                            "description": format!("FK -> {}", rel.target)
+                        }),
+                    );
                 }
                 continue;
             }

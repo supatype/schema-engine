@@ -2,6 +2,7 @@ pub mod column_diff;
 pub mod constraint_diff;
 pub mod doctor;
 pub mod enum_diff;
+pub mod field_access_diff;
 pub mod index_diff;
 pub mod integrity;
 pub mod ordering;
@@ -21,6 +22,44 @@ pub struct DiffOutput {
     pub operations: Vec<Operation>,
     pub summary: DiffSummary,
     pub warnings: Vec<String>,
+    /// Tables a model declares that already exist **and** carry no ownership marker.
+    ///
+    /// Nothing that changes them may be emitted — not RLS, not policies, not grants, not security
+    /// labels. Declaring a model is not permission to alter a table Supatype did not create: enabling
+    /// row level security on it can stop another application reading its own data, and it is the same
+    /// argument that would license dropping its columns.
+    ///
+    /// Computed here because the generators see only the AST, and the marker lives in the database.
+    #[serde(default)]
+    pub unmanaged_model_tables: Vec<String>,
+    /// How field rules will be enforced on *this* database.
+    ///
+    /// Decided here for the same reason as above: the answer is a property of the database — is the
+    /// masking extension installed? — and the generators only see the schema.
+    #[serde(default)]
+    pub field_masking: FieldMaskingTier,
+    /// The tables tier 2's `api` layer has to cover, with their columns and keys.
+    ///
+    /// Read here because it comes from the database; rendered by the SQL generator, which is the only
+    /// place that knows which schema the push was given.
+    #[serde(default)]
+    pub field_view_plan: Vec<crate::generator::sql::field_views::FieldViewTable>,
+}
+
+/// How a database enforces per-column rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum FieldMaskingTier {
+    /// No column in the schema has a rule, so nothing has to enforce anything.
+    #[default]
+    None,
+    /// `supatype_mask` rewrites references to the base table in the planner.
+    Extension,
+    /// Generated `api`-schema views carry the masking expression, and PostgREST is pointed at them.
+    ///
+    /// The fallback for a database that cannot load an extension — which is most managed Postgres, and
+    /// therefore most of what `database.external` made possible.
+    Views,
 }
 
 /// Each operation carries enough data for the SQL generator to produce DDL
@@ -243,9 +282,43 @@ pub fn diff_with_previous(
     constraint_diff::diff(ast, db, &mut ops)?;
     index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
+    field_access_diff::validate(ast, db, &mut warnings)?;
     trigger_diff::diff(ast, db, &mut ops)?;
 
     let ordered_ops = ordering::topological_sort(ops)?;
+
+    // Which mechanism will enforce the field rules here. `Views` is not a preference: it is what is
+    // left when the extension is absent, and the alternative was refusing the push outright.
+    let field_masking = if !crate::generator::sql::field_views::has_field_rules(ast) {
+        FieldMaskingTier::None
+    } else if db
+        .extensions
+        .iter()
+        .any(|e| e == crate::generator::sql::rls::MASK_EXTENSION)
+    {
+        FieldMaskingTier::Extension
+    } else {
+        FieldMaskingTier::Views
+    };
+    let field_view_plan = match field_masking {
+        FieldMaskingTier::Views => crate::generator::sql::field_views::field_view_plan(ast, db),
+        _ => Vec::new(),
+    };
+
+    // Model tables that already exist without an ownership marker. The security apparatus — grants,
+    // column privileges, field labels — is re-asserted from the AST alone on every push, so the
+    // renderer has no way to know which tables are ours unless it is told.
+    let unmanaged_model_tables: Vec<String> = ast
+        .models
+        .iter()
+        .filter_map(|m| {
+            db.tables
+                .iter()
+                .find(|t| t.name == m.table_name())
+                .filter(|t| !crate::managed::is_managed_comment(t.comment.as_deref()))
+                .map(|t| t.name.clone())
+        })
+        .collect();
 
     let safe = ordered_ops
         .iter()
@@ -262,6 +335,9 @@ pub fn diff_with_previous(
 
     Ok(DiffOutput {
         operations: ordered_ops,
+        unmanaged_model_tables,
+        field_masking,
+        field_view_plan,
         summary: DiffSummary {
             safe,
             cautious,

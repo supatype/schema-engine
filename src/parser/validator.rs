@@ -108,9 +108,21 @@ fn normalize_and_validate_rule_inner(
                 candidates.join(", ")
             );
         }
-        AccessRule::Any { rules } => {
+        AccessRule::Any { rules } | AccessRule::All { rules } => {
             for r in rules {
                 normalize_and_validate_rule_inner(r, model_name, owner_eligible)?;
+            }
+            Ok(())
+        }
+        AccessRule::Not { rule } => {
+            normalize_and_validate_rule_inner(rule, model_name, owner_eligible)
+        }
+        AccessRule::In { source, .. } => {
+            if let crate::parser::ast::MembershipSource::Rows {
+                filter: Some(f), ..
+            } = source
+            {
+                normalize_and_validate_rule_inner(f, model_name, owner_eligible)?;
             }
             Ok(())
         }

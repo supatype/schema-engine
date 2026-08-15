@@ -94,13 +94,22 @@ enum Command {
         lang: String,
     },
     /// Generate trigger SQL (updated_at + slug)
-    Triggers,
+    Triggers {
+        #[arg(long, default_value = "public")]
+        schema: String,
+    },
     /// Generate RLS policy SQL
-    Rls,
+    Rls {
+        #[arg(long, default_value = "public")]
+        schema: String,
+    },
     /// Generate storage schema SQL (bucket DDL + storage RLS)
     Storage,
     /// Generate PostgREST configuration
-    Postgrest,
+    Postgrest {
+        #[arg(long, default_value = "public")]
+        schema: String,
+    },
     /// Generate admin panel configuration JSON
     Admin,
     /// Generate auth helper SQL functions (auth.uid, auth.role, auth.email, auth.jwt)
@@ -251,28 +260,10 @@ async fn main() -> Result<()> {
                 .context("Failed to connect to database")?;
 
             // Ensure _supatype schema and internal tables exist
-            sqlx::raw_sql(migration_history::create_internal_schema_sql())
-                .execute(&pool)
+            // Internal bookkeeping + auth helpers (shared with the server push path).
+            migration_history::bootstrap_internal_state(&pool)
                 .await
-                .context("Failed to create _supatype schema")?;
-            sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create migrations table")?;
-            sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create schema_state table")?;
-            sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to ensure schema_state studio columns")?;
-            for col_sql in migration_history::ensure_all_migration_columns_sql() {
-                sqlx::raw_sql(&col_sql)
-                    .execute(&pool)
-                    .await
-                    .context("Failed to ensure migration columns")?;
-            }
+                .context("Failed to bootstrap _supatype internal state")?;
 
             let schema_sources_bytes = schema_sources_gz
                 .as_deref()
@@ -352,6 +343,33 @@ async fn main() -> Result<()> {
                 confirm_risky_changes(&diff)?;
             }
 
+            // Before either branch: an unchanged schema produces an empty diff, so the renderer's
+            // own check would never run and the push would report success while a declared table sat
+            // in the API with none of its rules applied.
+            supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)?;
+
+            // The field-masking tier is decided from the introspected extension list. A cached schema
+            // state that predates extension introspection would claim there are none, silently
+            // switching a tier-1 database to views *and* revoking the API roles' access to its base
+            // tables. Cheap to rule out while a connection is open, and not something to discover
+            // afterwards.
+            if diff.field_masking == supatype_engine::differ::FieldMaskingTier::Views {
+                let installed: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)",
+                )
+                .bind(supatype_engine::generator::sql::rls::MASK_EXTENSION)
+                .fetch_one(&pool)
+                .await?;
+                if installed {
+                    anyhow::bail!(
+                        "This database has {ext} installed, but the schema state used for this diff                          says otherwise — so the push was about to switch field masking to generated                          views and take the API roles off your tables.
+                         
+                         Re-run with --no-cache to diff against the live database.",
+                        ext = supatype_engine::generator::sql::rls::MASK_EXTENSION
+                    );
+                }
+            }
+
             if diff.operations.is_empty() {
                 // Storage materialization is not part of the model diff; apply it before the
                 // admin-only migration refresh path.
@@ -363,7 +381,8 @@ async fn main() -> Result<()> {
                 // Trigger functions (slug / updated_at) are idempotent and not part of
                 // the model diff — ensure they exist on every push so an up-to-date
                 // schema still gets its slug/updated_at triggers installed.
-                let triggers_sql = supatype_engine::generator::sql::triggers::generate(&ast)?;
+                let triggers_sql =
+                    supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
                 sqlx::raw_sql(&triggers_sql)
                     .execute(&pool)
                     .await
@@ -420,6 +439,32 @@ async fn main() -> Result<()> {
 
             let mut tx = pool.begin().await.context("begin migration transaction")?;
 
+            // Coordinate with realtime: skip WAL polls while this xact lock is held.
+            // Keys must match packages/cli + packages/realtime schema-push-lock constants.
+            // If the CLI already holds a session lock on the same keys, skip to avoid deadlock.
+            {
+                let lock_held: bool = sqlx::query_scalar(
+                    r#"
+                    SELECT EXISTS (
+                      SELECT 1 FROM pg_locks
+                      WHERE locktype = 'advisory'
+                        AND classid = 872014
+                        AND objid = 1
+                        AND granted
+                    )
+                    "#,
+                )
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap_or(false);
+                if !lock_held {
+                    sqlx::query("SELECT pg_advisory_xact_lock(872014, 1)")
+                        .execute(&mut *tx)
+                        .await
+                        .context("acquire schema-push advisory lock")?;
+                }
+            }
+
             if let Err(e) = (&mut *tx)
                 .execute(sqlx::raw_sql(&apply_body))
                 .await
@@ -436,6 +481,7 @@ async fn main() -> Result<()> {
                 .await;
                 let msg = supatype_engine::generator::sql::migration_errors::enrich_migration_error(
                     &e.to_string(),
+                    Some(&diff),
                 );
                 return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
             }
@@ -493,7 +539,23 @@ async fn main() -> Result<()> {
                 return Err(e.context("Failed to save schema state cache"));
             }
 
+            // Which mechanism is enforcing the field rules, probed rather than assumed.
+            // A failure here is a missing diagnostic, not a broken push: the enforcement
+            // itself is the labels, which are already applied in this transaction.
+            if let Err(e) = migration_history::record_field_enforcement(
+                &mut tx,
+                migration_history::labelled_column_count(&ast),
+            )
+            .await
+            {
+                eprintln!("Warning: failed to record field-enforcement capability: {e}");
+            }
+
             let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
+            // Kept for the schema_state refresh after commit: Studio reads its schema
+            // from `_supatype.schema_state`, which was only written on the up-to-date
+            // branch — so any project whose last push applied a migration had none.
+            let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
             let migration_sources = migration_history::AppliedMigrationSources {
                 sql_down,
                 schema_sources: schema_sources_bytes,
@@ -524,6 +586,18 @@ async fn main() -> Result<()> {
 
             tx.commit().await.context("commit migration transaction")?;
 
+            if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
+                if let Err(e) = migration_history::save_studio_metadata_if_present(
+                    &pool,
+                    admin_cfg,
+                    schema_snap,
+                )
+                .await
+                {
+                    eprintln!("Warning: failed to refresh Studio metadata: {e}");
+                }
+            }
+
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
             let warnings_json = serde_json::to_string(&drift_warnings)?;
             println!(
@@ -543,27 +617,30 @@ async fn main() -> Result<()> {
             };
             println!("{output}");
         }
-        Command::Triggers => {
+        Command::Triggers { schema } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let sql = supatype_engine::generator::sql::triggers::generate(&ast)?;
+            let sql = supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
             println!("{sql}");
         }
-        Command::Rls => {
+        Command::Rls { schema } => {
             let ast = supatype_engine::parser::parse(&input)?;
             println!(
                 "{}",
                 supatype_engine::generator::sql::rls::generate_auth_helpers()
             );
-            println!("{}", supatype_engine::generator::sql::rls::generate(&ast)?);
+            println!(
+                "{}",
+                supatype_engine::generator::sql::rls::generate(&ast, &schema)?
+            );
         }
         Command::Storage => {
             let ast = supatype_engine::parser::parse(&input)?;
             let sql = supatype_engine::generator::sql::storage::generate(&ast)?;
             println!("{sql}");
         }
-        Command::Postgrest => {
+        Command::Postgrest { schema } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let config = supatype_engine::generator::config::postgrest::generate(&ast)?;
+            let config = supatype_engine::generator::config::postgrest::generate(&ast, &schema)?;
             println!("{}", serde_json::to_string_pretty(&config)?);
         }
         Command::AuthFunctions {
@@ -679,15 +756,10 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
 
-            sqlx::raw_sql(migration_history::create_internal_schema_sql())
-                .execute(&pool)
-                .await?;
-            sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-                .execute(&pool)
-                .await?;
-            sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-                .execute(&pool)
-                .await?;
+            // Internal bookkeeping + auth helpers (shared with the server push path).
+            migration_history::bootstrap_internal_state(&pool)
+                .await
+                .context("Failed to bootstrap _supatype internal state")?;
 
             let db_state = if no_cache {
                 supatype_engine::introspector::introspect(&pool, &schema).await?
@@ -1025,6 +1097,9 @@ mod tests {
                 is_destructive: true,
             },
             warnings: vec![],
+            unmanaged_model_tables: vec![],
+            field_masking: supatype_engine::differ::FieldMaskingTier::None,
+            field_view_plan: Vec::new(),
         };
         assert!(has_destructive_ops(&diff));
     }
