@@ -87,18 +87,26 @@ fn normalize_and_validate_rule_inner(
             if field == "id" {
                 return Ok(());
             }
-            if !owner_eligible.contains(field) {
-                let mut candidates: Vec<String> = owner_eligible.iter().cloned().collect();
-                candidates.sort();
-                bail!(
-                    "Model '{}': Owner<\"{}\"> is invalid. Owner fields must reference kernel field names \
-                     (model fields or \"id\"). Use one of: [{}]",
-                    model_name,
-                    field,
-                    candidates.join(", ")
-                );
+            if owner_eligible.contains(field.as_str()) {
+                return Ok(());
             }
-            Ok(())
+            // Accept FK column names: Owner<"created_by_id"> → normalize to Owner<"created_by">.
+            // Users often write the column name; strip the _id suffix and re-check.
+            if let Some(base) = field.strip_suffix("_id") {
+                if owner_eligible.contains(base) {
+                    *field = base.to_string();
+                    return Ok(());
+                }
+            }
+            let mut candidates: Vec<String> = owner_eligible.iter().cloned().collect();
+            candidates.sort();
+            bail!(
+                "Model '{}': Owner<\"{}\"> is invalid. Owner fields must reference kernel field names \
+                 (model fields or \"id\"). Use one of: [{}]",
+                model_name,
+                field,
+                candidates.join(", ")
+            );
         }
         AccessRule::Any { rules } | AccessRule::All { rules } => {
             for r in rules {

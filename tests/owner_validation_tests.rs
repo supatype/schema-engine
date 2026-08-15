@@ -248,3 +248,111 @@ fn owner_from_nested_relation_generates_exists_subquery() {
         "must not compare uid() directly to album_id, got: {expr}"
     );
 }
+
+#[test]
+fn owner_rule_accepts_fk_column_name_and_normalizes_to_field_name() {
+    // Users write Owner<"created_by_id"> (the FK column) instead of Owner<"created_by">
+    // (the field name). The validator should accept the _id-suffix form and normalize it.
+    let schema = r#"{
+        "astVersion": 2,
+        "models": [
+            {
+                "name": "Profile",
+                "fields": {},
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "profile", "indexes": [] },
+                    "platform": { "access": {} }
+                }
+            },
+            {
+                "name": "Room",
+                "fields": {
+                    "created_by": {
+                        "kind": "relation",
+                        "cardinality": "belongsTo",
+                        "target": "Profile",
+                        "annotations": { "db": { "foreignKey": "created_by_id" } }
+                    }
+                },
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "room", "indexes": [] },
+                    "platform": {
+                        "access": {
+                            "read": { "type": "public" },
+                            "create": { "type": "authenticated" },
+                            "update": { "type": "owner", "field": "created_by_id" },
+                            "delete": { "type": "owner", "field": "created_by_id" }
+                        }
+                    }
+                }
+            }
+        ]
+    }"#;
+
+    let ast = parser::parse(schema).expect("schema must parse when FK column name used in Owner");
+    let room = ast.models.iter().find(|m| m.name == "Room").unwrap();
+    let update_rule = room
+        .access()
+        .update
+        .as_ref()
+        .expect("update rule must exist");
+    let serialized = serde_json::to_string(update_rule).unwrap();
+    assert!(
+        serialized.contains("\"field\":\"created_by\""),
+        "Owner field must be normalized from created_by_id to created_by, got: {serialized}"
+    );
+}
+
+#[test]
+fn owner_rule_fk_column_name_generates_correct_rls() {
+    use supatype_engine::generator::sql::rls::access_rule_to_expr;
+
+    let schema = r#"{
+        "astVersion": 2,
+        "models": [
+            {
+                "name": "Profile",
+                "fields": {},
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "profile", "indexes": [] },
+                    "platform": { "access": {} }
+                }
+            },
+            {
+                "name": "Message",
+                "fields": {
+                    "author": {
+                        "kind": "relation",
+                        "cardinality": "belongsTo",
+                        "target": "Profile",
+                        "annotations": { "db": { "foreignKey": "author_id" } }
+                    }
+                },
+                "options": {},
+                "annotations": {
+                    "db": { "tableName": "message", "indexes": [] },
+                    "platform": {
+                        "access": {
+                            "read": { "type": "public" },
+                            "create": { "type": "authenticated" },
+                            "update": { "type": "owner", "field": "author_id" },
+                            "delete": { "type": "owner", "field": "author_id" }
+                        }
+                    }
+                }
+            }
+        ]
+    }"#;
+
+    let ast = parser::parse(schema).expect("schema with FK-column Owner must parse");
+    let message = ast.models.iter().find(|m| m.name == "Message").unwrap();
+    let delete_rule = message.access().delete.as_ref().expect("delete rule");
+    let expr = access_rule_to_expr(&ast, message, delete_rule);
+    assert!(
+        expr.contains("auth.uid() = author_id"),
+        "RLS must compare auth.uid() to the author_id FK column, got: {expr}"
+    );
+}
