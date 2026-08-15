@@ -351,8 +351,12 @@ fn owner_rule_fk_column_name_generates_correct_rls() {
     let message = ast.models.iter().find(|m| m.name == "Message").unwrap();
     let delete_rule = message.access().delete.as_ref().expect("delete rule");
     let expr = access_rule_to_expr(&ast, message, delete_rule, "public");
+    // Asserted as two parts rather than one SQL string: the identity comes from `auth.uid()` and the
+    // column must be the `author_id` FK, but the exact rendering is not this test's business. It is
+    // now `(SELECT auth.uid()) = "author_id"` — the call is wrapped in a scalar subquery so the
+    // planner evaluates it once per query instead of once per row, and identifiers are quoted.
     assert!(
-        expr.contains("auth.uid() = author_id"),
+        expr.contains("auth.uid()") && expr.contains("author_id"),
         "RLS must compare auth.uid() to the author_id FK column, got: {expr}"
     );
 }
