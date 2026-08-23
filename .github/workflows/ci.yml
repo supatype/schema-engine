@@ -35,15 +35,26 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # Every suite in `tests/` must appear in one of this workflow's `--test` lists, or it
+      # never runs: `cargo test --test X` builds only the targets it names. `ci_coverage_tests`
+      # fails the build when a file here is not listed anywhere, which is how 15 suites came to
+      # be dead weight on main.
       - name: Run all non-integration tests
         run: |
           cargo test --lib \
+            --test ci_coverage_tests \
             --test parser_tests \
             --test differ_tests \
             --test migration_tests \
             --test evolution_tests \
+            --test normaliser_tests \
+            --test enum_migration_tests \
             --test owner_validation_tests \
-            --test column_type_match_tests
+            --test column_type_match_tests \
+            --test standup_regression_tests \
+            --test field_access_tests \
+            --test field_access_validation_tests \
+            --test field_write_privileges_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})
@@ -126,7 +137,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # SUPATYPE_FORCE_INTEGRATION_TESTS turns a skip into a failure. Without it, a suite that
+      # cannot reach the database, or an image without `supatype_mask`, returns early from the
+      # test body and reports green having asserted nothing.
       - name: Run integration tests
         env:
           DATABASE_URL: postgres://supatype_admin:postgres@localhost:5432/postgres
-        run: cargo test --test integration_test --test migration_conversion_integration
+          SUPATYPE_FORCE_INTEGRATION_TESTS: "1"
+        run: |
+          cargo test \
+            --test integration_test \
+            --test migration_conversion_integration \
+            --test grants_tests \
+            --test rls_convergence_tests \
+            --test schema_isolation_tests \
+            --test studio_members_tests \
+            --test table_adoption_tests \
+            --test table_ownership_tests \
+            --test field_access_contract_tests \
+            --test field_access_tamper_tests \
+            --test field_masking_tier_selection_tests

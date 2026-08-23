@@ -79,6 +79,16 @@ pub async fn terminate_db_sessions(admin: &sqlx::PgPool, db_name: &str) {
     let _ = sqlx::raw_sql(&sql).execute(admin).await;
 }
 
+/// Whether a skipped integration test should fail instead.
+///
+/// CI sets `SUPATYPE_FORCE_INTEGRATION_TESTS=1`, so a suite that cannot reach a database, or an
+/// image that cannot provide `supatype_mask`, turns the build red rather than passing quietly.
+/// Without it a skip returns from the test body, and a test that returns has passed: the gate
+/// would report green having asserted nothing, which is the failure mode it exists to catch.
+pub fn force_integration_tests() -> bool {
+    std::env::var("SUPATYPE_FORCE_INTEGRATION_TESTS").is_ok()
+}
+
 /// Runs `f` against an isolated Postgres (ephemeral DB or testcontainers).
 /// Skips when `DATABASE_URL` is unset and Docker/testcontainers is unavailable.
 pub async fn with_integration_pool<F, Fut>(f: F)
@@ -94,6 +104,12 @@ where
     let (container, url) = match start_supatype_postgres().await {
         Ok(c) => c,
         Err(e) => {
+            if force_integration_tests() {
+                panic!(
+                    "no database: DATABASE_URL is unset and Docker is unavailable ({e}). \
+                     Provide one, or unset SUPATYPE_FORCE_INTEGRATION_TESTS."
+                );
+            }
             eprintln!("SKIP integration: DATABASE_URL not set and Docker unavailable ({e})");
             return;
         }
@@ -124,6 +140,16 @@ pub async fn mask_extension_available(pool: &sqlx::PgPool) -> bool {
     {
         Ok(_) => true,
         Err(e) => {
+            if force_integration_tests() {
+                panic!(
+                    "image {} cannot provide supatype_mask ({e}). The extension has shipped in \
+                     supatype/postgres since v17.2.1, so this is a stale image or a missing \
+                     shared_preload_libraries entry, not an absent feature. Point \
+                     INTEGRATION_POSTGRES_IMAGE at a current image, or unset \
+                     SUPATYPE_FORCE_INTEGRATION_TESTS to let field-access tests skip.",
+                    integration_postgres_image()
+                );
+            }
             eprintln!(
                 "SKIP field-level access: image {} cannot provide supatype_mask ({e}). \
                  Point INTEGRATION_POSTGRES_IMAGE at an image built from supatype-postgres \
