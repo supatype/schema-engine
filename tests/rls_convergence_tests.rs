@@ -670,7 +670,7 @@ async fn a_push_that_cannot_grant_auth_usage_is_refused() {
             "REVOKE USAGE ON SCHEMA auth FROM authenticated;
              DO $$ BEGIN
                CREATE ROLE mask_push_probe;
-             EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+             EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
              GRANT USAGE, CREATE ON SCHEMA auth TO mask_push_probe;",
         )
         .execute(&pool)
