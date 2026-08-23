@@ -40,10 +40,15 @@ CREATE FUNCTION public.can_read_tamper_staff__salary(tamper_staff public.tamper_
 SECURITY LABEL FOR supatype ON COLUMN public.tamper_staff.salary
   IS 'MASK READ public."can_read_tamper_staff__salary"';
 
+-- Roles live in the cluster while each test gets its own database, so the suite's tests race
+-- here: two pass the same IF NOT EXISTS check and the loser of the insert gets 23505
+-- unique_violation on pg_authid, which is not the 42710 duplicate_object a handler expects.
+-- Reproduced with pgbench at 16 clients: the pre-check form failed 6 of 16, this one 0 of 16.
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tamper_app') THEN
+  BEGIN
     CREATE ROLE tamper_app;
-  END IF;
+  EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
+  END;
 END $$;
 GRANT SELECT, UPDATE ON public.tamper_staff TO tamper_app;
 GRANT USAGE ON SCHEMA public TO tamper_app;

@@ -177,10 +177,13 @@ CREATE FUNCTION public.can_write_contract_posts__salary(contract_posts public.co
 SECURITY LABEL FOR supatype ON COLUMN public.contract_posts.salary
   IS 'MASK READ public."can_read_contract_posts__salary" WRITE public."can_write_contract_posts__salary"';
 
+-- Created by whichever test in this suite gets here first. An IF NOT EXISTS pre-check is not
+-- enough: roles are cluster-wide, so the loser of the race gets 23505, not 42710.
 DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'contract_app') THEN
+  BEGIN
     CREATE ROLE contract_app;
-  END IF;
+  EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
+  END;
 END $$;
 GRANT SELECT, UPDATE ON public.contract_posts TO contract_app;
 "#;
@@ -446,10 +449,13 @@ async fn a_masked_view_does_not_bypass_row_level_security() {
             CREATE POLICY own_rows ON public.rls_view_posts FOR SELECT
               USING (author_id = auth.claim_text('uid'));
 
+            -- Cluster-wide role, so this races with the rest of the suite; catch both the
+            -- sequential (42710) and concurrent (23505) forms of "it already exists".
             DO $$ BEGIN
-              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_view_app') THEN
+              BEGIN
                 CREATE ROLE rls_view_app;
-              END IF;
+              EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
+              END;
             END $$;
             GRANT SELECT ON public.rls_view_posts TO rls_view_app;
             "#,

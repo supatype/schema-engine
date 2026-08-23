@@ -25,6 +25,48 @@ impl Default for AuthFunctionConfig {
     }
 }
 
+/// The schema the auth helpers live in on every path that is not explicitly configured.
+pub const AUTH_SCHEMA: &str = "auth";
+
+/// The roles PostgREST switches to per request, in the order the cloud provisioner lists them.
+pub const API_ROLES: [&str; 3] = ["anon", "authenticated", "service_role"];
+
+/// `GRANT USAGE` on the auth schema, for each API role that exists.
+///
+/// Creating the schema is not enough. These helpers are called from the *query*, not only from
+/// policy expressions, and a query-time call needs USAGE on their schema. Postgres evaluates a
+/// policy's `USING` clause with the table owner's privileges, which is why row-level security
+/// worked without this grant and field masking did not: `supatype_mask` rewrites a masked column
+/// into `CASE WHEN can_read_t__c(t) …` in the target list, which runs as the caller and reaches
+/// `auth.role()` directly. Without USAGE the caller gets `42501 permission denied for schema
+/// auth` instead of a masked value.
+///
+/// On `supatype/postgres` the init scripts grant this at initdb, so here it is a no-op. It is
+/// absent exactly where the engine created the schema itself, which is the `database.external`
+/// self-host path.
+///
+/// Guarded on role existence, as `grants.rs` guards its own statements: `anon` and `authenticated`
+/// belong to a deployment, and a database may legitimately have neither.
+///
+/// A caller that does not own the schema cannot grant on it, and Postgres reports that as a
+/// `WARNING: no privileges were granted`, not an error. So issuing this proves nothing on its own;
+/// `rls::generate_security_labels` checks the privilege afterwards and refuses the push when a
+/// schema declaring field rules still does not have it.
+pub fn grant_auth_schema_usage(schema: &str) -> String {
+    let quoted = schema.replace('"', "\"\"");
+    let body: String = API_ROLES
+        .iter()
+        .map(|role| {
+            format!(
+                "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN\n    \
+                 EXECUTE 'GRANT USAGE ON SCHEMA \"{quoted}\" TO {role}';\n  END IF;\n"
+            )
+        })
+        .collect();
+
+    format!("DO $auth_schema_usage$\nBEGIN\n{body}END\n$auth_schema_usage$;")
+}
+
 /// Generate all auth helper functions for a project.
 pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
     let mut sql = String::new();
@@ -38,6 +80,8 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
         config.auth_schema
     ));
 
+    sql.push_str(&grant_auth_schema_usage(&config.auth_schema));
+    sql.push_str("\n\n");
     sql.push_str(&generate_uid_function(&config.auth_schema));
     sql.push_str("\n\n");
     sql.push_str(&generate_role_function(
@@ -156,6 +200,52 @@ $$ LANGUAGE sql STABLE;"#,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Creating the schema without granting usage on it leaves the helpers unreachable from a
+    // query, which is how field masking came to fail with 42501 on a database the image had
+    // not bootstrapped. Guarded on the role existing, because a database may have neither.
+    #[test]
+    fn creating_the_auth_schema_grants_usage_on_it() {
+        let config = AuthFunctionConfig {
+            project_ref: String::new(),
+            auth_schema: "auth".to_string(),
+        };
+        let sql = generate_auth_functions(&config);
+
+        for role in ["anon", "authenticated", "service_role"] {
+            assert!(
+                sql.contains(&format!("GRANT USAGE ON SCHEMA \"auth\" TO {role}")),
+                "no usage grant for {role}:\n{sql}"
+            );
+        }
+        assert!(
+            sql.contains("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon')"),
+            "the grant was not guarded on the role existing:\n{sql}"
+        );
+        let schema_at = sql
+            .find("CREATE SCHEMA IF NOT EXISTS auth")
+            .expect("schema");
+        let grant_at = sql.find("GRANT USAGE ON SCHEMA").expect("grant");
+        assert!(
+            schema_at < grant_at,
+            "granted on the schema before creating it:\n{sql}"
+        );
+    }
+
+    // A non-default auth schema still gets the grant, quoted, or a project configured that way
+    // would be masked-but-unreadable in exactly the way this grant exists to prevent.
+    #[test]
+    fn a_configured_auth_schema_is_granted_and_quoted() {
+        let config = AuthFunctionConfig {
+            project_ref: String::new(),
+            auth_schema: "project_auth".to_string(),
+        };
+        let sql = generate_auth_functions(&config);
+        assert!(
+            sql.contains("GRANT USAGE ON SCHEMA \"project_auth\" TO authenticated"),
+            "configured schema was not granted:\n{sql}"
+        );
+    }
 
     #[test]
     fn test_generate_auth_functions_cloud() {
