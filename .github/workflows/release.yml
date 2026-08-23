@@ -9,8 +9,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ─── The tag is the version, and the binary has to agree ────────────────────
+  #
+  # ENGINE_VERSION comes from CARGO_PKG_VERSION via build.rs, and it is not cosmetic: it is
+  # bound to every row of _supatype migration history, written into the generated migration
+  # header, and reported by the server. Cargo.toml sat at 0.1.0 while tags ran to v0.1.8, so
+  # every migration ever applied recorded an engine version that was never released. Failing
+  # here is how that stops recurring: a forgotten bump is a red release, not a quiet mislabel.
+  version:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CRATE="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          echo "tag: ${TAG}, Cargo.toml: ${CRATE}"
+          if [ "${TAG}" != "${CRATE}" ]; then
+            echo "::error::Tag v${TAG} does not match Cargo.toml ${CRATE}. Bump the crate version, or tag v${CRATE}."
+            exit 1
+          fi
+
   # ─── Run tests before building release artefacts ────────────────────────────
   test:
+    needs: version
     name: Test
     runs-on: ubuntu-latest
     steps:
