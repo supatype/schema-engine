@@ -638,3 +638,79 @@ async fn removing_a_field_rule_clears_its_label() {
     })
     .await;
 }
+
+/// A push that cannot grant the privilege it needs must refuse, not report success.
+///
+/// This is the `database.external` shape: the `auth` schema belongs to another role, so the
+/// `GRANT USAGE` the push emits is silently discarded. Postgres answers a grant from a
+/// non-owner with `WARNING: no privileges were granted`, not an error, so nothing upstream
+/// notices. Left unchecked the push succeeds and every authenticated read of a masked column
+/// then fails with `42501 permission denied for schema auth` -- masking that does not mask,
+/// reported as a clean deploy.
+#[tokio::test]
+async fn a_push_that_cannot_grant_auth_usage_is_refused() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            return;
+        }
+        let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
+        let db = introspector::introspect(&pool, "public")
+            .await
+            .expect("introspect");
+        let diff = differ::diff(&ast, &db).unwrap();
+        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        sqlx::raw_sql(&sql)
+            .execute(&pool)
+            .await
+            .expect("migration applies");
+
+        // Put the database into the state the push cannot fix: the privilege gone, and the
+        // pushing role not the owner of the schema, so it cannot put it back.
+        sqlx::raw_sql(
+            "REVOKE USAGE ON SCHEMA auth FROM authenticated;
+             DO $$ BEGIN
+               CREATE ROLE mask_push_probe;
+             EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+             GRANT USAGE, CREATE ON SCHEMA auth TO mask_push_probe;",
+        )
+        .execute(&pool)
+        .await
+        .expect("stage a database whose auth schema the pusher does not own");
+
+        let labels =
+            supatype_engine::generator::sql::rls::generate_security_labels(&ast, "public", &[]);
+        let mut tx = pool.begin().await.expect("begin");
+        sqlx::raw_sql("SET LOCAL ROLE mask_push_probe")
+            .execute(&mut *tx)
+            .await
+            .expect("assume the pushing role");
+
+        let err = sqlx::raw_sql(&labels)
+            .execute(&mut *tx)
+            .await
+            .expect_err("a push that cannot enforce its field rules must not apply");
+        let db_err = err.as_database_error().expect("a database error");
+
+        // `feature_not_supported`, the same code the extension probe raises: the schema asks
+        // for masking this database cannot deliver.
+        assert_eq!(
+            db_err.code().as_deref(),
+            Some("0A000"),
+            "wrong error class, so this failed for some other reason: {err}"
+        );
+        assert!(
+            err.to_string().contains("USAGE on schema auth"),
+            "the refusal did not name the missing privilege: {err}"
+        );
+        tx.rollback().await.expect("rollback");
+
+        // And the privilege really is still missing, so the refusal was not spurious.
+        let granted: bool =
+            sqlx::query_scalar("SELECT has_schema_privilege('authenticated', 'auth', 'USAGE')")
+                .fetch_one(&pool)
+                .await
+                .expect("read the privilege back");
+        assert!(!granted, "the probe fired while the privilege was present");
+    })
+    .await;
+}

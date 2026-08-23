@@ -196,3 +196,61 @@ fn a_schema_with_no_field_rules_clears_but_does_not_probe() {
         "emitted a label with no rule to back it:\n{sql}"
     );
 }
+
+// The predicates in those labels call `auth.role()` from the query itself, not from a policy,
+// so the caller needs USAGE on the auth schema. Postgres runs a policy's USING clause with the
+// table owner's privileges, which is why row-level security never needed this and masking does.
+#[test]
+fn field_rules_grant_usage_on_the_auth_schema() {
+    let sql = security_labels();
+    assert!(
+        sql.contains("GRANT USAGE ON SCHEMA \"auth\" TO authenticated"),
+        "field rules did not grant the privilege their predicates need:\n{sql}"
+    );
+    assert!(
+        sql.contains("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')"),
+        "the grant was not guarded on the role existing:\n{sql}"
+    );
+}
+
+// Issuing that grant proves nothing: a role that does not own the schema cannot grant on it,
+// and Postgres answers with a WARNING rather than an error. So the push checks, and refuses,
+// rather than succeeding and leaving every authenticated read of a masked column at 42501.
+#[test]
+fn field_rules_refuse_to_apply_without_usage_on_the_auth_schema() {
+    let sql = security_labels();
+    assert!(
+        sql.contains("has_schema_privilege('authenticated', 'auth', 'USAGE')"),
+        "no privilege probe, so a no-op grant would pass unnoticed:\n{sql}"
+    );
+    assert!(
+        sql.contains("RAISE EXCEPTION 'field-level access requires USAGE on schema auth'"),
+        "the probe did not refuse the push:\n{sql}"
+    );
+    assert!(
+        sql.contains("pg_get_userbyid(nspowner)"),
+        "the refusal must name the owner who can grant it:\n{sql}"
+    );
+}
+
+// Same reasoning as the extension probe: a schema with no field rules must not start demanding
+// a privilege it does not use, or every such push would refuse on a database that never had it.
+#[test]
+fn a_schema_with_no_field_rules_neither_grants_nor_probes() {
+    let mut ast = parser::parse(FIXTURE).expect("fixture parses");
+    for model in &mut ast.models {
+        supatype_engine::parser::accessors::platform_access_mut(model)
+            .fields
+            .clear();
+    }
+    let sql = rls::generate_security_labels(&ast, "public", &[]);
+
+    assert!(
+        !sql.contains("GRANT USAGE ON SCHEMA"),
+        "granted a privilege for rules that do not exist:\n{sql}"
+    );
+    assert!(
+        !sql.contains("has_schema_privilege"),
+        "probed a privilege the schema does not need:\n{sql}"
+    );
+}

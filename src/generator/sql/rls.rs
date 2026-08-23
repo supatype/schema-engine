@@ -1,3 +1,4 @@
+use crate::generator::sql::auth_functions::{grant_auth_schema_usage, API_ROLES, AUTH_SCHEMA};
 use crate::parser::accessors::{
     db_foreign_key, db_table_name, platform_access, resolve_owner_column,
 };
@@ -80,7 +81,7 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
 pub fn generate_auth_helpers() -> String {
     let config = crate::generator::sql::auth_functions::AuthFunctionConfig {
         project_ref: String::new(),
-        auth_schema: "auth".to_string(),
+        auth_schema: AUTH_SCHEMA.to_string(),
     };
     let mut sql = crate::generator::sql::auth_functions::generate_auth_functions(&config);
 
@@ -880,6 +881,16 @@ $mask_probe$;
         ));
     }
 
+    // The privilege those predicates need, plus proof it is actually there. Emitted here and
+    // not only in the preamble because the preamble's auth helpers are gated on the diff
+    // carrying an RLS operation, so a steady-state push would check a privilege that nothing
+    // in that push had tried to establish.
+    if !statements.is_empty() {
+        out.push_str(&grant_auth_schema_usage(AUTH_SCHEMA));
+        out.push_str("\n\n");
+        out.push_str(&render_auth_usage_probe(statements.len()));
+    }
+
     out.push_str(&render_stale_label_clear(&keep, schema));
 
     for statement in &statements {
@@ -888,6 +899,55 @@ $mask_probe$;
     }
 
     out
+}
+
+/// Proof that the masking predicates can actually run, rather than a hope that they can.
+///
+/// [`grant_auth_schema_usage`] may have been a no-op: a role that does not own the schema cannot
+/// grant on it, and Postgres reports that as `WARNING: no privileges were granted`, not an error.
+/// So the grant alone proves nothing. Without this check a push to a database whose `auth` schema
+/// belongs to another role reports success, and then every authenticated read of a masked column
+/// fails with `42501 permission denied for schema auth`, the same class of fault as a privilege
+/// that is generated and never applied.
+///
+/// Refuses rather than degrades, matching the extension probe: a schema that declares a masked
+/// column, applied where the mask cannot be evaluated, is a database whose security posture
+/// silently differs from its source.
+fn render_auth_usage_probe(rule_count: usize) -> String {
+    let roles = API_ROLES.join(", ");
+    format!(
+        r#"DO $auth_usage_probe$
+DECLARE
+  owner text;
+BEGIN
+  SELECT pg_get_userbyid(nspowner) INTO owner
+    FROM pg_namespace WHERE nspname = '{AUTH_SCHEMA}';
+
+  -- No auth schema: the field predicates could not have been created either, and the extension
+  -- probe has already had its say about capability.
+  IF owner IS NULL THEN
+    RETURN;
+  END IF;
+
+  -- has_schema_privilege raises on an unknown role, so ask whether the role exists first. A
+  -- database with no `authenticated` role has no authenticated caller to break.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    RETURN;
+  END IF;
+
+  IF NOT has_schema_privilege('authenticated', '{AUTH_SCHEMA}', 'USAGE') THEN
+    RAISE EXCEPTION 'field-level access requires USAGE on schema {AUTH_SCHEMA}'
+      USING ERRCODE = 'feature_not_supported',
+            DETAIL  = format('%s column rule(s) would raise 42501 for every authenticated caller.',
+                             {rule_count}),
+            HINT    = format('Schema {AUTH_SCHEMA} is owned by %s, so this push could not grant on it. As that role: GRANT USAGE ON SCHEMA {AUTH_SCHEMA} TO {roles};',
+                             owner);
+  END IF;
+END
+$auth_usage_probe$;
+
+"#
+    )
 }
 
 /// Drop every label this push does not re-assert, so removing a field rule stops the
