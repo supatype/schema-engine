@@ -7,7 +7,7 @@ use crate::parser::accessors::db_unique;
 use crate::parser::ast::{FieldAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -110,6 +110,54 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
         } else {
             unmanaged_drift.push(item);
         }
+    }
+
+    // Check constraints Supatype did not write, on tables it manages.
+    //
+    // Adoption deliberately does **not** stamp these. Recognising someone else's `CHECK` as
+    // equivalent to one we would write means comparing expressions, and `pg_get_constraintdef`
+    // rewrites them on read-back: the fingerprint in our own comments exists precisely because that
+    // comparison is unreliable, and here there is no fingerprint to compare against because we did
+    // not write the original.
+    //
+    // So the honest position is to say so. Push will add its own constraint alongside, which is a
+    // duplicate rule rather than a wrong one, and the operator is the one who can tell whether their
+    // constraint and ours mean the same thing.
+    let expected_checks = expected_check_constraint_count(ast);
+    for constraint in db.constraints.iter().filter(|c| {
+        c.constraint_type == DbConstraintType::Check
+            && schema_tables.contains(c.table.as_str())
+            && !is_managed_comment(c.comment.as_deref())
+    }) {
+        // A column's own NOT NULL or an enum's value list are not rules anyone declared here.
+        let expression = constraint.check_expression.as_deref().unwrap_or("");
+        if expression.contains("IS NOT NULL") {
+            continue;
+        }
+        let will_add = expected_checks
+            .get(constraint.table.as_str())
+            .copied()
+            .unwrap_or(0);
+        unmanaged_drift.push(DoctorItem {
+            kind: "check_constraint".into(),
+            table: constraint.table.clone(),
+            name: constraint.name.clone(),
+            fields: constraint.columns.clone(),
+            message: if will_add > 0 {
+                format!(
+                    "Unmanaged check {} on {} was not created by Supatype and will not be adopted. \
+                     Push adds {will_add} constraint(s) of its own to this table; if yours enforces \
+                     the same rule, drop it to avoid enforcing it twice. Expression: {expression}",
+                    constraint.name, constraint.table
+                )
+            } else {
+                format!(
+                    "Unmanaged check {} on {} was not created by Supatype and is left alone. \
+                     Declare it in the schema if it should be managed. Expression: {expression}",
+                    constraint.name, constraint.table
+                )
+            },
+        });
     }
 
     for idx in db
@@ -289,6 +337,30 @@ fn expected_model_indexes(ast: &SchemaAst) -> Vec<ExpectedIndex> {
         }
     }
     out
+}
+
+/// How many `CHECK`s Supatype will create per table: column bounds plus model-level constraints.
+///
+/// A count rather than the expressions, because the message only needs to say "yours will sit
+/// alongside ours". Claiming more than that means claiming we can tell whether two check
+/// expressions mean the same thing, which is the comparison the fingerprint exists to avoid.
+fn expected_check_constraint_count(ast: &SchemaAst) -> HashMap<&str, usize> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for model in &ast.models {
+        let table = model.table_name();
+        let bounds = model
+            .fields
+            .iter()
+            .filter(|(name, field)| {
+                crate::generator::sql::migration::field_check_expression(field, name).is_some()
+            })
+            .count();
+        let total = bounds + model.annotations.db.constraints.len();
+        if total > 0 {
+            *counts.entry(table).or_default() += total;
+        }
+    }
+    counts
 }
 
 fn doctor_constraint_item(constraint: &DbConstraint) -> DoctorItem {

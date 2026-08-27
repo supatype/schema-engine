@@ -156,4 +156,5 @@ jobs:
             --test table_ownership_tests \
             --test field_access_contract_tests \
             --test field_access_tamper_tests \
-            --test field_masking_tier_selection_tests
+            --test field_masking_tier_selection_tests \
+            --test field_bounds_enforcement_tests

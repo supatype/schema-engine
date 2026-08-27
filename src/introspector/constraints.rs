@@ -137,28 +137,34 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
         });
     }
 
-    // Read CHECK constraints (excluding NOT NULL, which are not in table_constraints)
-    let check_rows: Vec<(String, String, String)> = sqlx::query_as(
+    // Read CHECK constraints from `pg_constraint` rather than `information_schema`, which exposes
+    // neither the constraint's OID nor its comment. The comment is what makes a bound diffable: it
+    // carries a fingerprint of the declared bound, so a tightened `MaxLength` is detected without
+    // comparing SQL text that `pg_get_constraintdef` has already rewritten.
+    let check_rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
         r#"
         SELECT
-            tc.table_name,
-            tc.constraint_name,
-            cc.check_clause
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.check_constraints cc
-            ON tc.constraint_name   = cc.constraint_name
-           AND tc.constraint_schema = cc.constraint_schema
-        WHERE tc.table_schema = $1
-          AND tc.constraint_type = 'CHECK'
-          AND cc.check_clause NOT LIKE '% IS NOT NULL'
-        ORDER BY tc.table_name, tc.constraint_name
+            rel.relname::text                                AS table_name,
+            con.conname::text                                AS constraint_name,
+            pg_get_constraintdef(con.oid)                    AS definition,
+            obj_description(con.oid, 'pg_constraint')        AS comment
+        FROM pg_constraint con
+        JOIN pg_class rel      ON rel.oid = con.conrelid
+        JOIN pg_namespace ns   ON ns.oid  = rel.relnamespace
+        -- `contype = 'c'` is the whole filter. A column's NOT NULL never lands here: PG17 keeps it
+        -- off `pg_constraint` entirely, and PG18 catalogues it as `contype = 'n'` reading `NOT NULL
+        -- a`. Excluding definitions that merely mention `IS NOT NULL` would instead drop real
+        -- bounds, since a model constraint may name a column as non-null inside a larger rule.
+        WHERE ns.nspname = $1
+          AND con.contype = 'c'
+        ORDER BY rel.relname, con.conname
         "#,
     )
     .bind(schema)
     .fetch_all(&mut *conn)
     .await?;
 
-    for (table, name, check_clause) in check_rows {
+    for (table, name, definition, comment) in check_rows {
         constraints.push(DbConstraint {
             table,
             name,
@@ -166,9 +172,9 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
             columns: vec![],
             foreign_table: None,
             foreign_columns: None,
-            check_expression: Some(check_clause),
+            check_expression: Some(definition),
             on_delete: None,
-            comment: None,
+            comment,
         });
     }
 

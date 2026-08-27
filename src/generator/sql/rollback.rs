@@ -124,6 +124,22 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
                 "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
             )
         }
+        Operation::AddCheckConstraint {
+            table, constraint, ..
+        } => {
+            format!(
+                "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
+            )
+        }
+        Operation::DropCheckConstraint {
+            table, constraint, ..
+        } => {
+            // The expression is gone with the constraint, so this cannot be rebuilt from the
+            // operation alone. Saying so is better than emitting SQL that restores nothing.
+            format!(
+                "-- WARNING: cannot roll back DROP CONSTRAINT \"{table}\".\"{constraint}\":                  re-push the schema that declared the bound."
+            )
+        }
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => {
@@ -344,6 +360,12 @@ fn forward_description(op: &Operation) -> String {
         Operation::AddUniqueConstraint { table, column, .. } => {
             format!("add unique {table}.{column}")
         }
+        Operation::AddCheckConstraint { table, columns, .. } => {
+            format!("set bounds {table}.{}", columns.join(", "))
+        }
+        Operation::DropCheckConstraint {
+            table, constraint, ..
+        } => format!("drop bounds {table}.{constraint}"),
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("drop unique {table}.{constraint}"),

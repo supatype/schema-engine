@@ -36,11 +36,34 @@ jobs:
     needs: version
     name: Test
     runs-on: ubuntu-latest
+    # The same Postgres CI's integration job uses. Without a database the integration suites skip,
+    # and a skipped test has passed: a release could be cut having asserted nothing about anything
+    # that touches Postgres, which is most of this engine.
+    services:
+      postgres:
+        image: supatype/postgres:17-latest
+        env:
+          POSTGRES_USER: supatype_admin
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd "pg_isready -U supatype_admin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      # SUPATYPE_FORCE_INTEGRATION_TESTS turns a skip into a failure, matching ci.yml. A release is
+      # the one run where a silent skip costs the most, because the artefact ships.
+      - name: Run tests
+        env:
+          DATABASE_URL: postgres://supatype_admin:postgres@localhost:5432/postgres
+          SUPATYPE_FORCE_INTEGRATION_TESTS: "1"
+        run: cargo test --workspace
 
   # ─── Cross-platform build matrix ────────────────────────────────────────────
   build:

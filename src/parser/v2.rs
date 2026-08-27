@@ -1,9 +1,9 @@
 use super::annotations::{DbFieldAnnotations, FieldAnnotations, ModelAnnotations};
 use super::ast::{
-    ArrayFieldAst, BlockDefinitionAst, BlocksFieldAst, CustomFieldAst, DecimalFieldAst,
+    scalar_of, ArrayFieldAst, BlockDefinitionAst, BlocksFieldAst, CustomFieldAst, DecimalFieldAst,
     DefaultValueAst, EnumFieldAst, FieldAst, GeoFieldAst, JsonFieldAst, ModelAst, ModelOptions,
     RelationCardinality, RelationFieldAst, ScalarFieldAst, SchemaAst, SlugFieldAst,
-    StorageAccessMode, StorageFieldAst, VectorFieldAst,
+    StorageAccessMode, StorageFieldAst, ValidationAst, VectorFieldAst,
 };
 use anyhow::{bail, Context, Result};
 use indexmap::IndexMap;
@@ -106,6 +106,22 @@ fn deserialize_model(value: &Value) -> Result<ModelAst> {
     })
 }
 
+/// The `check` a field carries, if its variant has anywhere to put one.
+///
+/// Nine of twelve variants had no `check` field, so serde discarded declared constraints without a
+/// word and the column was created unconstrained. {@link deserialize_field} uses this to refuse the
+/// AST instead, which is what stops a new field kind regressing into the same silence.
+fn carried_check(field: &FieldAst) -> Option<&str> {
+    match field {
+        FieldAst::Slug(f) => f.check.as_deref(),
+        FieldAst::Decimal(f) => f.check.as_deref(),
+        FieldAst::Json(f) | FieldAst::Button(f) => f.check.as_deref(),
+        FieldAst::Array(f) => f.check.as_deref(),
+        FieldAst::Blocks(f) => f.check.as_deref(),
+        other => scalar_of(other).and_then(|f| f.check.as_deref()),
+    }
+}
+
 fn deserialize_field(value: &Value) -> Result<FieldAst> {
     let kind = value
         .get("kind")
@@ -137,7 +153,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
             .transpose()?
     };
 
-    match kind {
+    let parsed: Result<FieldAst> = match kind {
         "text" => Ok(FieldAst::Text(scalar_from_v2(
             &annotations,
             required,
@@ -343,6 +359,8 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
             Ok(FieldAst::Json(JsonFieldAst {
                 pg_type,
                 required,
+                check: check_from_v2(value),
+                validation: validation_from_v2(value),
                 localized,
                 read_only,
                 annotations: annotations.clone(),
@@ -353,6 +371,8 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
             Ok(FieldAst::Button(JsonFieldAst {
                 pg_type,
                 required,
+                check: check_from_v2(value),
+                validation: validation_from_v2(value),
                 localized,
                 read_only,
                 annotations: annotations.clone(),
@@ -370,6 +390,8 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 required,
                 unique: annotations.db.unique,
                 from,
+                check: check_from_v2(value),
+                validation: validation_from_v2(value),
                 localized,
                 read_only,
                 annotations,
@@ -410,6 +432,8 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                     .get("scale")
                     .and_then(|v| v.as_u64())
                     .map(|n| n as u32),
+                check: check_from_v2(value),
+                validation: validation_from_v2(value),
                 localized,
                 read_only,
                 annotations,
@@ -423,6 +447,8 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "TEXT".to_string());
             Ok(FieldAst::Array(ArrayFieldAst {
+                check: check_from_v2(value),
+                validation: validation_from_v2(value),
                 element_type,
                 required,
                 unique: annotations.db.unique,
@@ -491,6 +517,8 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 .transpose()?
                 .unwrap_or_default();
             Ok(FieldAst::Blocks(BlocksFieldAst {
+                check: check_from_v2(value),
+                validation: validation_from_v2(value),
                 required,
                 blocks,
                 index: value.get("index").and_then(|v| v.as_bool()).unwrap_or(true),
@@ -549,7 +577,19 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
         "publishable" => Ok(FieldAst::Publishable),
         "softDelete" => Ok(FieldAst::SoftDelete),
         other => bail!("Unknown field kind: {other}"),
+    };
+    let field = parsed?;
+
+    // A `check` the chosen variant cannot hold would be dropped by serde in silence, which is
+    // exactly how nine field kinds came to accept a declared bound and enforce nothing. Refuse the
+    // AST instead: a push that fails is recoverable, a constraint that quietly never existed is not.
+    if value.get("check").is_some() && carried_check(&field).is_none() {
+        bail!(
+            "field of kind '{kind}' carries a check constraint, but that kind has nowhere to store one. Either add `check` to its AST struct and render it, or refuse the bound in the CLI's field-bounds table."
+        );
     }
+
+    Ok(field)
 }
 
 fn scalar_from_v2(
@@ -581,16 +621,35 @@ fn scalar_from_v2(
             .unwrap_or(false),
         index: annotations.db.index,
         default: default_val,
-        check: value
-            .get("check")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        check: check_from_v2(value),
+        validation: validation_from_v2(value),
         localized,
         read_only,
         sources,
         template,
         annotations: annotations.clone(),
     })
+}
+
+/// The raw `check` expression a field carries, still holding the `{name}` placeholder.
+fn check_from_v2(value: &Value) -> Option<String> {
+    value
+        .get("check")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+/// Structured constraint bounds, absent when the field declares no constraint modifier.
+///
+/// Returned as `None` rather than an empty struct so the admin config and any re-serialised AST stay
+/// free of `"validation": {}` noise on the overwhelming majority of fields that have no bounds.
+fn validation_from_v2(value: &Value) -> Option<ValidationAst> {
+    let raw = value.get("validation")?;
+    let parsed: ValidationAst = serde_json::from_value(raw.clone()).ok()?;
+    if parsed.is_empty() {
+        return None;
+    }
+    Some(parsed)
 }
 
 fn custom_from_v2(

@@ -1,5 +1,6 @@
 use supatype_engine::{
     differ,
+    generator::sql::migration,
     introspector::{
         indexes::DbIndex,
         tables::{DbColumn, DbTable},
@@ -189,6 +190,112 @@ fn test_existing_index_not_regenerated_when_name_matches() {
     assert!(
         add_index_for_posts.is_empty(),
         "index 'posts_author_id_idx' already exists — must not generate AddIndex op"
+    );
+}
+
+/// An index whose *shape* changed has to be rebuilt, not matched by name and skipped.
+///
+/// The declared-index check was a name lookup, so adding `unique: true` to an index that already
+/// existed planned no work at all. The schema said unique, the admin config said unique, Studio
+/// showed a "unique" badge, and the database went on accepting duplicates. The generator would not
+/// have saved it either: it emits `CREATE INDEX IF NOT EXISTS`, so even a planned add is a no-op
+/// while the old index still holds the name.
+#[test]
+fn test_index_rebuilt_when_uniqueness_changes() {
+    let input = include_str!("fixtures/five_model_blog.json");
+    let ast = parser::parse(input).unwrap();
+
+    // Same name and columns as the declared index, but not unique.
+    let db = DatabaseState {
+        tables: ast
+            .models
+            .iter()
+            .map(|m| DbTable {
+                schema: "public".into(),
+                name: m.table_name().to_string(),
+                comment: Some("supatype:managed;kind=table".into()),
+                columns: vec![col("id", "uuid")],
+            })
+            .collect(),
+        indexes: vec![DbIndex {
+            table: "posts".into(),
+            name: "posts_author_id_idx".into(),
+            columns: vec!["author_id".into()],
+            unique: true,
+            method: "btree".into(),
+            is_primary: false,
+            comment: None,
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    assert!(
+        diff.operations
+            .iter()
+            .any(|op| matches!(op, differ::Operation::AddIndex { table, .. } if table == "posts")),
+        "a mismatched index must be rebuilt: {:?}",
+        diff.operations
+    );
+
+    // And the rebuild has to remove the old index on the way. A separate drop operation would not
+    // do: adds are ordered before drops, so the pair would create nothing and then delete what was
+    // there, leaving the table with no index at all.
+    let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
+    let drop_at = sql
+        .find(r#"DROP INDEX IF EXISTS "public"."posts_author_id_idx""#)
+        .expect(&format!(
+            "rebuild must drop the old index:
+{sql}"
+        ));
+    let create_at = sql
+        .find(r#"INDEX IF NOT EXISTS "posts_author_id_idx""#)
+        .expect("rebuild must create the new index");
+    assert!(
+        drop_at < create_at,
+        "the drop has to come first:
+{sql}"
+    );
+}
+
+/// The same lookup, on the column list rather than uniqueness.
+#[test]
+fn test_index_rebuilt_when_columns_change() {
+    let input = include_str!("fixtures/five_model_blog.json");
+    let ast = parser::parse(input).unwrap();
+
+    let db = DatabaseState {
+        tables: ast
+            .models
+            .iter()
+            .map(|m| DbTable {
+                schema: "public".into(),
+                name: m.table_name().to_string(),
+                comment: Some("supatype:managed;kind=table".into()),
+                columns: vec![col("id", "uuid")],
+            })
+            .collect(),
+        indexes: vec![DbIndex {
+            table: "posts".into(),
+            name: "posts_author_id_idx".into(),
+            columns: vec!["title".into()],
+            unique: false,
+            method: "btree".into(),
+            is_primary: false,
+            comment: None,
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+
+    assert!(
+        diff.operations
+            .iter()
+            .any(|op| matches!(op, differ::Operation::AddIndex { table, .. } if table == "posts")),
+        "an index over different columns is a different index: {:?}",
+        diff.operations
     );
 }
 

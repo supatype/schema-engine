@@ -27,8 +27,12 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::RenameColumn { .. } => 6,
         Operation::AlterColumn { .. } => 7,
         Operation::RecreateColumn { .. } => 7,
+        // A changed bound is a drop and an add of the same constraint name, so the drop has to
+        // run before column work settles and the add strictly after it.
+        Operation::DropCheckConstraint { .. } => 5,
         Operation::AddForeignKey { .. } => 8,
         Operation::AddUniqueConstraint { .. } => 8,
+        Operation::AddCheckConstraint { .. } => 8,
         Operation::AddIndex { .. } => 9,
         Operation::EnableRls { .. } => 10,
         // Drop RLS policies BEFORE creating them, so a drop+recreate of the same

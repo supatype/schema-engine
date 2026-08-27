@@ -1,6 +1,7 @@
 use super::{Operation, Risk};
+use crate::introspector::indexes::DbIndex;
 use crate::managed::{expected_model_index_name, is_managed_comment};
-use crate::parser::ast::SchemaAst;
+use crate::parser::ast::{IndexAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 use std::collections::HashSet;
@@ -8,28 +9,37 @@ use std::collections::HashSet;
 fn expected_index_names(ast: &SchemaAst) -> HashSet<(String, String)> {
     let mut names = HashSet::new();
     for model in &ast.models {
-        let table = model.table_name();
         for index in model.indexes() {
-            let derived = expected_model_index_name(table, &index.fields);
+            let derived = expected_model_index_name(model.table_name(), &index.fields);
             let idx_name = index
                 .name
                 .as_deref()
                 .unwrap_or(derived.as_str())
                 .to_string();
-            names.insert((table.to_string(), idx_name));
+            names.insert((model.table_name().to_string(), idx_name));
         }
     }
     names
 }
 
-pub fn diff(ast: &SchemaAst, db: &DatabaseState, ops: &mut Vec<Operation>) -> Result<()> {
-    let db_index_names: HashSet<&str> = db
-        .indexes
-        .iter()
-        .filter(|i| !i.is_primary)
-        .map(|i| i.name.as_str())
-        .collect();
+/// Whether the index the database holds is the index the schema declares.
+///
+/// Compared on everything that changes what the index does: which columns, in what order, whether
+/// it is unique, and which access method. Postgres has no `ALTER INDEX` for any of these, so a
+/// difference means drop and recreate.
+///
+/// Matching on name alone was the whole check once, which made every one of those edits silent.
+/// Adding `unique` to an index that already existed changed the admin config, changed what Studio
+/// reported, and changed nothing in the database: the name was still there, so the differ planned
+/// no work and the push reported success. The `CREATE INDEX IF NOT EXISTS` the generator emits
+/// would not have helped even if an add had been planned.
+fn index_matches(declared: &IndexAst, live: &DbIndex) -> bool {
+    live.unique == declared.unique
+        && live.method.eq_ignore_ascii_case(declared.using.as_sql())
+        && live.columns == declared.fields
+}
 
+pub fn diff(ast: &SchemaAst, db: &DatabaseState, ops: &mut Vec<Operation>) -> Result<()> {
     let expected = expected_index_names(ast);
     let schema_tables: HashSet<&str> = ast.models.iter().map(|m| m.table_name()).collect();
 
@@ -37,13 +47,24 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, ops: &mut Vec<Operation>) -> Re
         for index in model.indexes() {
             let derived = expected_model_index_name(model.table_name(), &index.fields);
             let idx_name = index.name.as_deref().unwrap_or(derived.as_str());
-            if !db_index_names.contains(idx_name) {
-                ops.push(Operation::AddIndex {
-                    table: model.table_name().to_string(),
-                    index: Box::new(index.clone()),
-                    risk: Risk::Safe,
-                });
+
+            let live = db
+                .indexes
+                .iter()
+                .find(|i| !i.is_primary && i.name == idx_name && i.table == model.table_name());
+
+            // Same name but a different index is a rebuild, not a second index. The add carries
+            // its own `DROP INDEX IF EXISTS`, so it is emitted the same way whether the index is
+            // new or being replaced.
+            if live.is_some_and(|existing| index_matches(index, existing)) {
+                continue;
             }
+
+            ops.push(Operation::AddIndex {
+                table: model.table_name().to_string(),
+                index: Box::new(index.clone()),
+                risk: Risk::Safe,
+            });
         }
     }
 
