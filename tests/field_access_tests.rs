@@ -197,19 +197,32 @@ fn a_schema_with_no_field_rules_clears_but_does_not_probe() {
     );
 }
 
-// The predicates in those labels call `auth.role()` from the query itself, not from a policy,
-// so the caller needs USAGE on the auth schema. Postgres runs a policy's USING clause with the
-// table owner's privileges, which is why row-level security never needed this and masking does.
+// The predicates in those labels call `auth.role()` from the query itself, not from a policy, so
+// the caller needs USAGE on the auth schema. Postgres runs a policy's USING clause with the table
+// owner's privileges, which is why row-level security never needed this and masking does.
+//
+// The privilege is granted in the auth preamble, which a push emits before the labels, and the
+// labels carry only the probe that proves it landed. That split is deliberate: a GRANT issued by a
+// role that does not own the schema is a WARNING, not an error, so granting proves nothing on its
+// own. This asserts both halves, each in the artefact that actually carries it, because an earlier
+// version of this test looked for the grant in the labels alone and failed for that reason rather
+// than because the privilege was missing.
 #[test]
 fn field_rules_grant_usage_on_the_auth_schema() {
-    let sql = security_labels();
+    let preamble = rls::generate_auth_helpers();
     assert!(
-        sql.contains("GRANT USAGE ON SCHEMA \"auth\" TO authenticated"),
-        "field rules did not grant the privilege their predicates need:\n{sql}"
+        preamble.contains("GRANT USAGE ON SCHEMA \"auth\" TO authenticated"),
+        "the preamble did not grant the privilege the predicates need:\n{preamble}"
     );
     assert!(
-        sql.contains("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')"),
-        "the grant was not guarded on the role existing:\n{sql}"
+        preamble.contains("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')"),
+        "the grant was not guarded on the role existing:\n{preamble}"
+    );
+
+    let labels = security_labels();
+    assert!(
+        labels.contains("has_schema_privilege('authenticated', 'auth', 'USAGE')"),
+        "the labels did not check that the grant landed:\n{labels}"
     );
 }
 
