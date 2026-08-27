@@ -35,6 +35,7 @@ pub fn normalise(mut ast: SchemaAst) -> SchemaAst {
                     index: false,
                     default: Some(DefaultValueAst::GenRandomUuid),
                     check: None,
+                    validation: None,
                     localized: false,
                     read_only: false,
                     sources: vec![],

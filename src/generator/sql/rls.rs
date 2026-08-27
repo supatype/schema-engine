@@ -1,4 +1,4 @@
-use crate::generator::sql::auth_functions::{grant_auth_schema_usage, API_ROLES, AUTH_SCHEMA};
+use crate::generator::sql::auth_functions::{API_ROLES, AUTH_SCHEMA};
 use crate::parser::accessors::{
     db_foreign_key, db_table_name, platform_access, resolve_owner_column,
 };
@@ -243,6 +243,9 @@ pub fn access_rule_to_expr(
     schema: &str,
 ) -> String {
     match rule {
+        // Constraint-only nodes. The CLI refuses them inside `access`, so reaching here means a
+        // hand-written AST; rendering FALSE denies rather than silently granting.
+        AccessRule::Matches { .. } => "FALSE".to_string(),
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
@@ -547,6 +550,11 @@ fn join_rules(
 /// Renders one side of a comparison.
 fn operand_to_expr(operand: &Operand) -> String {
     match operand {
+        // Constraint-only operands, refused inside `access` by the CLI. Rendered so the match stays
+        // exhaustive; a policy that reached one would be comparing against a measure, not a caller.
+        Operand::Length { column, form } | Operand::ItemCount { column, form } => {
+            crate::generator::sql::constraints::measure_expr(column, *form)
+        }
         Operand::Column { name } => format!("\"{}\"", name.replace('"', "\"\"")),
         Operand::AuthUid => AUTH_UID.to_string(),
         Operand::AuthRole => AUTH_ROLE.to_string(),
@@ -881,13 +889,10 @@ $mask_probe$;
         ));
     }
 
-    // The privilege those predicates need, plus proof it is actually there. Emitted here and
-    // not only in the preamble because the preamble's auth helpers are gated on the diff
-    // carrying an RLS operation, so a steady-state push would check a privilege that nothing
-    // in that push had tried to establish.
+    // Proof that the privilege those predicates need actually landed. The grant itself is in the
+    // preamble, emitted on every push, so this no longer re-issues it: a grant can be a silent
+    // no-op (see `render_auth_usage_probe`), and checking is the half worth doing twice.
     if !statements.is_empty() {
-        out.push_str(&grant_auth_schema_usage(AUTH_SCHEMA));
-        out.push_str("\n\n");
         out.push_str(&render_auth_usage_probe(statements.len()));
     }
 

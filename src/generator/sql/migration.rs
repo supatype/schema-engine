@@ -5,13 +5,14 @@ use crate::generator::sql::column_conversion::{
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
 };
 use crate::managed::{
-    comment_on_constraint_sql, comment_on_index_sql, expected_unique_constraint_name,
-    managed_comment,
+    comment_on_constraint_sql, comment_on_index_sql, expected_check_constraint_name,
+    expected_model_constraint_name,
+    expected_unique_constraint_name, managed_check_comment, managed_comment,
 };
 use crate::parser::accessors::db_unique;
 use crate::parser::ast::{
     AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
-    RelationFieldAst, ScalarFieldAst, SchemaAst,
+    scalar_of, RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
 };
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
@@ -183,17 +184,6 @@ fn needs_postgis(diff: &DiffOutput) -> bool {
     })
 }
 
-fn needs_auth_helpers(diff: &DiffOutput) -> bool {
-    diff.operations.iter().any(|op| {
-        matches!(
-            op,
-            Operation::EnableRls { .. }
-                | Operation::CreateRlsPolicy { .. }
-                | Operation::DropRlsPolicy { .. }
-        )
-    })
-}
-
 // Optional extensions before inner `BEGIN`: pgcrypto (uuid gen_random_uuid), vector (pgvector),
 // postgis (GEOGRAPHY). `FieldAst::Custom` is not analysed here.
 fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
@@ -219,14 +209,20 @@ fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
         lines.push(String::new());
     }
 
-    if needs_auth_helpers(diff) {
-        lines.push(
-            crate::generator::sql::rls::generate_auth_helpers()
-                .trim()
-                .into(),
-        );
-        lines.push(String::new());
-    }
+    // Unconditional, for the same reason the affordance functions below are: a definition that is
+    // only re-emitted when the diff happens to carry an RLS operation drifts from the policies that
+    // call it, and nothing notices until a policy evaluates against a stale helper.
+    //
+    // It was gated, which is why the `auth` schema grant had to be emitted a second time from the
+    // field-masking block: a steady-state push checked a privilege that nothing in that push had
+    // tried to establish. Every statement here is `IF NOT EXISTS` or `CREATE OR REPLACE`, so
+    // re-emission costs a parse and settles the question for every push rather than some of them.
+    lines.push(
+        crate::generator::sql::rls::generate_auth_helpers()
+            .trim()
+            .into(),
+    );
+    lines.push(String::new());
 
     lines
 }
@@ -391,6 +387,8 @@ fn render_forward_operation_lines(
             | Operation::DropForeignKey { risk, .. }
             | Operation::AddUniqueConstraint { risk, .. }
             | Operation::DropUniqueConstraint { risk, .. }
+            | Operation::AddCheckConstraint { risk, .. }
+            | Operation::DropCheckConstraint { risk, .. }
             | Operation::CreateEnum { risk, .. }
             | Operation::DropEnum { risk, .. }
             | Operation::AddEnumValue { risk, .. }
@@ -424,6 +422,9 @@ fn render_forward_operation_lines(
 
 fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
     let mut lines = render_forward_preamble(diff);
+    // A CHECK that calls a function is validated when the table is created, so the helper
+    // functions have to exist before any operation line runs, not alongside the triggers.
+    lines.push(super::constraint_helpers::generate());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
     lines.extend(render_reasserted_lines(
         diff,
@@ -438,6 +439,9 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     let mut lines = render_forward_preamble(diff);
     lines.push("BEGIN;".into());
     lines.push(String::new());
+    // A CHECK that calls a function is validated when the table is created, so the helper
+    // functions have to exist before any operation line runs, not alongside the triggers.
+    lines.push(super::constraint_helpers::generate());
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
     lines.extend(render_reasserted_lines(
         diff,
@@ -479,6 +483,12 @@ fn op_description(op: &Operation) -> String {
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("Drop unique constraint: {table}.{constraint}"),
+        Operation::AddCheckConstraint { table, columns, .. } => {
+            format!("Set bounds: {table}.{}", columns.join(", "))
+        }
+        Operation::DropCheckConstraint {
+            table, constraint, ..
+        } => format!("Drop bounds: {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("Create enum: {name}"),
         Operation::DropEnum { name, .. } => format!("Drop enum: {name}"),
         Operation::AddEnumValue {
@@ -656,7 +666,7 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             if let Some(sql) = composite_sql {
                 return Ok(sql);
             }
-            let col_def = field_to_column_def(column, field)?;
+            let col_def = field_to_column_def(table, column, field)?;
             if let Some(backfill) = add_column_backfill_default(field) {
                 return Ok(format!(
                     "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN {col_def} DEFAULT {backfill};\n\
@@ -720,6 +730,31 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             ..
         } => add_unique_constraint_sql(table, column, constraint, schema),
         Operation::DropUniqueConstraint {
+            table, constraint, ..
+        } => Ok(format!(
+            "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
+        )),
+        Operation::AddCheckConstraint {
+            table,
+            constraint,
+            expression,
+            comment,
+            ..
+        } => Ok(format!(
+            // Dropped first so the operation means "this table carries exactly this bound" rather
+            // than "this bound is new". The differ only emits an add when it believes the
+            // constraint is absent, and it can believe that wrongly: it diffs against a cached
+            // snapshot, and a snapshot written by an engine that recorded less than this one does
+            // will not mention a constraint that is really there. Without the drop, that mismatch
+            // is a duplicate-name error that fails this push and every push after it, with no way
+            // out from inside the tool. The drop costs a revalidation of the table, but only on the
+            // path that was otherwise going to fail: an unchanged bound produces no add at all.
+            "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";
+ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({expression});
+{}",
+            comment_on_constraint_sql(table, constraint, comment, schema)
+        )),
+        Operation::DropCheckConstraint {
             table, constraint, ..
         } => Ok(format!(
             "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
@@ -933,7 +968,7 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
                 col_defs.push("    \"deleted_at\" TIMESTAMPTZ".into());
             }
             other => {
-                col_defs.push(format!("    {}", field_to_column_def(field_name, other)?));
+                col_defs.push(format!("    {}", field_to_column_def(table, field_name, other)?));
             }
         }
     }
@@ -983,6 +1018,47 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
                 schema,
             ));
         }
+    }
+
+    // Stamp the bounds constraints CREATE TABLE declared inline. The comment carries a fingerprint
+    // of the expression, which is what lets the differ notice a *changed* bound later without
+    // comparing SQL text that Postgres has already rewritten on read-back.
+    for (field_name, field) in &model.fields {
+        for col in column_names_for(field_name, field) {
+            let Some(expr) = field_check_expression(field, &col) else {
+                continue;
+            };
+            statements.push(comment_on_constraint_sql(
+                table,
+                &expected_check_constraint_name(table, &col),
+                &managed_check_comment(table, &[col.as_str()], &expr),
+                schema,
+            ));
+        }
+    }
+
+
+    // Model-level constraints, as named table constraints stamped like the column bounds. Named for
+    // the same reason: the name is how the differ finds it again, and the fingerprinted comment is
+    // how a *changed* constraint is noticed without comparing SQL Postgres has already rewritten.
+    for (index, rule) in model.annotations.db.constraints.iter().enumerate() {
+        let expr = crate::generator::sql::constraints::constraint_to_expr(rule)?;
+        let constraint = expected_model_constraint_name(table, index);
+        statements.push(format!(
+            "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({expr});"
+        ));
+        // The columns the rule actually reads, not the constraint's own name. `columns_in` exists
+        // for this; passing the name put `fields=events_check_1` in ownership metadata, which reads
+        // as a column that does not exist.
+        let mut columns = Vec::new();
+        crate::parser::ast::columns_in(rule, &mut columns);
+        let column_refs: Vec<&str> = columns.iter().map(String::as_str).collect();
+        statements.push(comment_on_constraint_sql(
+            table,
+            &constraint,
+            &managed_check_comment(table, &column_refs, &expr),
+            schema,
+        ));
     }
 
     // Explicit model-level indexes
@@ -1095,9 +1171,9 @@ fn field_index_flag(field: &FieldAst) -> Option<bool> {
 
 // ─── COLUMN DEFINITION ───────────────────────────────────────────────────────
 
-fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
+fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<String> {
     match field {
-        FieldAst::Uuid(f) => Ok(scalar_col(name, "UUID", f, false)),
+        FieldAst::Uuid(f) => Ok(scalar_col(table, name, "UUID", f, false)),
         FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Bytes(f) | FieldAst::Color(f) => {
             let pg = if matches!(field, FieldAst::RichText(_)) {
                 "JSONB"
@@ -1107,21 +1183,21 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
                 "TEXT"
             };
             let rich_text = matches!(field, FieldAst::RichText(_));
-            Ok(scalar_col(name, pg, f, rich_text))
+            Ok(scalar_col(table, name, pg, f, rich_text))
         }
         FieldAst::Email(f) => {
-            let mut def = scalar_col(name, "TEXT", f, false);
+            let mut def = scalar_col(table, name, "TEXT", f, false);
             def.push_str(&format!(" CHECK (\"{name}\" ~* '^[^@]+@[^@]+\\.[^@]+$')"));
             Ok(def)
         }
-        FieldAst::Integer(f) => Ok(scalar_col(name, "INTEGER", f, false)),
-        FieldAst::Float(f) => Ok(scalar_col(name, "DOUBLE PRECISION", f, false)),
-        FieldAst::Boolean(f) => Ok(scalar_col(name, "BOOLEAN", f, false)),
-        FieldAst::Datetime(f) => Ok(scalar_col(name, "TIMESTAMPTZ", f, false)),
-        FieldAst::BigInt(f) => Ok(scalar_col(name, "BIGINT", f, false)),
-        FieldAst::SmallInt(f) => Ok(scalar_col(name, "SMALLINT", f, false)),
-        FieldAst::Date(f) => Ok(scalar_col(name, "DATE", f, false)),
-        FieldAst::Timestamp(f) => Ok(scalar_col(name, "TIMESTAMP", f, false)),
+        FieldAst::Integer(f) => Ok(scalar_col(table, name, "INTEGER", f, false)),
+        FieldAst::Float(f) => Ok(scalar_col(table, name, "DOUBLE PRECISION", f, false)),
+        FieldAst::Boolean(f) => Ok(scalar_col(table, name, "BOOLEAN", f, false)),
+        FieldAst::Datetime(f) => Ok(scalar_col(table, name, "TIMESTAMPTZ", f, false)),
+        FieldAst::BigInt(f) => Ok(scalar_col(table, name, "BIGINT", f, false)),
+        FieldAst::SmallInt(f) => Ok(scalar_col(table, name, "SMALLINT", f, false)),
+        FieldAst::Date(f) => Ok(scalar_col(table, name, "DATE", f, false)),
+        FieldAst::Timestamp(f) => Ok(scalar_col(table, name, "TIMESTAMP", f, false)),
         FieldAst::Serial(f) => {
             // SERIAL is self-declaring — NOT NULL + sequence default are implicit.
             // primary_key / unique flags still apply.
@@ -1142,33 +1218,35 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             };
             Ok(format!("\"{name}\" BIGSERIAL{pk}{uniq}"))
         }
-        FieldAst::Money(f) => Ok(scalar_col(name, "NUMERIC(19,4)", f, false)),
+        FieldAst::Money(f) => Ok(scalar_col(table, name, "NUMERIC(19,4)", f, false)),
         FieldAst::Url(f) => {
-            let mut def = scalar_col(name, "TEXT", f, false);
+            let mut def = scalar_col(table, name, "TEXT", f, false);
             def.push_str(&format!(" CHECK (\"{name}\" ~* '^https?://')"));
             Ok(def)
         }
-        FieldAst::Ip(f) => Ok(scalar_col(name, "INET", f, false)),
-        FieldAst::Cidr(f) => Ok(scalar_col(name, "CIDR", f, false)),
-        FieldAst::Macaddr(f) => Ok(scalar_col(name, "MACADDR", f, false)),
-        FieldAst::Interval(f) => Ok(scalar_col(name, "INTERVAL", f, false)),
-        FieldAst::TsQuery(f) => Ok(scalar_col(name, "TSQUERY", f, false)),
+        FieldAst::Ip(f) => Ok(scalar_col(table, name, "INET", f, false)),
+        FieldAst::Cidr(f) => Ok(scalar_col(table, name, "CIDR", f, false)),
+        FieldAst::Macaddr(f) => Ok(scalar_col(table, name, "MACADDR", f, false)),
+        FieldAst::Interval(f) => Ok(scalar_col(table, name, "INTERVAL", f, false)),
+        FieldAst::TsQuery(f) => Ok(scalar_col(table, name, "TSQUERY", f, false)),
         FieldAst::TsVector(f) => {
             // tsvector is typically NOT NULL; index is GIN.
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("\"{name}\" TSVECTOR{req}"))
         }
-        FieldAst::Xml(f) => Ok(scalar_col(name, "XML", f, false)),
+        FieldAst::Xml(f) => Ok(scalar_col(table, name, "XML", f, false)),
         FieldAst::Array(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = if f.unique { " UNIQUE" } else { "" };
             let elem = f.element_type.to_uppercase();
-            Ok(format!("\"{name}\" {elem}[]{req}{uniq}"))
+            let check = render_check(table, name, field);
+            Ok(format!("\"{name}\" {elem}[]{req}{uniq}{check}"))
         }
         FieldAst::Slug(f) => {
             let unique = if f.unique { " UNIQUE" } else { "" };
             let req = if f.required { " NOT NULL" } else { "" };
-            Ok(format!("\"{name}\" TEXT{req}{unique}"))
+            let check = render_check(table, name, field);
+            Ok(format!("\"{name}\" TEXT{req}{unique}{check}"))
         }
         FieldAst::Enum(f) => {
             let vals = f
@@ -1190,11 +1268,13 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
         }
         FieldAst::Json(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            Ok(format!("\"{name}\" JSONB{req}"))
+            let check = render_check(table, name, field);
+            Ok(format!("\"{name}\" JSONB{req}{check}"))
         }
         FieldAst::Button(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            Ok(format!("\"{name}\" JSONB{req}"))
+            let check = render_check(table, name, field);
+            Ok(format!("\"{name}\" JSONB{req}{check}"))
         }
         FieldAst::Decimal(f) => {
             let pg = match (f.precision, f.scale) {
@@ -1203,9 +1283,11 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
                 _ => "NUMERIC".into(),
             };
             let req = if f.required { " NOT NULL" } else { "" };
-            Ok(format!("\"{name}\" {pg}{req}"))
+            let check = render_check(table, name, field);
+            Ok(format!("\"{name}\" {pg}{req}{check}"))
         }
         FieldAst::Image(f) | FieldAst::File(f) => Ok(scalar_col(
+            table,
             name,
             "JSONB",
             &ScalarFieldAst {
@@ -1217,12 +1299,15 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
             false,
         )),
         FieldAst::Blocks(f) => Ok(scalar_col(
+            table,
             name,
             "JSONB",
             &ScalarFieldAst {
                 pg_type: "JSONB".into(),
                 required: f.required,
                 localized: f.localized,
+                check: f.check.clone(),
+                validation: f.validation.clone(),
                 ..Default::default()
             },
             false,
@@ -1261,7 +1346,187 @@ fn field_to_column_def(name: &str, field: &FieldAst) -> Result<String> {
     }
 }
 
-fn scalar_col(name: &str, pg_type: &str, f: &ScalarFieldAst, rich_text: bool) -> String {
+/// The `CHECK` expression a column carries, or `None`.
+///
+/// One function rather than a clause built inside each `field_to_column_def` arm, because the same
+/// answer is needed twice: once to render the column, and once to stamp the constraint's comment
+/// with a fingerprint of it. Two derivations of the same expression would drift, and a comment that
+/// disagrees with its constraint is worse than no comment, since the differ trusts it.
+/// The expression itself, from already-decomposed parts.
+///
+/// `scalar_col` is handed synthesized `ScalarFieldAst` values for image, file and blocks columns and
+/// never sees the enum, so both entry points meet here rather than each deriving the expression.
+fn check_expression_parts(
+    check: Option<&str>,
+    validation: Option<&ValidationAst>,
+    name: &str,
+    localized: bool,
+    pg_type: &str,
+    rich_text: bool,
+) -> Option<String> {
+    if localized {
+        return localized_check(validation, name, pg_type, rich_text);
+    }
+    check.map(|c| c.replace("{name}", name))
+}
+
+pub fn field_check_expression(field: &FieldAst, name: &str) -> Option<String> {
+    let (check, validation, localized, pg_type, rich_text) = match field {
+        FieldAst::Slug(f) => (
+            f.check.as_deref(),
+            f.validation.as_ref(),
+            f.localized,
+            "TEXT".to_string(),
+            false,
+        ),
+        FieldAst::Decimal(f) => (
+            f.check.as_deref(),
+            f.validation.as_ref(),
+            f.localized,
+            "NUMERIC".to_string(),
+            false,
+        ),
+        FieldAst::Json(f) | FieldAst::Button(f) => (
+            f.check.as_deref(),
+            f.validation.as_ref(),
+            f.localized,
+            "JSONB".to_string(),
+            false,
+        ),
+        // An array column is never localized: translations of a list are a model change, not a
+        // column one, so there is no locale map to iterate.
+        FieldAst::Array(f) => (
+            f.check.as_deref(),
+            f.validation.as_ref(),
+            false,
+            f.element_type.to_uppercase(),
+            false,
+        ),
+        FieldAst::Blocks(f) => (
+            f.check.as_deref(),
+            f.validation.as_ref(),
+            f.localized,
+            "JSONB".to_string(),
+            false,
+        ),
+        FieldAst::RichText(f) => (
+            f.check.as_deref(),
+            f.validation.as_ref(),
+            f.localized,
+            "JSONB".to_string(),
+            true,
+        ),
+        other => {
+            let f = scalar_of(other)?;
+            (
+                f.check.as_deref(),
+                f.validation.as_ref(),
+                f.localized,
+                f.pg_type.clone(),
+                false,
+            )
+        }
+    };
+
+    check_expression_parts(check, validation, name, localized, &pg_type, rich_text)
+}
+
+/// A column's named `CONSTRAINT ... CHECK (...)` clause, or empty.
+///
+/// Named rather than left to Postgres's `{table}_{column}_check`: the name is how the differ finds
+/// the constraint again on the next push, and the comment stamped alongside it is how a *changed*
+/// bound is detected. Anonymous inline checks were only ever created, never reconciled, so
+/// tightening a bound used to produce no migration at all.
+fn render_check(table: &str, name: &str, field: &FieldAst) -> String {
+    field_check_expression(field, name)
+        .map(|expr| {
+            format!(
+                " CONSTRAINT \"{}\" CHECK ({expr})",
+                expected_check_constraint_name(table, name)
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// Which `_supatype.localized_*` family bounds this column.
+///
+/// Read from the bounds themselves rather than from the field variant: the CLI has already decided
+/// that a `JSON<T[]>` takes item counts and a `JSON<{...}>` takes none, and re-deriving that here
+/// from `JSONB` alone would be a guess. Storage only settles the question the bounds cannot: whether
+/// a range is numeric or temporal.
+fn localized_measure(v: &ValidationAst, pg_type: &str, rich_text: bool) -> &'static str {
+    if v.max_items.is_some() || v.min_items.is_some() {
+        return "items";
+    }
+    if v.max_length.is_some() || v.min_length.is_some() {
+        return if rich_text { "richtext_length" } else { "length" };
+    }
+    let upper = pg_type.to_uppercase();
+    if upper.starts_with("DATE") || upper.starts_with("TIMESTAMP") || upper.starts_with("INTERVAL") {
+        "temporal"
+    } else {
+        "number"
+    }
+}
+
+fn localized_check(
+    validation: Option<&ValidationAst>,
+    name: &str,
+    pg_type: &str,
+    rich_text: bool,
+) -> Option<String> {
+    let v = validation?;
+    if v.is_empty() {
+        return None;
+    }
+    let measure = localized_measure(v, pg_type, rich_text);
+
+    // One call per bound. A two-sided helper would be STRICT over a NULL argument and pass silently,
+    // which is the failure this area is not allowed to have twice.
+    let mut clauses: Vec<String> = Vec::new();
+    let mut push = |direction: &str, arg: String| {
+        clauses.push(format!(
+            "{schema}.localized_{measure}_{direction}(\"{name}\", {arg})",
+            schema = crate::generator::sql::constraint_helpers::HELPER_SCHEMA,
+        ));
+    };
+
+    match measure {
+        "items" => {
+            if let Some(n) = v.max_items {
+                push("max", n.to_string());
+            }
+            if let Some(n) = v.min_items {
+                push("min", n.to_string());
+            }
+        }
+        "length" | "richtext_length" => {
+            if let Some(n) = v.max_length {
+                push("max", n.to_string());
+            }
+            if let Some(n) = v.min_length {
+                push("min", n.to_string());
+            }
+        }
+        _ => {
+            for (bound, direction) in [(v.max.as_ref(), "max"), (v.min.as_ref(), "min")] {
+                let Some(bound) = bound else { continue };
+                let arg = match bound {
+                    serde_json::Value::String(s) => format!("'{}'", s.replace('\'', "''")),
+                    other => other.to_string(),
+                };
+                push(direction, arg);
+            }
+        }
+    }
+
+    if clauses.is_empty() {
+        return None;
+    }
+    Some(clauses.join(" AND "))
+}
+
+fn scalar_col(table: &str, name: &str, pg_type: &str, f: &ScalarFieldAst, rich_text: bool) -> String {
     // Localized fields are stored as JSONB regardless of their base type.
     let effective_type = if f.localized { "JSONB" } else { pg_type };
     let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
@@ -1287,15 +1552,21 @@ fn scalar_col(name: &str, pg_type: &str, f: &ScalarFieldAst, rich_text: bool) ->
             format!(" DEFAULT {expr}")
         })
         .unwrap_or_default();
-    // CHECK constraints don't apply to JSONB-stored localized columns.
-    let check = if f.localized {
-        String::new()
-    } else {
-        f.check
-            .as_ref()
-            .map(|c| format!(" CHECK ({})", c.replace("{name}", name)))
-            .unwrap_or_default()
-    };
+    let check = check_expression_parts(
+        f.check.as_deref(),
+        f.validation.as_ref(),
+        name,
+        f.localized,
+        pg_type,
+        rich_text,
+    )
+    .map(|expr| {
+        format!(
+            " CONSTRAINT \"{}\" CHECK ({expr})",
+            expected_check_constraint_name(table, name)
+        )
+    })
+    .unwrap_or_default();
     format!("\"{name}\" {effective_type}{pk}{req}{uniq}{default}{check}")
 }
 
@@ -1435,7 +1706,7 @@ fn recreate_column_sql(
         "ALTER TABLE \"{schema}\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";"
     ));
 
-    let col_def = field_to_column_def(column, field)?;
+    let col_def = field_to_column_def(table, column, field)?;
     stmts.push(format!(
         "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN {col_def};"
     ));
@@ -1506,13 +1777,7 @@ fn recreate_column_sql(
 
 fn create_index_sql(table: &str, index: &IndexAst, schema: &str) -> Result<String> {
     let unique = if index.unique { "UNIQUE " } else { "" };
-    let method = match &index.using {
-        IndexMethod::Btree => "btree",
-        IndexMethod::Gin => "gin",
-        IndexMethod::Gist => "gist",
-        IndexMethod::Hnsw => "hnsw",
-        IndexMethod::Brin => "brin",
-    };
+    let method = index.using.as_sql();
     let cols = index
         .fields
         .iter()
@@ -1532,8 +1797,13 @@ fn create_index_sql(table: &str, index: &IndexAst, schema: &str) -> Result<Strin
     let comment = managed_comment(kind, table, &field_refs);
     let comment_sql = comment_on_index_sql(idx_name, &comment, schema);
 
+    // Dropped first so the operation means "this table carries exactly this index" rather than
+    // "this index is new". The differ only emits an add when the live index does not match the
+    // declared one, and `IF NOT EXISTS` on its own would keep the old one, so an index that changed
+    // shape would silently stay as it was. Emitting a separate drop does not work either: adds are
+    // applied before drops, so the pair would create nothing and then remove what was there.
     Ok(format!(
-        "CREATE {unique}INDEX IF NOT EXISTS \"{idx_name}\" ON \"{schema}\".\"{table}\" USING {method} ({cols});\n{comment_sql}"
+        "DROP INDEX IF EXISTS \"{schema}\".\"{idx_name}\";\nCREATE {unique}INDEX IF NOT EXISTS \"{idx_name}\" ON \"{schema}\".\"{table}\" USING {method} ({cols});\n{comment_sql}"
     ))
 }
 

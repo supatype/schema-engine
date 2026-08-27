@@ -9,8 +9,8 @@
 //! These are pure unit tests — no DB required.
 
 use supatype_engine::{
-    differ::{self, Operation, Risk},
-    generator::typescript::admin,
+    differ::{self, doctor, Operation, Risk},
+    generator::{sql::migration, typescript::admin},
     introspector::{
         constraints::{DbConstraint, DbConstraintType},
         enums::DbEnum,
@@ -7195,4 +7195,1027 @@ fn test_admin_config_honours_declared_editor_widget() {
     assert_eq!(widget_of("payload"), "json");
     // A widget Studio cannot render would leave the field with no editor, so it falls back.
     assert_eq!(widget_of("unknown_widget"), "json");
+}
+
+/// Declared bounds reach Studio, not just Postgres.
+///
+/// `FieldConfig.validation` has been read by four Studio widgets since the admin panel was built and
+/// written by nothing, so `MaxLength<string, 120>` rendered as an unbounded input and failed on save
+/// with a database error. The CLI compiles the modifier to both a `check` and structured bounds; this
+/// asserts the second half survives into the config Studio actually loads.
+#[test]
+fn test_admin_config_carries_declared_validation_bounds() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Review",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "headline": {
+          "kind": "text",
+          "required": true,
+          "check": "char_length(\"{name}\") <= 120",
+          "validation": { "maxLength": 120 },
+          "annotations": { "db": { "pgType": "TEXT" } }
+        },
+        "body": {
+          "kind": "text",
+          "required": true,
+          "validation": { "maxLength": 4000, "minLength": 20 },
+          "annotations": { "db": { "pgType": "TEXT" } }
+        },
+        "rating": {
+          "kind": "integer",
+          "required": true,
+          "validation": { "min": 1, "max": 5 },
+          "annotations": { "db": { "pgType": "INTEGER" } }
+        },
+        "note": {
+          "kind": "text",
+          "required": false,
+          "annotations": { "db": { "pgType": "TEXT" } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "reviews", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let config = admin::generate(&ast).unwrap();
+
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let field = |name: &str| -> &serde_json::Value {
+        fields
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap_or_else(|| panic!("field {name} missing from admin config"))
+    };
+
+    assert_eq!(field("headline")["validation"]["maxLength"], 120);
+    assert_eq!(field("body")["validation"]["maxLength"], 4000);
+    assert_eq!(field("body")["validation"]["minLength"], 20);
+    assert_eq!(field("rating")["validation"]["min"], 1.0);
+    assert_eq!(field("rating")["validation"]["max"], 5.0);
+
+    // A field with no declared bound carries no key, so a widget reads `undefined` and renders plain.
+    assert!(
+        field("note").get("validation").is_none(),
+        "unconstrained field must not carry a validation key: {:?}",
+        field("note")
+    );
+}
+
+/// `MaxLength` on a slug and `Between` on a decimal used to vanish.
+///
+/// Both modifiers compile to a `check` in the CLI, but `SlugFieldAst` and `DecimalFieldAst` had no
+/// `check` field, so serde dropped it silently and the column was created unconstrained. Nothing
+/// reported it: the schema said one thing and the database did another.
+#[test]
+fn test_slug_and_decimal_honour_declared_check_constraints() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Listing",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false } }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": { "db": { "pgType": "TEXT" } }
+        },
+        "handle": {
+          "kind": "slug",
+          "required": true,
+          "from": "title",
+          "check": "char_length(\"{name}\") <= 80",
+          "validation": { "maxLength": 80 },
+          "annotations": { "db": { "pgType": "TEXT", "unique": true } }
+        },
+        "price": {
+          "kind": "decimal",
+          "required": true,
+          "precision": 10,
+          "scale": 2,
+          "check": "\"{name}\"::numeric >= 0",
+          "validation": { "min": 0 },
+          "annotations": { "db": { "pgType": "NUMERIC" } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "listings", "indexes": [] },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+
+    assert!(
+        forward.contains(r#"CHECK (char_length("handle") <= 80)"#),
+        "slug check constraint must reach the DDL; got:\n{forward}"
+    );
+    assert!(
+        forward.contains(r#"CHECK ("price"::numeric >= 0)"#),
+        "decimal check constraint must reach the DDL; got:\n{forward}"
+    );
+
+    let config = admin::generate(&ast).unwrap();
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let validation_of = |name: &str| -> serde_json::Value {
+        fields
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap_or_else(|| panic!("field {name} missing from admin config"))["validation"]
+            .clone()
+    };
+    assert_eq!(validation_of("handle")["maxLength"], 80);
+    assert_eq!(validation_of("price")["min"], 0.0);
+}
+
+/// Every field kind that accepts a bound renders the right expression, and none is dropped.
+///
+/// The bug this replaces: the CLI emitted a `check` for every kind and the engine kept it for three,
+/// so `enum`, `json`, `array`, `blocks` and six others accepted a declared bound and enforced
+/// nothing. Nine kinds were silently unconstrained and no test noticed, because no test enumerated
+/// the kinds. This one does, and asserting the expression rather than merely "a CHECK exists" is
+/// what catches the second half of that bug: `char_length` was applied to arrays and JSONB, where it
+/// either does not exist or raises at insert time.
+#[test]
+fn test_every_bounded_kind_renders_its_own_expression() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Audit",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "title": { "kind": "text", "required": true,
+                   "check": "char_length(\"{name}\") <= 120",
+                   "validation": { "maxLength": 120 },
+                   "annotations": { "db": { "pgType": "TEXT" } } },
+        "tags": { "kind": "array", "required": true,
+                  "check": "cardinality(\"{name}\") <= 3",
+                  "validation": { "maxItems": 3 },
+                  "annotations": { "db": { "pgType": "ARRAY", "elementType": "TEXT" } } },
+        "setup_items": { "kind": "json", "required": true,
+                  "check": "jsonb_typeof(\"{name}\") = 'array' AND jsonb_array_length(\"{name}\") >= 1",
+                  "validation": { "minItems": 1 },
+                  "annotations": { "db": { "pgType": "JSONB" } } },
+        "sections": { "kind": "blocks", "required": true, "blocks": [],
+                  "check": "jsonb_typeof(\"{name}\") = 'array' AND jsonb_array_length(\"{name}\") >= 1",
+                  "validation": { "minItems": 1 },
+                  "annotations": { "db": { "pgType": "JSONB" } } },
+        "body": { "kind": "richText", "required": true,
+                  "check": "char_length(_supatype.richtext_text(\"{name}\")) <= 320",
+                  "validation": { "maxLength": 320 },
+                  "annotations": { "db": { "pgType": "JSONB" } } },
+        "score": { "kind": "integer", "required": true,
+                   "check": "(\"{name}\" >= 1) AND (\"{name}\" <= 5)",
+                   "validation": { "min": 1, "max": 5 },
+                   "annotations": { "db": { "pgType": "INTEGER" } } },
+        "event_day": { "kind": "date", "required": true,
+                   "check": "(\"{name}\" >= '2026-01-01'::date) AND (\"{name}\" <= '2026-12-31'::date)",
+                   "validation": { "min": "2026-01-01", "max": "2026-12-31" },
+                   "annotations": { "db": { "pgType": "DATE" } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": { "db": { "tableName": "audit", "indexes": [] }, "platform": { "access": {} } }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+
+    // Each kind, and the expression that is correct for its storage. A kind whose bound is dropped
+    // fails here, and so does one measured with the wrong function.
+    let expected = [
+        ("text", r#"CHECK (char_length("title") <= 120)"#),
+        ("array", r#"CHECK (cardinality("tags") <= 3)"#),
+        (
+            "json array",
+            r#"CHECK (jsonb_typeof("setup_items") = 'array' AND jsonb_array_length("setup_items") >= 1)"#,
+        ),
+        (
+            "blocks",
+            r#"CHECK (jsonb_typeof("sections") = 'array' AND jsonb_array_length("sections") >= 1)"#,
+        ),
+        ("richText", r#"CHECK (char_length(_supatype.richtext_text("body")) <= 320)"#),
+        ("integer", r#"CHECK (("score" >= 1) AND ("score" <= 5))"#),
+        (
+            "date",
+            r#"CHECK (("event_day" >= '2026-01-01'::date) AND ("event_day" <= '2026-12-31'::date))"#,
+        ),
+    ];
+    for (kind, clause) in expected {
+        assert!(
+            forward.contains(clause),
+            "{kind} bound missing from the DDL, expected {clause}\n{forward}"
+        );
+    }
+
+    // The rich-text helper is referenced by a CHECK, which Postgres validates at CREATE TABLE time,
+    // so it must be defined before the table rather than beside the triggers that follow it.
+    let helper = forward
+        .find("FUNCTION _supatype.richtext_text")
+        .expect("rich-text helper must be emitted");
+    let table = forward.find("CREATE TABLE").expect("table must be created");
+    assert!(
+        helper < table,
+        "helper functions must precede the tables whose constraints call them"
+    );
+
+    // Studio must be told exactly what Postgres enforces, or the form and the database disagree.
+    let config = admin::generate(&ast).unwrap();
+    let fields = config["models"][0]["fields"].as_array().unwrap();
+    let validation = |name: &str| -> serde_json::Value {
+        fields
+            .iter()
+            .find(|f| f["name"] == name)
+            .unwrap_or_else(|| panic!("field {name} missing from admin config"))["validation"]
+            .clone()
+    };
+    assert_eq!(validation("title")["maxLength"], 120);
+    assert_eq!(validation("tags")["maxItems"], 3);
+    assert_eq!(validation("setup_items")["minItems"], 1);
+    assert_eq!(validation("sections")["minItems"], 1);
+    assert_eq!(validation("body")["maxLength"], 320);
+    assert_eq!(validation("score")["max"], 5);
+    assert_eq!(validation("event_day")["min"], "2026-01-01");
+}
+
+/// A kind with nowhere to store a check must fail the parse, not drop it.
+#[test]
+fn test_a_check_a_kind_cannot_store_is_refused_not_dropped() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Thing",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "embedding": { "kind": "vector", "required": true, "dimensions": 3,
+                       "check": "(\"{name}\" >= 0)",
+                       "annotations": { "db": { "pgType": "VECTOR" } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": { "db": { "tableName": "things", "indexes": [] }, "platform": { "access": {} } }
+    }
+  ]
+}"#;
+
+    let err = parser::parse(ast_json).expect_err("a check with no home must fail the parse");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("nowhere to store"),
+        "the error must say the constraint cannot be stored, not something incidental: {message}"
+    );
+}
+
+/// A localized column is bounded per locale, instead of not at all.
+///
+/// Localized columns are JSONB keyed by locale, so the scalar expression the CLI compiles
+/// (`char_length("headline") <= 120`) would compare against a JSON object. The generator used to
+/// respond by **dropping** the constraint, which left the field most likely to overrun, a
+/// translation, as the one field nothing enforced. Each bound now becomes a call to the matching
+/// `_supatype.localized_*` helper.
+#[test]
+fn test_localized_columns_are_bounded_per_locale() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "locales": ["en", "fr"],
+  "defaultLocale": "en",
+  "models": [
+    {
+      "name": "Page",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "headline": { "kind": "text", "required": true, "localized": true,
+                      "check": "char_length(\"{name}\") <= 120",
+                      "validation": { "maxLength": 120, "minLength": 3 },
+                      "annotations": { "db": { "pgType": "TEXT" } } },
+        "body": { "kind": "richText", "required": true, "localized": true,
+                  "check": "char_length(_supatype.richtext_text(\"{name}\")) <= 320",
+                  "validation": { "maxLength": 320 },
+                  "annotations": { "db": { "pgType": "JSONB" } } },
+        "keywords": { "kind": "json", "required": true, "localized": true,
+                  "check": "jsonb_typeof(\"{name}\") = 'array' AND jsonb_array_length(\"{name}\") >= 1",
+                  "validation": { "minItems": 1 },
+                  "annotations": { "db": { "pgType": "JSONB" } } },
+        "readMinutes": { "kind": "integer", "required": true, "localized": true,
+                  "check": "(\"{name}\" >= 1) AND (\"{name}\" <= 60)",
+                  "validation": { "min": 1, "max": 60 },
+                  "annotations": { "db": { "pgType": "INTEGER" } } },
+        "releaseDay": { "kind": "date", "required": true, "localized": true,
+                  "check": "(\"{name}\" >= '2026-01-01'::date)",
+                  "validation": { "min": "2026-01-01" },
+                  "annotations": { "db": { "pgType": "DATE" } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": { "db": { "tableName": "pages", "indexes": [] }, "platform": { "access": {} } }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+
+    // Each measure reaches its own helper, and every call is schema-qualified so it survives a
+    // restore that runs with an empty search_path.
+    for expected in [
+        r#"_supatype.localized_length_max("headline", 120)"#,
+        r#"_supatype.localized_length_min("headline", 3)"#,
+        r#"_supatype.localized_richtext_length_max("body", 320)"#,
+        r#"_supatype.localized_items_min("keywords", 1)"#,
+        r#"_supatype.localized_number_max("readMinutes", 60)"#,
+        r#"_supatype.localized_number_min("readMinutes", 1)"#,
+        r#"_supatype.localized_temporal_min("releaseDay", '2026-01-01')"#,
+    ] {
+        assert!(
+            forward.contains(expected),
+            "localized bound missing, expected {expected}\n{forward}"
+        );
+    }
+
+    // The scalar form must not survive onto a JSONB column: it is what used to be dropped, and
+    // emitting it instead of dropping it would fail CREATE TABLE rather than fix anything.
+    assert!(
+        !forward.contains(r#"CHECK (char_length("headline") <= 120)"#),
+        "a localized column must not carry the scalar expression:\n{forward}"
+    );
+}
+
+/// A bound on a column added to an existing table must reach the database.
+///
+/// Column checks were only ever emitted inline by `CREATE TABLE`, so everything Phases A to D fixed
+/// applied to new tables alone: add a bounded column to a table that already exists and the
+/// constraint was silently absent, which is the same failure in a different place.
+#[test]
+fn test_a_bound_on_an_added_column_is_not_dropped() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "title": { "kind": "text", "required": true,
+                   "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+        "excerpt": { "kind": "text", "required": false,
+                     "check": "char_length(\"{name}\") <= 320",
+                     "validation": { "maxLength": 320 },
+                     "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+        "headline": { "kind": "text", "required": false, "localized": true,
+                     "check": "char_length(\"{name}\") <= 120",
+                     "validation": { "maxLength": 120 },
+                     "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": { "db": { "tableName": "posts", "indexes": [] }, "platform": { "access": {} } }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
+            columns: vec![col("id", "uuid"), col("title", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+
+    assert!(
+        forward.contains(r#"CHECK (char_length("excerpt") <= 320)"#),
+        "a scalar bound on an added column must reach the DDL:\n{forward}"
+    );
+    assert!(
+        forward.contains(r#"CHECK (_supatype.localized_length_max("headline", 120))"#),
+        "a localized bound on an added column must reach the DDL:\n{forward}"
+    );
+}
+
+/// Tightening a bound on an existing column must produce a migration.
+///
+/// Documents the boundary of what Phases A to D fixed. Column checks are emitted by `CREATE TABLE`
+/// and `ADD COLUMN`; the differ compares only unique and foreign-key constraints, so a bound that
+/// *changes* on a column that already exists may not be diffed at all. This test states which of
+/// those two worlds we are in rather than leaving it to be discovered by a user whose tightened
+/// bound quietly did nothing.
+#[test]
+fn test_changing_a_bound_on_an_existing_column() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "excerpt": { "kind": "text", "required": false,
+                     "check": "char_length(\"{name}\") <= 80",
+                     "validation": { "maxLength": 80 },
+                     "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": { "db": { "tableName": "posts", "indexes": [] }, "platform": { "access": {} } }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
+            columns: vec![col("id", "uuid"), col("excerpt", "text")],
+        }],
+        constraints: vec![DbConstraint {
+            table: "posts".into(),
+            name: "posts_excerpt_bounds".into(),
+            constraint_type: DbConstraintType::Check,
+            columns: vec!["excerpt".into()],
+            foreign_table: None,
+            foreign_columns: None,
+            // The database still holds the old, looser bound.
+            check_expression: Some("CHECK ((char_length(excerpt) <= 320))".into()),
+            on_delete: None,
+            // Stamped by the push that created it, carrying the fingerprint of the *old* bound.
+            comment: Some(
+                "supatype:managed;kind=check;table=posts;fields=excerpt;v=1;bounds=deadbeefdeadbeef"
+                    .into(),
+            ),
+        }],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+
+    // The old constraint is dropped and the new bound added, in that order: Postgres has no
+    // ALTER CONSTRAINT for a check expression.
+    assert!(
+        forward.contains(r#"DROP CONSTRAINT IF EXISTS "posts_excerpt_bounds""#),
+        "the stale bound must be dropped:
+{forward}"
+    );
+    assert!(
+        forward.contains(r#"ADD CONSTRAINT "posts_excerpt_bounds" CHECK (char_length("excerpt") <= 80)"#),
+        "the tightened bound must be added:
+{forward}"
+    );
+    let drop_at = forward
+        .find(r#"DROP CONSTRAINT IF EXISTS "posts_excerpt_bounds""#)
+        .unwrap();
+    let add_at = forward
+        .find(r#"ADD CONSTRAINT "posts_excerpt_bounds""#)
+        .unwrap();
+    assert!(drop_at < add_at, "the drop must precede the add:
+{forward}");
+
+    // The replacement is stamped, or the next push sees no fingerprint and churns again.
+    assert!(
+        forward.contains(r#"COMMENT ON CONSTRAINT "posts_excerpt_bounds""#),
+        "the new constraint must carry its fingerprint:
+{forward}"
+    );
+}
+
+/// Model-level constraints reach the database as table `CHECK`s.
+///
+/// The measure operands arrive already resolved by the CLI, so this asserts the engine renders what
+/// it was handed rather than re-deciding: `ItemCount` over a JSON array must become a guarded
+/// `jsonb_array_length`, and over a real array a `cardinality`, from `form` alone.
+#[test]
+fn test_model_constraints_render_as_table_checks() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Event",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "starts_at": { "kind": "datetime", "required": true,
+                "annotations": { "db": { "pgType": "TIMESTAMPTZ" } } },
+        "ends_at": { "kind": "datetime", "required": true,
+                "annotations": { "db": { "pgType": "TIMESTAMPTZ" } } },
+        "sku": { "kind": "text", "required": true,
+                "annotations": { "db": { "pgType": "TEXT" } } },
+        "tags": { "kind": "array", "required": true,
+                "annotations": { "db": { "pgType": "ARRAY", "elementType": "TEXT" } } },
+        "refs": { "kind": "json", "required": true, "jsonArray": true,
+                "annotations": { "db": { "pgType": "JSONB" } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": {
+          "tableName": "events",
+          "indexes": [],
+          "constraints": [
+            { "type": "compare", "op": "lte",
+              "left": { "kind": "column", "name": "starts_at" },
+              "right": { "kind": "column", "name": "ends_at" } },
+            { "type": "matches", "column": "sku", "pattern": "^[A-Z]{3}$" },
+            { "type": "compare", "op": "lte",
+              "left": { "kind": "itemCount", "column": "tags", "form": "array" },
+              "right": { "kind": "literal", "value": 3 } },
+            { "type": "compare", "op": "gte",
+              "left": { "kind": "itemCount", "column": "refs", "form": "jsonbArray" },
+              "right": { "kind": "literal", "value": 1 } },
+            { "type": "any", "rules": [
+              { "type": "compare", "op": "eq",
+                "left": { "kind": "column", "name": "sku" },
+                "right": { "kind": "literal", "value": "AAA" } },
+              { "type": "nullCheck", "operand": { "kind": "column", "name": "sku" }, "isNull": false }
+            ] }
+          ]
+        },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+
+    for expected in [
+        r#"ADD CONSTRAINT "events_check_1" CHECK ("starts_at" <= "ends_at")"#,
+        r#"ADD CONSTRAINT "events_check_2" CHECK ("sku" ~ '^[A-Z]{3}$')"#,
+        r#"ADD CONSTRAINT "events_check_3" CHECK (cardinality("tags") <= 3)"#,
+        // The JSONB measure carries its type guard, or an object value raises at insert instead of
+        // failing the check.
+        r#"ADD CONSTRAINT "events_check_4" CHECK (jsonb_typeof("refs") = 'array' AND jsonb_array_length("refs") >= 1)"#,
+    ] {
+        assert!(
+            forward.contains(expected),
+            "missing constraint DDL, expected {expected}\n{forward}"
+        );
+    }
+
+    // Combinators nest, and each constraint is stamped so a change to it is diffable.
+    assert!(forward.contains(r#""events_check_5" CHECK ((("sku" = 'AAA') OR ("sku" IS NOT NULL)))"#), "{forward}");
+    for index in 1..=5 {
+        assert!(
+            forward.contains(&format!("COMMENT ON CONSTRAINT \"events_check_{index}\"")),
+            "constraint {index} must carry its fingerprint:\n{forward}"
+        );
+    }
+}
+
+/// A rule a `CHECK` cannot evaluate fails the render, rather than becoming a constraint that lies.
+#[test]
+fn test_a_caller_dependent_constraint_fails_the_render() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Doc",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "owner_id": { "kind": "uuid", "required": true,
+                "annotations": { "db": { "pgType": "UUID" } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": {
+          "tableName": "docs",
+          "indexes": [],
+          "constraints": [
+            { "type": "compare", "op": "eq",
+              "left": { "kind": "column", "name": "owner_id" },
+              "right": { "kind": "authUid" } }
+          ]
+        },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let err = migration::forward_sql(&diff, false, "public", &ast)
+        .expect_err("a constraint reading the caller cannot be rendered");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("depends on the caller"),
+        "the failure must say why, not merely fail: {message}"
+    );
+}
+
+/// Ownership metadata on a constraint names the columns it reads.
+///
+/// `fields=` is what every other managed object uses to say which columns it covers, and nothing
+/// parses it yet, so a wrong value here would sit unnoticed until something did. The first version
+/// of this code passed the constraint's own name, putting `fields=events_check_1` in the comment: a
+/// column that does not exist, in the metadata the ownership gate is built on.
+#[test]
+fn test_constraint_ownership_comments_name_their_columns() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Event",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "starts_at": { "kind": "datetime", "required": false,
+                "annotations": { "db": { "pgType": "TIMESTAMPTZ" } } },
+        "ends_at": { "kind": "datetime", "required": false,
+                "annotations": { "db": { "pgType": "TIMESTAMPTZ" } } },
+        "sku": { "kind": "text", "required": false,
+                "check": "char_length(\"{name}\") <= 3",
+                "validation": { "maxLength": 3 },
+                "annotations": { "db": { "pgType": "TEXT" } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": {
+          "tableName": "events",
+          "indexes": [],
+          "constraints": [
+            { "type": "compare", "op": "lte",
+              "left": { "kind": "column", "name": "starts_at" },
+              "right": { "kind": "column", "name": "ends_at" } },
+            { "type": "matches", "column": "sku", "pattern": "^[A-Z]+$" }
+          ]
+        },
+        "platform": { "access": {} }
+      }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+
+    // A cross-column rule names both columns, in the order it reads them.
+    assert!(
+        forward.contains("kind=check;table=events;fields=starts_at,ends_at"),
+        "a two-column constraint must name both columns:\n{forward}"
+    );
+    // A single-column rule names the one.
+    assert!(
+        forward.contains("kind=check;table=events;fields=sku;"),
+        "a single-column constraint must name its column:\n{forward}"
+    );
+    // And the column bound keeps naming its own column, not its constraint.
+    assert!(
+        forward.contains("kind=check;table=events;fields=sku;"),
+        "a column bound must name its column:\n{forward}"
+    );
+    // Nothing should ever name a constraint where a column belongs.
+    assert!(
+        !forward.contains("fields=events_check_"),
+        "a constraint name is not a column:\n{forward}"
+    );
+}
+
+/// `doctor` reports a check constraint Supatype did not write, rather than adopting it.
+///
+/// Adoption stamps tables, unique constraints and indexes. It deliberately does not stamp checks:
+/// recognising someone else's `CHECK` as equivalent to one we would write means comparing
+/// expressions, and `pg_get_constraintdef` rewrites them on read-back. The fingerprint in our own
+/// comments exists because that comparison is unreliable, and for a constraint we did not write
+/// there is no fingerprint to compare against.
+///
+/// So push adds its own alongside, and the operator is told, because they are the only one who can
+/// say whether the two rules mean the same thing.
+#[test]
+fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "excerpt": { "kind": "text", "required": false,
+                     "check": "char_length(\"{name}\") <= 80",
+                     "validation": { "maxLength": 80 },
+                     "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": { "db": { "tableName": "posts", "indexes": [] }, "platform": { "access": {} } }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
+            columns: vec![col("id", "uuid"), col("excerpt", "text")],
+        }],
+        constraints: vec![
+            // Theirs: same intent, different name, no managed comment.
+            DbConstraint {
+                table: "posts".into(),
+                name: "posts_excerpt_len".into(),
+                constraint_type: DbConstraintType::Check,
+                columns: vec!["excerpt".into()],
+                foreign_table: None,
+                foreign_columns: None,
+                check_expression: Some("CHECK ((length(excerpt) <= 80))".into()),
+                on_delete: None,
+                comment: None,
+            },
+            // A NOT NULL is a column property, not a rule anyone declared. Reporting it would bury
+            // the finding that matters under one per nullable column.
+            DbConstraint {
+                table: "posts".into(),
+                name: "posts_id_not_null".into(),
+                constraint_type: DbConstraintType::Check,
+                columns: vec!["id".into()],
+                foreign_table: None,
+                foreign_columns: None,
+                check_expression: Some("CHECK ((id IS NOT NULL))".into()),
+                on_delete: None,
+                comment: None,
+            },
+        ],
+        ..DatabaseState::default()
+    };
+
+    let report = doctor::report(&ast, &db);
+    let checks: Vec<_> = report
+        .unmanaged_drift
+        .iter()
+        .filter(|item| item.kind == "check_constraint")
+        .collect();
+
+    assert_eq!(
+        checks.len(),
+        1,
+        "exactly the operator's own check should be reported, not the NOT NULL: {:?}",
+        report.unmanaged_drift
+    );
+    let item = checks[0];
+    assert_eq!(item.name, "posts_excerpt_len");
+    assert!(
+        item.message.contains("will not be adopted"),
+        "the message must say it is not adopted: {}",
+        item.message
+    );
+    assert!(
+        item.message.contains("adds 1 constraint(s) of its own"),
+        "and that a duplicate is coming, so the operator can decide: {}",
+        item.message
+    );
+    assert!(
+        item.message.contains("length(excerpt) <= 80"),
+        "and show the expression, since the names will not match: {}",
+        item.message
+    );
+}
+
+/// Our own constraints are not reported as drift.
+#[test]
+fn test_doctor_leaves_supatype_owned_checks_alone() {
+    let ast_json = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": { "db": { "tableName": "posts", "indexes": [] }, "platform": { "access": {} } }
+    }
+  ]
+}"#;
+
+    let ast = parser::parse(ast_json).unwrap();
+    let db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
+            columns: vec![col("id", "uuid")],
+        }],
+        constraints: vec![DbConstraint {
+            table: "posts".into(),
+            name: "posts_excerpt_bounds".into(),
+            constraint_type: DbConstraintType::Check,
+            columns: vec!["excerpt".into()],
+            foreign_table: None,
+            foreign_columns: None,
+            check_expression: Some("CHECK ((char_length(excerpt) <= 80))".into()),
+            on_delete: None,
+            comment: Some(
+                "supatype:managed;kind=check;table=posts;fields=excerpt;v=1;bounds=abc".into(),
+            ),
+        }],
+        ..DatabaseState::default()
+    };
+
+    let report = doctor::report(&ast, &db);
+    assert!(
+        !report
+            .unmanaged_drift
+            .iter()
+            .any(|item| item.kind == "check_constraint"),
+        "a stamped constraint is ours, not drift: {:?}",
+        report.unmanaged_drift
+    );
+}
+
+/// Model constraints reconcile like column bounds: changed, added and removed all migrate.
+///
+/// Before this they were created with the table and never looked at again, so editing a constraint
+/// left the database enforcing the old rule while the schema claimed the new one. That is the gap
+/// column bounds had before D4, and it has the same fix: a named constraint, a fingerprinted
+/// comment, and a comparison of fingerprints rather than of SQL Postgres has already rewritten.
+fn constrained_ast(rules: &str) -> String {
+    format!(
+        r#"{{
+  "astVersion": 2,
+  "models": [
+    {{
+      "name": "Event",
+      "fields": {{
+        "id": {{ "kind": "uuid", "primaryKey": true, "required": true,
+                "default": {{ "kind": "genRandomUuid" }},
+                "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }} }},
+        "starts_at": {{ "kind": "datetime", "required": false,
+                "annotations": {{ "db": {{ "pgType": "TIMESTAMPTZ" }} }} }},
+        "ends_at": {{ "kind": "datetime", "required": false,
+                "annotations": {{ "db": {{ "pgType": "TIMESTAMPTZ" }} }} }}
+      }},
+      "options": {{ "timestamps": false, "softDelete": false }},
+      "annotations": {{
+        "db": {{ "tableName": "events", "indexes": [], "constraints": [{rules}] }},
+        "platform": {{ "access": {{}} }}
+      }}
+    }}
+  ]
+}}"#
+    )
+}
+
+const LTE_RULE: &str = r#"{ "type": "compare", "op": "lte",
+  "left": { "kind": "column", "name": "starts_at" },
+  "right": { "kind": "column", "name": "ends_at" } }"#;
+
+const LT_RULE: &str = r#"{ "type": "compare", "op": "lt",
+  "left": { "kind": "column", "name": "starts_at" },
+  "right": { "kind": "column", "name": "ends_at" } }"#;
+
+/// The events table as it stands after a push that installed `expr`.
+fn events_db(existing: Option<(&str, &str)>) -> DatabaseState {
+    DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "events".into(),
+            comment: Some("supatype:managed;kind=table".into()),
+            columns: vec![
+                col("id", "uuid"),
+                col("starts_at", "timestamptz"),
+                col("ends_at", "timestamptz"),
+            ],
+        }],
+        constraints: existing
+            .map(|(name, expr)| {
+                vec![DbConstraint {
+                    table: "events".into(),
+                    name: name.into(),
+                    constraint_type: DbConstraintType::Check,
+                    columns: vec![],
+                    foreign_table: None,
+                    foreign_columns: None,
+                    check_expression: Some(format!("CHECK (({expr}))")),
+                    on_delete: None,
+                    comment: Some(format!(
+                        "supatype:managed;kind=check;table=events;fields=starts_at,ends_at;v=1;bounds={}",
+                        supatype_engine::managed::check_fingerprint(expr)
+                    )),
+                }]
+            })
+            .unwrap_or_default(),
+        ..DatabaseState::default()
+    }
+}
+
+#[test]
+fn test_an_unchanged_model_constraint_produces_no_migration() {
+    let ast = parser::parse(&constrained_ast(LTE_RULE)).unwrap();
+    let db = events_db(Some(("events_check_1", r#""starts_at" <= "ends_at""#)));
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
+    assert!(
+        !forward.contains("events_check_1"),
+        "an unchanged constraint must not churn on every push:\n{forward}"
+    );
+}
+
+#[test]
+fn test_a_changed_model_constraint_is_dropped_and_recreated() {
+    // `<=` tightened to `<`.
+    let ast = parser::parse(&constrained_ast(LT_RULE)).unwrap();
+    let db = events_db(Some(("events_check_1", r#""starts_at" <= "ends_at""#)));
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
+
+    assert!(
+        forward.contains(r#"DROP CONSTRAINT IF EXISTS "events_check_1""#),
+        "the stale constraint must be dropped:\n{forward}"
+    );
+    assert!(
+        forward.contains(r#"ADD CONSTRAINT "events_check_1" CHECK ("starts_at" < "ends_at")"#),
+        "the new rule must be added:\n{forward}"
+    );
+    let drop_at = forward
+        .find(r#"DROP CONSTRAINT IF EXISTS "events_check_1""#)
+        .unwrap();
+    let add_at = forward.find(r#"ADD CONSTRAINT "events_check_1""#).unwrap();
+    assert!(drop_at < add_at, "the drop must precede the add:\n{forward}");
+}
+
+#[test]
+fn test_a_removed_model_constraint_is_dropped() {
+    // The schema no longer declares it, so the database must stop enforcing it.
+    let ast = parser::parse(&constrained_ast("")).unwrap();
+    let db = events_db(Some(("events_check_1", r#""starts_at" <= "ends_at""#)));
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
+    assert!(
+        forward.contains(r#"DROP CONSTRAINT IF EXISTS "events_check_1""#),
+        "a constraint removed from the schema must be removed from the database, or it goes on \
+         rejecting writes the schema now permits:\n{forward}"
+    );
+}
+
+#[test]
+fn test_a_new_model_constraint_on_an_existing_table_is_added() {
+    let ast = parser::parse(&constrained_ast(LTE_RULE)).unwrap();
+    let db = events_db(None);
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
+    assert!(
+        forward.contains(r#"ADD CONSTRAINT "events_check_1" CHECK ("starts_at" <= "ends_at")"#),
+        "adding a constraint to a table that already exists must migrate:\n{forward}"
+    );
+    assert!(
+        forward.contains(r#"COMMENT ON CONSTRAINT "events_check_1""#),
+        "and be stamped, or the next push sees no fingerprint and churns:\n{forward}"
+    );
 }

@@ -25,6 +25,10 @@ use crate::parser::ast::{AccessRule, MembershipSource, Operand, SchemaAst};
 /// true and the grant survives.
 fn reachable_by_anon(rule: &AccessRule) -> bool {
     match rule {
+        // Constraint-only. `Matches` is refused inside an `access` rule by the CLI, so this arm is
+        // reached only if an AST is hand-written; treating it as caller-independent is the safe
+        // reading, since the pattern says nothing about who is asking.
+        AccessRule::Matches { .. } => true,
         AccessRule::Public => true,
         AccessRule::Private => false,
 

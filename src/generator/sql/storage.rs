@@ -121,6 +121,8 @@ fn sql_quote_bucket_id(bucket_id: &str) -> String {
 /// objects.owner column rather than model-specific FK columns.
 fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
     match rule {
+        // Constraint-only, refused inside `access` by the CLI. Denies rather than grants.
+        AccessRule::Matches { .. } => "false".to_string(),
         AccessRule::Owner { .. } => "auth.uid() = owner".to_string(),
         AccessRule::Any { rules } => rules
             .iter()

@@ -200,3 +200,92 @@ fn test_vector_extension_emitted_for_vector_fields() {
         "vector extension must appear before BEGIN"
     );
 }
+
+/// The auth helpers are re-asserted on every push, not only on pushes that touch RLS.
+///
+/// They were gated on the diff carrying an `EnableRls` / `CreateRlsPolicy` / `DropRlsPolicy`
+/// operation. A policy calls `auth.uid()`, so a definition that is only refreshed when a policy
+/// happens to change drifts from the policies that call it, and nothing notices until one evaluates
+/// against a stale helper. Grants and security labels already re-assert unconditionally; this makes
+/// the helpers behave the same way.
+///
+/// A steady-state push is the case that matters: same schema, same database, nothing to do.
+#[test]
+fn auth_helpers_are_emitted_on_a_push_that_touches_no_policy() {
+    let input = include_str!("fixtures/basic_blog.json");
+    let ast = parser::parse(input).unwrap();
+
+    // Apply once, then diff the same schema against the state it produced: no RLS operations left.
+    let first = differ::diff(&ast, &DatabaseState::default()).unwrap();
+    let rls_ops = first.operations.iter().any(|op| {
+        matches!(
+            op,
+            differ::Operation::EnableRls { .. }
+                | differ::Operation::CreateRlsPolicy { .. }
+                | differ::Operation::DropRlsPolicy { .. }
+        )
+    });
+    assert!(rls_ops, "the fixture must carry RLS ops, or the contrast is empty");
+
+    // The same push once its policies are already in place: everything else still to do, no RLS
+    // operation left to hang the helpers off.
+    let mut steady = first.clone();
+    steady.operations.retain(|op| {
+        !matches!(
+            op,
+            differ::Operation::EnableRls { .. }
+                | differ::Operation::CreateRlsPolicy { .. }
+                | differ::Operation::DropRlsPolicy { .. }
+        )
+    });
+    assert!(
+        !steady.operations.is_empty(),
+        "the steady-state diff must still do something, or the preamble is all there is"
+    );
+
+    let forward = migration::forward_sql(&steady, false, "public", &ast).unwrap();
+    assert!(
+        forward.contains("CREATE OR REPLACE FUNCTION auth.uid()"),
+        "a push with no RLS operation must still assert the helpers its policies call:\n{forward}"
+    );
+    assert!(
+        forward.contains("CREATE SCHEMA IF NOT EXISTS auth;"),
+        "and the schema they live in:\n{forward}"
+    );
+}
+
+/// The `auth` schema grant is emitted once, from the preamble.
+///
+/// It used to be emitted twice: once in the preamble, and again from the field-masking block,
+/// because the preamble's copy was gated and a steady-state push would otherwise check a privilege
+/// nothing in that push had established. With the gate gone the second copy is redundant, and two
+/// emitters of one grant is how the two drift apart.
+#[test]
+fn the_auth_schema_grant_has_a_single_emitter() {
+    // A fixture with **field** rules: the second emitter lived in the field-masking block, so a
+    // schema without one never reached it and the test would pass either way.
+    let input = include_str!("fixtures/rls_field_rules.json");
+    let ast = parser::parse(input).unwrap();
+    // With `supatype_mask` present the differ picks the extension tier, which is the tier whose
+    // masking block held the second emitter. Without it the tier is `Views` and the block never
+    // runs, so the test would pass whether or not the duplicate was there.
+    let db = DatabaseState {
+        extensions: vec![supatype_engine::generator::sql::rls::MASK_EXTENSION.to_string()],
+        ..DatabaseState::default()
+    };
+    let diff = differ::diff(&ast, &db).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    assert_eq!(
+        diff.field_masking,
+        differ::FieldMaskingTier::Extension,
+        "the fixture must reach the extension tier, or the second emitter is unreachable"
+    );
+
+    // One `DO $auth_schema_usage$` block is one emitter. Counting the GRANT statements would
+    // count the per-role lines inside the block instead.
+    let emitters = forward.matches("DO $auth_schema_usage$").count();
+    assert_eq!(
+        emitters, 1,
+        "expected exactly one auth-schema grant emitter, found {emitters}:\n{forward}"
+    );
+}

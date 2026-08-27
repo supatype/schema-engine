@@ -1,6 +1,7 @@
 use crate::parser::accessors::field_annotations;
 use crate::parser::ast::{
-    DefaultValueAst, FieldAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst,
+    scalar_of, DefaultValueAst, FieldAst, ModelAst, RelationCardinality, RelationFieldAst,
+    SchemaAst,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -90,9 +91,54 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         json!({ "field": "id", "direction": "desc" })
     };
 
+    // Model constraints travel to Studio as the node the CLI parsed, not as SQL.
+    //
+    // Studio evaluates them against the form's values, which is only possible while they stay a
+    // structure it can walk. Sending the rendered `CHECK` would be sending SQL to a browser and
+    // giving up the ability to say which rule failed and on which field: the payoff for refusing raw
+    // SQL, spent.
+    let constraints: Vec<Value> = model
+        .annotations
+        .db
+        .constraints
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| {
+            let mut columns = Vec::new();
+            crate::parser::ast::columns_in(rule, &mut columns);
+            json!({
+                "name": crate::managed::expected_model_constraint_name(model.table_name(), index),
+                "columns": columns,
+                "rule": rule,
+            })
+        })
+        .collect();
+
+    // Declared indexes, so Studio can show what this model is indexed by.
+    //
+    // Only the ones the schema declares. Indexes the engine creates on its own (a relation's foreign
+    // key, a blocks GIN, a unique constraint's backing index) are consequences of other declarations
+    // and listing them here would read as things an author chose.
+    let indexes: Vec<Value> = model
+        .indexes()
+        .iter()
+        .map(|index| {
+            json!({
+                "name": index.name.clone().unwrap_or_else(|| {
+                    crate::managed::expected_model_index_name(model.table_name(), &index.fields)
+                }),
+                "fields": index.fields,
+                "unique": index.unique,
+                "using": index.using,
+            })
+        })
+        .collect();
+
     json!({
         "name": model.name,
         "tableName": model.table_name(),
+        "constraints": constraints,
+        "indexes": indexes,
         "singleton": model.options.singleton,
         "publishing": has_publishing,
         "softDelete": has_soft_delete,
@@ -309,6 +355,9 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                     "localized": b.localized,
                     "options": { "blockTypes": block_defs },
                 });
+                if let Some(v) = field_validation(field) {
+                    entry["validation"] = v;
+                }
                 if b.localized {
                     entry["defaultLocale"] = json!(default_locale);
                 }
@@ -375,6 +424,10 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                 };
                 if let Some(opts) = options {
                     entry["options"] = opts;
+                }
+
+                if let Some(v) = field_validation(other) {
+                    entry["validation"] = v;
                 }
 
                 if localized {
@@ -564,6 +617,48 @@ fn field_sortable(field: &FieldAst) -> bool {
             | FieldAst::Serial(_)
             | FieldAst::BigSerial(_)
     )
+}
+
+
+/// Studio-facing bounds for a field, or `None` when it declares no constraint modifier.
+///
+/// Studio widgets have read `config.validation` since the admin panel was built; until this existed
+/// nothing wrote the key, so a `MaxLength<string, 120>` reached the editor as an unbounded input and
+/// surfaced only as a database error on save.
+fn field_validation(field: &FieldAst) -> Option<Value> {
+    let validation = match field {
+        FieldAst::Slug(f) => f.validation.as_ref(),
+        FieldAst::Decimal(f) => f.validation.as_ref(),
+        FieldAst::Json(f) | FieldAst::Button(f) => f.validation.as_ref(),
+        FieldAst::Array(f) => f.validation.as_ref(),
+        FieldAst::Blocks(f) => f.validation.as_ref(),
+        other => scalar_of(other).and_then(|f| f.validation.as_ref()),
+    }?;
+
+    if validation.is_empty() {
+        return None;
+    }
+
+    let mut m = serde_json::Map::new();
+    if let Some(v) = validation.max_length {
+        m.insert("maxLength".into(), json!(v));
+    }
+    if let Some(v) = validation.min_length {
+        m.insert("minLength".into(), json!(v));
+    }
+    if let Some(v) = validation.max_items {
+        m.insert("maxItems".into(), json!(v));
+    }
+    if let Some(v) = validation.min_items {
+        m.insert("minItems".into(), json!(v));
+    }
+    if let Some(v) = validation.min.as_ref() {
+        m.insert("min".into(), v.clone());
+    }
+    if let Some(v) = validation.max.as_ref() {
+        m.insert("max".into(), v.clone());
+    }
+    Some(Value::Object(m))
 }
 
 fn field_required_flag(field: &FieldAst) -> bool {

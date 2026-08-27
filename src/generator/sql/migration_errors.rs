@@ -34,6 +34,40 @@ pub fn enrich_migration_error(raw: &str, diff: Option<&DiffOutput>) -> String {
         );
     }
 
+    if let Some(constraint) = parse_check_violation(raw) {
+        // One lookup for all three facts: naming the column and handing over a query that finds the
+        // offending rows is the difference between "your push failed" and "here is what to fix".
+        let site = diff.and_then(|d| find_check_constraint(d, constraint));
+        let (what, find_them) = match site {
+            Some((table, columns, expression)) => (
+                // Quoted per column, so a cross-column rule reads as two identifiers rather than
+                // one identifier containing a comma.
+                format!(
+                    "\"{table}\".{}",
+                    columns
+                        .split(", ")
+                        .map(|c| format!("\"{c}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                format!(
+                    "• Find the rows that breach it:\n    SELECT * FROM \"{table}\" WHERE NOT ({expression});\n"
+                ),
+            ),
+            None => (format!("the column behind \"{constraint}\""), String::new()),
+        };
+        return format!(
+            "Cannot apply the bound on {what}: rows already in the table breach it.\n\n\
+             Nothing was applied. The migration runs in one transaction and rolled back, so every \
+             row is exactly as it was.\n\n\
+             What you can do:\n\
+             {find_them}\
+             • Correct or delete those rows, then push again\n\
+             • Or loosen the bound in your schema so it admits the data you already have\n\n\
+             Database error: {raw}"
+        );
+    }
+
     if let Some((column, table)) = parse_null_violation(raw) {
         return format!(
             "Cannot apply required field \"{column}\" on table \"{table}\": existing rows have no value for this column.\n\n\
@@ -118,6 +152,39 @@ fn same_type(a: &str, b: &str) -> bool {
     norm(a) == norm(b)
 }
 
+/// The constraint named in a `check_violation`.
+///
+/// Postgres phrases it as `check constraint "posts_excerpt_bounds" is violated by some row` when
+/// adding one, and `new row for relation "posts" violates check constraint "..."` when inserting.
+/// Only the first can happen during a migration, but matching both costs nothing and stops the
+/// message regressing to raw if the wording is met elsewhere.
+fn parse_check_violation(raw: &str) -> Option<&str> {
+    let marker = "check constraint \"";
+    let start = raw.find(marker)? + marker.len();
+    let rest = &raw[start..];
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// The table, the columns and the expression behind a check constraint the migration was adding.
+fn find_check_constraint<'a>(
+    diff: &'a DiffOutput,
+    constraint: &str,
+) -> Option<(&'a str, String, &'a str)> {
+    diff.operations.iter().find_map(|op| match op {
+        Operation::AddCheckConstraint {
+            table,
+            columns,
+            constraint: name,
+            expression,
+            ..
+        } if name == constraint => {
+            Some((table.as_str(), columns.join(", "), expression.as_str()))
+        }
+        _ => None,
+    })
+}
+
 fn parse_null_violation(raw: &str) -> Option<(&str, &str)> {
     if let Some((col, tail)) = raw
         .split("column \"")
@@ -143,6 +210,7 @@ fn parse_null_violation(raw: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::differ::Risk;
 
     #[test]
     fn names_the_column_behind_an_impossible_cast() {
@@ -225,5 +293,51 @@ mod tests {
     fn passes_through_unknown_errors() {
         let raw = "permission denied for table foo";
         assert_eq!(enrich_migration_error(raw, None), raw);
+    }
+
+    #[test]
+    fn names_the_rows_that_block_a_tightened_bound() {
+        let diff = DiffOutput {
+            operations: vec![Operation::AddCheckConstraint {
+                table: "posts".into(),
+                columns: vec!["excerpt".into()],
+                constraint: "posts_excerpt_bounds".into(),
+                expression: "char_length(\"excerpt\") <= 80".into(),
+                comment: "supatype:managed;kind=check".into(),
+                risk: Risk::Cautious,
+            }],
+            summary: crate::differ::DiffSummary {
+                safe: 0,
+                cautious: 1,
+                destructive: 0,
+                is_destructive: false,
+            },
+            warnings: vec![],
+            unmanaged_model_tables: vec![],
+            field_masking: crate::differ::FieldMaskingTier::None,
+            field_view_plan: Vec::new(),
+        };
+        let raw = "ERROR: check constraint \"posts_excerpt_bounds\" of relation \"posts\" is violated by some row";
+
+        let message = enrich_migration_error(raw, Some(&diff));
+
+        // The column, not just the constraint: a generated name means nothing to the author.
+        assert!(message.contains("\"posts\".\"excerpt\""), "{message}");
+        // A query they can run, with the actual bound in it.
+        assert!(
+            message.contains("SELECT * FROM \"posts\" WHERE NOT (char_length(\"excerpt\") <= 80);"),
+            "{message}"
+        );
+        // And the reassurance that matters most on a failed migration.
+        assert!(message.contains("rolled back"), "{message}");
+    }
+
+    #[test]
+    fn falls_back_gracefully_when_the_constraint_is_not_ours() {
+        let raw = "ERROR: check constraint \"legacy_manual_check\" of relation \"posts\" is violated by some row";
+        let message = enrich_migration_error(raw, None);
+        assert!(message.contains("legacy_manual_check"), "{message}");
+        // No fabricated query, because we do not know the expression.
+        assert!(!message.contains("SELECT * FROM"), "{message}");
     }
 }

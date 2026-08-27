@@ -1,4 +1,4 @@
-use super::ast::{AccessAst, IndexAst};
+use super::ast::{AccessAst, AccessRule, IndexAst};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -17,6 +17,10 @@ pub struct DbModelAnnotations {
     pub table_name: String,
     #[serde(default)]
     pub indexes: Vec<IndexAst>,
+    /// Model-level `CHECK` rules, in the same node vocabulary as access rules but with a narrower
+    /// operand set. Beside `indexes` because both are things Postgres holds, unlike `access`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<AccessRule>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

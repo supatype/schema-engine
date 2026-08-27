@@ -90,6 +90,71 @@ impl ModelAst {
     }
 }
 
+/// Every column a constraint reads, so a single-column constraint can be attributed to its field.
+pub fn columns_in(rule: &AccessRule, out: &mut Vec<String>) {
+    let mut note = |name: &String| {
+        if !out.contains(name) {
+            out.push(name.clone());
+        }
+    };
+    let mut note_operand = |operand: &Operand| match operand {
+        Operand::Column { name }
+        | Operand::Length { column: name, .. }
+        | Operand::ItemCount { column: name, .. } => note(name),
+        _ => {}
+    };
+    match rule {
+        AccessRule::Compare { left, right, .. } => {
+            note_operand(left);
+            note_operand(right);
+        }
+        AccessRule::NullCheck { operand, .. } => note_operand(operand),
+        AccessRule::Matches { column, .. } => note(column),
+        AccessRule::Any { rules } | AccessRule::All { rules } => {
+            for inner in rules {
+                columns_in(inner, out);
+            }
+        }
+        AccessRule::Not { rule } => columns_in(rule, out),
+        _ => {}
+    }
+}
+
+/// The `ScalarFieldAst` behind a field, for the twenty-five variants that wrap one.
+///
+/// Lives here because three modules had each grown their own copy with slightly different variant
+/// lists, which is how a field kind comes to be handled in one place and forgotten in another.
+pub fn scalar_of(field: &FieldAst) -> Option<&ScalarFieldAst> {
+    match field {
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Email(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f)
+        | FieldAst::Color(f) => Some(f),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FieldAst {
@@ -148,6 +213,44 @@ pub enum FieldAst {
     SoftDelete,
 }
 
+/// Constraint bounds in structured form, carried beside the SQL `check` compiled from the same
+/// `MaxLength` / `MinLength` / `Between` modifiers.
+///
+/// Postgres enforces the check; these numbers are what Studio needs to enforce the same rule in the
+/// form, before the round trip. Re-deriving them by parsing `char_length("x") <= 120` back out would
+/// be a second, lossier implementation of a fact the CLI already knows.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationAst {
+    /// Characters, or octets for a binary column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_length: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<u32>,
+    /// Elements of an array, a JSON array or a blocks field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_items: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_items: Option<u32>,
+    /// Inclusive range. A number for a numeric column, an ISO-8601 string for a temporal one, which
+    /// is why this is a `Value` and not an `f64`: narrowing it would drop every date bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<serde_json::Value>,
+}
+
+impl ValidationAst {
+    pub fn is_empty(&self) -> bool {
+        self.max_length.is_none()
+            && self.min_length.is_none()
+            && self.max_items.is_none()
+            && self.min_items.is_none()
+            && self.min.is_none()
+            && self.max.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ScalarFieldAst {
@@ -160,6 +263,8 @@ pub struct ScalarFieldAst {
     pub index: bool,
     pub default: Option<DefaultValueAst>,
     pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ValidationAst>,
     /// When true the field is stored as JSONB with locale keys, e.g. {"en": "Hello", "fr": "Bonjour"}.
     #[serde(default)]
     pub localized: bool,
@@ -183,6 +288,10 @@ pub struct SlugFieldAst {
     pub unique: bool,
     /// Source field name for slug generation trigger.
     pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ValidationAst>,
     #[serde(default)]
     pub localized: bool,
     #[serde(default)]
@@ -212,6 +321,10 @@ pub struct EnumFieldAst {
 pub struct JsonFieldAst {
     pub pg_type: String,
     pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ValidationAst>,
     #[serde(default)]
     pub localized: bool,
     #[serde(default)]
@@ -227,6 +340,10 @@ pub struct DecimalFieldAst {
     pub required: bool,
     pub precision: Option<u32>,
     pub scale: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ValidationAst>,
     #[serde(default)]
     pub localized: bool,
     #[serde(default)]
@@ -290,6 +407,10 @@ pub struct VectorFieldAst {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct BlocksFieldAst {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ValidationAst>,
     pub required: bool,
     /// Block type definitions. Each defines a named block with its own fields.
     pub blocks: Vec<BlockDefinitionAst>,
@@ -349,6 +470,10 @@ pub struct RelationFieldAst {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ArrayFieldAst {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<ValidationAst>,
     /// The Postgres element type, e.g. "TEXT", "INTEGER", "UUID".
     pub element_type: String,
     pub required: bool,
@@ -429,6 +554,12 @@ pub struct FieldAccessAst {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AccessRule {
+    /// The column matches a regular expression.
+    ///
+    /// Carries a **pattern**, never a predicate: it is rendered as the right-hand side of `~`, so
+    /// there is nothing for an author to escape out of and Studio can run the same string through
+    /// its own regex engine. A predicate here would be raw SQL under another name.
+    Matches { column: String, pattern: String },
     Public,
     Private,
     Authenticated,
@@ -541,6 +672,33 @@ pub enum Operand {
 
     /// `now() + INTERVAL 'n unit'`.
     FromNow { amount: u32, unit: TimeUnit },
+
+    /// How much of a column there is, for a model constraint.
+    ///
+    /// `form` is resolved by the CLI, which is the only layer holding both the field's kind and the
+    /// table that says what a measure means for it. The engine sees `JSONB` and cannot tell an array
+    /// from an object; re-deriving that here would be a second copy of the CLI's kind table, and the
+    /// first copy of it is what shipped `char_length(text[])`.
+    Length { column: String, form: MeasureForm },
+
+    /// How many elements a column holds. Same reasoning as {@link Operand::Length}.
+    ItemCount { column: String, form: MeasureForm },
+}
+
+/// How a column is measured, decided by the CLI from the field's kind.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasureForm {
+    /// `char_length(col)`
+    Chars,
+    /// `octet_length(col)`
+    Octets,
+    /// `char_length(_supatype.richtext_text(col))`
+    RichText,
+    /// `cardinality(col)`
+    Array,
+    /// `jsonb_array_length(col)`, guarded by `jsonb_typeof`
+    JsonbArray,
 }
 
 /// Granularity for [`Operand::StartOf`].
@@ -658,6 +816,23 @@ pub enum IndexMethod {
     Gist,
     Hnsw,
     Brin,
+}
+
+impl IndexMethod {
+    /// The access-method name Postgres uses, and reports back from `pg_am`.
+    ///
+    /// One mapping, used by the generator to build `USING <method>` and by the differ to compare a
+    /// declared index against the one the database holds. Two copies would let those two disagree
+    /// about what a method is called, and the differ would then rebuild an index on every push.
+    pub fn as_sql(&self) -> &'static str {
+        match self {
+            IndexMethod::Btree => "btree",
+            IndexMethod::Gin => "gin",
+            IndexMethod::Gist => "gist",
+            IndexMethod::Hnsw => "hnsw",
+            IndexMethod::Brin => "brin",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

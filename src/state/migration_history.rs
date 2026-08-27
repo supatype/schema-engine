@@ -501,17 +501,29 @@ pub async fn load_latest_admin_config(pool: &PgPool) -> Option<serde_json::Value
         .map(|(v,)| v)
 }
 
+/// The cached snapshot of the database, or `None` when it cannot be trusted.
+///
+/// The cache is a record of what one engine build saw, so it is only valid for that build. What the
+/// introspector reads is part of the engine's behaviour and does change: a version that skipped
+/// check constraints mentioning `IS NOT NULL` wrote snapshots missing them, and a later engine
+/// diffing against one of those snapshots would try to add a constraint the database already had,
+/// failing every push from then on. A snapshot written by any other version is therefore discarded
+/// rather than repaired, and the caller introspects instead: slower, and always right.
 pub async fn load_schema_state(
     pool: &PgPool,
 ) -> Option<crate::state::database_state::DatabaseState> {
-    let sql = format!("SELECT db_state FROM {SCHEMA}.schema_state WHERE id = 1");
-    let row: Option<(serde_json::Value,)> = sqlx::query_as(&sql)
+    let sql = format!("SELECT db_state, engine_version FROM {SCHEMA}.schema_state WHERE id = 1");
+    let row: Option<(serde_json::Value, String)> = sqlx::query_as(&sql)
         .fetch_optional(pool)
         .await
         .ok()
         .flatten();
 
-    row.and_then(|(val,)| serde_json::from_value(val).ok())
+    let (val, written_by) = row?;
+    if written_by != env!("ENGINE_VERSION") {
+        return None;
+    }
+    serde_json::from_value(val).ok()
 }
 
 pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
