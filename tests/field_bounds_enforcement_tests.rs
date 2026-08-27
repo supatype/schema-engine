@@ -15,8 +15,7 @@
 mod common;
 
 use supatype_engine::{
-    differ, generator::sql::migration, introspector, parser,
-    state::database_state::DatabaseState,
+    differ, generator::sql::migration, introspector, parser, state::database_state::DatabaseState,
 };
 
 /// One model carrying every bound shape that reaches the database, scalar and localized.
@@ -184,13 +183,16 @@ async fn every_declared_bound_is_enforced_by_the_database() {
             .expect("a row satisfying every bound must insert");
 
         for (column, value, what) in BREACHES {
-            let result = sqlx::raw_sql(&insert_with(column, value)).execute(&pool).await;
+            let result = sqlx::raw_sql(&insert_with(column, value))
+                .execute(&pool)
+                .await;
             let err = result.err().unwrap_or_else(|| {
                 panic!("{what}: the row was accepted, so the bound on \"{column}\" is not enforced")
             });
             let message = err.to_string();
             assert!(
-                message.contains("violates check constraint") || message.contains("check constraint"),
+                message.contains("violates check constraint")
+                    || message.contains("check constraint"),
                 "{what}: expected a check-constraint rejection on \"{column}\", got: {message}"
             );
         }
@@ -219,10 +221,12 @@ async fn tightening_a_bound_migrates_and_takes_effect() {
             .expect("nine characters is within MaxLength 10");
 
         // Re-diff against the live database, which is the path a real push takes.
-        let tightened = SCHEMA.replace(r#""maxLength": 10"#, r#""maxLength": 5"#).replace(
-            r#""check": "char_length(\"{name}\") <= 10""#,
-            r#""check": "char_length(\"{name}\") <= 5""#,
-        );
+        let tightened = SCHEMA
+            .replace(r#""maxLength": 10"#, r#""maxLength": 5"#)
+            .replace(
+                r#""check": "char_length(\"{name}\") <= 10""#,
+                r#""check": "char_length(\"{name}\") <= 5""#,
+            );
         let live = introspector::introspect(&pool, "public").await.unwrap();
         let migration_sql = forward_sql_for(&tightened, &live);
 
@@ -268,9 +272,21 @@ async fn tightening_a_bound_migrates_and_takes_effect() {
 /// for the wrong reason. Studio asserts the same boundaries in `bounds-parity.test.ts`, which is
 /// what makes "Studio refuses exactly what Postgres refuses" a checked claim rather than a hope.
 const AT_THE_BOUNDARY: &[(&str, &str, &str)] = &[
-    ("headline", "'exactly10!'", "char_length = 10, the MaxLength"),
-    ("tags", "ARRAY['a','b','c']", "cardinality = 3, the MaxItems"),
-    ("keywords", "'[\"one\"]'::jsonb", "jsonb_array_length = 1, the MinItems"),
+    (
+        "headline",
+        "'exactly10!'",
+        "char_length = 10, the MaxLength",
+    ),
+    (
+        "tags",
+        "ARRAY['a','b','c']",
+        "cardinality = 3, the MaxItems",
+    ),
+    (
+        "keywords",
+        "'[\"one\"]'::jsonb",
+        "jsonb_array_length = 1, the MinItems",
+    ),
     (
         "body",
         "'{\"root\":{\"children\":[{\"type\":\"text\",\"text\":\"123456789012\"}]}}'::jsonb",
@@ -278,7 +294,11 @@ const AT_THE_BOUNDARY: &[(&str, &str, &str)] = &[
     ),
     ("score", "5", "the top of Between 1..5"),
     ("score", "1", "the bottom of Between 1..5"),
-    ("event_day", "DATE '2026-12-31'", "the last day the range admits"),
+    (
+        "event_day",
+        "DATE '2026-12-31'",
+        "the last day the range admits",
+    ),
     (
         "title_i18n",
         "'{\"en\":\"exactly10!\",\"fr\":\"court\"}'::jsonb",
@@ -289,7 +309,11 @@ const AT_THE_BOUNDARY: &[(&str, &str, &str)] = &[
         "'{\"en\":[\"a\"],\"fr\":[\"b\"]}'::jsonb",
         "one item per locale, the localized MinItems",
     ),
-    ("reading_i18n", "'{\"en\":60,\"fr\":1}'::jsonb", "60, the localized maximum"),
+    (
+        "reading_i18n",
+        "'{\"en\":60,\"fr\":1}'::jsonb",
+        "60, the localized maximum",
+    ),
 ];
 
 /// Absence is legal however tight the bound: a CHECK that evaluates to NULL passes.
@@ -546,11 +570,11 @@ async fn changing_a_model_constraint_takes_effect() {
         let ast = parser::parse(&tightened).unwrap();
         let diff = differ::diff(&ast, &live_again).unwrap();
         assert!(
-            !diff
-                .operations
-                .iter()
-                .any(|op| matches!(op, differ::Operation::AddCheckConstraint { .. }
-                    | differ::Operation::DropCheckConstraint { .. })),
+            !diff.operations.iter().any(|op| matches!(
+                op,
+                differ::Operation::AddCheckConstraint { .. }
+                    | differ::Operation::DropCheckConstraint { .. }
+            )),
             "an unchanged constraint must produce no operations on the next push: {:?}",
             diff.operations
         );
@@ -592,10 +616,10 @@ async fn a_constraint_mentioning_is_not_null_is_not_lost_to_introspection() {
         let ast = parser::parse(CONSTRAINED).unwrap();
         let diff = differ::diff(&ast, &live).unwrap();
         assert!(
-            !diff.operations.iter().any(|op| matches!(
-                op,
-                differ::Operation::AddCheckConstraint { .. }
-            )),
+            !diff
+                .operations
+                .iter()
+                .any(|op| matches!(op, differ::Operation::AddCheckConstraint { .. })),
             "an unchanged constraint must not be added twice: {:?}",
             diff.operations
         );

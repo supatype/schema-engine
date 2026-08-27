@@ -7426,7 +7426,10 @@ fn test_every_bounded_kind_renders_its_own_expression() {
             "blocks",
             r#"CHECK (jsonb_typeof("sections") = 'array' AND jsonb_array_length("sections") >= 1)"#,
         ),
-        ("richText", r#"CHECK (char_length(_supatype.richtext_text("body")) <= 320)"#),
+        (
+            "richText",
+            r#"CHECK (char_length(_supatype.richtext_text("body")) <= 320)"#,
+        ),
         ("integer", r#"CHECK (("score" >= 1) AND ("score" <= 5))"#),
         (
             "date",
@@ -7700,7 +7703,9 @@ fn test_changing_a_bound_on_an_existing_column() {
 {forward}"
     );
     assert!(
-        forward.contains(r#"ADD CONSTRAINT "posts_excerpt_bounds" CHECK (char_length("excerpt") <= 80)"#),
+        forward.contains(
+            r#"ADD CONSTRAINT "posts_excerpt_bounds" CHECK (char_length("excerpt") <= 80)"#
+        ),
         "the tightened bound must be added:
 {forward}"
     );
@@ -7710,8 +7715,11 @@ fn test_changing_a_bound_on_an_existing_column() {
     let add_at = forward
         .find(r#"ADD CONSTRAINT "posts_excerpt_bounds""#)
         .unwrap();
-    assert!(drop_at < add_at, "the drop must precede the add:
-{forward}");
+    assert!(
+        drop_at < add_at,
+        "the drop must precede the add:
+{forward}"
+    );
 
     // The replacement is stamped, or the next push sees no fingerprint and churns again.
     assert!(
@@ -7797,7 +7805,10 @@ fn test_model_constraints_render_as_table_checks() {
     }
 
     // Combinators nest, and each constraint is stamped so a change to it is diffable.
-    assert!(forward.contains(r#""events_check_5" CHECK ((("sku" = 'AAA') OR ("sku" IS NOT NULL)))"#), "{forward}");
+    assert!(
+        forward.contains(r#""events_check_5" CHECK ((("sku" = 'AAA') OR ("sku" IS NOT NULL)))"#),
+        "{forward}"
+    );
     for index in 1..=5 {
         assert!(
             forward.contains(&format!("COMMENT ON CONSTRAINT \"events_check_{index}\"")),
@@ -8185,7 +8196,10 @@ fn test_a_changed_model_constraint_is_dropped_and_recreated() {
         .find(r#"DROP CONSTRAINT IF EXISTS "events_check_1""#)
         .unwrap();
     let add_at = forward.find(r#"ADD CONSTRAINT "events_check_1""#).unwrap();
-    assert!(drop_at < add_at, "the drop must precede the add:\n{forward}");
+    assert!(
+        drop_at < add_at,
+        "the drop must precede the add:\n{forward}"
+    );
 }
 
 #[test]

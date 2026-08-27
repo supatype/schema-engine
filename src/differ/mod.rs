@@ -1,5 +1,5 @@
-pub mod column_diff;
 pub mod check_diff;
+pub mod column_diff;
 pub mod constraint_diff;
 pub mod doctor;
 pub mod enum_diff;

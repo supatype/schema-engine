@@ -193,7 +193,6 @@ fn test_existing_index_not_regenerated_when_name_matches() {
     );
 }
 
-
 /// An index whose *shape* changed has to be rebuilt, not matched by name and skipped.
 ///
 /// The declared-index check was a name lookup, so adding `unique: true` to an index that already
@@ -246,13 +245,18 @@ fn test_index_rebuilt_when_uniqueness_changes() {
     let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
     let drop_at = sql
         .find(r#"DROP INDEX IF EXISTS "public"."posts_author_id_idx""#)
-        .expect(&format!("rebuild must drop the old index:
-{sql}"));
+        .expect(&format!(
+            "rebuild must drop the old index:
+{sql}"
+        ));
     let create_at = sql
         .find(r#"INDEX IF NOT EXISTS "posts_author_id_idx""#)
         .expect("rebuild must create the new index");
-    assert!(drop_at < create_at, "the drop has to come first:
-{sql}");
+    assert!(
+        drop_at < create_at,
+        "the drop has to come first:
+{sql}"
+    );
 }
 
 /// The same lookup, on the column list rather than uniqueness.

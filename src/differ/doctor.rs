@@ -134,7 +134,10 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
         if expression.contains("IS NOT NULL") {
             continue;
         }
-        let will_add = expected_checks.get(constraint.table.as_str()).copied().unwrap_or(0);
+        let will_add = expected_checks
+            .get(constraint.table.as_str())
+            .copied()
+            .unwrap_or(0);
         unmanaged_drift.push(DoctorItem {
             kind: "check_constraint".into(),
             table: constraint.table.clone(),

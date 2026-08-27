@@ -1,6 +1,6 @@
 use super::{Operation, Risk};
-use crate::managed::{expected_model_index_name, is_managed_comment};
 use crate::introspector::indexes::DbIndex;
+use crate::managed::{expected_model_index_name, is_managed_comment};
 use crate::parser::ast::{IndexAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;

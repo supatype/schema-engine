@@ -29,10 +29,7 @@ pub fn measure_expr(column: &str, form: MeasureForm) -> String {
 /// check. Returns the guard that must be ANDed in front of any comparison using this operand.
 fn measure_guard(column: &str, form: MeasureForm) -> Option<String> {
     match form {
-        MeasureForm::JsonbArray => Some(format!(
-            "jsonb_typeof({}) = 'array'",
-            quote_ident(column)
-        )),
+        MeasureForm::JsonbArray => Some(format!("jsonb_typeof({}) = 'array'", quote_ident(column))),
         _ => None,
     }
 }

@@ -619,7 +619,6 @@ fn field_sortable(field: &FieldAst) -> bool {
     )
 }
 
-
 /// Studio-facing bounds for a field, or `None` when it declares no constraint modifier.
 ///
 /// Studio widgets have read `config.validation` since the admin panel was built; until this existed

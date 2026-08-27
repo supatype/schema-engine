@@ -58,7 +58,11 @@ fn localized_helpers() -> String {
     const MEASURES: [(&str, &str, &str); 5] = [
         // (name, argument type, expression over each locale's value)
         ("length", "integer", "char_length(value)"),
-        ("richtext_length", "integer", "char_length({schema}.richtext_text(value::jsonb))"),
+        (
+            "richtext_length",
+            "integer",
+            "char_length({schema}.richtext_text(value::jsonb))",
+        ),
         ("items", "integer", "jsonb_array_length(value::jsonb)"),
         ("number", "numeric", "value::numeric"),
         // A localized temporal value is one ISO string per locale. Comparing through `timestamptz`
@@ -73,7 +77,11 @@ fn localized_helpers() -> String {
             let expr = measure.replace("{schema}", HELPER_SCHEMA);
             // The temporal helper takes its bound as text so one function serves every date and
             // time column; it casts both sides rather than trusting the argument's declared type.
-            let rhs = if name == "temporal" { "n::timestamptz" } else { "n" };
+            let rhs = if name == "temporal" {
+                "n::timestamptz"
+            } else {
+                "n"
+            };
             out.push(format!(
                 "CREATE OR REPLACE FUNCTION {HELPER_SCHEMA}.localized_{name}_{direction}(v jsonb, n {arg_type})\n\
                  RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT AS $fn$\n\
@@ -106,7 +114,10 @@ mod tests {
     #[test]
     fn every_helper_is_schema_qualified() {
         let sql = generate();
-        for line in sql.lines().filter(|l| l.contains("CREATE OR REPLACE FUNCTION")) {
+        for line in sql
+            .lines()
+            .filter(|l| l.contains("CREATE OR REPLACE FUNCTION"))
+        {
             assert!(
                 line.contains(&format!("FUNCTION {HELPER_SCHEMA}.")),
                 "an unqualified helper stops resolving when search_path is empty, which is what a \

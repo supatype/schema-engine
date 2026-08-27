@@ -6,13 +6,13 @@ use crate::generator::sql::column_conversion::{
 };
 use crate::managed::{
     comment_on_constraint_sql, comment_on_index_sql, expected_check_constraint_name,
-    expected_model_constraint_name,
-    expected_unique_constraint_name, managed_check_comment, managed_comment,
+    expected_model_constraint_name, expected_unique_constraint_name, managed_check_comment,
+    managed_comment,
 };
 use crate::parser::accessors::db_unique;
 use crate::parser::ast::{
-    AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality,
-    scalar_of, RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
+    scalar_of, AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst,
+    RelationCardinality, RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
 };
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
@@ -968,7 +968,10 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
                 col_defs.push("    \"deleted_at\" TIMESTAMPTZ".into());
             }
             other => {
-                col_defs.push(format!("    {}", field_to_column_def(table, field_name, other)?));
+                col_defs.push(format!(
+                    "    {}",
+                    field_to_column_def(table, field_name, other)?
+                ));
             }
         }
     }
@@ -1036,7 +1039,6 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
             ));
         }
     }
-
 
     // Model-level constraints, as named table constraints stamped like the column bounds. Named for
     // the same reason: the name is how the differ finds it again, and the fingerprinted comment is
@@ -1459,10 +1461,15 @@ fn localized_measure(v: &ValidationAst, pg_type: &str, rich_text: bool) -> &'sta
         return "items";
     }
     if v.max_length.is_some() || v.min_length.is_some() {
-        return if rich_text { "richtext_length" } else { "length" };
+        return if rich_text {
+            "richtext_length"
+        } else {
+            "length"
+        };
     }
     let upper = pg_type.to_uppercase();
-    if upper.starts_with("DATE") || upper.starts_with("TIMESTAMP") || upper.starts_with("INTERVAL") {
+    if upper.starts_with("DATE") || upper.starts_with("TIMESTAMP") || upper.starts_with("INTERVAL")
+    {
         "temporal"
     } else {
         "number"
@@ -1526,7 +1533,13 @@ fn localized_check(
     Some(clauses.join(" AND "))
 }
 
-fn scalar_col(table: &str, name: &str, pg_type: &str, f: &ScalarFieldAst, rich_text: bool) -> String {
+fn scalar_col(
+    table: &str,
+    name: &str,
+    pg_type: &str,
+    f: &ScalarFieldAst,
+    rich_text: bool,
+) -> String {
     // Localized fields are stored as JSONB regardless of their base type.
     let effective_type = if f.localized { "JSONB" } else { pg_type };
     let pk = if f.primary_key { " PRIMARY KEY" } else { "" };

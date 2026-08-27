@@ -225,7 +225,10 @@ fn auth_helpers_are_emitted_on_a_push_that_touches_no_policy() {
                 | differ::Operation::DropRlsPolicy { .. }
         )
     });
-    assert!(rls_ops, "the fixture must carry RLS ops, or the contrast is empty");
+    assert!(
+        rls_ops,
+        "the fixture must carry RLS ops, or the contrast is empty"
+    );
 
     // The same push once its policies are already in place: everything else still to do, no RLS
     // operation left to hang the helpers off.

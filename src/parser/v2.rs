@@ -1,9 +1,9 @@
 use super::annotations::{DbFieldAnnotations, FieldAnnotations, ModelAnnotations};
 use super::ast::{
-    ArrayFieldAst, BlockDefinitionAst, BlocksFieldAst, CustomFieldAst, DecimalFieldAst,
+    scalar_of, ArrayFieldAst, BlockDefinitionAst, BlocksFieldAst, CustomFieldAst, DecimalFieldAst,
     DefaultValueAst, EnumFieldAst, FieldAst, GeoFieldAst, JsonFieldAst, ModelAst, ModelOptions,
     RelationCardinality, RelationFieldAst, ScalarFieldAst, SchemaAst, SlugFieldAst,
-    scalar_of, StorageAccessMode, StorageFieldAst, ValidationAst, VectorFieldAst,
+    StorageAccessMode, StorageFieldAst, ValidationAst, VectorFieldAst,
 };
 use anyhow::{bail, Context, Result};
 use indexmap::IndexMap;
@@ -121,7 +121,6 @@ fn carried_check(field: &FieldAst) -> Option<&str> {
         other => scalar_of(other).and_then(|f| f.check.as_deref()),
     }
 }
-
 
 fn deserialize_field(value: &Value) -> Result<FieldAst> {
     let kind = value

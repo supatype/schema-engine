@@ -559,7 +559,10 @@ pub enum AccessRule {
     /// Carries a **pattern**, never a predicate: it is rendered as the right-hand side of `~`, so
     /// there is nothing for an author to escape out of and Studio can run the same string through
     /// its own regex engine. A predicate here would be raw SQL under another name.
-    Matches { column: String, pattern: String },
+    Matches {
+        column: String,
+        pattern: String,
+    },
     Public,
     Private,
     Authenticated,

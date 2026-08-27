@@ -178,9 +178,7 @@ fn find_check_constraint<'a>(
             constraint: name,
             expression,
             ..
-        } if name == constraint => {
-            Some((table.as_str(), columns.join(", "), expression.as_str()))
-        }
+        } if name == constraint => Some((table.as_str(), columns.join(", "), expression.as_str())),
         _ => None,
     })
 }
