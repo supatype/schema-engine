@@ -371,6 +371,16 @@ async fn main() -> Result<()> {
             }
 
             if diff.operations.is_empty() {
+                // Rendered before anything is applied, so a schema whose versioned models have no
+                // stated visibility fails the push rather than half-applying it.
+                //
+                // Applied on this path at all because the publishing layer is exactly the kind of
+                // change that produces no DDL: widening `draft_visibility` in the config alters no
+                // table, so a steady-state push is the only push that will ever carry it. Skipping
+                // it here would mean a security setting that reads as applied and is not.
+                let versions_sql =
+                    supatype_engine::generator::sql::versions::render_versions_layer(&ast, &schema)?;
+
                 // Storage materialization is not part of the model diff; apply it before the
                 // admin-only migration refresh path.
                 sqlx::raw_sql(&storage_sql)
@@ -387,6 +397,13 @@ async fn main() -> Result<()> {
                     .execute(&pool)
                     .await
                     .context("Failed to apply trigger functions")?;
+
+                if !versions_sql.trim().is_empty() {
+                    sqlx::raw_sql(&versions_sql)
+                        .execute(&pool)
+                        .await
+                        .context("Failed to apply drafts and publishing layer")?;
+                }
 
                 // AST-only changes (widgets, labels, etc.) still need admin_config / snapshot
                 // so Studio and tooling see the latest schema without a DDL migration.

@@ -19,6 +19,11 @@ pub struct SchemaAst {
     pub plugins: Vec<PluginRegistrationAst>,
     /// SSO / OIDC provider configuration.
     pub sso: Option<SsoConfigAst>,
+    /// Draft visibility and preview-link bounds, from the project config.
+    ///
+    /// `None` when the project sent none, which is correct for a schema with no versioned model and
+    /// an error for one that has: see [`PublishingAst`].
+    pub publishing: Option<PublishingAst>,
     /// Warnings from parse/validation.
     pub warnings: Vec<String>,
 }
@@ -799,6 +804,54 @@ pub struct ModelOptions {
     /// When true the model is a singleton (global config) — exactly one row enforced.
     #[serde(default)]
     pub singleton: bool,
+    /// Drafts and version history, when the model declares `versions`.
+    ///
+    /// Absent for every model that does not, which is the common case: versioning doubles writes and
+    /// adds a table per model, so it is opt-in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions: Option<VersionsAst>,
+}
+
+/// What a model's `versions` declaration asked for.
+///
+/// The CLI normalises `versions: true` into this before it reaches the engine, so there is one shape
+/// here rather than a bool-or-object union to match on.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionsAst {
+    /// Editing writes a draft version rather than the live row.
+    ///
+    /// `false` keeps the history and writes straight through: the audit-trail case, where every
+    /// change is recorded and nothing is withheld from readers. No draft view is generated then,
+    /// because there is never a pending version to read.
+    pub drafts: bool,
+    /// Versions kept per record, oldest pruned beyond it.
+    pub keep: u32,
+}
+
+/// Who may see a draft, and how long a preview link lives.
+///
+/// Project-wide rather than per model, and **required whenever a versioned model's DDL is
+/// rendered**: the alternative is a default applied silently, and the default here is a security
+/// boundary. A CLI path that forgets to send it gets an error naming the omission rather than a
+/// narrower policy than the project asked for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishingAst {
+    /// Studio roles that see every draft, beyond each record's own creator.
+    ///
+    /// The creator is not listed and cannot be removed: they wrote the draft. An empty list is
+    /// meaningful and means creators only, so emptiness is not a fallback.
+    #[serde(default)]
+    pub draft_visibility: Vec<String>,
+    /// Default lifetime of a minted preview link, in seconds.
+    pub preview_default_ttl: u32,
+    /// Ceiling for a link covering one record, in seconds.
+    pub preview_max_record_ttl: u32,
+    /// Ceiling for a link covering every draft in the project, in seconds.
+    pub preview_max_project_ttl: u32,
+    /// Whether project-scoped links may be minted at all.
+    pub preview_allow_project_scope: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

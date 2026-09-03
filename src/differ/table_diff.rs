@@ -33,15 +33,22 @@ pub fn diff(
 ) -> Result<()> {
     let db_table_names: std::collections::HashSet<&str> =
         db.tables.iter().map(|t| t.name.as_str()).collect();
-
     // Junction tables are first-class schema objects — include them so the
     // "removed table" pass does not drop live M2M tables as orphans (and then
     // skip recreate because they still appear in the initial db snapshot).
+    //
+    // Snapshot tables likewise, and there the stakes are higher: they carry the managed marker, so
+    // the ownership gate below is no protection at all, and dropping one takes every version of
+    // every record with it. A model that *stops* declaring `versions` does fall out of this set, so
+    // its history is dropped — destructively, which needs `--force`, which is the right ceremony for
+    // deliberately discarding history.
+    let versions_tables = crate::generator::sql::versions::versions_tables(ast);
     let schema_table_names: std::collections::HashSet<&str> = ast
         .models
         .iter()
         .map(|m| m.table_name())
         .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
+        .chain(versions_tables.iter().map(String::as_str))
         .collect();
 
     // Build a set of existing FK constraint names for fast lookup
@@ -214,7 +221,42 @@ pub fn diff(
         }
     }
 
+    // One snapshot table per versioned model, created when absent.
+    //
+    // `record_id` follows the model's own primary key rather than assuming `UUID`: a model keyed by
+    // a `Serial` would otherwise get a foreign key Postgres refuses to create, and the push would
+    // fail on a type mismatch that names neither the model nor the reason.
+    for model in crate::generator::sql::versions::versioned_models(ast) {
+        let table = model.table_name();
+        let versions_table = crate::generator::sql::versions::versions_table_name(table);
+        if db_table_names.contains(versions_table.as_str()) {
+            continue;
+        }
+        let (primary_key, record_id_type) = versions_record_id(model);
+        ops.push(Operation::CreateVersionsTable {
+            table: table.to_string(),
+            versions_table,
+            record_id_type,
+            primary_key,
+            risk: Risk::Safe,
+        });
+    }
+
     Ok(())
+}
+
+/// The column and type `record_id` has to match, from the model's declared primary key.
+///
+/// Falls back to `id UUID`, which is what every scaffolded model has, rather than failing: a model
+/// with no primary key at all cannot be versioned meaningfully and will have failed earlier for
+/// reasons that name the real problem.
+fn versions_record_id(model: &crate::parser::ast::ModelAst) -> (String, String) {
+    model
+        .fields
+        .iter()
+        .find(|(_, field)| column_diff::field_is_primary_key(field))
+        .map(|(name, field)| (name.clone(), column_diff::field_pg_type(field)))
+        .unwrap_or_else(|| ("id".to_string(), "UUID".to_string()))
 }
 
 fn previous_model<'a>(

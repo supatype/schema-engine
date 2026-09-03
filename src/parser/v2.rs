@@ -49,6 +49,10 @@ pub fn deserialize_schema(value: &Value) -> Result<SchemaAst> {
             .get("sso")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?,
+        publishing: value
+            .get("publishing")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()?,
         warnings: deserialize_optional_string_vec(value, "warnings"),
     })
 }
@@ -748,6 +752,9 @@ pub fn serialize_schema(ast: &SchemaAst) -> Value {
     }
     if let Some(ref sso) = ast.sso {
         root["sso"] = serde_json::to_value(sso).unwrap_or(Value::Null);
+    }
+    if let Some(ref publishing) = ast.publishing {
+        root["publishing"] = serde_json::to_value(publishing).unwrap_or(Value::Null);
     }
     if !ast.warnings.is_empty() {
         root["warnings"] = serde_json::to_value(&ast.warnings).unwrap_or(Value::Null);

@@ -401,6 +401,7 @@ fn render_forward_operation_lines(
             | Operation::CreateTrigger { risk, .. }
             | Operation::DropTrigger { risk, .. }
             | Operation::CreateJunctionTable { risk, .. }
+            | Operation::CreateVersionsTable { risk, .. }
             | Operation::EnableExtension { risk, .. } => match risk {
                 Risk::Safe => "safe",
                 Risk::Cautious => "cautious",
@@ -449,8 +450,24 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
         schema,
         &diff.unmanaged_model_tables,
     ));
+    // Last, because it reads the snapshot tables the operations above create and the model tables
+    // they reference. Errors rather than warns when the push failed to state who may see a draft.
+    lines.extend(render_versions_lines(ast, schema)?);
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
+}
+
+/// The drafts and publishing layer, when this schema has a versioned model.
+fn render_versions_lines(ast: &SchemaAst, schema: &str) -> Result<Vec<String>> {
+    let sql = crate::generator::sql::versions::render_versions_layer(ast, schema)?;
+    if sql.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(vec![
+        "-- Drafts, version history and publishing".into(),
+        sql.trim_end().into(),
+        String::new(),
+    ])
 }
 
 fn op_description(op: &Operation) -> String {
@@ -518,6 +535,9 @@ fn op_description(op: &Operation) -> String {
         }
         Operation::DropTrigger { table, trigger, .. } => format!("Drop trigger: {table}.{trigger}"),
         Operation::CreateJunctionTable { table, .. } => format!("Create junction table: {table}"),
+        Operation::CreateVersionsTable { versions_table, .. } => {
+            format!("Create versions table: {versions_table}")
+        }
         Operation::EnableExtension { name, .. } => format!("Enable extension: {name}"),
     }
 }
@@ -915,6 +935,19 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
                  COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{marker}';"
             ))
         }
+        Operation::CreateVersionsTable {
+            table,
+            versions_table,
+            record_id_type,
+            primary_key,
+            ..
+        } => Ok(crate::generator::sql::versions::create_versions_table_sql(
+            schema,
+            table,
+            versions_table,
+            record_id_type,
+            primary_key,
+        )),
         Operation::EnableExtension { name, .. } => {
             Ok(format!("CREATE EXTENSION IF NOT EXISTS \"{name}\";"))
         }
@@ -1901,39 +1934,8 @@ fn model_primary_key<'a>(ast: &'a SchemaAst, model_name: &str) -> Option<(&'a st
     model
         .fields
         .iter()
-        .find(|(_, f)| field_is_primary_key(f))
+        .find(|(_, f)| crate::differ::column_diff::field_is_primary_key(f))
         .map(|(name, field)| (name.as_str(), field))
-}
-
-fn field_is_primary_key(field: &FieldAst) -> bool {
-    match field {
-        FieldAst::Text(s)
-        | FieldAst::RichText(s)
-        | FieldAst::Integer(s)
-        | FieldAst::Float(s)
-        | FieldAst::Boolean(s)
-        | FieldAst::Datetime(s)
-        | FieldAst::Uuid(s)
-        | FieldAst::Email(s)
-        | FieldAst::BigInt(s)
-        | FieldAst::Bytes(s)
-        | FieldAst::SmallInt(s)
-        | FieldAst::Date(s)
-        | FieldAst::Timestamp(s)
-        | FieldAst::Serial(s)
-        | FieldAst::BigSerial(s)
-        | FieldAst::Money(s)
-        | FieldAst::Url(s)
-        | FieldAst::Ip(s)
-        | FieldAst::Cidr(s)
-        | FieldAst::Macaddr(s)
-        | FieldAst::Interval(s)
-        | FieldAst::TsQuery(s)
-        | FieldAst::TsVector(s)
-        | FieldAst::Xml(s)
-        | FieldAst::Color(s) => s.primary_key,
-        _ => false,
-    }
 }
 
 fn to_snake_case(s: &str) -> String {
