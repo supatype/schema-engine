@@ -417,3 +417,118 @@ async fn an_audit_model_records_every_write_and_refuses_drafts() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_localized_field_survives_the_snapshot_round_trip_and_publishes_whole() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // A localized field is one JSONB column holding every locale, so a snapshot is JSONB
+            // inside JSONB. That is where a round trip goes wrong: `to_jsonb` then
+            // `jsonb_populate_record` can double-encode, and the column comes back as a string
+            // containing JSON rather than as the locale record.
+            sqlx::query(
+                "UPDATE public.posts SET body = '{\"en\": \"English\", \"fr\": \"Francais\"}'::jsonb
+                  WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .execute(&mut *db)
+            .await
+            .expect("seed both locales");
+
+            // Edit one locale only. The other must survive, because the merge base is the whole row.
+            save_draft(db, r#"{"body": {"en": "Edited English", "fr": "Francais"}}"#).await;
+
+            let drafted: (Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr' FROM draft.posts WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the draft view");
+            assert_eq!(
+                drafted,
+                (Some("Edited English".into()), Some("Francais".into())),
+                "the locale record must come back as an object, not as a string of JSON"
+            );
+
+            publish(db).await.expect("publish");
+
+            // Publication is per record, not per locale: both locales go live together, because
+            // they share one column and `published_at` is one column on the row.
+            let live: (Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the live row");
+            assert_eq!(
+                live,
+                (Some("Edited English".into()), Some("Francais".into())),
+                "publishing must move every locale, and must not stringify the record"
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn any_version_can_be_restored_including_one_from_the_middle_of_a_history() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            for title in ["One", "Two", "Three", "Four", "Five"] {
+                save_draft(db, &format!(r#"{{"title": "{title}"}}"#)).await;
+            }
+            publish(db).await.expect("publish the newest");
+            assert_eq!(live_title(db).await, "Five");
+
+            // Not just the first or the last: a version from the middle, while a later one is live.
+            sqlx::query("SELECT supatype.restore_version('posts', $1, 2)")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("restore version 2");
+
+            assert_eq!(
+                draft_title(db).await.as_deref(),
+                Some("Two"),
+                "the restored version becomes the working draft"
+            );
+            assert_eq!(
+                live_title(db).await,
+                "Five",
+                "and nothing has gone live without a publish"
+            );
+
+            // Publishing then promotes exactly what was restored, so "publish version 2" is
+            // restore-then-publish rather than a version argument on publish: the newest version
+            // stays the one that says what the state is.
+            publish(db).await.expect("publish the restored draft");
+            assert_eq!(live_title(db).await, "Two");
+
+            let history: Vec<(i32, String)> = sqlx::query_as(
+                "SELECT version, status FROM public.posts_versions
+                  WHERE record_id = $1::uuid ORDER BY version",
+            )
+            .bind(POST)
+            .fetch_all(&mut *db)
+            .await
+            .expect("read history");
+            assert_eq!(
+                history.len(),
+                6,
+                "restoring appends rather than rewriting, so the act is in the history too"
+            );
+            assert_eq!(history[5].1, "published");
+
+            // And a version that was never written is refused rather than silently doing nothing.
+            let err = sqlx::query("SELECT supatype.restore_version('posts', $1, 99)")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect_err("a version that does not exist must be refused");
+            assert!(format!("{err}").contains("no version"), "got {err}");
+        })
+    })
+    .await;
+}

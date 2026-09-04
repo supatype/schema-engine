@@ -23,6 +23,12 @@
           "required": true,
           "annotations": { "db": { "pgType": "TEXT", "unique": false, "index": false } }
         },
+        "body": {
+          "kind": "richText",
+          "required": false,
+          "localized": true,
+          "annotations": { "db": { "pgType": "JSONB", "unique": false, "index": false } }
+        },
         "published_at": {
           "kind": "timestamp",
           "required": false,
