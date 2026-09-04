@@ -714,3 +714,215 @@ async fn publishing_a_version_that_was_never_written_is_refused() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_scheduled_publish_waits_and_then_fires() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"title": "Goes live at nine"}"#).await;
+
+            sqlx::query("SELECT supatype.schedule_publish('posts', $1, now() + interval '1 hour')")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("schedule");
+
+            // Scheduling publishes nothing: it records an intent that the job acts on.
+            assert_eq!(live_title(db).await, "First cut");
+
+            // Nothing is due yet, so a run does nothing rather than publishing early.
+            let fired: i32 = sqlx::query_scalar("SELECT _supatype.run_due_publishes()")
+                .fetch_one(&mut *db)
+                .await
+                .expect("run the job");
+            assert_eq!(fired, 0);
+            assert_eq!(live_title(db).await, "First cut");
+
+            // Ask the job what it would do an hour from now. Passing the clock in is what makes the
+            // job testable at all: waiting an hour is not a test.
+            let fired: i32 =
+                sqlx::query_scalar("SELECT _supatype.run_due_publishes(now() + interval '2 hours')")
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("run the job");
+            assert_eq!(fired, 1);
+            assert_eq!(live_title(db).await, "Goes live at nine");
+
+            // The schedule is consumed, so a second run does not publish it again.
+            let again: i32 =
+                sqlx::query_scalar("SELECT _supatype.run_due_publishes(now() + interval '2 hours')")
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("run the job again");
+            assert_eq!(again, 0);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn one_locale_can_be_scheduled_while_another_is_already_live() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"body": {"en": "Now", "fr": "Plus tard"}}"#).await;
+            sqlx::query("SELECT supatype.publish('posts', $1, NULL, ARRAY['en'])")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("publish English now");
+
+            sqlx::query(
+                "SELECT supatype.schedule_publish('posts', $1, now() + interval '1 hour', NULL,
+                                                  ARRAY['fr'])",
+            )
+            .bind(POST)
+            .execute(&mut *db)
+            .await
+            .expect("schedule French");
+
+            let before: (Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the live row");
+            assert_eq!(before.0.as_deref(), Some("Now"));
+            assert_eq!(before.1, None, "the translation is scheduled, not live");
+
+            sqlx::query("SELECT _supatype.run_due_publishes(now() + interval '2 hours')")
+                .execute(&mut *db)
+                .await
+                .expect("run the job");
+
+            let after: (Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the live row");
+            assert_eq!(after.0.as_deref(), Some("Now"), "English is untouched");
+            assert_eq!(after.1.as_deref(), Some("Plus tard"));
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_schedule_can_be_withdrawn_without_publishing() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"title": "Not yet"}"#).await;
+            sqlx::query("SELECT supatype.schedule_publish('posts', $1, now() + interval '1 hour')")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("schedule");
+            sqlx::query("SELECT supatype.unschedule_publish('posts', $1)")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("unschedule");
+
+            let fired: i32 =
+                sqlx::query_scalar("SELECT _supatype.run_due_publishes(now() + interval '2 hours')")
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("run the job");
+            assert_eq!(fired, 0);
+            assert_eq!(live_title(db).await, "First cut");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn retention_prunes_old_versions_but_never_the_newest_or_the_live_one() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // The fixture keeps 5.
+            for n in 1..=8 {
+                save_draft(db, &format!(r#"{{"title": "v{n}"}}"#)).await;
+            }
+            // Publish version 2, so an *old* version is the live one and must survive pruning even
+            // though retention would otherwise reach it.
+            sqlx::query("SELECT supatype.publish('posts', $1, 2)")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("publish version 2");
+
+            sqlx::query("SELECT _supatype.prune_versions()")
+                .execute(&mut *db)
+                .await
+                .expect("prune");
+
+            let kept: Vec<i32> = sqlx::query_scalar(
+                "SELECT version FROM public.posts_versions WHERE record_id = $1::uuid
+                  ORDER BY version",
+            )
+            .bind(POST)
+            .fetch_all(&mut *db)
+            .await
+            .expect("read the surviving versions");
+
+            assert!(
+                kept.contains(&8),
+                "the newest must survive: a draft read and a publish both work from it"
+            );
+            assert!(
+                kept.contains(&2),
+                "the live version must survive: it is the only record of what the world is seeing"
+            );
+            assert!(
+                !kept.contains(&1),
+                "retention of 5 over 8 versions must actually remove something; kept {kept:?}"
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_scheduler_is_wired_up_when_the_database_has_one() {
+    common::with_integration_pool(|pool| async move {
+        let mut conn = pool.acquire().await.expect("acquire");
+        // `pg_cron` needs shared_preload_libraries, so it is available in the supatype image and
+        // absent almost everywhere else. Install it here and assert the push schedules the jobs;
+        // the degrade path is the same code with the `pg_extension` check failing.
+        if sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS pg_cron")
+            .execute(&mut *conn)
+            .await
+            .is_err()
+        {
+            eprintln!("SKIP scheduler wiring: this image cannot load pg_cron");
+            return;
+        }
+
+        let _guard = FIXTURE_LOCK.lock().await;
+        apply_and_seed(&mut conn).await;
+
+        let jobs: Vec<String> = sqlx::query_scalar(
+            "SELECT jobname FROM cron.job WHERE jobname LIKE 'supatype-%' ORDER BY jobname",
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .expect("read cron.job");
+        assert_eq!(
+            jobs,
+            vec!["supatype-prune-versions", "supatype-scheduled-publish"],
+            "a push must register both jobs when the database can run them"
+        );
+
+        // Re-emitted on every push, and it has to converge rather than stack a second copy.
+        apply_and_seed(&mut conn).await;
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM cron.job WHERE jobname LIKE 'supatype-%'")
+                .fetch_one(&mut *conn)
+                .await
+                .expect("count jobs");
+        assert_eq!(count, 2, "a second push must not add a second copy of each job");
+    })
+    .await;
+}

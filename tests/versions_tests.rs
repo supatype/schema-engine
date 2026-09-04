@@ -332,3 +332,38 @@ fn a_masked_model_and_a_versioned_model_can_share_a_schema() {
     assert!(versions::assert_no_versions_with_field_rules(&ast).is_ok());
     assert!(versions::has_versions(&ast));
 }
+
+// ─── The admin config's publishing flag ───────────────────────────────────────
+
+#[test]
+fn studio_learns_publishing_from_versions_not_from_a_field_named_publishable() {
+    // The regression this replaces: `has_composite(model, "publishable")` was true only when a
+    // model had a *field* called `publishable`, which nothing but the deleted builder API emitted.
+    // So a model got its `published_at` column and no publish widget, and the feature read as
+    // present in the schema while being absent from the UI.
+    let ast = versioned_ast();
+    let config = supatype_engine::generator::typescript::admin::generate(&ast).unwrap();
+    let models = config["models"].as_array().expect("models");
+
+    let post = models.iter().find(|m| m["name"] == "Post").expect("Post");
+    assert_eq!(post["publishing"], serde_json::json!(true));
+    assert_eq!(post["versions"]["drafts"], serde_json::json!(true));
+    assert_eq!(post["versions"]["keep"], serde_json::json!(5));
+    assert_eq!(post["versions"]["versionsTable"], serde_json::json!("posts_versions"));
+    assert_eq!(
+        post["versions"]["localizedColumns"],
+        serde_json::json!(["body"]),
+        "a control that says `publish English` has to know which columns English is a key of"
+    );
+
+    let ledger = models.iter().find(|m| m["name"] == "Ledger").expect("Ledger");
+    assert_eq!(
+        ledger["versions"]["drafts"],
+        serde_json::json!(false),
+        "an audit model keeps history and withholds nothing, so its editor must not offer a draft"
+    );
+
+    let tag = models.iter().find(|m| m["name"] == "Tag").expect("Tag");
+    assert_eq!(tag["publishing"], serde_json::json!(false));
+    assert!(tag["versions"].is_null(), "an unversioned model gets no publish control");
+}

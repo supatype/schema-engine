@@ -159,7 +159,10 @@ pub fn create_versions_table_sql(
          \"version\" INTEGER NOT NULL,\n    \
          \"status\" TEXT NOT NULL CHECK (\"status\" IN ('draft', 'published')),\n    \
          \"data\" JSONB NOT NULL,\n    \
-         \"publish_at\" TIMESTAMPTZ,\n    \
+         -- When each locale is due to go live, if it has been scheduled.\n    \
+         -- Per locale rather than one `publish_at` for the row, because publishing is per locale:\n    \
+         -- a single column could not say: English at nine, the translation when it lands.\n    \
+         \"scheduled_locales\" JSONB NOT NULL DEFAULT '{{}}',\n    \
          \"created_at\" TIMESTAMPTZ NOT NULL DEFAULT now(),\n    \
          \"created_by\" UUID,\n    \
          -- Which locales this version is live for, and when each went live.\n    \
@@ -478,6 +481,9 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
         }
     }
 
+    // Last, because both jobs call functions defined above them.
+    out.push_str(&cron_jobs_sql());
+
     Ok(out)
 }
 
@@ -715,7 +721,8 @@ fn draft_aware_select_policy_sql(
 ///   submitted for them is discarded. So a direct insert is a draft save and cannot be a forged
 ///   published version, a version renumbered over someone else's, or a snapshot attributed to
 ///   another author.
-/// * **On update**, only `status` and `publish_at` may change. `data` and `created_by` are restored
+/// * **On update**, only the publishing state may change: `status`, `published_locales` and
+///   `scheduled_locales`. `data` and `created_by` are restored
 ///   from the stored row, so history cannot be rewritten by whoever can still edit the record.
 fn versions_write_access_sql(schema: &str, table: &str, versions_table: &str) -> String {
     let can_edit = format!("{HELPER_SCHEMA}.{}", quoted(&can_edit_function_name(table)));
@@ -773,7 +780,7 @@ fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -
       RETURN NEW;
     END IF;
 
-    -- Only the publishing state may move: `status`, `publish_at` and `published_locales`. A caller
+    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller
     -- who can still edit the record must not be able to rewrite what an earlier version said, or
     -- the history stops being evidence of anything.
     NEW."data" := OLD."data";
@@ -989,10 +996,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".publish(
 
     -- `*` stands for the whole record on a model with no localized column, so the state map has one
     -- shape rather than two.
-    want := COALESCE(
-      locales,
-      CASE WHEN cardinality(entry."localized_columns") = 0 OR cardinality(entry."locales") = 0
-           THEN ARRAY['*'] ELSE entry."locales" END);
+    want := COALESCE(locales, {helper}.default_locales(entry));
 
     -- Only the locales this version is not already live for. That is also what makes a repeat
     -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for
@@ -1104,10 +1108,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".unpublish(
     remaining boolean;
     updated integer;
   BEGIN
-    want := COALESCE(
-      locales,
-      CASE WHEN cardinality(entry."localized_columns") = 0 OR cardinality(entry."locales") = 0
-           THEN ARRAY['*'] ELSE entry."locales" END);
+    want := COALESCE(locales, {helper}.default_locales(entry));
 
     FOREACH col IN ARRAY entry."localized_columns" LOOP
       assignments := assignments || format('%I = COALESCE(%I, ''{{}}''::jsonb) - $2', col, col);
@@ -1183,10 +1184,243 @@ CREATE OR REPLACE FUNCTION "{rpc}".restore_version(model_table text, record_id t
   END;
   $fn$;
 
+-- The locales a call means when it names none: every locale the project declares, or the single key
+-- `*` on a model with no localized column, so the state maps have one shape rather than two.
+CREATE OR REPLACE FUNCTION {helper}.default_locales(entry {helper}.versioned_models)
+  RETURNS text[] LANGUAGE sql IMMUTABLE SET search_path = '' AS $fn$
+    SELECT CASE
+      WHEN cardinality(entry."localized_columns") = 0 OR cardinality(entry."locales") = 0
+        THEN ARRAY['*'] ELSE entry."locales" END;
+  $fn$;
+
+-- Schedule some or all of a version's locales to go live later.
+--
+-- **A real change from how scheduled publishing used to work.** Without versions, a schedule needed
+-- no scheduler: the access rule compared `published_at <= now()`, so a future timestamp simply hid
+-- the row until it arrived. That trick works only while the content is already in the live row. Once
+-- publishing means copying a draft in, something has to do the copying, which is what the job below
+-- is for.
+--
+-- `SECURITY INVOKER`, and it writes the version row, so the same `can_edit` gate that governs
+-- drafting governs scheduling. Nothing is published here: this records an intent, and the job acts
+-- on it.
+CREATE OR REPLACE FUNCTION "{rpc}".schedule_publish(
+  model_table text, record_id text, at timestamptz,
+  version integer DEFAULT NULL, locales text[] DEFAULT NULL)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    target integer;
+    want text[];
+    updated integer;
+  BEGIN
+    IF at IS NULL THEN
+      RAISE EXCEPTION 'schedule_publish needs a time' USING ERRCODE = '22023';
+    END IF;
+
+    target := version;
+    IF target IS NULL THEN
+      EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',
+        'version', entry."schema_name", entry."versions_table",
+        'record_id', entry."primary_key_type", 'version')
+        INTO target USING record_id;
+    END IF;
+
+    IF target IS NULL THEN
+      RAISE EXCEPTION 'no version to schedule for % in %', record_id, model_table
+        USING ERRCODE = '02000', HINT = 'Save a draft first.';
+    END IF;
+
+    want := COALESCE(locales, {helper}.default_locales(entry));
+
+    EXECUTE format(
+      'UPDATE %I.%I SET %I = %I || $3 WHERE %I = $1::%s AND %I = $2',
+      entry."schema_name", entry."versions_table", 'scheduled_locales', 'scheduled_locales',
+      'record_id', entry."primary_key_type", 'version')
+      USING record_id, target,
+            (SELECT jsonb_object_agg(l, at) FROM unnest(want) AS l);
+    GET DIAGNOSTICS updated = ROW_COUNT;
+
+    IF updated = 0 THEN
+      RAISE EXCEPTION 'not permitted to schedule % in %, or no such version', record_id, model_table
+        USING ERRCODE = '42501';
+    END IF;
+
+    RETURN jsonb_build_object(
+      'record_id', record_id, 'version', target, 'at', at, 'locales', to_jsonb(want));
+  END;
+  $fn$;
+
+-- Withdraw a schedule without publishing anything.
+CREATE OR REPLACE FUNCTION "{rpc}".unschedule_publish(
+  model_table text, record_id text, version integer DEFAULT NULL, locales text[] DEFAULT NULL)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    want text[] := COALESCE(locales, {helper}.default_locales(entry));
+  BEGIN
+    IF version IS NULL THEN
+      EXECUTE format('UPDATE %I.%I SET %I = %I - $2 WHERE %I = $1::%s AND %I ?| $2',
+        entry."schema_name", entry."versions_table", 'scheduled_locales', 'scheduled_locales',
+        'record_id', entry."primary_key_type", 'scheduled_locales')
+        USING record_id, want;
+    ELSE
+      EXECUTE format(
+        'UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',
+        entry."schema_name", entry."versions_table", 'scheduled_locales', 'scheduled_locales',
+        'record_id', entry."primary_key_type", 'version')
+        USING record_id, version, want;
+    END IF;
+
+    RETURN jsonb_build_object('record_id', record_id, 'locales', to_jsonb(want));
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION "{rpc}".schedule_publish(text, text, timestamptz, integer, text[])
+  TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION "{rpc}".unschedule_publish(text, text, integer, text[])
+  TO authenticated, service_role;
+
+-- Publish everything whose scheduled time has arrived.
+--
+-- **`SECURITY INVOKER`, and that is what makes it correct in two places at once.** Run by the
+-- scheduler it executes as the job's owner, which bypasses row level security, so a schedule set
+-- last week still fires when its author is nowhere near. Called by an ordinary caller it executes as
+-- them, so they can only publish what they could have published by hand. One implementation, no
+-- second permission model, and no privilege to escalate through.
+--
+-- Each record is published in its own block so one failure — a constraint the draft violates, a
+-- record deleted since — does not strand every other schedule behind it. The failure is reported as
+-- a warning and the schedule cleared, because a schedule that cannot be honoured will not start
+-- working on the next tick and retrying it every minute for ever is worse than saying so once.
+CREATE OR REPLACE FUNCTION {helper}.run_due_publishes(now_at timestamptz DEFAULT now())
+  RETURNS integer LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models;
+    due record;
+    published integer := 0;
+  BEGIN
+    FOR entry IN SELECT * FROM {helper}.versioned_models WHERE "drafts" LOOP
+      FOR due IN
+        EXECUTE format(
+          'SELECT v.%I AS record_id, v.%I AS version,
+                  array_agg(e.key) AS locales
+             FROM %I.%I v, jsonb_each_text(v.%I) e
+            WHERE (e.value)::timestamptz <= $1
+            GROUP BY v.%I, v.%I',
+          'record_id', 'version', entry."schema_name", entry."versions_table",
+          'scheduled_locales', 'record_id', 'version')
+          USING now_at
+      LOOP
+        BEGIN
+          PERFORM "{rpc}".publish(
+            entry."table_name", due.record_id::text, due.version, due.locales);
+          published := published + 1;
+        EXCEPTION WHEN OTHERS THEN
+          RAISE WARNING 'scheduled publish failed for % version % in %: %',
+            due.record_id, due.version, entry."table_name", SQLERRM;
+        END;
+
+        EXECUTE format('UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',
+          entry."schema_name", entry."versions_table", 'scheduled_locales', 'scheduled_locales',
+          'record_id', entry."primary_key_type", 'version')
+          USING due.record_id::text, due.version, due.locales;
+      END LOOP;
+    END LOOP;
+    RETURN published;
+  END;
+  $fn$;
+
+-- Prune history beyond each model's retention.
+--
+-- Unbounded history is a slow leak on a busy table. Two rows are never pruned whatever the
+-- retention says: the newest, which is what a draft read and a publish both work from, and any
+-- version that claims a live locale, which is the only record of what the world is currently seeing.
+--
+-- `SECURITY DEFINER`, unlike everything else here. Retention is the system's housekeeping rather
+-- than any caller's act, and the API roles hold no `DELETE` on the snapshot tables at all: history
+-- is append-only to them, and this is the one thing that removes rows.
+CREATE OR REPLACE FUNCTION {helper}.prune_versions()
+  RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models;
+    removed integer := 0;
+    n integer;
+  BEGIN
+    FOR entry IN SELECT * FROM {helper}.versioned_models LOOP
+      EXECUTE format(
+        'DELETE FROM %I.%I v
+          WHERE v.%I IN (
+            SELECT id FROM (
+              SELECT k.%I AS id,
+                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,
+                     k.%I AS live
+                FROM %I.%I k
+            ) ranked
+            WHERE ranked.rank > $1 AND ranked.live = ''{{}}''::jsonb
+          )',
+        entry."schema_name", entry."versions_table",
+        'id', 'id', 'record_id', 'version', 'published_locales',
+        entry."schema_name", entry."versions_table")
+        USING entry."keep";
+      GET DIAGNOSTICS n = ROW_COUNT;
+      removed := removed + n;
+    END LOOP;
+    RETURN removed;
+  END;
+  $fn$;
+
 GRANT EXECUTE ON FUNCTION "{rpc}".create_draft(text, text, jsonb) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION "{rpc}".publish(text, text, integer, text[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION "{rpc}".unpublish(text, text, text[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION "{rpc}".restore_version(text, text, integer) TO authenticated, service_role;
+
+"#
+    )
+}
+/// The two scheduled jobs, when this database can run them.
+///
+/// **Degrades rather than refuses**, the same tier split as field masking and `pg_net`. `pg_cron`
+/// needs `shared_preload_libraries` and a restart, which is not something a managed provider will
+/// do, so a database without it gets the whole feature except the clock: drafts, publishing,
+/// history, restore and preview all work, and a scheduled publish sits waiting until something calls
+/// `_supatype.run_due_publishes()`. That is deliberately callable by hand, so an operator with a
+/// cron of their own, or a worker, can drive it.
+///
+/// The gate is `pg_extension`, not `pg_available_extensions`: available means the files are on disk,
+/// installed means it works here. `pg_cron` also lives in exactly one database per cluster, so being
+/// available is no promise that `cron.schedule` exists in *this* one.
+///
+/// `IF NOT EXISTS` on the extension and an upsert on the schedule, so re-emission on every push is
+/// free and a changed schedule converges rather than accumulating jobs.
+fn cron_jobs_sql() -> String {
+    let helper = HELPER_SCHEMA;
+    format!(
+        r#"-- Scheduled publishing and retention, if this database has a scheduler.
+DO $cron$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    RAISE NOTICE 'pg_cron is not installed here, so scheduled publishing and version pruning will not run on a timer. Everything else works. Call {helper}.run_due_publishes() and {helper}.prune_versions() from a scheduler of your own.';
+    RETURN;
+  END IF;
+
+  -- Replaced rather than added to, so a push converges on one job per purpose instead of stacking a
+  -- new one every time.
+  PERFORM cron.unschedule(jobname)
+     FROM cron.job
+    WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions');
+
+  -- Every minute: the smallest useful granularity for "publish at nine", and the job does nothing
+  -- but one indexed scan per versioned model when there is nothing due.
+  PERFORM cron.schedule('supatype-scheduled-publish', '* * * * *',
+    'SELECT {helper}.run_due_publishes()');
+
+  -- Hourly: pruning is housekeeping, and running it every minute would spend more on the scan than
+  -- it reclaims.
+  PERFORM cron.schedule('supatype-prune-versions', '0 * * * *',
+    'SELECT {helper}.prune_versions()');
+END;
+$cron$;
 
 "#
     )
