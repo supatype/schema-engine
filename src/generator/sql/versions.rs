@@ -236,7 +236,28 @@ fn settings_sql(publishing: &PublishingAst) -> String {
 fn visibility_helpers_sql() -> String {
     let helper = HELPER_SCHEMA;
     format!(
-        r#"-- The visibility list in force: Studio's override when set, otherwise the pushed config.
+        r#"
+-- The caller's user id, or NULL when the request has no subject.
+--
+-- **Not `auth.uid()`, and the difference is a security hole rather than a nicety.** `auth.uid()`
+-- falls back to the nil UUID `00000000-0000-0000-0000-000000000000` when there is no `sub` claim, and
+-- two kinds of request legitimately have none: a `service_role` call, which is how Studio writes, and
+-- a preview link, which carries `role: authenticated` and deliberately no subject. So a draft saved
+-- through Studio would be stamped `created_by = <nil uuid>`, and every subject-less caller would then
+-- satisfy `created_by = auth.uid()` and read it. Storing NULL and comparing against NULL closes that:
+-- no subject matches nothing.
+--
+-- It also survives an empty claims setting. `current_setting(…, true)::jsonb` raises `22P02` on `''`,
+-- which is not the same as unset, and a session that has been handed an empty string should read as
+-- anonymous rather than fail.
+CREATE OR REPLACE FUNCTION {helper}.caller_id() RETURNS uuid
+  LANGUAGE sql STABLE SET search_path = '' AS $fn$
+    SELECT nullif(
+      nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub',
+      ''
+    )::uuid;
+  $fn$;
+
 CREATE OR REPLACE FUNCTION {helper}.draft_visibility_roles() RETURNS text[]
   LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
     SELECT COALESCE(s."override_visibility", s."configured_visibility")
@@ -252,7 +273,7 @@ CREATE OR REPLACE FUNCTION {helper}.draft_visibility_roles() RETURNS text[]
 CREATE OR REPLACE FUNCTION {helper}.sees_all_drafts() RETURNS boolean
   LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
   DECLARE
-    caller uuid := auth.uid();
+    caller uuid := {helper}.caller_id();
     caller_role text;
   BEGIN
     IF caller IS NULL THEN
@@ -323,7 +344,7 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{versions_q};\n\
          CREATE POLICY {policy_q} ON {schema_q}.{versions_q}\n  \
          FOR SELECT USING (\n    \
-         \"created_by\" = auth.uid()\n    \
+         (\"created_by\" IS NOT NULL AND \"created_by\" = {helper}.caller_id())\n    \
          -- Wrapped in a SELECT so it is evaluated once per statement, not once per row.\n    \
          OR (SELECT {helper}.sees_all_drafts())\n    \
          OR {helper}.preview_allows({model_lit}, \"record_id\"::text)\n  \
@@ -413,18 +434,592 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
     out.push_str(";\n\n");
     out.push_str(&settings_sql(publishing));
     out.push('\n');
+    out.push_str(&registry_sql(ast, schema));
+    out.push_str(&rpc_functions_sql());
     out.push_str(&draft_schema_preamble());
 
     for model in &models {
         let table = db_table_name(model);
         let versions_table = versions_table_name(table);
+        let (primary_key, _) = model_primary_key(model);
+        let drafts = versions_of(model).is_some_and(|v| v.drafts);
+
+        // Reading history is the same question for both kinds of versioned model.
         out.push_str(&versions_table_access_sql(schema, table, &versions_table));
-        // A model that keeps history without withholding writes has no pending version to read, so
-        // it gets no draft view. Asking for one answers PGRST106, which is the honest answer.
-        if versions_of(model).is_some_and(|v| v.drafts) {
+
+        if drafts {
+            // The `can_edit` function comes before the policies that call it: a policy naming a
+            // function that does not exist is refused at `CREATE POLICY`, not at evaluation time.
+            out.push_str(&can_edit_function_sql(ast, model, schema));
+            out.push_str(&draft_aware_select_policy_sql(
+                schema,
+                table,
+                &versions_table,
+                &primary_key,
+            ));
+            out.push_str(&versions_write_access_sql(schema, table, &versions_table));
             out.push_str(&draft_view_sql(schema, table, &versions_table));
+        } else {
+            // History without withholding writes. The table is written directly and each write
+            // leaves a snapshot, so there is no pending version to read, no draft view, and nothing
+            // for a caller to compose by hand: the snapshot table stays read-only to the API.
+            out.push_str(&audit_trigger_sql(
+                schema,
+                table,
+                &versions_table,
+                &primary_key,
+            ));
         }
     }
 
     Ok(out)
+}
+
+// ─── The registry ─────────────────────────────────────────────────────────────
+
+/// The versioned models, as a table the generated functions and the pruning job can read.
+///
+/// The functions take a table name as a parameter (`supatype.publish('posts', $1)`) rather than
+/// being generated one per model, so PostgREST exposes four RPC endpoints instead of four per model.
+/// That means dynamic SQL, and dynamic SQL means the table name has to be checked against something
+/// rather than interpolated: this is that something. A name not in here is refused before any
+/// `format()` runs.
+///
+/// Replaced wholesale on every push, so a model that stops declaring `versions` stops being
+/// publishable. Deleting the row does not drop the snapshot table, which the differ handles as a
+/// destructive operation needing `--force`: losing history should take a deliberate act.
+fn registry_sql(ast: &SchemaAst, schema: &str) -> String {
+    let mut out = format!(
+        "CREATE TABLE IF NOT EXISTS {helper}.versioned_models (\n    \
+         \"table_name\" TEXT PRIMARY KEY,\n    \
+         \"schema_name\" TEXT NOT NULL,\n    \
+         \"model_name\" TEXT NOT NULL,\n    \
+         \"versions_table\" TEXT NOT NULL,\n    \
+         \"primary_key\" TEXT NOT NULL,\n    \
+         \"primary_key_type\" TEXT NOT NULL,\n    \
+         \"published_at_column\" TEXT,\n    \
+         \"drafts\" BOOLEAN NOT NULL,\n    \
+         \"keep\" INTEGER NOT NULL\n\
+         );\n\n\
+         -- `WHERE TRUE` is not decoration: `supatype/postgres` preloads the safe-update guard,\n\
+         -- which refuses an unqualified DELETE outright. Found by running this, not by reading it.\n\
+         DELETE FROM {helper}.versioned_models WHERE TRUE;\n",
+        helper = HELPER_SCHEMA,
+    );
+
+    for model in versioned_models(ast) {
+        let table = db_table_name(model);
+        let versions = versions_table_name(table);
+        let options = versions_of(model).expect("filtered to versioned models");
+        let (primary_key, primary_key_type) = model_primary_key(model);
+        // Publishing stamps this column. A model without one is still publishable, in the sense that
+        // a draft is promoted into the live row, just with nothing recording the moment.
+        let published_at = if model.fields.contains_key(PUBLISHED_AT_COLUMN) {
+            quote_literal(PUBLISHED_AT_COLUMN)
+        } else {
+            "NULL".to_string()
+        };
+
+        out.push_str(&format!(
+            "INSERT INTO {helper}.versioned_models\n  \
+             (\"table_name\", \"schema_name\", \"model_name\", \"versions_table\", \
+             \"primary_key\", \"primary_key_type\", \"published_at_column\", \"drafts\", \"keep\")\n\
+             VALUES ({table_lit}, {schema_lit}, {model_lit}, {versions_lit}, {pk_lit}, \
+             {pk_type_lit}, {published_at}, {drafts}, {keep});\n",
+            helper = HELPER_SCHEMA,
+            table_lit = quote_literal(table),
+            schema_lit = quote_literal(schema),
+            model_lit = quote_literal(&model.name),
+            versions_lit = quote_literal(&versions),
+            pk_lit = quote_literal(&primary_key),
+            pk_type_lit = quote_literal(&primary_key_type),
+            drafts = options.drafts,
+            keep = options.keep,
+        ));
+    }
+    out.push('\n');
+    out
+}
+
+/// The column publishing stamps, when the model has it.
+const PUBLISHED_AT_COLUMN: &str = "published_at";
+
+/// The model's primary key column and its Postgres type.
+///
+/// Falls back to `id UUID`, which is what every scaffolded model has. A model with no primary key
+/// cannot be versioned meaningfully and will have failed earlier for reasons that name the real
+/// problem.
+fn model_primary_key(model: &ModelAst) -> (String, String) {
+    model
+        .fields
+        .iter()
+        .find(|(_, field)| crate::differ::column_diff::field_is_primary_key(field))
+        .map(|(name, field)| {
+            (
+                name.clone(),
+                crate::differ::column_diff::field_pg_type(field),
+            )
+        })
+        .unwrap_or_else(|| ("id".to_string(), "UUID".to_string()))
+}
+
+// ─── Per-model edit authority ─────────────────────────────────────────────────
+
+fn can_edit_function_name(table: &str) -> String {
+    format!("can_edit_{table}")
+}
+
+/// `_supatype.can_edit_<table>(record)`: does the model's own `update` rule admit this caller?
+///
+/// **`SECURITY INVOKER`**, so row level security on the model's table applies and nothing here sees
+/// past it. That is what makes it safe to expose the four RPC functions to `authenticated`: they are
+/// invoker too, so a caller's own rules govern from end to end and no part of this feature runs with
+/// borrowed privilege.
+///
+/// It works on an unpublished record because the model's table also carries the draft-aware SELECT
+/// policy below. Without that, a creator could not see their own unpublished row and so could not
+/// edit it, which is the one case the feature exists for.
+///
+/// A model with **no** `update` rule renders `FALSE`. No rule means no writers through the API, and
+/// drafting is a write: granting it here would invent an entitlement the schema withholds.
+fn can_edit_function_sql(ast: &SchemaAst, model: &ModelAst, schema: &str) -> String {
+    let table = db_table_name(model);
+    let (primary_key, primary_key_type) = model_primary_key(model);
+    let expr = match crate::parser::accessors::platform_access(model).update.as_ref() {
+        Some(rule) => crate::generator::sql::rls::access_rule_to_expr(ast, model, rule, schema),
+        None => "FALSE".to_string(),
+    };
+    let name = can_edit_function_name(table);
+    format!(
+        "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record {pk_type})\n  \
+         RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$\n    \
+         SELECT EXISTS (\n      \
+         SELECT 1 FROM {schema_q}.{table_q}\n       \
+         WHERE {pk_q} = p_record AND ({expr})\n    \
+         );\n  \
+         $fn$;\n\
+         GRANT EXECUTE ON FUNCTION {helper}.{fn_q}({pk_type}) TO authenticated, service_role;\n\n",
+        helper = HELPER_SCHEMA,
+        fn_q = quoted(&name),
+        pk_type = primary_key_type,
+        schema_q = quoted(schema),
+        table_q = quoted(table),
+        pk_q = quoted(&primary_key),
+    )
+}
+
+/// The extra SELECT policy that lets the right people read an unpublished row.
+///
+/// Permissive, so it ORs with the model's own read rule rather than narrowing it. Without it, a blog
+/// whose `read` rule is `published_at <= now()` hides every unpublished record from its own author,
+/// and everything downstream — reading the pending draft, editing it, publishing it — operates on a
+/// row nobody can see.
+///
+/// The predicate is the snapshot policy's, written out rather than inherited. Relying on row level
+/// security to filter the subquery would work for an API caller and not for the table's owner, and a
+/// policy whose meaning depends on who is asking is a policy nobody can review.
+///
+/// It reads the snapshot table, whose own policy reads no table at all, so the reference is
+/// one-directional and there is no cycle for Postgres to refuse.
+fn draft_aware_select_policy_sql(
+    schema: &str,
+    table: &str,
+    versions_table: &str,
+    primary_key: &str,
+) -> String {
+    let policy = format!("{table}_draft_select");
+    let comment = crate::managed::managed_comment("rls_policy", table, &["draft_select"]);
+    format!(
+        "DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
+         CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
+         FOR SELECT USING (\n    \
+         EXISTS (\n      \
+         SELECT 1 FROM {schema_q}.{versions_q} v\n       \
+         WHERE v.\"record_id\" = {pk_q}\n         \
+         AND (\n           \
+           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = {helper}.caller_id())\n           \
+         OR (SELECT {helper}.sees_all_drafts())\n           \
+         OR {helper}.preview_allows({table_lit}, v.\"record_id\"::text)\n         \
+         )\n    \
+         )\n  \
+         );\n\
+         COMMENT ON POLICY {policy_q} ON {schema_q}.{table_q} IS '{comment}';\n\n",
+        policy_q = quoted(&policy),
+        schema_q = quoted(schema),
+        table_q = quoted(table),
+        versions_q = quoted(versions_table),
+        pk_q = quoted(primary_key),
+        table_lit = quote_literal(table),
+        helper = HELPER_SCHEMA,
+    )
+}
+
+// ─── Writing the snapshot table ───────────────────────────────────────────────
+
+/// Write access to one snapshot table: policies, grants and the two triggers that hold its shape.
+///
+/// `authenticated` is granted `INSERT` and `UPDATE`, gated on `can_edit_<table>`, and **not**
+/// `DELETE`: history is append-only, and pruning is the retention job's work, which runs as the
+/// owner.
+///
+/// The grants matter less than the triggers, because PostgREST exposes the snapshot table like any
+/// other in the managed schema, so a caller can `POST /posts_versions` directly. Rather than try to
+/// prevent that, the triggers make it harmless:
+///
+/// * **On insert**, `version`, `created_by` and `status` are assigned here and whatever the caller
+///   submitted for them is discarded. So a direct insert is a draft save and cannot be a forged
+///   published version, a version renumbered over someone else's, or a snapshot attributed to
+///   another author.
+/// * **On update**, only `status` and `publish_at` may change. `data` and `created_by` are restored
+///   from the stored row, so history cannot be rewritten by whoever can still edit the record.
+fn versions_write_access_sql(schema: &str, table: &str, versions_table: &str) -> String {
+    let can_edit = format!("{HELPER_SCHEMA}.{}", quoted(&can_edit_function_name(table)));
+    let insert_policy = format!("{versions_table}_insert");
+    let update_policy = format!("{versions_table}_update");
+    let insert_comment = crate::managed::managed_comment("rls_policy", versions_table, &["insert"]);
+    let update_comment = crate::managed::managed_comment("rls_policy", versions_table, &["update"]);
+    let guard = format!("{versions_table}_guard");
+
+    format!(
+        "DROP POLICY IF EXISTS {insert_q} ON {schema_q}.{versions_q};\n\
+         CREATE POLICY {insert_q} ON {schema_q}.{versions_q}\n  \
+         FOR INSERT WITH CHECK ({can_edit}(\"record_id\"));\n\
+         COMMENT ON POLICY {insert_q} ON {schema_q}.{versions_q} IS '{insert_comment}';\n\n\
+         DROP POLICY IF EXISTS {update_q} ON {schema_q}.{versions_q};\n\
+         CREATE POLICY {update_q} ON {schema_q}.{versions_q}\n  \
+         FOR UPDATE USING ({can_edit}(\"record_id\")) WITH CHECK ({can_edit}(\"record_id\"));\n\
+         COMMENT ON POLICY {update_q} ON {schema_q}.{versions_q} IS '{update_comment}';\n\n\
+         GRANT INSERT, UPDATE ON {schema_q}.{versions_q} TO authenticated;\n\n\
+         {trigger}",
+        insert_q = quoted(&insert_policy),
+        update_q = quoted(&update_policy),
+        schema_q = quoted(schema),
+        versions_q = quoted(versions_table),
+        trigger = versions_guard_trigger_sql(schema, versions_table, &guard),
+    )
+}
+
+/// The trigger that assigns a version row's own fields and refuses to let history be rewritten.
+///
+/// **`SECURITY DEFINER`**, and only for the version number. `MAX(version)` under the caller's own
+/// row level security counts the versions the *caller* can see, and a signed-in user with no Studio
+/// membership sees only their own drafts: their next version number would collide with someone
+/// else's and the insert would fail with `23505` on `(record_id, version)`. Numbering is a property
+/// of the record, not of who is looking at it.
+///
+/// It bypasses nothing else. A `BEFORE` trigger runs before the executor evaluates the insert's
+/// `WITH CHECK`, so the policy still decides whether the write happens; this only fills in fields on
+/// the row being written, and every reference is schema-qualified under an empty `search_path`.
+fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -> String {
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {helper}.{guard_q}() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  BEGIN
+    IF TG_OP = 'INSERT' THEN
+      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other
+      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:
+      -- no forged published version, no renumbering over someone else's, no borrowed authorship.
+      SELECT COALESCE(MAX(v."version"), 0) + 1 INTO NEW."version"
+        FROM {schema_q}.{versions_q} v WHERE v."record_id" = NEW."record_id";
+      NEW."created_by" := {helper}.caller_id();
+      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with
+      -- a separate permission check.
+      NEW."status" := 'draft';
+      RETURN NEW;
+    END IF;
+
+    -- Only the publishing state may move. A caller who can still edit the record must not be able
+    -- to rewrite what an earlier version said, or the history stops being evidence of anything.
+    NEW."data" := OLD."data";
+    NEW."created_by" := OLD."created_by";
+    NEW."created_at" := OLD."created_at";
+    NEW."version" := OLD."version";
+    NEW."record_id" := OLD."record_id";
+    RETURN NEW;
+  END;
+  $fn$;
+
+DROP TRIGGER IF EXISTS {guard_q} ON {schema_q}.{versions_q};
+CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
+  FOR EACH ROW EXECUTE FUNCTION {helper}.{guard_q}();
+
+"#,
+        helper = HELPER_SCHEMA,
+        guard_q = quoted(guard),
+        schema_q = quoted(schema),
+        versions_q = quoted(versions_table),
+    )
+}
+
+/// The trigger that records every write as a version, for a model that keeps history without
+/// withholding writes.
+///
+/// `versions: { drafts: false }` is the audit-trail case: writes go straight to the table as they
+/// always did, and each one leaves a snapshot behind. Without this the model would get a snapshot
+/// table that nothing ever writes to, because `create_draft` is the only other writer and it refuses
+/// a model with drafts off.
+///
+/// `AFTER`, so a write that fails a constraint or a policy leaves no version claiming it happened.
+/// `SECURITY DEFINER` because the caller holds no privilege on the snapshot table on this path: they
+/// are not drafting, they are writing the table, and the history is the system's record rather than
+/// theirs to compose.
+fn audit_trigger_sql(
+    schema: &str,
+    table: &str,
+    versions_table: &str,
+    primary_key: &str,
+) -> String {
+    let audit = format!("{versions_table}_audit");
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {helper}.{audit_q}() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  DECLARE
+    next_version integer;
+  BEGIN
+    SELECT COALESCE(MAX(v."version"), 0) + 1 INTO next_version
+      FROM {schema_q}.{versions_q} v WHERE v."record_id" = NEW.{pk_q};
+    INSERT INTO {schema_q}.{versions_q}
+      ("record_id", "version", "status", "data", "created_by")
+    VALUES (NEW.{pk_q}, next_version, 'published', to_jsonb(NEW), auth.uid());
+    RETURN NULL;
+  END;
+  $fn$;
+
+DROP TRIGGER IF EXISTS {audit_q} ON {schema_q}.{table_q};
+CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
+  FOR EACH ROW EXECUTE FUNCTION {helper}.{audit_q}();
+
+"#,
+        helper = HELPER_SCHEMA,
+        audit_q = quoted(&audit),
+        schema_q = quoted(schema),
+        table_q = quoted(table),
+        versions_q = quoted(versions_table),
+        pk_q = quoted(primary_key),
+    )
+}
+
+// ─── The publish functions ────────────────────────────────────────────────────
+
+/// `supatype.create_draft`, `publish`, `unpublish` and `restore_version`.
+///
+/// One set for every model, taking the table name as a parameter and checked against the registry,
+/// so PostgREST exposes four endpoints rather than four per model.
+///
+/// **All four are `SECURITY INVOKER`.** Every write they make is a write the caller could have made
+/// themselves: an insert into the snapshot table, gated by that table's policy, and an update of the
+/// model's row, gated by the model's own `update` rule. Nothing runs with borrowed privilege, so
+/// there is no second permission model to keep in step with the first — which was the whole reason
+/// to generate these rather than write them in application code.
+fn rpc_functions_sql() -> String {
+    let helper = HELPER_SCHEMA;
+    let rpc = RPC_SCHEMA;
+    format!(
+        r#"CREATE SCHEMA IF NOT EXISTS "{rpc}";
+GRANT USAGE ON SCHEMA "{rpc}" TO anon, authenticated, service_role;
+
+-- The registry row for a table, or an error naming what was asked for.
+--
+-- Every function below starts here, so a table name never reaches `format()` unchecked.
+CREATE OR REPLACE FUNCTION {helper}.versioned_model(p_table text)
+  RETURNS {helper}.versioned_models LANGUAGE plpgsql STABLE SECURITY DEFINER
+  SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models;
+  BEGIN
+    SELECT * INTO entry FROM {helper}.versioned_models WHERE "table_name" = p_table;
+    IF entry."table_name" IS NULL THEN
+      RAISE EXCEPTION 'no versioned model for table %', p_table
+        USING ERRCODE = '22023',
+              HINT = 'Add `versions` to the model in your schema and push, or check the table name.';
+    END IF;
+    RETURN entry;
+  END;
+  $fn$;
+
+-- Save a draft: the newest snapshot merged with the submitted fields, or the live row when there is
+-- no snapshot yet.
+--
+-- Merging onto the newest snapshot rather than the live row is what makes successive edits
+-- accumulate instead of each starting again from what is published. Reading it needs the snapshot
+-- table's SELECT policy to pass, which for anyone entitled to edit the record it does: draft
+-- visibility covers every Studio role precisely so that an editor cannot save over a pending draft
+-- they were not shown.
+CREATE OR REPLACE FUNCTION "{rpc}".create_draft(model_table text, record_id text, data jsonb)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    base jsonb;
+    saved record;
+  BEGIN
+    IF NOT entry."drafts" THEN
+      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry."model_name"
+        USING ERRCODE = '22023',
+              HINT = 'Write to the table directly; every change is recorded as a version.';
+    END IF;
+
+    EXECUTE format(
+      'SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',
+      'data', entry."schema_name", entry."versions_table", 'record_id',
+      entry."primary_key_type", 'version')
+      INTO base USING record_id;
+
+    IF base IS NULL THEN
+      EXECUTE format('SELECT to_jsonb(t) FROM %I.%I t WHERE t.%I = $1::%s',
+        entry."schema_name", entry."table_name", entry."primary_key", entry."primary_key_type")
+        INTO base USING record_id;
+    END IF;
+
+    IF base IS NULL THEN
+      RAISE EXCEPTION 'no such record % in %', record_id, model_table USING ERRCODE = '02000';
+    END IF;
+
+    -- `version`, `created_by` and `status` are the guard trigger's to assign.
+    EXECUTE format(
+      'INSERT INTO %I.%I (%I, %I) VALUES ($1::%s, $2) RETURNING %I, %I, %I',
+      entry."schema_name", entry."versions_table", 'record_id', 'data',
+      entry."primary_key_type", 'version', 'status', 'created_at')
+      INTO saved USING record_id, base || COALESCE(data, '{{}}'::jsonb);
+
+    RETURN jsonb_build_object(
+      'record_id', record_id, 'version', saved."version",
+      'status', saved."status", 'created_at', saved."created_at");
+  END;
+  $fn$;
+
+-- Promote the newest draft into the live row.
+--
+-- The `UPDATE` runs under the caller's own rules, so the policy that already governs editing governs
+-- publishing and there is nothing new to keep in step. `jsonb_populate_record` restores the column
+-- shape, and the primary key is excluded from the assignment: publishing a draft must not be able to
+-- move a record's identity.
+CREATE OR REPLACE FUNCTION "{rpc}".publish(model_table text, record_id text)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    pending record;
+    assignments text;
+    updated integer;
+  BEGIN
+    -- The **newest** version, whatever its status, and then a check that it is a draft.
+    --
+    -- Selecting the newest row whose status is `draft` looks equivalent and reverts content: an older
+    -- version that was never published keeps `status = 'draft'` for ever, quite correctly, so once v2
+    -- had been published a second publish would find v1 and put stale content live. Status is a
+    -- property of the newest row, which is what the state table in the design note says.
+    EXECUTE format(
+      'SELECT v.%I AS version, v.%I AS data, v.%I AS status FROM %I.%I v
+        WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',
+      'version', 'data', 'status', entry."schema_name", entry."versions_table",
+      'record_id', entry."primary_key_type", 'version')
+      INTO pending USING record_id;
+
+    IF pending IS NULL OR pending.status <> 'draft' THEN
+      RAISE EXCEPTION 'no pending draft for % in %', record_id, model_table
+        USING ERRCODE = '02000',
+              HINT = 'The live row is already what the newest version says.';
+    END IF;
+
+    SELECT string_agg(format('%I = (r).%I', c.column_name, c.column_name), ', ')
+      INTO assignments
+      FROM information_schema.columns c
+     WHERE c.table_schema = entry."schema_name"
+       AND c.table_name = entry."table_name"
+       AND c.column_name <> entry."primary_key"
+       AND c.is_generated = 'NEVER';
+
+    EXECUTE format(
+      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src
+        WHERE %I = $1::%s',
+      entry."schema_name", entry."table_name", assignments,
+      entry."schema_name", entry."table_name",
+      entry."primary_key", entry."primary_key_type")
+      USING record_id, pending.data;
+    GET DIAGNOSTICS updated = ROW_COUNT;
+
+    IF updated = 0 THEN
+      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table
+        USING ERRCODE = '42501',
+              HINT = 'Publishing a record requires the same permission as editing it.';
+    END IF;
+
+    IF entry."published_at_column" IS NOT NULL THEN
+      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, now()) WHERE %I = $1::%s',
+        entry."schema_name", entry."table_name",
+        entry."published_at_column", entry."published_at_column",
+        entry."primary_key", entry."primary_key_type")
+        USING record_id;
+    END IF;
+
+    EXECUTE format('UPDATE %I.%I SET %I = ''published'' WHERE %I = $1::%s AND %I = $2',
+      entry."schema_name", entry."versions_table", 'status',
+      'record_id', entry."primary_key_type", 'version')
+      USING record_id, pending.version;
+
+    RETURN jsonb_build_object('record_id', record_id, 'version', pending.version, 'status', 'published');
+  END;
+  $fn$;
+
+-- Take a record out of publication, leaving the live content in place.
+--
+-- The content stays because it is the newest published version: withdrawing publication is not the
+-- same as reverting an edit, and blanking the row would lose the thing a later publish would restore.
+CREATE OR REPLACE FUNCTION "{rpc}".unpublish(model_table text, record_id text)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    updated integer;
+  BEGIN
+    IF entry."published_at_column" IS NULL THEN
+      RAISE EXCEPTION 'model % has no published_at column, so there is nothing to unpublish', entry."model_name"
+        USING ERRCODE = '22023',
+              HINT = 'Add `published_at: Optional<Timestamp>` to the model.';
+    END IF;
+
+    EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',
+      entry."schema_name", entry."table_name", entry."published_at_column",
+      entry."primary_key", entry."primary_key_type")
+      USING record_id;
+    GET DIAGNOSTICS updated = ROW_COUNT;
+
+    IF updated = 0 THEN
+      RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table
+        USING ERRCODE = '42501';
+    END IF;
+
+    RETURN jsonb_build_object('record_id', record_id, 'status', 'unpublished');
+  END;
+  $fn$;
+
+-- Restore an earlier version as a **new draft**, never as an immediate publish.
+--
+-- Nothing goes live without publishing, so restoring is an editing act with a preview and a second
+-- decision behind it, not a way to change what the world sees in one call.
+CREATE OR REPLACE FUNCTION "{rpc}".restore_version(model_table text, record_id text, version integer)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    snapshot jsonb;
+  BEGIN
+    EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s AND v.%I = $2',
+      'data', entry."schema_name", entry."versions_table",
+      'record_id', entry."primary_key_type", 'version')
+      INTO snapshot USING record_id, version;
+
+    IF snapshot IS NULL THEN
+      RAISE EXCEPTION 'no version % of % in %', version, record_id, model_table
+        USING ERRCODE = '02000';
+    END IF;
+
+    RETURN "{rpc}".create_draft(model_table, record_id, snapshot);
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION "{rpc}".create_draft(text, text, jsonb) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION "{rpc}".publish(text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION "{rpc}".unpublish(text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION "{rpc}".restore_version(text, text, integer) TO authenticated, service_role;
+
+"#
+    )
 }

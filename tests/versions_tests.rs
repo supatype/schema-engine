@@ -152,8 +152,16 @@ fn the_snapshot_policy_admits_the_creator_the_elevated_and_a_preview_link() {
     let sql = forward_sql();
     assert!(sql.contains("CREATE POLICY \"posts_versions_select\""));
     assert!(
-        sql.contains("\"created_by\" = auth.uid()"),
+        sql.contains(
+            "(\"created_by\" IS NOT NULL AND \"created_by\" = _supatype.caller_id())"
+        ),
         "a creator must be able to read back the draft they just saved"
+    );
+    assert!(
+        !sql.contains("\"created_by\" = auth.uid()"),
+        "`auth.uid()` falls back to the nil UUID when a request has no subject, and a \
+         `service_role` write is stamped with whatever this returns: comparing against it would let \
+         every subject-less caller read every draft Studio saved"
     );
     assert!(
         sql.contains("OR (SELECT _supatype.sees_all_drafts())"),
@@ -239,7 +247,7 @@ fn the_draft_view_does_not_join_the_model_table() {
 fn the_configured_visibility_is_what_gets_compiled_in() {
     let sql = forward_sql();
     assert!(
-        sql.contains("SET \"configured_visibility\" = ARRAY['admin', 'developer']::text[]"),
+        sql.contains("SET \"configured_visibility\" = ARRAY['admin', 'developer', 'editor']::text[]"),
         "the project's stated roles must reach the database; got:\n{sql}"
     );
 }
@@ -258,7 +266,7 @@ fn a_studio_override_wins_over_the_pushed_config() {
 fn a_steady_state_push_does_not_touch_the_settings_row() {
     let sql = forward_sql();
     assert!(
-        sql.contains("IS DISTINCT FROM ARRAY['admin', 'developer']::text[]"),
+        sql.contains("IS DISTINCT FROM ARRAY['admin', 'developer', 'editor']::text[]"),
         "the update must be conditional, or every push looks like a settings change"
     );
 }

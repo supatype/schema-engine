@@ -1,7 +1,7 @@
 {
   "astVersion": 2,
   "publishing": {
-    "draftVisibility": ["admin", "developer"],
+    "draftVisibility": ["admin", "developer", "editor"],
     "previewDefaultTtl": 900,
     "previewMaxRecordTtl": 604800,
     "previewMaxProjectTtl": 86400,
