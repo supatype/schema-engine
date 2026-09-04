@@ -162,6 +162,12 @@ pub fn create_versions_table_sql(
          \"publish_at\" TIMESTAMPTZ,\n    \
          \"created_at\" TIMESTAMPTZ NOT NULL DEFAULT now(),\n    \
          \"created_by\" UUID,\n    \
+         -- Which locales this version is live for, and when each went live.\n    \
+         -- One key per published locale, or the single key `*` for a model with no localized\n    \
+         -- column. Publication state lives here rather than on the model's row because the\n    \
+         -- column differ drops columns the schema does not declare, and rather than in a table of\n    \
+         -- its own because this row already carries the policies and the guard that protect it.\n    \
+         \"published_locales\" JSONB NOT NULL DEFAULT '{{}}',\n    \
          UNIQUE (\"record_id\", \"version\")\n\
          );\n\n\
          COMMENT ON TABLE {schema_q}.{versions_q} IS '{marker}';\n\n\
@@ -498,6 +504,10 @@ fn registry_sql(ast: &SchemaAst, schema: &str) -> String {
          \"primary_key\" TEXT NOT NULL,\n    \
          \"primary_key_type\" TEXT NOT NULL,\n    \
          \"published_at_column\" TEXT,\n    \
+         -- The columns holding one value per locale, and the project's locale list. Publishing one\n    \
+         -- locale merges its keys into these columns and leaves the others as they were.\n    \
+         \"localized_columns\" TEXT[] NOT NULL DEFAULT '{{}}',\n    \
+         \"locales\" TEXT[] NOT NULL DEFAULT '{{}}',\n    \
          \"drafts\" BOOLEAN NOT NULL,\n    \
          \"keep\" INTEGER NOT NULL\n\
          );\n\n\
@@ -506,6 +516,8 @@ fn registry_sql(ast: &SchemaAst, schema: &str) -> String {
          DELETE FROM {helper}.versioned_models WHERE TRUE;\n",
         helper = HELPER_SCHEMA,
     );
+
+    let locales = text_array(&ast.locales);
 
     for model in versioned_models(ast) {
         let table = db_table_name(model);
@@ -523,9 +535,10 @@ fn registry_sql(ast: &SchemaAst, schema: &str) -> String {
         out.push_str(&format!(
             "INSERT INTO {helper}.versioned_models\n  \
              (\"table_name\", \"schema_name\", \"model_name\", \"versions_table\", \
-             \"primary_key\", \"primary_key_type\", \"published_at_column\", \"drafts\", \"keep\")\n\
+             \"primary_key\", \"primary_key_type\", \"published_at_column\", \
+             \"localized_columns\", \"locales\", \"drafts\", \"keep\")\n\
              VALUES ({table_lit}, {schema_lit}, {model_lit}, {versions_lit}, {pk_lit}, \
-             {pk_type_lit}, {published_at}, {drafts}, {keep});\n",
+             {pk_type_lit}, {published_at}, {localized}, {locales}, {drafts}, {keep});\n",
             helper = HELPER_SCHEMA,
             table_lit = quote_literal(table),
             schema_lit = quote_literal(schema),
@@ -533,12 +546,44 @@ fn registry_sql(ast: &SchemaAst, schema: &str) -> String {
             versions_lit = quote_literal(&versions),
             pk_lit = quote_literal(&primary_key),
             pk_type_lit = quote_literal(&primary_key_type),
+            localized = text_array(&localized_columns(model)),
             drafts = options.drafts,
             keep = options.keep,
         ));
     }
     out.push('\n');
     out
+}
+
+/// A `text[]` literal, or an empty one.
+fn text_array(values: &[String]) -> String {
+    if values.is_empty() {
+        return "ARRAY[]::text[]".to_string();
+    }
+    format!(
+        "ARRAY[{}]::text[]",
+        values
+            .iter()
+            .map(|v| quote_literal(v))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+/// The model's columns that hold one value per locale.
+///
+/// A localized field is a single `jsonb` column keyed by locale, which is what makes per-locale
+/// publishing possible at all: publishing one locale merges that key and leaves the rest of the
+/// column alone, so an unpublished translation is simply absent from the live row and needs no
+/// policy to hide it.
+fn localized_columns(model: &ModelAst) -> Vec<String> {
+    model
+        .fields
+        .iter()
+        .filter(|(_, field)| crate::differ::column_diff::is_localized(field))
+        .flat_map(|(name, field)| crate::differ::column_diff::column_names_for(name, field))
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 /// The column publishing stamps, when the model has it.
@@ -728,8 +773,9 @@ fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -
       RETURN NEW;
     END IF;
 
-    -- Only the publishing state may move. A caller who can still edit the record must not be able
-    -- to rewrite what an earlier version said, or the history stops being evidence of anything.
+    -- Only the publishing state may move: `status`, `publish_at` and `published_locales`. A caller
+    -- who can still edit the record must not be able to rewrite what an earlier version said, or
+    -- the history stops being evidence of anything.
     NEW."data" := OLD."data";
     NEW."created_by" := OLD."created_by";
     NEW."created_at" := OLD."created_at";
@@ -887,54 +933,114 @@ CREATE OR REPLACE FUNCTION "{rpc}".create_draft(model_table text, record_id text
   END;
   $fn$;
 
--- Promote the newest draft into the live row.
+-- Promote a version into the live row, for some or all of its locales.
+--
+-- **Two arguments beyond the record, both optional.** `version` defaults to the newest, so the
+-- ordinary case is unchanged. `locales` defaults to every locale the project declares, so a project
+-- that translates before publishing never sees this.
+--
+-- **Per locale, because a localized field is one `jsonb` column keyed by locale.** Publishing `en`
+-- merges the `en` key of every localized column and leaves the rest of the column exactly as it was,
+-- so an unpublished translation is simply *absent* from the live row. That is what makes this
+-- enforceable at all: row level security cannot hide one key of a column, and nothing has to,
+-- because the value was never written.
+--
+-- **The shared, non-localized columns go live with whichever locale is published.** They belong to
+-- no locale, so the alternative is that a change to one could only ever go live by publishing every
+-- translation, which would make the feature useless to the team it exists for.
 --
 -- The `UPDATE` runs under the caller's own rules, so the policy that already governs editing governs
--- publishing and there is nothing new to keep in step. `jsonb_populate_record` restores the column
--- shape, and the primary key is excluded from the assignment: publishing a draft must not be able to
--- move a record's identity.
-CREATE OR REPLACE FUNCTION "{rpc}".publish(model_table text, record_id text)
+-- publishing and there is nothing new to keep in step.
+CREATE OR REPLACE FUNCTION "{rpc}".publish(
+  model_table text, record_id text, version integer DEFAULT NULL, locales text[] DEFAULT NULL)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
-    pending record;
-    assignments text;
+    target record;
+    want text[];
+    pending text[];
+    assignments text[] := ARRAY[]::text[];
+    col text;
+    stamp timestamptz := now();
     updated integer;
   BEGIN
-    -- The **newest** version, whatever its status, and then a check that it is a draft.
-    --
-    -- Selecting the newest row whose status is `draft` looks equivalent and reverts content: an older
-    -- version that was never published keeps `status = 'draft'` for ever, quite correctly, so once v2
-    -- had been published a second publish would find v1 and put stale content live. Status is a
-    -- property of the newest row, which is what the state table in the design note says.
-    EXECUTE format(
-      'SELECT v.%I AS version, v.%I AS data, v.%I AS status FROM %I.%I v
-        WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',
-      'version', 'data', 'status', entry."schema_name", entry."versions_table",
-      'record_id', entry."primary_key_type", 'version')
-      INTO pending USING record_id;
-
-    IF pending IS NULL OR pending.status <> 'draft' THEN
-      RAISE EXCEPTION 'no pending draft for % in %', record_id, model_table
-        USING ERRCODE = '02000',
-              HINT = 'The live row is already what the newest version says.';
+    -- The version to promote: the one named, or the newest.
+    IF version IS NULL THEN
+      EXECUTE format(
+        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v
+          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',
+        'version', 'data', 'published_locales', entry."schema_name", entry."versions_table",
+        'record_id', entry."primary_key_type", 'version')
+        INTO target USING record_id;
+    ELSE
+      EXECUTE format(
+        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v
+          WHERE v.%I = $1::%s AND v.%I = $2',
+        'version', 'data', 'published_locales', entry."schema_name", entry."versions_table",
+        'record_id', entry."primary_key_type", 'version')
+        INTO target USING record_id, version;
     END IF;
 
-    SELECT string_agg(format('%I = (r).%I', c.column_name, c.column_name), ', ')
+    IF target IS NULL THEN
+      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table
+        USING ERRCODE = '02000',
+              HINT = 'Save a draft first, or name a version that exists.';
+    END IF;
+
+    -- `*` stands for the whole record on a model with no localized column, so the state map has one
+    -- shape rather than two.
+    want := COALESCE(
+      locales,
+      CASE WHEN cardinality(entry."localized_columns") = 0 OR cardinality(entry."locales") = 0
+           THEN ARRAY['*'] ELSE entry."locales" END);
+
+    -- Only the locales this version is not already live for. That is also what makes a repeat
+    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for
+    -- the newest *draft* and would fall back to an older one, putting stale content live.
+    SELECT array_agg(l) INTO pending
+      FROM unnest(want) AS l
+     WHERE NOT (target.published_locales ? l);
+
+    IF pending IS NULL THEN
+      RAISE EXCEPTION 'version % of % in % is already live for %',
+        target.version, record_id, model_table, array_to_string(want, ', ')
+        USING ERRCODE = '02000',
+              HINT = 'The live row already says what this version says.';
+    END IF;
+
+    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a
+    -- draft must not be able to move a record's identity.
+    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))
       INTO assignments
       FROM information_schema.columns c
      WHERE c.table_schema = entry."schema_name"
        AND c.table_name = entry."table_name"
        AND c.column_name <> entry."primary_key"
+       AND NOT (c.column_name = ANY (entry."localized_columns"))
        AND c.is_generated = 'NEVER';
+    assignments := COALESCE(assignments, ARRAY[]::text[]);
+
+    -- Localized columns, merged key by key for the locales being published.
+    -- `jsonb_each` raises on anything but an object, and a localized column the author has not
+    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every
+    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.
+    FOREACH col IN ARRAY entry."localized_columns" LOOP
+      assignments := assignments || format(
+        '%I = COALESCE(%I, ''{{}}''::jsonb) || (
+           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{{}}''::jsonb)
+             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''
+                                  THEN $2 -> %L ELSE ''{{}}''::jsonb END) e
+            WHERE e.key = ANY ($3))',
+        col, col, col, col);
+    END LOOP;
 
     EXECUTE format(
       'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src
         WHERE %I = $1::%s',
-      entry."schema_name", entry."table_name", assignments,
+      entry."schema_name", entry."table_name", array_to_string(assignments, ', '),
       entry."schema_name", entry."table_name",
       entry."primary_key", entry."primary_key_type")
-      USING record_id, pending.data;
+      USING record_id, target.data, pending;
     GET DIAGNOSTICS updated = ROW_COUNT;
 
     IF updated = 0 THEN
@@ -944,50 +1050,112 @@ CREATE OR REPLACE FUNCTION "{rpc}".publish(model_table text, record_id text)
     END IF;
 
     IF entry."published_at_column" IS NOT NULL THEN
-      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, now()) WHERE %I = $1::%s',
+      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',
         entry."schema_name", entry."table_name",
         entry."published_at_column", entry."published_at_column",
         entry."primary_key", entry."primary_key_type")
-        USING record_id;
+        USING record_id, stamp;
     END IF;
 
-    EXECUTE format('UPDATE %I.%I SET %I = ''published'' WHERE %I = $1::%s AND %I = $2',
-      entry."schema_name", entry."versions_table", 'status',
-      'record_id', entry."primary_key_type", 'version')
-      USING record_id, pending.version;
+    -- Exactly one version claims a locale, so publishing takes it off every other version. Without
+    -- this, "which version is live for fr" would have several answers after a restore.
+    EXECUTE format(
+      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{{}}''::jsonb
+          THEN ''draft'' ELSE ''published'' END
+        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',
+      entry."schema_name", entry."versions_table",
+      'published_locales', 'published_locales', 'status', 'published_locales',
+      'record_id', entry."primary_key_type", 'version', 'published_locales')
+      USING record_id, target.version, pending;
 
-    RETURN jsonb_build_object('record_id', record_id, 'version', pending.version, 'status', 'published');
+    EXECUTE format(
+      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''
+        WHERE %I = $1::%s AND %I = $2',
+      entry."schema_name", entry."versions_table",
+      'published_locales', 'published_locales', 'status',
+      'record_id', entry."primary_key_type", 'version')
+      USING record_id, target.version,
+            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);
+
+    RETURN jsonb_build_object(
+      'record_id', record_id, 'version', target.version,
+      'status', 'published', 'locales', to_jsonb(pending));
   END;
   $fn$;
 
--- Take a record out of publication, leaving the live content in place.
+-- Take some or all locales out of publication.
 --
--- The content stays because it is the newest published version: withdrawing publication is not the
--- same as reverting an edit, and blanking the row would lose the thing a later publish would restore.
-CREATE OR REPLACE FUNCTION "{rpc}".unpublish(model_table text, record_id text)
+-- Removing a locale's keys from the live columns is what actually hides it, for the same reason
+-- publishing writes them: an absent translation needs no policy. The remaining locales are
+-- untouched, and `published_at` is cleared only when nothing is left published, so a record with one
+-- locale still live stays readable to a rule that compares `published_at`.
+--
+-- On a model with no localized column this is the whole record, and the content stays in the row:
+-- withdrawing publication is not the same as reverting an edit, and blanking the row would lose the
+-- thing a later publish would restore.
+CREATE OR REPLACE FUNCTION "{rpc}".unpublish(
+  model_table text, record_id text, locales text[] DEFAULT NULL)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    want text[];
+    assignments text[] := ARRAY[]::text[];
+    col text;
+    remaining boolean;
     updated integer;
   BEGIN
-    IF entry."published_at_column" IS NULL THEN
-      RAISE EXCEPTION 'model % has no published_at column, so there is nothing to unpublish', entry."model_name"
-        USING ERRCODE = '22023',
-              HINT = 'Add `published_at: Optional<Timestamp>` to the model.';
+    want := COALESCE(
+      locales,
+      CASE WHEN cardinality(entry."localized_columns") = 0 OR cardinality(entry."locales") = 0
+           THEN ARRAY['*'] ELSE entry."locales" END);
+
+    FOREACH col IN ARRAY entry."localized_columns" LOOP
+      assignments := assignments || format('%I = COALESCE(%I, ''{{}}''::jsonb) - $2', col, col);
+    END LOOP;
+
+    IF cardinality(assignments) > 0 THEN
+      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',
+        entry."schema_name", entry."table_name", array_to_string(assignments, ', '),
+        entry."primary_key", entry."primary_key_type")
+        USING record_id, want;
+      GET DIAGNOSTICS updated = ROW_COUNT;
+      IF updated = 0 THEN
+        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table
+          USING ERRCODE = '42501';
+      END IF;
     END IF;
 
-    EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',
-      entry."schema_name", entry."table_name", entry."published_at_column",
-      entry."primary_key", entry."primary_key_type")
-      USING record_id;
-    GET DIAGNOSTICS updated = ROW_COUNT;
+    EXECUTE format(
+      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{{}}''::jsonb
+          THEN ''draft'' ELSE ''published'' END
+        WHERE %I = $1::%s AND %I ?| $2',
+      entry."schema_name", entry."versions_table",
+      'published_locales', 'published_locales', 'status', 'published_locales',
+      'record_id', entry."primary_key_type", 'published_locales')
+      USING record_id, want;
 
-    IF updated = 0 THEN
-      RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table
-        USING ERRCODE = '42501';
+    EXECUTE format(
+      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{{}}''::jsonb)',
+      entry."schema_name", entry."versions_table", 'record_id', entry."primary_key_type",
+      'published_locales')
+      INTO remaining USING record_id;
+
+    IF entry."published_at_column" IS NOT NULL AND NOT remaining THEN
+      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',
+        entry."schema_name", entry."table_name", entry."published_at_column",
+        entry."primary_key", entry."primary_key_type")
+        USING record_id;
+      GET DIAGNOSTICS updated = ROW_COUNT;
+      IF updated = 0 THEN
+        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table
+          USING ERRCODE = '42501';
+      END IF;
     END IF;
 
-    RETURN jsonb_build_object('record_id', record_id, 'status', 'unpublished');
+    RETURN jsonb_build_object(
+      'record_id', record_id, 'status',
+      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,
+      'locales', to_jsonb(want));
   END;
   $fn$;
 
@@ -1016,8 +1184,8 @@ CREATE OR REPLACE FUNCTION "{rpc}".restore_version(model_table text, record_id t
   $fn$;
 
 GRANT EXECUTE ON FUNCTION "{rpc}".create_draft(text, text, jsonb) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION "{rpc}".publish(text, text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION "{rpc}".unpublish(text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION "{rpc}".publish(text, text, integer, text[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION "{rpc}".unpublish(text, text, text[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION "{rpc}".restore_version(text, text, integer) TO authenticated, service_role;
 
 "#

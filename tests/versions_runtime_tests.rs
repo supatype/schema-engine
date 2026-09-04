@@ -199,7 +199,7 @@ async fn a_second_publish_with_nothing_pending_is_refused_not_reverted() {
                 .await
                 .expect_err("a second publish with nothing pending must be refused");
             assert!(
-                format!("{err}").contains("no pending draft"),
+                format!("{err}").contains("already live for"),
                 "expected a refusal naming the reason; got {err}"
             );
         })
@@ -419,7 +419,7 @@ async fn an_audit_model_records_every_write_and_refuses_drafts() {
 }
 
 #[tokio::test]
-async fn a_localized_field_survives_the_snapshot_round_trip_and_publishes_whole() {
+async fn a_localized_field_survives_the_snapshot_round_trip_and_defaults_to_every_locale() {
     with_seeded(|db| {
         Box::pin(async move {
             // A localized field is one JSONB column holding every locale, so a snapshot is JSONB
@@ -528,6 +528,188 @@ async fn any_version_can_be_restored_including_one_from_the_middle_of_a_history(
                 .await
                 .expect_err("a version that does not exist must be refused");
             assert!(format!("{err}").contains("no version"), "got {err}");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn one_locale_can_go_live_while_another_stays_in_draft() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(
+                db,
+                r#"{"body": {"en": "English copy", "fr": "Copie francaise"}}"#,
+            )
+            .await;
+
+            sqlx::query("SELECT supatype.publish('posts', $1, NULL, ARRAY['en'])")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("publish English only");
+
+            // The unpublished translation is *absent* from the live row rather than hidden by a
+            // policy. That is the whole reason this is enforceable: row level security cannot hide
+            // one key of a column, and nothing has to, because the value was never written.
+            let live: (Option<String>, Option<String>, bool) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr', body ? 'fr' FROM public.posts
+                  WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the live row");
+            assert_eq!(live.0.as_deref(), Some("English copy"));
+            assert_eq!(live.1, None, "the French copy must not be live");
+            assert!(!live.2, "the key must be absent, not present and empty");
+
+            // The draft still holds both, so the translation is not lost, just unpublished.
+            let drafted: (Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr' FROM draft.posts WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the draft view");
+            assert_eq!(drafted.0.as_deref(), Some("English copy"));
+            assert_eq!(drafted.1.as_deref(), Some("Copie francaise"));
+
+            // And the version records which locales it is live for.
+            let published: serde_json::Value = sqlx::query_scalar(
+                "SELECT published_locales FROM public.posts_versions
+                  WHERE record_id = $1::uuid ORDER BY version DESC LIMIT 1",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read published_locales");
+            assert!(published.get("en").is_some(), "en must be recorded live");
+            assert!(published.get("fr").is_none(), "fr must not be");
+
+            // Publishing the translation later brings it live without touching English.
+            sqlx::query("SELECT supatype.publish('posts', $1, NULL, ARRAY['fr'])")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("publish French");
+            let both: (Option<String>, Option<String>) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the live row");
+            assert_eq!(both.0.as_deref(), Some("English copy"));
+            assert_eq!(both.1.as_deref(), Some("Copie francaise"));
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn unpublishing_one_locale_leaves_the_others_live() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"body": {"en": "Live", "fr": "En ligne"}}"#).await;
+            publish(db).await.expect("publish both");
+
+            sqlx::query("SELECT supatype.unpublish('posts', $1, ARRAY['fr'])")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("unpublish French");
+
+            let live: (Option<String>, Option<String>, bool) = sqlx::query_as(
+                "SELECT body->>'en', body->>'fr', published_at IS NOT NULL FROM public.posts
+                  WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read the live row");
+            assert_eq!(live.0.as_deref(), Some("Live"), "English stays live");
+            assert_eq!(live.1, None, "French is withdrawn");
+            assert!(
+                live.2,
+                "published_at must survive while any locale is live, or a rule comparing it would \
+                 hide the locales that are still published"
+            );
+
+            // Withdrawing the last locale clears `published_at`, so the record reads as unpublished
+            // to a rule that compares it.
+            sqlx::query("SELECT supatype.unpublish('posts', $1, ARRAY['en'])")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("unpublish English");
+            let hidden: bool = sqlx::query_scalar(
+                "SELECT published_at IS NULL FROM public.posts WHERE id = $1::uuid",
+            )
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("read published_at");
+            assert!(hidden);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_named_version_can_be_published_directly() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"title": "One"}"#).await;
+            save_draft(db, r#"{"title": "Two"}"#).await;
+            save_draft(db, r#"{"title": "Three"}"#).await;
+
+            // Straight to version 1, with two newer drafts above it.
+            sqlx::query("SELECT supatype.publish('posts', $1, 1)")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("publish version 1");
+            assert_eq!(live_title(db).await, "One");
+
+            // Exactly one version claims a locale, so publishing another moves the claim rather
+            // than leaving two versions both saying they are live.
+            sqlx::query("SELECT supatype.publish('posts', $1, 3)")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect("publish version 3");
+            assert_eq!(live_title(db).await, "Three");
+
+            let claims: Vec<(i32, bool)> = sqlx::query_as(
+                "SELECT version, published_locales <> '{}'::jsonb FROM public.posts_versions
+                  WHERE record_id = $1::uuid ORDER BY version",
+            )
+            .bind(POST)
+            .fetch_all(&mut *db)
+            .await
+            .expect("read the claims");
+            assert_eq!(
+                claims,
+                vec![(1, false), (2, false), (3, true)],
+                "only the published version may claim a locale"
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn publishing_a_version_that_was_never_written_is_refused() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"title": "Only one"}"#).await;
+            let err = sqlx::query("SELECT supatype.publish('posts', $1, 42)")
+                .bind(POST)
+                .execute(&mut *db)
+                .await
+                .expect_err("a version that does not exist must be refused");
+            assert!(format!("{err}").contains("no version to publish"), "got {err}");
         })
     })
     .await;

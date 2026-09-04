@@ -110,7 +110,7 @@ pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
     }
 }
 
-fn is_localized(field: &FieldAst) -> bool {
+pub(crate) fn is_localized(field: &FieldAst) -> bool {
     match field {
         FieldAst::Text(f)
         | FieldAst::RichText(f)

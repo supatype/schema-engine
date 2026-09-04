@@ -1,5 +1,7 @@
 {
   "astVersion": 2,
+  "locales": ["en", "fr"],
+  "defaultLocale": "en",
   "publishing": {
     "draftVisibility": ["admin", "developer", "editor"],
     "previewDefaultTtl": 900,
