@@ -1097,3 +1097,87 @@ async fn a_request_with_no_preview_claim_is_entitled_to_nothing() {
     })
     .await;
 }
+
+// ─── auth.uid() ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn auth_uid_is_null_for_a_request_with_no_subject() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // It used to answer the nil UUID, and that is a hole rather than a convenience: a
+            // `service_role` write has no subject, so it stamped ownership columns with the nil
+            // UUID, and every *other* subject-less caller then satisfied `column = auth.uid()`.
+            become_caller(db, None).await;
+            let uid: Option<String> = sqlx::query_scalar("SELECT auth.uid()::text")
+                .fetch_one(&mut *db)
+                .await
+                .expect("read auth.uid()");
+            assert_eq!(uid, None, "no subject means no user, not user zero");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn auth_uid_reads_the_subject_when_there_is_one() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            let uid: Option<String> = sqlx::query_scalar("SELECT auth.uid()::text")
+                .fetch_one(&mut *db)
+                .await
+                .expect("read auth.uid()");
+            assert_eq!(uid.as_deref(), Some(EDITOR));
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_auth_helpers_survive_an_empty_claims_setting() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // `current_setting(…, true)` answers NULL when unset and the empty string when
+            // something has set it to one, and `''::jsonb` raises `22P02`. Seven helpers each
+            // carried their own unguarded cast, so such a request failed with a JSON syntax error
+            // rather than reading as anonymous.
+            sqlx::query("SELECT set_config('request.jwt.claims', '', false)")
+                .execute(&mut *db)
+                .await
+                .expect("clear the claims");
+
+            let row: (Option<String>, String, String, Option<String>) = sqlx::query_as(
+                "SELECT auth.uid()::text, auth.role(), auth.email(),
+                        auth.claim_text('app_metadata.tier')",
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("every helper must read an empty claims setting as anonymous");
+
+            assert_eq!(row.0, None);
+            assert_eq!(row.1, "anon");
+            assert_eq!(row.2, "");
+            assert_eq!(row.3, None);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_subject_less_caller_does_not_match_a_row_owned_by_the_nil_uuid() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // The shape of the old hole, written as the thing it must not do. A row whose owner
+            // column literally holds the nil UUID must not belong to everyone who has no subject.
+            become_caller(db, None).await;
+            let matches: bool = sqlx::query_scalar(
+                "SELECT '00000000-0000-0000-0000-000000000000'::uuid = auth.uid()",
+            )
+            .fetch_one(&mut *db)
+            .await
+            .map(|v: Option<bool>| v.unwrap_or(false))
+            .expect("compare");
+            assert!(!matches, "the nil UUID must not be everybody");
+        })
+    })
+    .await;
+}

@@ -248,23 +248,17 @@ fn visibility_helpers_sql() -> String {
         r#"
 -- The caller's user id, or NULL when the request has no subject.
 --
--- **Not `auth.uid()`, and the difference is a security hole rather than a nicety.** `auth.uid()`
--- falls back to the nil UUID `00000000-0000-0000-0000-000000000000` when there is no `sub` claim, and
--- two kinds of request legitimately have none: a `service_role` call, which is how Studio writes, and
--- a preview link, which carries `role: authenticated` and deliberately no subject. So a draft saved
--- through Studio would be stamped `created_by = <nil uuid>`, and every subject-less caller would then
--- satisfy `created_by = auth.uid()` and read it. Storing NULL and comparing against NULL closes that:
--- no subject matches nothing.
+-- A thin alias for `auth.uid()`, which is what it now means. It was its own implementation while
+-- `auth.uid()` fell back to the nil UUID for a subject-less request, and that gap was a hole rather
+-- than a nicety: two kinds of request legitimately have no subject, a `service_role` call and a
+-- preview link, so a draft saved through Studio was stamped with the nil UUID and every other
+-- subject-less caller then satisfied `created_by = auth.uid()`.
 --
--- It also survives an empty claims setting. `current_setting(…, true)::jsonb` raises `22P02` on `''`,
--- which is not the same as unset, and a session that has been handed an empty string should read as
--- anonymous rather than fail.
+-- `auth.uid()` answers NULL now, so this exists only to keep the policies below reading as one
+-- thought. It is not a second definition to keep in step.
 CREATE OR REPLACE FUNCTION {helper}.caller_id() RETURNS uuid
   LANGUAGE sql STABLE SET search_path = '' AS $fn$
-    SELECT nullif(
-      nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub',
-      ''
-    )::uuid;
+    SELECT auth.uid();
   $fn$;
 
 CREATE OR REPLACE FUNCTION {helper}.draft_visibility_roles() RETURNS text[]
