@@ -1181,3 +1181,104 @@ async fn a_subject_less_caller_does_not_match_a_row_owned_by_the_nil_uuid() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn an_anonymous_reader_can_still_read_a_versioned_model() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"title": "Public post"}"#).await;
+            publish(db).await.expect("publish");
+
+            // As `anon`, which is how the public reads a blog. Every other test here runs as the
+            // table's owner, which holds privileges the public does not, so the suite passed
+            // against a database no anonymous reader could use: the draft-aware policy was written
+            // as an `EXISTS` over the snapshot table, and evaluating it needs a privilege `anon`
+            // deliberately does not have. Ordinary reads of *published* content failed `42501`.
+            sqlx::query("SET ROLE anon")
+                .execute(&mut *db)
+                .await
+                .expect("become anon");
+
+            let readable: Result<Option<String>, sqlx::Error> =
+                sqlx::query_scalar("SELECT title FROM public.posts WHERE id = $1::uuid")
+                    .bind(POST)
+                    .fetch_optional(&mut *db)
+                    .await;
+
+            assert!(
+                readable.is_ok(),
+                "an anonymous read of a versioned model must not fail: {:?}",
+                readable.err()
+            );
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_anonymous_reader_is_told_nothing_about_a_draft() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            save_draft(db, r#"{"title": "Not for the public"}"#).await;
+
+            // Both halves of being anonymous. `SET ROLE anon` changes only the Postgres role; the
+            // session keeps whatever claims were set, so a test that switched role alone would
+            // still be the editor as far as every policy is concerned — and would pass while
+            // asserting nothing.
+            sqlx::query("SELECT set_config('request.jwt.claims', '', false)")
+                .execute(&mut *db)
+                .await
+                .expect("drop the claims");
+            sqlx::query("SET ROLE anon")
+                .execute(&mut *db)
+                .await
+                .expect("become anon");
+
+            // The helper the policy calls is SECURITY DEFINER, so it reads the snapshot table on the
+            // caller's behalf. That is safe only because the predicate inside it is what withholds
+            // the draft, not the privilege: this asserts the predicate still says no.
+            let sees: bool = sqlx::query_scalar("SELECT _supatype.sees_draft_posts($1)")
+                .bind(POST)
+                .fetch_one(&mut *db)
+                .await
+                .expect("evaluate the draft clause as anon");
+            assert!(!sees, "anonymous must never be shown a draft");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn usage_on_the_helper_schema_does_not_hand_anyone_the_maintenance_functions() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // The API roles need USAGE here so a draft policy can resolve the helper it calls.
+            // Postgres grants EXECUTE on a new function to PUBLIC, so without the revokes that
+            // USAGE also hands every role `prune_versions`, which is SECURITY DEFINER and deletes
+            // history.
+            sqlx::query("SET ROLE anon")
+                .execute(&mut *db)
+                .await
+                .expect("become anon");
+
+            let pruning = sqlx::query("SELECT _supatype.prune_versions()")
+                .execute(&mut *db)
+                .await;
+            assert!(
+                pruning.is_err(),
+                "anonymous must not be able to delete version history"
+            );
+
+            let publishing = sqlx::query("SELECT _supatype.run_due_publishes()")
+                .execute(&mut *db)
+                .await;
+            assert!(
+                publishing.is_err(),
+                "anonymous must not be able to run the publishing job"
+            );
+
+            sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
+        })
+    })
+    .await;
+}

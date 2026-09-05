@@ -221,6 +221,14 @@ fn settings_sql(publishing: &PublishingAst) -> String {
 
     format!(
         "CREATE SCHEMA IF NOT EXISTS {helper};\n\n\
+         -- The API roles need to *resolve* names here, because the draft policies on the model\n\
+         -- tables call helpers in this schema and a policy expression runs as the caller. Without\n\
+         -- it an anonymous read of a versioned model fails `42501 permission denied for schema\n\
+         -- _supatype` — on published content, which is most of what a reader asks for.\n\
+         --\n\
+         -- USAGE alone discloses nothing: every table here still requires its own grant and none\n\
+         -- is given. Functions are the exception, and the reason for the revokes below.\n\
+         GRANT USAGE ON SCHEMA {helper} TO anon, authenticated, service_role;\n\n\
          CREATE TABLE IF NOT EXISTS {helper}.publishing_settings (\n    \
          \"singleton\" BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (\"singleton\"),\n    \
          \"configured_visibility\" TEXT[] NOT NULL DEFAULT '{{}}',\n    \
@@ -653,19 +661,31 @@ fn can_edit_function_sql(ast: &SchemaAst, model: &ModelAst, schema: &str) -> Str
     )
 }
 
-/// The extra SELECT policy that lets the right people read an unpublished row.
+fn sees_draft_function_name(table: &str) -> String {
+    format!("sees_draft_{table}")
+}
+
+/// The extra SELECT policy that lets the right people read an unpublished row, and the helper it
+/// asks.
 ///
-/// Permissive, so it ORs with the model's own read rule rather than narrowing it. Without it, a blog
-/// whose `read` rule is `published_at <= now()` hides every unpublished record from its own author,
-/// and everything downstream — reading the pending draft, editing it, publishing it — operates on a
-/// row nobody can see.
+/// **The helper is `SECURITY DEFINER`, and that is the whole point of it.** The policy asks a
+/// question about drafts, and answering it means reading the snapshot table — which `anon`
+/// deliberately holds no privilege on. Written inline, as an `EXISTS` over that table, the policy
+/// therefore failed for every anonymous caller with `42501 permission denied for table
+/// <table>_versions`, on ordinary reads of *published* content. A blog served nothing to the public.
 ///
-/// The predicate is the snapshot policy's, written out rather than inherited. Relying on row level
-/// security to filter the subquery would work for an API caller and not for the table's owner, and a
-/// policy whose meaning depends on who is asking is a policy nobody can review.
+/// Row level security is not what withholds drafts here; the predicate inside is. So the helper may
+/// read the table on the caller's behalf and return one boolean, which discloses nothing beyond what
+/// the policy would have.
 ///
-/// It reads the snapshot table, whose own policy reads no table at all, so the reference is
-/// one-directional and there is no cycle for Postgres to refuse.
+/// Found by serving a real page: every test until then ran as the table's owner, which holds the
+/// privilege the policy needs, so the whole suite passed against a database no anonymous reader
+/// could use.
+///
+/// The policy itself is permissive, so it ORs with the model's own read rule rather than narrowing
+/// it. Without it, a blog whose `read` rule is `published_at <= now()` hides every unpublished
+/// record from its own author, and reading, editing and publishing all operate on a row nobody can
+/// see.
 fn draft_aware_select_policy_sql(
     schema: &str,
     table: &str,
@@ -674,28 +694,33 @@ fn draft_aware_select_policy_sql(
 ) -> String {
     let policy = format!("{table}_draft_select");
     let comment = crate::managed::managed_comment("rls_policy", table, &["draft_select"]);
+    let helper_fn = sees_draft_function_name(table);
     format!(
-        "DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
-         CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
-         FOR SELECT USING (\n    \
-         EXISTS (\n      \
+        "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record text)\n  \
+         RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$\n    \
+         SELECT EXISTS (\n      \
          SELECT 1 FROM {schema_q}.{versions_q} v\n       \
-         WHERE v.\"record_id\" = {pk_q}\n         \
+         WHERE v.\"record_id\"::text = p_record\n         \
          AND (\n           \
-           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = {helper}.caller_id())\n           \
+         (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = {helper}.caller_id())\n           \
          OR (SELECT {helper}.sees_all_drafts())\n           \
          OR {helper}.preview_allows({table_lit}, v.\"record_id\"::text)\n         \
          )\n    \
-         )\n  \
-         );\n\
+         );\n  \
+         $fn$;\n\
+         GRANT EXECUTE ON FUNCTION {helper}.{fn_q}(text) TO anon, authenticated, service_role;\n\n\
+         DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
+         CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
+         FOR SELECT USING ({helper}.{fn_q}({pk_q}::text));\n\
          COMMENT ON POLICY {policy_q} ON {schema_q}.{table_q} IS '{comment}';\n\n",
+        helper = HELPER_SCHEMA,
+        fn_q = quoted(&helper_fn),
         policy_q = quoted(&policy),
         schema_q = quoted(schema),
         table_q = quoted(table),
         versions_q = quoted(versions_table),
         pk_q = quoted(primary_key),
         table_lit = quote_literal(table),
-        helper = HELPER_SCHEMA,
     )
 }
 
@@ -1382,6 +1407,21 @@ CREATE OR REPLACE FUNCTION {helper}.prune_versions()
     RETURN removed;
   END;
   $fn$;
+
+-- Postgres grants EXECUTE on a new function to PUBLIC, so USAGE on this schema would otherwise
+-- hand every role the maintenance functions: `prune_versions` is SECURITY DEFINER and deletes
+-- history, and `run_due_publishes` publishes. Neither is a caller's to invoke. The API roles need
+-- USAGE here only so a draft policy can resolve the helper it calls, and that helper is granted
+-- deliberately, one line at a time.
+REVOKE ALL ON FUNCTION {helper}.prune_versions() FROM PUBLIC;
+REVOKE ALL ON FUNCTION {helper}.run_due_publishes(timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION {helper}.draft_visibility_roles() FROM PUBLIC;
+REVOKE ALL ON FUNCTION {helper}.versioned_model(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION {helper}.sees_all_drafts() TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {helper}.preview_allows(text, text) TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {helper}.preview_epoch() TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {helper}.caller_id() TO anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {helper}.versioned_model(text) TO authenticated, service_role;
 
 GRANT EXECUTE ON FUNCTION "{rpc}".create_draft(text, text, jsonb) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION "{rpc}".publish(text, text, integer, text[]) TO authenticated, service_role;
