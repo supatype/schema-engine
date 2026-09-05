@@ -421,25 +421,16 @@ fn render_forward_operation_lines(
     Ok(lines)
 }
 
-fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
-    let mut lines = render_forward_preamble(diff);
-    // A CHECK that calls a function is validated when the table is created, so the helper
-    // functions have to exist before any operation line runs, not alongside the triggers.
-    lines.push(super::constraint_helpers::generate());
-    lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(
-        diff,
-        ast,
-        schema,
-        &diff.unmanaged_model_tables,
-    ));
-    Ok(lines.join("\n"))
-}
-
-fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
-    let mut lines = render_forward_preamble(diff);
-    lines.push("BEGIN;".into());
-    lines.push(String::new());
+/// Everything a forward migration does, between the preamble and the transaction boundary.
+///
+/// **One composition, because there were two and they drifted.** `render_forward_wrapped` builds the
+/// migration file and `render_forward_outer_body` builds what a push applies, and they were separate
+/// lists of the same steps: the drafts and publishing layer was added to the first and not the
+/// second, so a push created the snapshot tables and none of the views, functions or policies that
+/// make them mean anything. The push reported success. Only running it against a real database
+/// showed it, because every test rendered the file.
+fn render_forward_core(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
     // A CHECK that calls a function is validated when the table is created, so the helper
     // functions have to exist before any operation line runs, not alongside the triggers.
     lines.push(super::constraint_helpers::generate());
@@ -453,6 +444,20 @@ fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> R
     // Last, because it reads the snapshot tables the operations above create and the model tables
     // they reference. Errors rather than warns when the push failed to state who may see a draft.
     lines.extend(render_versions_lines(ast, schema)?);
+    Ok(lines)
+}
+
+fn render_forward_outer_body(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
+    let mut lines = render_forward_preamble(diff);
+    lines.extend(render_forward_core(diff, schema, ast)?);
+    Ok(lines.join("\n"))
+}
+
+fn render_forward_wrapped(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
+    let mut lines = render_forward_preamble(diff);
+    lines.push("BEGIN;".into());
+    lines.push(String::new());
+    lines.extend(render_forward_core(diff, schema, ast)?);
     lines.push("COMMIT;".into());
     Ok(lines.join("\n"))
 }

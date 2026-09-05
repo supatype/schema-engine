@@ -392,3 +392,33 @@ fn a_schema_with_no_versioned_model_carries_no_preview_bounds() {
     let config = supatype_engine::generator::typescript::admin::generate(&ast).unwrap();
     assert!(config["publishing"].is_null());
 }
+
+#[test]
+fn what_a_push_applies_carries_the_same_layer_as_the_migration_file() {
+    // These are two renderers over the same steps, and they drifted: the drafts and publishing
+    // layer was added to the file and not to the push, so a push created the snapshot tables and
+    // none of the views, functions or policies that make them mean anything — and reported success.
+    // Every test rendered the file, so every test passed. Only a real database showed it.
+    let ast = versioned_ast();
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
+
+    let file = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    let applied =
+        migration::push_storage_and_model_apply_body("", &diff, false, "public", &ast).unwrap();
+
+    for marker in [
+        "CREATE SCHEMA IF NOT EXISTS \"draft\"",
+        "_supatype.versioned_models",
+        "\"supatype\".create_draft",
+        "\"supatype\".publish",
+        "CREATE VIEW \"draft\".\"posts\"",
+        "CREATE POLICY \"posts_versions_select\"",
+        "_supatype.caller_id()",
+    ] {
+        assert!(file.contains(marker), "the migration file is missing {marker}");
+        assert!(
+            applied.contains(marker),
+            "what a push applies is missing {marker}, so the file and the push disagree"
+        );
+    }
+}

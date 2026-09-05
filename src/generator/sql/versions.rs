@@ -438,7 +438,7 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
     out.push_str(&settings_sql(publishing));
     out.push('\n');
     out.push_str(&registry_sql(ast, schema));
-    out.push_str(&rpc_functions_sql());
+    out.push_str(&rpc_functions_sql(schema));
     out.push_str(&draft_schema_preamble());
 
     for model in &models {
@@ -858,7 +858,26 @@ CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
 /// model's row, gated by the model's own `update` rule. Nothing runs with borrowed privilege, so
 /// there is no second permission model to keep in step with the first — which was the whole reason
 /// to generate these rather than write them in application code.
-fn rpc_functions_sql() -> String {
+/// The search path a function that writes a user's table must run under.
+///
+/// **Not `''`, and that distinction cost a real schema.** An empty search path is right for SQL that
+/// only ever names its own objects, and every reference in these functions is fully qualified — but
+/// the `UPDATE` they perform fires the *user's* triggers, and those inherit it. A generated slug
+/// trigger calling `unaccent(...)` unqualified, which is how it is written and how it works for an
+/// ordinary write, then fails with `function unaccent(text) does not exist` and takes the publish
+/// with it.
+///
+/// A write made on the caller's behalf has to run in the environment their own write would, so this
+/// is what PostgREST gives an ordinary request, with the managed schema named explicitly.
+fn write_search_path(schema: &str) -> String {
+    if schema == "public" {
+        return "pg_catalog, public, extensions".to_string();
+    }
+    format!("pg_catalog, {}, public, extensions", quoted(schema))
+}
+
+fn rpc_functions_sql(schema: &str) -> String {
+    let write_path = write_search_path(schema);
     let helper = HELPER_SCHEMA;
     let rpc = RPC_SCHEMA;
     format!(
@@ -893,7 +912,7 @@ CREATE OR REPLACE FUNCTION {helper}.versioned_model(p_table text)
 -- visibility covers every Studio role precisely so that an editor cannot save over a pending draft
 -- they were not shown.
 CREATE OR REPLACE FUNCTION "{rpc}".create_draft(model_table text, record_id text, data jsonb)
-  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
     base jsonb;
@@ -954,7 +973,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".create_draft(model_table text, record_id text
 -- publishing and there is nothing new to keep in step.
 CREATE OR REPLACE FUNCTION "{rpc}".publish(
   model_table text, record_id text, version integer DEFAULT NULL, locales text[] DEFAULT NULL)
-  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
     target record;
@@ -1093,7 +1112,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".publish(
 -- thing a later publish would restore.
 CREATE OR REPLACE FUNCTION "{rpc}".unpublish(
   model_table text, record_id text, locales text[] DEFAULT NULL)
-  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
     want text[];
@@ -1159,7 +1178,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".unpublish(
 -- Nothing goes live without publishing, so restoring is an editing act with a preview and a second
 -- decision behind it, not a way to change what the world sees in one call.
 CREATE OR REPLACE FUNCTION "{rpc}".restore_version(model_table text, record_id text, version integer)
-  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
     snapshot jsonb;
@@ -1201,7 +1220,7 @@ CREATE OR REPLACE FUNCTION {helper}.default_locales(entry {helper}.versioned_mod
 CREATE OR REPLACE FUNCTION "{rpc}".schedule_publish(
   model_table text, record_id text, at timestamptz,
   version integer DEFAULT NULL, locales text[] DEFAULT NULL)
-  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
     target integer;
@@ -1248,7 +1267,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".schedule_publish(
 -- Withdraw a schedule without publishing anything.
 CREATE OR REPLACE FUNCTION "{rpc}".unschedule_publish(
   model_table text, record_id text, version integer DEFAULT NULL, locales text[] DEFAULT NULL)
-  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
     want text[] := COALESCE(locales, {helper}.default_locales(entry));
@@ -1288,7 +1307,7 @@ GRANT EXECUTE ON FUNCTION "{rpc}".unschedule_publish(text, text, integer, text[]
 -- a warning and the schedule cleared, because a schedule that cannot be honoured will not start
 -- working on the next tick and retrying it every minute for ever is worse than saying so once.
 CREATE OR REPLACE FUNCTION {helper}.run_due_publishes(now_at timestamptz DEFAULT now())
-  RETURNS integer LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  RETURNS integer LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models;
     due record;
