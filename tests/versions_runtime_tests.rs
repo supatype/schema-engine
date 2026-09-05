@@ -926,3 +926,174 @@ async fn the_scheduler_is_wired_up_when_the_database_has_one() {
     })
     .await;
 }
+
+/// The claims a preview link carries, as `supatype-auth` mints them.
+///
+/// Built here rather than imported, because the point is to check that the shape
+/// the Go service signs is the shape the generated policy reads. Two repos have to
+/// agree on this, and nothing but a test that speaks both can say whether they do.
+fn preview_claims(scope: &str, model: &str, record: &str, epoch: i32) -> String {
+    let preview = if scope == "record" {
+        serde_json::json!({
+            "scope": "record", "model": model, "record_id": record, "epoch": epoch
+        })
+    } else {
+        serde_json::json!({ "scope": "project", "epoch": epoch })
+    };
+    // No `sub`: `auth.uid()` is then null and the bearer inherits nothing from
+    // looking logged in.
+    serde_json::json!({ "role": "authenticated", "preview": preview }).to_string()
+}
+
+async fn become_preview_bearer(db: &mut PgConnection, claims: &str) {
+    sqlx::query("SELECT set_config('request.jwt.claims', $1, false)")
+        .bind(claims)
+        .execute(db)
+        .await
+        .expect("set preview claims");
+}
+
+#[tokio::test]
+async fn a_record_preview_link_opens_that_record_and_no_other() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            let other = "44444444-4444-4444-4444-444444444444";
+            sqlx::query("INSERT INTO public.posts (id, title) VALUES ($1::uuid, 'Other post')")
+                .bind(other)
+                .execute(&mut *db)
+                .await
+                .expect("seed a second post");
+
+            save_draft(db, r#"{"title": "Shared with a reviewer"}"#).await;
+            sqlx::query("SELECT supatype.create_draft('posts', $1, '{\"title\": \"Private\"}')")
+                .bind(other)
+                .execute(&mut *db)
+                .await
+                .expect("draft the second post");
+
+            let epoch: i32 = sqlx::query_scalar("SELECT _supatype.preview_epoch()")
+                .fetch_one(&mut *db)
+                .await
+                .expect("read the epoch");
+
+            become_preview_bearer(db, &preview_claims("record", "posts", POST, epoch)).await;
+
+            let visible: Vec<String> = sqlx::query_scalar(
+                "SELECT title FROM draft.posts ORDER BY title",
+            )
+            .fetch_all(&mut *db)
+            .await
+            .expect("read drafts as the bearer");
+
+            // The table owner is not subject to RLS here, so this asserts the
+            // policy's own arithmetic through the helper rather than through
+            // privilege: what the bearer's claim entitles them to.
+            let entitled: (bool, bool) = sqlx::query_as(
+                "SELECT _supatype.preview_allows('posts', $1), _supatype.preview_allows('posts', $2)",
+            )
+            .bind(POST)
+            .bind(other)
+            .fetch_one(&mut *db)
+            .await
+            .expect("evaluate the preview clause");
+
+            assert!(entitled.0, "the link must open the record it names");
+            assert!(!entitled.1, "and must not open any other");
+            assert_eq!(visible.len(), 2, "the owner sees both; the claim is what differs");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_project_preview_link_opens_every_record() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            let epoch: i32 = sqlx::query_scalar("SELECT _supatype.preview_epoch()")
+                .fetch_one(&mut *db)
+                .await
+                .expect("read the epoch");
+            become_preview_bearer(db, &preview_claims("project", "", "", epoch)).await;
+
+            let entitled: bool = sqlx::query_scalar(
+                "SELECT _supatype.preview_allows('posts', $1) AND _supatype.preview_allows('ledger', $2)",
+            )
+            .bind(POST)
+            .bind(LEDGER)
+            .fetch_one(&mut *db)
+            .await
+            .expect("evaluate the preview clause");
+            assert!(entitled, "a project link covers every model and every record");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn bumping_the_epoch_withdraws_every_outstanding_link() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            let epoch: i32 = sqlx::query_scalar("SELECT _supatype.preview_epoch()")
+                .fetch_one(&mut *db)
+                .await
+                .expect("read the epoch");
+            become_preview_bearer(db, &preview_claims("record", "posts", POST, epoch)).await;
+
+            let before: bool =
+                sqlx::query_scalar("SELECT _supatype.preview_allows('posts', $1)")
+                    .bind(POST)
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("evaluate before");
+            assert!(before);
+
+            // What `POST /admin/preview-links/revoke` does. A signed token cannot
+            // be recalled, only outwaited, so this is the only thing that pulls
+            // one early.
+            sqlx::query(
+                "UPDATE _supatype.publishing_settings SET preview_epoch = preview_epoch + 1
+                  WHERE singleton",
+            )
+            .execute(&mut *db)
+            .await
+            .expect("bump the epoch");
+
+            let after: bool = sqlx::query_scalar("SELECT _supatype.preview_allows('posts', $1)")
+                .bind(POST)
+                .fetch_one(&mut *db)
+                .await
+                .expect("evaluate after");
+            assert!(!after, "a link minted under an older epoch must stop working");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_request_with_no_preview_claim_is_entitled_to_nothing() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            let entitled: bool = sqlx::query_scalar("SELECT _supatype.preview_allows('posts', $1)")
+                .bind(POST)
+                .fetch_one(&mut *db)
+                .await
+                .expect("evaluate with an ordinary caller");
+            assert!(!entitled, "an ordinary signed-in caller holds no preview link");
+
+            // And an empty claims setting must read as anonymous rather than raise:
+            // `current_setting(…)::jsonb` errors on '' and that is not the same as
+            // unset.
+            sqlx::query("SELECT set_config('request.jwt.claims', '', false)")
+                .execute(&mut *db)
+                .await
+                .expect("clear the claims");
+            let empty: bool = sqlx::query_scalar("SELECT _supatype.preview_allows('posts', $1)")
+                .bind(POST)
+                .fetch_one(&mut *db)
+                .await
+                .expect("an empty claims setting must not raise");
+            assert!(!empty);
+        })
+    })
+    .await;
+}

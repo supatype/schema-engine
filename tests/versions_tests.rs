@@ -367,3 +367,28 @@ fn studio_learns_publishing_from_versions_not_from_a_field_named_publishable() {
     assert_eq!(tag["publishing"], serde_json::json!(false));
     assert!(tag["versions"].is_null(), "an unversioned model gets no publish control");
 }
+
+#[test]
+fn the_admin_config_carries_the_preview_bounds_to_the_api_server() {
+    // The server already reads `adminRoles` from this file, so settings that arrive the same way
+    // travel the same way. A second delivery path is a second thing to forget.
+    let config =
+        supatype_engine::generator::typescript::admin::generate(&versioned_ast()).unwrap();
+    let publishing = &config["publishing"];
+    assert_eq!(
+        publishing["draftVisibility"],
+        serde_json::json!(["admin", "developer", "editor"])
+    );
+    assert_eq!(publishing["previewDefaultTtl"], serde_json::json!(900));
+    assert_eq!(publishing["previewMaxRecordTtl"], serde_json::json!(604800));
+    assert_eq!(publishing["previewMaxProjectTtl"], serde_json::json!(86400));
+    assert_eq!(publishing["previewAllowProjectScope"], serde_json::json!(true));
+}
+
+#[test]
+fn a_schema_with_no_versioned_model_carries_no_preview_bounds() {
+    // A project that never asked for drafts must not gain a preview-link endpoint's settings.
+    let ast = parser::parse(include_str!("fixtures/basic_blog.json")).unwrap();
+    let config = supatype_engine::generator::typescript::admin::generate(&ast).unwrap();
+    assert!(config["publishing"].is_null());
+}

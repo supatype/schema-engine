@@ -72,6 +72,20 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
         "models": models,
         "globals": globals,
         "storageBuckets": storage_buckets,
+        // Draft visibility and the bounds on a preview link, carried through from the project
+        // config so the API server can read them without a second delivery path. It already reads
+        // `adminRoles` from this file; this is the same journey for settings that arrive the same
+        // way. Absent for a schema with no versioned model.
+        "publishing": match ast.publishing.as_ref() {
+            Some(p) if crate::generator::sql::versions::has_versions(ast) => json!({
+                "draftVisibility": p.draft_visibility,
+                "previewDefaultTtl": p.preview_default_ttl,
+                "previewMaxRecordTtl": p.preview_max_record_ttl,
+                "previewMaxProjectTtl": p.preview_max_project_ttl,
+                "previewAllowProjectScope": p.preview_allow_project_scope,
+            }),
+            _ => Value::Null,
+        },
     }))
 }
 
