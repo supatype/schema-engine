@@ -291,8 +291,12 @@ mod tests {
     fn test_uid_returns_uuid() {
         let sql = generate_uid_function("auth");
         assert!(sql.contains("RETURNS uuid"));
-        assert!(sql.contains("request.jwt.claims"));
-        assert!(sql.contains("sub"));
+        assert!(sql.contains("'sub'"));
+        // Through `auth.jwt()` rather than reading the setting itself. One guarded accessor is what
+        // stops a second helper growing its own idea of what an absent claim means: the nil-UUID
+        // fallback that used to live here made every subject-less caller look like the same user.
+        assert!(sql.contains("auth.jwt()"));
+        assert!(!sql.contains("current_setting"));
     }
 
     #[test]
@@ -302,7 +306,7 @@ mod tests {
             .find("'app_metadata' ->> 'role'")
             .expect("app_metadata lookup");
         let claim_idx = sql
-            .find("::jsonb ->> 'role'")
+            .find("auth.jwt() ->> 'role'")
             .expect("top-level role fallback");
         assert!(
             app_idx < claim_idx,
@@ -317,6 +321,26 @@ mod tests {
     fn test_role_unprefixed() {
         let sql = generate_role_function("auth", "abc123");
         assert!(!sql.contains("abc123_anon"));
-        assert!(sql.contains("request.jwt.claims"));
+        assert!(sql.contains("auth.jwt()"));
+    }
+
+    #[test]
+    fn test_jwt_accessor_is_defined_before_its_callers() {
+        // `LANGUAGE sql` bodies are parsed and their references resolved when the function is
+        // created, so a helper calling `auth.jwt()` fails outright if `auth.jwt()` does not exist
+        // yet. The whole bundle is applied in order, which makes emission order load-bearing and
+        // invisible: reorder these and the failure is at migration time, not here.
+        let config = AuthFunctionConfig {
+            project_ref: String::new(),
+            auth_schema: "auth".to_string(),
+        };
+        let sql = generate_auth_functions(&config);
+        let defined = sql
+            .find("FUNCTION auth.jwt()")
+            .expect("auth.jwt() must be generated");
+        for caller in ["FUNCTION auth.uid()", "FUNCTION auth.role()"] {
+            let at = sql.find(caller).unwrap_or_else(|| panic!("{caller} missing"));
+            assert!(at > defined, "{caller} is created before auth.jwt() exists");
+        }
     }
 }

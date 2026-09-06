@@ -243,9 +243,68 @@ fn settings_sql(publishing: &PublishingAst) -> String {
          UPDATE {helper}.publishing_settings\n   \
          SET \"configured_visibility\" = {roles}, \"updated_at\" = now()\n \
          WHERE \"singleton\" AND \"configured_visibility\" IS DISTINCT FROM {roles};\n\n\
-         {helpers}",
+         {links}{helpers}",
         helper = HELPER_SCHEMA,
+        links = preview_links_sql(),
         helpers = visibility_helpers_sql(),
+    )
+}
+
+/// The record behind one preview link.
+///
+/// # Why this table exists at all
+///
+/// It did not, and revoking meant bumping `preview_epoch`, which withdraws *every* outstanding link
+/// at once. Sending one link to the wrong person therefore broke every other link in the project.
+/// The objection to keeping a table was that it would be a database of secrets to protect, and that
+/// objection is answered rather than accepted: a link is an id and a secret, and only a hash of the
+/// secret is stored. Losing this table discloses nothing, because nothing here can open a draft.
+///
+/// The id is deliberately not secret. That is what makes a link listable and revocable: Studio can
+/// say who minted one and when it expires without ever holding the credential a second time.
+///
+/// # What the database does not do with it
+///
+/// Nothing. No policy reads this table and no generated helper touches it. A link is exchanged for a
+/// short-lived JWT by the server, and that JWT is what the policies see, so authorization still
+/// happens exactly where it did before. This is bookkeeping, and it is here rather than in the
+/// server's own storage so that a project's links travel with the project.
+///
+/// `epoch` is stamped at mint so the global counter still works as the panic button: bumping it
+/// strands every row here as well as every token already issued.
+fn preview_links_sql() -> String {
+    let helper = HELPER_SCHEMA;
+    format!(
+        r#"
+CREATE TABLE IF NOT EXISTS {helper}.preview_links (
+  "id" TEXT PRIMARY KEY,
+  -- A hash, never the secret. Comparison happens in the server, in constant time.
+  "secret_hash" TEXT NOT NULL,
+  "scope" TEXT NOT NULL CHECK ("scope" IN ('record', 'project')),
+  "model" TEXT,
+  "record_id" TEXT,
+  "epoch" INTEGER NOT NULL,
+  "created_by" UUID,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT now(),
+  "expires_at" TIMESTAMPTZ NOT NULL,
+  "revoked_at" TIMESTAMPTZ,
+  -- A record link that names no record would be a project link wearing the wrong label, and it
+  -- would resolve to a claim matching nothing.
+  CONSTRAINT "preview_links_record_is_named"
+    CHECK ("scope" <> 'record' OR ("model" IS NOT NULL AND "record_id" IS NOT NULL))
+);
+
+-- Listing the live links for one record, which is what the share control asks on every open.
+CREATE INDEX IF NOT EXISTS "preview_links_live_for_record"
+  ON {helper}.preview_links ("model", "record_id")
+  WHERE "revoked_at" IS NULL;
+
+-- The schema grants USAGE to the API roles so draft policies can resolve their helpers, and a
+-- table still needs its own grant, which this never gets. Said explicitly anyway: a project that
+-- runs a blanket `GRANT ALL ON ALL TABLES IN SCHEMA` would otherwise hand out the hashes.
+REVOKE ALL ON {helper}.preview_links FROM PUBLIC;
+REVOKE ALL ON {helper}.preview_links FROM anon, authenticated, service_role;
+"#
     )
 }
 
@@ -1408,12 +1467,30 @@ CREATE OR REPLACE FUNCTION {helper}.prune_versions()
   END;
   $fn$;
 
+-- Expired and revoked links, cleared out once they can no longer resolve.
+--
+-- Kept for a week past death rather than deleted the moment they expire: "why did that link stop
+-- working" is asked after the fact, and a row that says `revoked_at` answers it where an absent row
+-- looks the same as a link that never existed.
+CREATE OR REPLACE FUNCTION {helper}.prune_preview_links()
+  RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  DECLARE
+    removed integer;
+  BEGIN
+    DELETE FROM {helper}.preview_links
+     WHERE COALESCE("revoked_at", "expires_at") < now() - interval '7 days';
+    GET DIAGNOSTICS removed = ROW_COUNT;
+    RETURN removed;
+  END;
+  $fn$;
+
 -- Postgres grants EXECUTE on a new function to PUBLIC, so USAGE on this schema would otherwise
 -- hand every role the maintenance functions: `prune_versions` is SECURITY DEFINER and deletes
 -- history, and `run_due_publishes` publishes. Neither is a caller's to invoke. The API roles need
 -- USAGE here only so a draft policy can resolve the helper it calls, and that helper is granted
 -- deliberately, one line at a time.
 REVOKE ALL ON FUNCTION {helper}.prune_versions() FROM PUBLIC;
+REVOKE ALL ON FUNCTION {helper}.prune_preview_links() FROM PUBLIC;
 REVOKE ALL ON FUNCTION {helper}.run_due_publishes(timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION {helper}.draft_visibility_roles() FROM PUBLIC;
 REVOKE ALL ON FUNCTION {helper}.versioned_model(text) FROM PUBLIC;
@@ -1453,7 +1530,7 @@ fn cron_jobs_sql() -> String {
 DO $cron$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
-    RAISE NOTICE 'pg_cron is not installed here, so scheduled publishing and version pruning will not run on a timer. Everything else works. Call {helper}.run_due_publishes() and {helper}.prune_versions() from a scheduler of your own.';
+    RAISE NOTICE 'pg_cron is not installed here, so scheduled publishing and version pruning will not run on a timer. Everything else works. Call {helper}.run_due_publishes(), {helper}.prune_versions() and {helper}.prune_preview_links() from a scheduler of your own.';
     RETURN;
   END IF;
 
@@ -1470,8 +1547,10 @@ BEGIN
 
   -- Hourly: pruning is housekeeping, and running it every minute would spend more on the scan than
   -- it reclaims.
+  -- One job for both kinds of housekeeping: they run at the same cadence and a second timer
+  -- would be a second thing to notice had stopped.
   PERFORM cron.schedule('supatype-prune-versions', '0 * * * *',
-    'SELECT {helper}.prune_versions()');
+    'SELECT {helper}.prune_versions(), {helper}.prune_preview_links()');
 END;
 $cron$;
 

@@ -1282,3 +1282,152 @@ async fn usage_on_the_helper_schema_does_not_hand_anyone_the_maintenance_functio
     })
     .await;
 }
+
+/// A link row, minted the way the server does.
+async fn insert_link(
+    db: &mut PgConnection,
+    id: &str,
+    expires: &str,
+    revoked: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO _supatype.preview_links
+           (id, secret_hash, scope, model, record_id, epoch, expires_at, revoked_at)
+         VALUES ($1, 'not-a-real-hash', 'record', 'posts', $2, 1,
+                 now() + $3::interval, CASE WHEN $4 = '' THEN NULL ELSE now() + $4::interval END)",
+    )
+    .bind(id)
+    .bind(POST)
+    .bind(expires)
+    .bind(revoked.unwrap_or(""))
+    .execute(db)
+    .await
+    .map(|_| ())
+}
+
+#[tokio::test]
+async fn a_record_link_must_name_the_record_it_covers() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // A record-scoped row with no record resolves to a claim that matches nothing, so the
+            // holder is told the draft does not exist rather than that their link is malformed.
+            let bad = sqlx::query(
+                "INSERT INTO _supatype.preview_links
+                   (id, secret_hash, scope, epoch, expires_at)
+                 VALUES ('pl_bad', 'h', 'record', 1, now() + interval '1 hour')",
+            )
+            .execute(&mut *db)
+            .await;
+            assert!(bad.is_err(), "a record link with no record must be refused");
+
+            // The same row as a project link is fine: it covers everything by construction.
+            sqlx::query(
+                "INSERT INTO _supatype.preview_links
+                   (id, secret_hash, scope, epoch, expires_at)
+                 VALUES ('pl_project', 'h', 'project', 1, now() + interval '1 hour')",
+            )
+            .execute(&mut *db)
+            .await
+            .expect("a project link needs no record");
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_api_roles_cannot_read_the_link_table() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            insert_link(db, "pl_secret", "1 hour", None)
+                .await
+                .expect("seed a link");
+
+            // The schema grants USAGE so draft policies can resolve their helpers. That must not
+            // carry the table with it: these rows are what a link is checked against.
+            for role in ["anon", "authenticated", "service_role"] {
+                sqlx::query(&format!("SET ROLE {role}"))
+                    .execute(&mut *db)
+                    .await
+                    .unwrap_or_else(|_| panic!("become {role}"));
+                let read = sqlx::query("SELECT secret_hash FROM _supatype.preview_links")
+                    .fetch_all(&mut *db)
+                    .await;
+                assert!(read.is_err(), "{role} must not read preview link hashes");
+                sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
+            }
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn pruning_keeps_a_dead_link_long_enough_to_explain_itself() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            sqlx::query("DELETE FROM _supatype.preview_links WHERE TRUE")
+                .execute(&mut *db)
+                .await
+                .expect("clear links");
+
+            insert_link(db, "pl_live", "1 hour", None).await.expect("live");
+            insert_link(db, "pl_recent", "-1 hour", None).await.expect("just expired");
+            insert_link(db, "pl_ancient", "-30 days", None).await.expect("long dead");
+            insert_link(db, "pl_revoked", "30 days", Some("-30 days"))
+                .await
+                .expect("revoked long ago");
+
+            let removed: i32 = sqlx::query_scalar("SELECT _supatype.prune_preview_links()")
+                .fetch_one(&mut *db)
+                .await
+                .expect("prune");
+            assert_eq!(removed, 2, "only links dead more than a week go");
+
+            let left: Vec<String> =
+                sqlx::query_scalar("SELECT id FROM _supatype.preview_links ORDER BY id")
+                    .fetch_all(&mut *db)
+                    .await
+                    .expect("list");
+            // The recently expired one stays on purpose: "why did that link stop working" is asked
+            // after the fact, and a missing row cannot tell it apart from a link that never was.
+            assert_eq!(left, vec!["pl_live".to_string(), "pl_recent".to_string()]);
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_blanket_grant_does_not_survive_the_next_push() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            // Postgres grants nothing on a new table, so the previous test passes with or without
+            // the explicit revoke. This is the case the revoke is actually for: a project that has
+            // run `GRANT ALL ON ALL TABLES IN SCHEMA` for its own reasons, which sweeps up a table
+            // holding the material every preview link is checked against.
+            sqlx::query("GRANT SELECT ON ALL TABLES IN SCHEMA _supatype TO anon")
+                .execute(&mut *db)
+                .await
+                .expect("a project may grant broadly in its own database");
+
+            sqlx::query("SET ROLE anon").execute(&mut *db).await.expect("become anon");
+            let granted = sqlx::query("SELECT id FROM _supatype.preview_links")
+                .fetch_all(&mut *db)
+                .await;
+            sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
+            assert!(granted.is_ok(), "the blanket grant must really have applied");
+
+            // Pushing again takes it back, so the exposure lasts until the next deploy rather than
+            // for ever.
+            db.execute(sqlx::raw_sql(&forward_migration()))
+                .await
+                .expect("re-apply the migration");
+
+            sqlx::query("SET ROLE anon").execute(&mut *db).await.expect("become anon");
+            let after = sqlx::query("SELECT id FROM _supatype.preview_links")
+                .fetch_all(&mut *db)
+                .await;
+            sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
+            assert!(after.is_err(), "the push must revoke the blanket grant again");
+        })
+    })
+    .await;
+}
