@@ -24,8 +24,8 @@
 //! `update` breaks in both directions, hiding a draft from the developer debugging it on an
 //! `Owner<>` model and exposing every draft to every signed-in user on a `LoggedIn` one.
 
-use crate::parser::accessors::db_table_name;
-use crate::parser::ast::{ModelAst, PublishingAst, SchemaAst, VersionsAst};
+use crate::parser::accessors::{db_table_name, versions_of, versions_table_name};
+use crate::parser::ast::{ModelAst, PublishingAst, SchemaAst};
 use anyhow::{bail, Result};
 
 /// Schema holding one draft view per versioned model, selected with `Accept-Profile: draft`.
@@ -41,30 +41,12 @@ pub const RPC_SCHEMA: &str = "supatype";
 /// Schema holding the helpers the policies call. Never exposed to the API.
 pub const HELPER_SCHEMA: &str = "_supatype";
 
-/// Suffix on a versioned model's snapshot table.
-pub const VERSIONS_SUFFIX: &str = "_versions";
-
-/// The snapshot table for a model's table.
-pub fn versions_table_name(table: &str) -> String {
-    format!("{table}{VERSIONS_SUFFIX}")
-}
-
-/// A model's `versions` declaration, when it has one.
-pub fn versions_of(model: &ModelAst) -> Option<&VersionsAst> {
-    model.options.versions.as_ref()
-}
-
 /// Every model that declares `versions`, in declaration order.
 pub fn versioned_models(ast: &SchemaAst) -> Vec<&ModelAst> {
     ast.models
         .iter()
         .filter(|m| versions_of(m).is_some())
         .collect()
-}
-
-/// True when this schema needs the versions layer at all.
-pub fn has_versions(ast: &SchemaAst) -> bool {
-    ast.models.iter().any(|m| versions_of(m).is_some())
 }
 
 /// Every snapshot table this schema owns, for the differ's "tables we know about" set.
@@ -100,7 +82,11 @@ pub fn assert_no_versions_with_field_rules(ast: &SchemaAst) -> Result<()> {
         .models
         .iter()
         .filter(|m| versions_of(m).is_some())
-        .filter(|m| !crate::parser::accessors::platform_access(m).fields.is_empty())
+        .filter(|m| {
+            !crate::parser::accessors::platform_access(m)
+                .fields
+                .is_empty()
+        })
         .map(|m| m.name.clone())
         .collect();
 
@@ -647,8 +633,8 @@ fn localized_columns(model: &ModelAst) -> Vec<String> {
     model
         .fields
         .iter()
-        .filter(|(_, field)| crate::differ::column_diff::is_localized(field))
-        .flat_map(|(name, field)| crate::differ::column_diff::column_names_for(name, field))
+        .filter(|(_, field)| crate::parser::accessors::is_localized(field))
+        .flat_map(|(name, field)| crate::parser::accessors::column_names_for(name, field))
         .filter(|name| !name.is_empty())
         .collect()
 }
@@ -697,7 +683,10 @@ fn can_edit_function_name(table: &str) -> String {
 fn can_edit_function_sql(ast: &SchemaAst, model: &ModelAst, schema: &str) -> String {
     let table = db_table_name(model);
     let (primary_key, primary_key_type) = model_primary_key(model);
-    let expr = match crate::parser::accessors::platform_access(model).update.as_ref() {
+    let expr = match crate::parser::accessors::platform_access(model)
+        .update
+        .as_ref()
+    {
         Some(rule) => crate::generator::sql::rls::access_rule_to_expr(ast, model, rule, schema),
         None => "FALSE".to_string(),
     };
@@ -894,12 +883,7 @@ CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
 /// `SECURITY DEFINER` because the caller holds no privilege on the snapshot table on this path: they
 /// are not drafting, they are writing the table, and the history is the system's record rather than
 /// theirs to compose.
-fn audit_trigger_sql(
-    schema: &str,
-    table: &str,
-    versions_table: &str,
-    primary_key: &str,
-) -> String {
+fn audit_trigger_sql(schema: &str, table: &str, versions_table: &str, primary_key: &str) -> String {
     let audit = format!("{versions_table}_audit");
     format!(
         r#"CREATE OR REPLACE FUNCTION {helper}.{audit_q}() RETURNS trigger

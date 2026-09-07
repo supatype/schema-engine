@@ -1,5 +1,5 @@
 use super::annotations::FieldAnnotations;
-use super::ast::{AccessAst, FieldAst, ModelAst, RelationCardinality};
+use super::ast::{AccessAst, FieldAst, ModelAst, RelationCardinality, SchemaAst, VersionsAst};
 use super::resolver::to_snake_case;
 
 pub fn db_table_name(model: &ModelAst) -> &str {
@@ -210,4 +210,91 @@ pub fn default_foreign_key_column(field_name: &str) -> String {
         });
     let base = snake.trim_end_matches("_id");
     format!("{base}_id")
+}
+
+// ─── Schema facts the generators need without a database ──────────────────────
+//
+// These read the AST and nothing else. They live here rather than beside the SQL generator and the
+// differ that also use them because the TypeScript admin generator needs them too, and that
+// generator is compiled to WASM, where `generator::sql` and `differ` are both gated out for pulling
+// in sqlx and tokio. A WASM-visible module reaching into a gated one builds fine on the host and
+// fails only on the wasm32 target, which is not a build anybody runs by hand.
+
+/// Suffix on a versioned model's snapshot table.
+pub const VERSIONS_SUFFIX: &str = "_versions";
+
+/// The snapshot table for a model's table.
+pub fn versions_table_name(table: &str) -> String {
+    format!("{table}{VERSIONS_SUFFIX}")
+}
+
+/// A model's `versions` declaration, when it has one.
+pub fn versions_of(model: &ModelAst) -> Option<&VersionsAst> {
+    model.options.versions.as_ref()
+}
+
+/// True when this schema needs the versions layer at all.
+pub fn has_versions(ast: &SchemaAst) -> bool {
+    ast.models.iter().any(|m| versions_of(m).is_some())
+}
+
+/// True when this field holds one value per locale rather than one value.
+///
+/// A localized field is stored as JSONB keyed by locale whatever its declared type, so this decides
+/// the column type, what the draft views reconstruct, and what the admin config tells Studio to
+/// render as a per-locale input.
+pub(crate) fn is_localized(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Email(f)
+        | FieldAst::Url(f)
+        | FieldAst::Xml(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Color(f) => f.localized,
+        FieldAst::Slug(f) => f.localized,
+        FieldAst::Enum(f) => f.localized,
+        FieldAst::Json(f) => f.localized,
+        FieldAst::Button(f) => f.localized,
+        FieldAst::Decimal(f) => f.localized,
+        FieldAst::Money(f) => f.localized,
+        FieldAst::Image(f) | FieldAst::File(f) => f.localized,
+        FieldAst::Blocks(f) => f.localized,
+        _ => false,
+    }
+}
+
+/// The database columns one declared field occupies.
+///
+/// Most fields are one column of the same name, but a `belongs_to` relation is its foreign key,
+/// `timestamps` and `publishable` expand to several, and a relation with no local column has none.
+pub fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
+    match field {
+        FieldAst::Relation(rel) => match rel.cardinality {
+            RelationCardinality::BelongsTo => {
+                vec![rel
+                    .foreign_key
+                    .clone()
+                    .unwrap_or_else(|| format!("{field_name}_id"))]
+            }
+            _ => vec![],
+        },
+        FieldAst::Timestamps => vec!["created_at".into(), "updated_at".into()],
+        FieldAst::Publishable => vec![
+            "status".into(),
+            "published_at".into(),
+            "scheduled_at".into(),
+        ],
+        FieldAst::SoftDelete => vec!["deleted_at".into()],
+        _ => vec![field_name.to_string()],
+    }
 }

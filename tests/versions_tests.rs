@@ -26,8 +26,7 @@ fn db_table(name: &str, managed: bool) -> supatype_engine::introspector::tables:
         schema: "public".to_string(),
         name: name.to_string(),
         columns: Vec::new(),
-        comment: managed
-            .then(|| format!("supatype:managed;kind=table;table={name};fields=;v=1")),
+        comment: managed.then(|| format!("supatype:managed;kind=table;table={name};fields=;v=1")),
     }
 }
 
@@ -38,7 +37,9 @@ fn emits_a_snapshot_table_and_its_index_per_versioned_model() {
     let sql = forward_sql();
     for table in ["posts_versions", "ledger_versions"] {
         assert!(
-            sql.contains(&format!("CREATE TABLE IF NOT EXISTS \"public\".\"{table}\"")),
+            sql.contains(&format!(
+                "CREATE TABLE IF NOT EXISTS \"public\".\"{table}\""
+            )),
             "expected a snapshot table for {table}; got:\n{sql}"
         );
         assert!(
@@ -87,7 +88,13 @@ fn a_snapshot_table_survives_the_next_push() {
     // differ's known-table set it would be dropped as an orphan, taking every version with it.
     let ast = versioned_ast();
     let mut db = DatabaseState::default();
-    for name in ["posts", "posts_versions", "ledger", "ledger_versions", "tags"] {
+    for name in [
+        "posts",
+        "posts_versions",
+        "ledger",
+        "ledger_versions",
+        "tags",
+    ] {
         db.tables.push(db_table(name, true));
     }
     let diff = differ::diff(&ast, &db).unwrap();
@@ -152,9 +159,7 @@ fn the_snapshot_policy_admits_the_creator_the_elevated_and_a_preview_link() {
     let sql = forward_sql();
     assert!(sql.contains("CREATE POLICY \"posts_versions_select\""));
     assert!(
-        sql.contains(
-            "(\"created_by\" IS NOT NULL AND \"created_by\" = _supatype.caller_id())"
-        ),
+        sql.contains("(\"created_by\" IS NOT NULL AND \"created_by\" = _supatype.caller_id())"),
         "a creator must be able to read back the draft they just saved"
     );
     assert!(
@@ -247,7 +252,9 @@ fn the_draft_view_does_not_join_the_model_table() {
 fn the_configured_visibility_is_what_gets_compiled_in() {
     let sql = forward_sql();
     assert!(
-        sql.contains("SET \"configured_visibility\" = ARRAY['admin', 'developer', 'editor']::text[]"),
+        sql.contains(
+            "SET \"configured_visibility\" = ARRAY['admin', 'developer', 'editor']::text[]"
+        ),
         "the project's stated roles must reach the database; got:\n{sql}"
     );
 }
@@ -257,9 +264,7 @@ fn a_studio_override_wins_over_the_pushed_config() {
     // Two columns, not one: a single column would mean each writer clobbering the other, so a push
     // would silently undo an operator's override or an override would make the file in git a lie.
     let sql = forward_sql();
-    assert!(sql.contains(
-        "SELECT COALESCE(s.\"override_visibility\", s.\"configured_visibility\")"
-    ));
+    assert!(sql.contains("SELECT COALESCE(s.\"override_visibility\", s.\"configured_visibility\")"));
 }
 
 #[test]
@@ -321,7 +326,10 @@ fn versions_and_per_column_rules_are_refused_together() {
     let err = versions::assert_no_versions_with_field_rules(&ast)
         .expect_err("a masked column inside a snapshot cannot be enforced");
     let message = format!("{err:#}");
-    assert!(message.contains("Post"), "the error must name the model: {message}");
+    assert!(
+        message.contains("Post"),
+        "the error must name the model: {message}"
+    );
 }
 
 #[test]
@@ -330,7 +338,7 @@ fn a_masked_model_and_a_versioned_model_can_share_a_schema() {
     // holding one of each.
     let ast = versioned_ast();
     assert!(versions::assert_no_versions_with_field_rules(&ast).is_ok());
-    assert!(versions::has_versions(&ast));
+    assert!(parser::accessors::has_versions(&ast));
 }
 
 // ─── The admin config's publishing flag ───────────────────────────────────────
@@ -349,14 +357,20 @@ fn studio_learns_publishing_from_versions_not_from_a_field_named_publishable() {
     assert_eq!(post["publishing"], serde_json::json!(true));
     assert_eq!(post["versions"]["drafts"], serde_json::json!(true));
     assert_eq!(post["versions"]["keep"], serde_json::json!(5));
-    assert_eq!(post["versions"]["versionsTable"], serde_json::json!("posts_versions"));
+    assert_eq!(
+        post["versions"]["versionsTable"],
+        serde_json::json!("posts_versions")
+    );
     assert_eq!(
         post["versions"]["localizedColumns"],
         serde_json::json!(["body"]),
         "a control that says `publish English` has to know which columns English is a key of"
     );
 
-    let ledger = models.iter().find(|m| m["name"] == "Ledger").expect("Ledger");
+    let ledger = models
+        .iter()
+        .find(|m| m["name"] == "Ledger")
+        .expect("Ledger");
     assert_eq!(
         ledger["versions"]["drafts"],
         serde_json::json!(false),
@@ -365,15 +379,17 @@ fn studio_learns_publishing_from_versions_not_from_a_field_named_publishable() {
 
     let tag = models.iter().find(|m| m["name"] == "Tag").expect("Tag");
     assert_eq!(tag["publishing"], serde_json::json!(false));
-    assert!(tag["versions"].is_null(), "an unversioned model gets no publish control");
+    assert!(
+        tag["versions"].is_null(),
+        "an unversioned model gets no publish control"
+    );
 }
 
 #[test]
 fn the_admin_config_carries_the_preview_bounds_to_the_api_server() {
     // The server already reads `adminRoles` from this file, so settings that arrive the same way
     // travel the same way. A second delivery path is a second thing to forget.
-    let config =
-        supatype_engine::generator::typescript::admin::generate(&versioned_ast()).unwrap();
+    let config = supatype_engine::generator::typescript::admin::generate(&versioned_ast()).unwrap();
     let publishing = &config["publishing"];
     assert_eq!(
         publishing["draftVisibility"],
@@ -382,7 +398,10 @@ fn the_admin_config_carries_the_preview_bounds_to_the_api_server() {
     assert_eq!(publishing["previewDefaultTtl"], serde_json::json!(900));
     assert_eq!(publishing["previewMaxRecordTtl"], serde_json::json!(604800));
     assert_eq!(publishing["previewMaxProjectTtl"], serde_json::json!(86400));
-    assert_eq!(publishing["previewAllowProjectScope"], serde_json::json!(true));
+    assert_eq!(
+        publishing["previewAllowProjectScope"],
+        serde_json::json!(true)
+    );
 }
 
 #[test]
@@ -415,7 +434,10 @@ fn what_a_push_applies_carries_the_same_layer_as_the_migration_file() {
         "CREATE POLICY \"posts_versions_select\"",
         "_supatype.caller_id()",
     ] {
-        assert!(file.contains(marker), "the migration file is missing {marker}");
+        assert!(
+            file.contains(marker),
+            "the migration file is missing {marker}"
+        );
         assert!(
             applied.contains(marker),
             "what a push applies is missing {marker}, so the file and the push disagree"

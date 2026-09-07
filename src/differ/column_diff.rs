@@ -5,6 +5,7 @@ use crate::generator::sql::column_conversion::{
 };
 use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::tables::{DbColumn, DbTable};
+use crate::parser::accessors::{column_names_for, is_localized};
 use crate::parser::ast::{FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality};
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
@@ -12,28 +13,6 @@ use serde_json::json;
 use strsim::jaro_winkler;
 
 const RENAME_THRESHOLD: f64 = 0.7;
-
-pub fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
-    match field {
-        FieldAst::Relation(rel) => match rel.cardinality {
-            RelationCardinality::BelongsTo => {
-                vec![rel
-                    .foreign_key
-                    .clone()
-                    .unwrap_or_else(|| format!("{field_name}_id"))]
-            }
-            _ => vec![],
-        },
-        FieldAst::Timestamps => vec!["created_at".into(), "updated_at".into()],
-        FieldAst::Publishable => vec![
-            "status".into(),
-            "published_at".into(),
-            "scheduled_at".into(),
-        ],
-        FieldAst::SoftDelete => vec!["deleted_at".into()],
-        _ => vec![field_name.to_string()],
-    }
-}
 
 fn has_index_flag(field: &FieldAst) -> bool {
     match field {
@@ -107,36 +86,6 @@ pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
             Some(rel.required)
         }
         _ => None,
-    }
-}
-
-pub(crate) fn is_localized(field: &FieldAst) -> bool {
-    match field {
-        FieldAst::Text(f)
-        | FieldAst::RichText(f)
-        | FieldAst::Email(f)
-        | FieldAst::Url(f)
-        | FieldAst::Xml(f)
-        | FieldAst::Bytes(f)
-        | FieldAst::Integer(f)
-        | FieldAst::Float(f)
-        | FieldAst::BigInt(f)
-        | FieldAst::SmallInt(f)
-        | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f)
-        | FieldAst::Date(f)
-        | FieldAst::Timestamp(f)
-        | FieldAst::Uuid(f)
-        | FieldAst::Color(f) => f.localized,
-        FieldAst::Slug(f) => f.localized,
-        FieldAst::Enum(f) => f.localized,
-        FieldAst::Json(f) => f.localized,
-        FieldAst::Button(f) => f.localized,
-        FieldAst::Decimal(f) => f.localized,
-        FieldAst::Money(f) => f.localized,
-        FieldAst::Image(f) | FieldAst::File(f) => f.localized,
-        FieldAst::Blocks(f) => f.localized,
-        _ => false,
     }
 }
 

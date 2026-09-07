@@ -1,4 +1,4 @@
-use crate::differ::column_diff::{column_names_for, field_pg_type};
+use crate::differ::column_diff::field_pg_type;
 use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
 use crate::generator::sql::column_conversion::{
     add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
@@ -9,7 +9,7 @@ use crate::managed::{
     expected_model_constraint_name, expected_unique_constraint_name, managed_check_comment,
     managed_comment,
 };
-use crate::parser::accessors::db_unique;
+use crate::parser::accessors::{column_names_for, db_unique};
 use crate::parser::ast::{
     scalar_of, AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst,
     RelationCardinality, RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,

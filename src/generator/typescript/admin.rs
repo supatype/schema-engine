@@ -77,7 +77,7 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
         // `adminRoles` from this file; this is the same journey for settings that arrive the same
         // way. Absent for a schema with no versioned model.
         "publishing": match ast.publishing.as_ref() {
-            Some(p) if crate::generator::sql::versions::has_versions(ast) => json!({
+            Some(p) if crate::parser::accessors::has_versions(ast) => json!({
                 "draftVisibility": p.draft_visibility,
                 "previewDefaultTtl": p.preview_default_ttl,
                 "previewMaxRecordTtl": p.preview_max_record_ttl,
@@ -100,7 +100,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     // emitted, so a `WithPublishable<…>` model got its `published_at` column and no publish widget:
     // the feature read as present in the schema and was absent from the UI. A model declaring
     // `versions` is publishable, and one that does not is not.
-    let versioning = crate::generator::sql::versions::versions_of(model);
+    let versioning = crate::parser::accessors::versions_of(model);
     let has_publishing = versioning.is_some();
     let has_soft_delete = has_composite(model, "softDelete") || model.options.soft_delete;
 
@@ -170,7 +170,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
             Some(options) => json!({
                 "drafts": options.drafts,
                 "keep": options.keep,
-                "versionsTable": crate::generator::sql::versions::versions_table_name(
+                "versionsTable": crate::parser::accessors::versions_table_name(
                     model.table_name()
                 ),
                 "localizedColumns": localized_column_names(model),
@@ -875,8 +875,8 @@ fn localized_column_names(model: &ModelAst) -> Vec<String> {
     model
         .fields
         .iter()
-        .filter(|(_, field)| crate::differ::column_diff::is_localized(field))
-        .flat_map(|(name, field)| crate::differ::column_diff::column_names_for(name, field))
+        .filter(|(_, field)| crate::parser::accessors::is_localized(field))
+        .flat_map(|(name, field)| crate::parser::accessors::column_names_for(name, field))
         .filter(|name| !name.is_empty())
         .collect()
 }

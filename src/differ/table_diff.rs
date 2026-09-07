@@ -228,7 +228,7 @@ pub fn diff(
     // fail on a type mismatch that names neither the model nor the reason.
     for model in crate::generator::sql::versions::versioned_models(ast) {
         let table = model.table_name();
-        let versions_table = crate::generator::sql::versions::versions_table_name(table);
+        let versions_table = crate::parser::accessors::versions_table_name(table);
         if db_table_names.contains(versions_table.as_str()) {
             continue;
         }
