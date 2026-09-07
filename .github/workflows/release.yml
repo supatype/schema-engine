@@ -55,7 +55,17 @@ jobs:
           - 5432:5432
     steps:
       - uses: actions/checkout@v4
+      # wasm32 so `test_wasm_build` runs here rather than taking its "target not installed" branch.
+      # It guards a break that only shows on that target: the library gates its sqlx and tokio
+      # modules off wasm32, so a WASM-visible module reaching into a gated one builds clean on the
+      # host and fails only there. That is not hypothetical, it reached main once. Skipping it is
+      # the same silent pass SUPATYPE_FORCE_INTEGRATION_TESTS exists to prevent.
+      #
+      # The language SDK exec tests still skip here, deliberately: they need a dozen toolchains, and
+      # ci.yml runs them on every push with SUPATYPE_FORCE_EXEC_TESTS. This one costs a target.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       # SUPATYPE_FORCE_INTEGRATION_TESTS turns a skip into a failure, matching ci.yml. A release is
       # the one run where a silent skip costs the most, because the artefact ships.
