@@ -151,8 +151,9 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         // DDL, so a steady-state push is the only one that will ever carry a changed
         // `draft_visibility`. Rendered before anything is applied, so a schema whose versioned
         // models have no stated visibility fails rather than half-applying.
-        let versions_sql = crate::generator::sql::versions::render_versions_layer(&ast, &req.schema)
-            .map_err(engine_error)?;
+        let versions_sql =
+            crate::generator::sql::versions::render_versions_layer(&ast, &req.schema)
+                .map_err(engine_error)?;
         sqlx::raw_sql(&storage_sql)
             .execute(&pool)
             .await

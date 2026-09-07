@@ -379,7 +379,9 @@ async fn main() -> Result<()> {
                 // table, so a steady-state push is the only push that will ever carry it. Skipping
                 // it here would mean a security setting that reads as applied and is not.
                 let versions_sql =
-                    supatype_engine::generator::sql::versions::render_versions_layer(&ast, &schema)?;
+                    supatype_engine::generator::sql::versions::render_versions_layer(
+                        &ast, &schema,
+                    )?;
 
                 // Storage materialization is not part of the model diff; apply it before the
                 // admin-only migration refresh path.

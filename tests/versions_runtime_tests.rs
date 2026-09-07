@@ -436,7 +436,11 @@ async fn a_localized_field_survives_the_snapshot_round_trip_and_defaults_to_ever
             .expect("seed both locales");
 
             // Edit one locale only. The other must survive, because the merge base is the whole row.
-            save_draft(db, r#"{"body": {"en": "Edited English", "fr": "Francais"}}"#).await;
+            save_draft(
+                db,
+                r#"{"body": {"en": "Edited English", "fr": "Francais"}}"#,
+            )
+            .await;
 
             let drafted: (Option<String>, Option<String>) = sqlx::query_as(
                 "SELECT body->>'en', body->>'fr' FROM draft.posts WHERE id = $1::uuid",
@@ -709,7 +713,10 @@ async fn publishing_a_version_that_was_never_written_is_refused() {
                 .execute(&mut *db)
                 .await
                 .expect_err("a version that does not exist must be refused");
-            assert!(format!("{err}").contains("no version to publish"), "got {err}");
+            assert!(
+                format!("{err}").contains("no version to publish"),
+                "got {err}"
+            );
         })
     })
     .await;
@@ -740,20 +747,22 @@ async fn a_scheduled_publish_waits_and_then_fires() {
 
             // Ask the job what it would do an hour from now. Passing the clock in is what makes the
             // job testable at all: waiting an hour is not a test.
-            let fired: i32 =
-                sqlx::query_scalar("SELECT _supatype.run_due_publishes(now() + interval '2 hours')")
-                    .fetch_one(&mut *db)
-                    .await
-                    .expect("run the job");
+            let fired: i32 = sqlx::query_scalar(
+                "SELECT _supatype.run_due_publishes(now() + interval '2 hours')",
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("run the job");
             assert_eq!(fired, 1);
             assert_eq!(live_title(db).await, "Goes live at nine");
 
             // The schedule is consumed, so a second run does not publish it again.
-            let again: i32 =
-                sqlx::query_scalar("SELECT _supatype.run_due_publishes(now() + interval '2 hours')")
-                    .fetch_one(&mut *db)
-                    .await
-                    .expect("run the job again");
+            let again: i32 = sqlx::query_scalar(
+                "SELECT _supatype.run_due_publishes(now() + interval '2 hours')",
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("run the job again");
             assert_eq!(again, 0);
         })
     })
@@ -825,11 +834,12 @@ async fn a_schedule_can_be_withdrawn_without_publishing() {
                 .await
                 .expect("unschedule");
 
-            let fired: i32 =
-                sqlx::query_scalar("SELECT _supatype.run_due_publishes(now() + interval '2 hours')")
-                    .fetch_one(&mut *db)
-                    .await
-                    .expect("run the job");
+            let fired: i32 = sqlx::query_scalar(
+                "SELECT _supatype.run_due_publishes(now() + interval '2 hours')",
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("run the job");
             assert_eq!(fired, 0);
             assert_eq!(live_title(db).await, "First cut");
         })
@@ -922,7 +932,10 @@ async fn the_scheduler_is_wired_up_when_the_database_has_one() {
                 .fetch_one(&mut *conn)
                 .await
                 .expect("count jobs");
-        assert_eq!(count, 2, "a second push must not add a second copy of each job");
+        assert_eq!(
+            count, 2,
+            "a second push must not add a second copy of each job"
+        );
     })
     .await;
 }
@@ -1039,12 +1052,11 @@ async fn bumping_the_epoch_withdraws_every_outstanding_link() {
                 .expect("read the epoch");
             become_preview_bearer(db, &preview_claims("record", "posts", POST, epoch)).await;
 
-            let before: bool =
-                sqlx::query_scalar("SELECT _supatype.preview_allows('posts', $1)")
-                    .bind(POST)
-                    .fetch_one(&mut *db)
-                    .await
-                    .expect("evaluate before");
+            let before: bool = sqlx::query_scalar("SELECT _supatype.preview_allows('posts', $1)")
+                .bind(POST)
+                .fetch_one(&mut *db)
+                .await
+                .expect("evaluate before");
             assert!(before);
 
             // What `POST /admin/preview-links/revoke` does. A signed token cannot
@@ -1063,7 +1075,10 @@ async fn bumping_the_epoch_withdraws_every_outstanding_link() {
                 .fetch_one(&mut *db)
                 .await
                 .expect("evaluate after");
-            assert!(!after, "a link minted under an older epoch must stop working");
+            assert!(
+                !after,
+                "a link minted under an older epoch must stop working"
+            );
         })
     })
     .await;
@@ -1078,7 +1093,10 @@ async fn a_request_with_no_preview_claim_is_entitled_to_nothing() {
                 .fetch_one(&mut *db)
                 .await
                 .expect("evaluate with an ordinary caller");
-            assert!(!entitled, "an ordinary signed-in caller holds no preview link");
+            assert!(
+                !entitled,
+                "an ordinary signed-in caller holds no preview link"
+            );
 
             // And an empty claims setting must read as anonymous rather than raise:
             // `current_setting(…)::jsonb` errors on '' and that is not the same as
@@ -1277,7 +1295,10 @@ async fn usage_on_the_helper_schema_does_not_hand_anyone_the_maintenance_functio
                 "anonymous must not be able to run the publishing job"
             );
 
-            sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
+            sqlx::query("RESET ROLE")
+                .execute(&mut *db)
+                .await
+                .expect("reset");
         })
     })
     .await;
@@ -1353,7 +1374,10 @@ async fn the_api_roles_cannot_read_the_link_table() {
                     .fetch_all(&mut *db)
                     .await;
                 assert!(read.is_err(), "{role} must not read preview link hashes");
-                sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
+                sqlx::query("RESET ROLE")
+                    .execute(&mut *db)
+                    .await
+                    .expect("reset");
             }
         })
     })
@@ -1369,9 +1393,15 @@ async fn pruning_keeps_a_dead_link_long_enough_to_explain_itself() {
                 .await
                 .expect("clear links");
 
-            insert_link(db, "pl_live", "1 hour", None).await.expect("live");
-            insert_link(db, "pl_recent", "-1 hour", None).await.expect("just expired");
-            insert_link(db, "pl_ancient", "-30 days", None).await.expect("long dead");
+            insert_link(db, "pl_live", "1 hour", None)
+                .await
+                .expect("live");
+            insert_link(db, "pl_recent", "-1 hour", None)
+                .await
+                .expect("just expired");
+            insert_link(db, "pl_ancient", "-30 days", None)
+                .await
+                .expect("long dead");
             insert_link(db, "pl_revoked", "30 days", Some("-30 days"))
                 .await
                 .expect("revoked long ago");
@@ -1408,12 +1438,21 @@ async fn a_blanket_grant_does_not_survive_the_next_push() {
                 .await
                 .expect("a project may grant broadly in its own database");
 
-            sqlx::query("SET ROLE anon").execute(&mut *db).await.expect("become anon");
+            sqlx::query("SET ROLE anon")
+                .execute(&mut *db)
+                .await
+                .expect("become anon");
             let granted = sqlx::query("SELECT id FROM _supatype.preview_links")
                 .fetch_all(&mut *db)
                 .await;
-            sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
-            assert!(granted.is_ok(), "the blanket grant must really have applied");
+            sqlx::query("RESET ROLE")
+                .execute(&mut *db)
+                .await
+                .expect("reset");
+            assert!(
+                granted.is_ok(),
+                "the blanket grant must really have applied"
+            );
 
             // Pushing again takes it back, so the exposure lasts until the next deploy rather than
             // for ever.
@@ -1421,12 +1460,21 @@ async fn a_blanket_grant_does_not_survive_the_next_push() {
                 .await
                 .expect("re-apply the migration");
 
-            sqlx::query("SET ROLE anon").execute(&mut *db).await.expect("become anon");
+            sqlx::query("SET ROLE anon")
+                .execute(&mut *db)
+                .await
+                .expect("become anon");
             let after = sqlx::query("SELECT id FROM _supatype.preview_links")
                 .fetch_all(&mut *db)
                 .await;
-            sqlx::query("RESET ROLE").execute(&mut *db).await.expect("reset");
-            assert!(after.is_err(), "the push must revoke the blanket grant again");
+            sqlx::query("RESET ROLE")
+                .execute(&mut *db)
+                .await
+                .expect("reset");
+            assert!(
+                after.is_err(),
+                "the push must revoke the blanket grant again"
+            );
         })
     })
     .await;

@@ -339,7 +339,9 @@ mod tests {
             .find("FUNCTION auth.jwt()")
             .expect("auth.jwt() must be generated");
         for caller in ["FUNCTION auth.uid()", "FUNCTION auth.role()"] {
-            let at = sql.find(caller).unwrap_or_else(|| panic!("{caller} missing"));
+            let at = sql
+                .find(caller)
+                .unwrap_or_else(|| panic!("{caller} missing"));
             assert!(at > defined, "{caller} is created before auth.jwt() exists");
         }
     }
