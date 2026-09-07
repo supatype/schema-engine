@@ -11,7 +11,6 @@
 //! work fell into three separate times. The fingerprint lives in the constraint's comment, is
 //! written by us, and is rewritten by nobody, so equality means equality.
 use super::{Operation, Risk};
-use crate::differ::column_diff::column_names_for;
 use crate::generator::sql::constraints::constraint_to_expr;
 use crate::generator::sql::migration::field_check_expression;
 use crate::introspector::constraints::{DbConstraint, DbConstraintType};
@@ -19,6 +18,7 @@ use crate::managed::{
     check_fingerprint, expected_check_constraint_name, expected_model_constraint_name,
     fingerprint_of, is_managed_comment, managed_check_comment,
 };
+use crate::parser::accessors::column_names_for;
 use crate::parser::ast::columns_in;
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;

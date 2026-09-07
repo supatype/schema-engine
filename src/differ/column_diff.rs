@@ -5,6 +5,7 @@ use crate::generator::sql::column_conversion::{
 };
 use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::tables::{DbColumn, DbTable};
+use crate::parser::accessors::{column_names_for, is_localized};
 use crate::parser::ast::{FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality};
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
@@ -12,28 +13,6 @@ use serde_json::json;
 use strsim::jaro_winkler;
 
 const RENAME_THRESHOLD: f64 = 0.7;
-
-pub fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
-    match field {
-        FieldAst::Relation(rel) => match rel.cardinality {
-            RelationCardinality::BelongsTo => {
-                vec![rel
-                    .foreign_key
-                    .clone()
-                    .unwrap_or_else(|| format!("{field_name}_id"))]
-            }
-            _ => vec![],
-        },
-        FieldAst::Timestamps => vec!["created_at".into(), "updated_at".into()],
-        FieldAst::Publishable => vec![
-            "status".into(),
-            "published_at".into(),
-            "scheduled_at".into(),
-        ],
-        FieldAst::SoftDelete => vec!["deleted_at".into()],
-        _ => vec![field_name.to_string()],
-    }
-}
 
 fn has_index_flag(field: &FieldAst) -> bool {
     match field {
@@ -107,36 +86,6 @@ pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
             Some(rel.required)
         }
         _ => None,
-    }
-}
-
-fn is_localized(field: &FieldAst) -> bool {
-    match field {
-        FieldAst::Text(f)
-        | FieldAst::RichText(f)
-        | FieldAst::Email(f)
-        | FieldAst::Url(f)
-        | FieldAst::Xml(f)
-        | FieldAst::Bytes(f)
-        | FieldAst::Integer(f)
-        | FieldAst::Float(f)
-        | FieldAst::BigInt(f)
-        | FieldAst::SmallInt(f)
-        | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f)
-        | FieldAst::Date(f)
-        | FieldAst::Timestamp(f)
-        | FieldAst::Uuid(f)
-        | FieldAst::Color(f) => f.localized,
-        FieldAst::Slug(f) => f.localized,
-        FieldAst::Enum(f) => f.localized,
-        FieldAst::Json(f) => f.localized,
-        FieldAst::Button(f) => f.localized,
-        FieldAst::Decimal(f) => f.localized,
-        FieldAst::Money(f) => f.localized,
-        FieldAst::Image(f) | FieldAst::File(f) => f.localized,
-        FieldAst::Blocks(f) => f.localized,
-        _ => false,
     }
 }
 
@@ -970,4 +919,42 @@ pub fn diff(
     }
 
     Ok(())
+}
+
+/// Whether a field declares itself the primary key.
+///
+/// Lives here beside [`field_pg_type`] because both answer questions about a declared field that
+/// several layers need: the migration renderer needs the key to build a foreign key, and the differ
+/// needs it to type the `record_id` on a snapshot table. It was private to the migration renderer,
+/// which is why `field_views.rs` reaches for the serialised form instead — a workaround for a helper
+/// that existed and could not be seen.
+pub(crate) fn field_is_primary_key(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(s)
+        | FieldAst::RichText(s)
+        | FieldAst::Integer(s)
+        | FieldAst::Float(s)
+        | FieldAst::Boolean(s)
+        | FieldAst::Datetime(s)
+        | FieldAst::Uuid(s)
+        | FieldAst::Email(s)
+        | FieldAst::BigInt(s)
+        | FieldAst::Bytes(s)
+        | FieldAst::SmallInt(s)
+        | FieldAst::Date(s)
+        | FieldAst::Timestamp(s)
+        | FieldAst::Serial(s)
+        | FieldAst::BigSerial(s)
+        | FieldAst::Money(s)
+        | FieldAst::Url(s)
+        | FieldAst::Ip(s)
+        | FieldAst::Cidr(s)
+        | FieldAst::Macaddr(s)
+        | FieldAst::Interval(s)
+        | FieldAst::TsQuery(s)
+        | FieldAst::TsVector(s)
+        | FieldAst::Xml(s)
+        | FieldAst::Color(s) => s.primary_key,
+        _ => false,
+    }
 }

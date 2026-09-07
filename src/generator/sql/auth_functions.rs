@@ -82,6 +82,10 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
 
     sql.push_str(&grant_auth_schema_usage(&config.auth_schema));
     sql.push_str("\n\n");
+    // `jwt()` first: every other helper reads the claims through it, and a `LANGUAGE sql` body is
+    // validated when the function is created, so a caller emitted before its callee fails the push.
+    sql.push_str(&generate_jwt_function(&config.auth_schema));
+    sql.push_str("\n\n");
     sql.push_str(&generate_uid_function(&config.auth_schema));
     sql.push_str("\n\n");
     sql.push_str(&generate_role_function(
@@ -91,25 +95,33 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
     sql.push_str("\n\n");
     sql.push_str(&generate_email_function(&config.auth_schema));
     sql.push_str("\n\n");
-    sql.push_str(&generate_jwt_function(&config.auth_schema));
-    sql.push_str("\n\n");
     sql.push_str(&generate_claim_function(&config.auth_schema));
 
     sql
 }
 
-/// auth.uid() — extracts the user ID (sub claim) from the JWT.
+/// auth.uid() — the caller's user id, or NULL when the request has no subject.
+///
+/// **NULL, not the nil UUID.** It used to fall back to
+/// `00000000-0000-0000-0000-000000000000`, and that is a hole rather than a convenience: any rule
+/// shaped `column = auth.uid()` then matches for *every* subject-less caller wherever that column
+/// can hold the nil UUID — and a column holds it exactly when a subject-less writer stamped it,
+/// which is what a `service_role` write is. So a row written through the admin API became readable
+/// by anyone whose token carried no `sub`.
+///
+/// Changing it can only ever deny more: `x = auth.uid()` goes from matching nil-UUID rows to
+/// matching nothing, and `NOT (x = auth.uid())` goes from true to NULL, which denies. The one thing
+/// that changes behaviour is a `DEFAULT auth.uid()` on a `NOT NULL` column, which now refuses an
+/// anonymous insert instead of letting it claim ownership of the row. That is the bug, not a
+/// regression.
+///
+/// This is also what `auth.uid()` means everywhere else people have met it, so a rule copied in from
+/// a Supabase project now behaves the way its author expected.
 fn generate_uid_function(schema: &str) -> String {
     format!(
-        r#"-- auth.uid() -- extracts user ID from JWT claims set by PostgREST
+        r#"-- auth.uid() -- the caller's user id, or NULL when the request has no subject.
 CREATE OR REPLACE FUNCTION {schema}.uid() RETURNS uuid AS $$
-  SELECT COALESCE(
-    NULLIF(
-      current_setting('request.jwt.claims', true)::jsonb ->> 'sub',
-      ''
-    )::uuid,
-    '00000000-0000-0000-0000-000000000000'::uuid
-  );
+  SELECT NULLIF({schema}.jwt() ->> 'sub', '')::uuid;
 $$ LANGUAGE sql STABLE;"#,
         schema = schema
     )
@@ -128,8 +140,8 @@ fn generate_role_function(schema: &str, _project_ref: &str) -> String {
 -- user can edit themselves.
 CREATE OR REPLACE FUNCTION {schema}.role() RETURNS text AS $$
   SELECT COALESCE(
-    current_setting('request.jwt.claims', true)::jsonb -> 'app_metadata' ->> 'role',
-    current_setting('request.jwt.claims', true)::jsonb ->> 'role',
+    {schema}.jwt() -> 'app_metadata' ->> 'role',
+    {schema}.jwt() ->> 'role',
     'anon'
   );
 $$ LANGUAGE sql STABLE;"#,
@@ -142,10 +154,7 @@ fn generate_email_function(schema: &str) -> String {
     format!(
         r#"-- auth.email() -- extracts email from JWT claims
 CREATE OR REPLACE FUNCTION {schema}.email() RETURNS text AS $$
-  SELECT COALESCE(
-    current_setting('request.jwt.claims', true)::jsonb ->> 'email',
-    ''
-  );
+  SELECT COALESCE({schema}.jwt() ->> 'email', '');
 $$ LANGUAGE sql STABLE;"#,
         schema = schema
     )
@@ -166,30 +175,30 @@ fn generate_claim_function(schema: &str) -> String {
     format!(
         r#"-- auth.claim(path) -- nested JWT claim by dotted path, e.g. 'app_metadata.tier'
 CREATE OR REPLACE FUNCTION {schema}.claim(claim_path text) RETURNS jsonb AS $$
-  SELECT COALESCE(
-    current_setting('request.jwt.claims', true)::jsonb,
-    '{{}}'::jsonb
-  ) #> string_to_array(claim_path, '.');
+  SELECT {schema}.jwt() #> string_to_array(claim_path, '.');
 $$ LANGUAGE sql STABLE;
 
 -- auth.claim_text(path) -- the same claim as text, for scalar comparisons.
 CREATE OR REPLACE FUNCTION {schema}.claim_text(claim_path text) RETURNS text AS $$
-  SELECT COALESCE(
-    current_setting('request.jwt.claims', true)::jsonb,
-    '{{}}'::jsonb
-  ) #>> string_to_array(claim_path, '.');
+  SELECT {schema}.jwt() #>> string_to_array(claim_path, '.');
 $$ LANGUAGE sql STABLE;"#,
         schema = schema
     )
 }
 
-/// auth.jwt() — returns the full JWT claims as JSONB.
+/// auth.jwt() — the verified claims, and the one place they are read.
+///
+/// **Every other helper goes through this**, which is what makes the guard below worth having
+/// rather than repeating: `current_setting(…, true)` returns NULL when the setting is unset but the
+/// empty string when something has set it to one, and `''::jsonb` raises `22P02`. Seven functions
+/// each carried their own copy of the unguarded cast, so any request that arrived with an empty
+/// claims setting failed with a JSON syntax error instead of reading as anonymous.
 fn generate_jwt_function(schema: &str) -> String {
     format!(
-        r#"-- auth.jwt() -- returns full JWT claims as JSONB
+        r#"-- auth.jwt() -- the verified claims, or an empty object for an anonymous request.
 CREATE OR REPLACE FUNCTION {schema}.jwt() RETURNS jsonb AS $$
   SELECT COALESCE(
-    current_setting('request.jwt.claims', true)::jsonb,
+    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,
     '{{}}'::jsonb
   );
 $$ LANGUAGE sql STABLE;"#,
@@ -282,8 +291,12 @@ mod tests {
     fn test_uid_returns_uuid() {
         let sql = generate_uid_function("auth");
         assert!(sql.contains("RETURNS uuid"));
-        assert!(sql.contains("request.jwt.claims"));
-        assert!(sql.contains("sub"));
+        assert!(sql.contains("'sub'"));
+        // Through `auth.jwt()` rather than reading the setting itself. One guarded accessor is what
+        // stops a second helper growing its own idea of what an absent claim means: the nil-UUID
+        // fallback that used to live here made every subject-less caller look like the same user.
+        assert!(sql.contains("auth.jwt()"));
+        assert!(!sql.contains("current_setting"));
     }
 
     #[test]
@@ -293,7 +306,7 @@ mod tests {
             .find("'app_metadata' ->> 'role'")
             .expect("app_metadata lookup");
         let claim_idx = sql
-            .find("::jsonb ->> 'role'")
+            .find("auth.jwt() ->> 'role'")
             .expect("top-level role fallback");
         assert!(
             app_idx < claim_idx,
@@ -308,6 +321,28 @@ mod tests {
     fn test_role_unprefixed() {
         let sql = generate_role_function("auth", "abc123");
         assert!(!sql.contains("abc123_anon"));
-        assert!(sql.contains("request.jwt.claims"));
+        assert!(sql.contains("auth.jwt()"));
+    }
+
+    #[test]
+    fn test_jwt_accessor_is_defined_before_its_callers() {
+        // `LANGUAGE sql` bodies are parsed and their references resolved when the function is
+        // created, so a helper calling `auth.jwt()` fails outright if `auth.jwt()` does not exist
+        // yet. The whole bundle is applied in order, which makes emission order load-bearing and
+        // invisible: reorder these and the failure is at migration time, not here.
+        let config = AuthFunctionConfig {
+            project_ref: String::new(),
+            auth_schema: "auth".to_string(),
+        };
+        let sql = generate_auth_functions(&config);
+        let defined = sql
+            .find("FUNCTION auth.jwt()")
+            .expect("auth.jwt() must be generated");
+        for caller in ["FUNCTION auth.uid()", "FUNCTION auth.role()"] {
+            let at = sql
+                .find(caller)
+                .unwrap_or_else(|| panic!("{caller} missing"));
+            assert!(at > defined, "{caller} is created before auth.jwt() exists");
+        }
     }
 }

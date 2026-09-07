@@ -54,7 +54,8 @@ jobs:
             --test standup_regression_tests \
             --test field_access_tests \
             --test field_access_validation_tests \
-            --test field_write_privileges_tests
+            --test field_write_privileges_tests \
+            --test versions_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})
@@ -157,4 +158,5 @@ jobs:
             --test field_access_contract_tests \
             --test field_access_tamper_tests \
             --test field_masking_tier_selection_tests \
-            --test field_bounds_enforcement_tests
+            --test field_bounds_enforcement_tests \
+            --test versions_runtime_tests

@@ -1,8 +1,7 @@
 use super::{Operation, Risk};
-use crate::differ::column_diff::column_names_for;
 use crate::introspector::constraints::{DbConstraint, DbConstraintType};
 use crate::managed::{expected_unique_constraint_name, is_managed_comment};
-use crate::parser::accessors::db_unique;
+use crate::parser::accessors::{column_names_for, db_unique};
 use crate::parser::ast::{FieldAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;

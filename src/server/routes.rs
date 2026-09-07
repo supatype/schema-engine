@@ -147,10 +147,23 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         .map_err(engine_error)?;
 
     if diff.operations.is_empty() {
+        // Same reason as the CLI path: the publishing layer is the kind of change that produces no
+        // DDL, so a steady-state push is the only one that will ever carry a changed
+        // `draft_visibility`. Rendered before anything is applied, so a schema whose versioned
+        // models have no stated visibility fails rather than half-applying.
+        let versions_sql =
+            crate::generator::sql::versions::render_versions_layer(&ast, &req.schema)
+                .map_err(engine_error)?;
         sqlx::raw_sql(&storage_sql)
             .execute(&pool)
             .await
             .map_err(engine_error)?;
+        if !versions_sql.trim().is_empty() {
+            sqlx::raw_sql(&versions_sql)
+                .execute(&pool)
+                .await
+                .map_err(engine_error)?;
+        }
         info!("Schema is up to date — refreshing Studio metadata.");
         let admin_cfg =
             crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;

@@ -72,6 +72,20 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
         "models": models,
         "globals": globals,
         "storageBuckets": storage_buckets,
+        // Draft visibility and the bounds on a preview link, carried through from the project
+        // config so the API server can read them without a second delivery path. It already reads
+        // `adminRoles` from this file; this is the same journey for settings that arrive the same
+        // way. Absent for a schema with no versioned model.
+        "publishing": match ast.publishing.as_ref() {
+            Some(p) if crate::parser::accessors::has_versions(ast) => json!({
+                "draftVisibility": p.draft_visibility,
+                "previewDefaultTtl": p.preview_default_ttl,
+                "previewMaxRecordTtl": p.preview_max_record_ttl,
+                "previewMaxProjectTtl": p.preview_max_project_ttl,
+                "previewAllowProjectScope": p.preview_allow_project_scope,
+            }),
+            _ => Value::Null,
+        },
     }))
 }
 
@@ -79,7 +93,15 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
 
 fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -> Value {
     let has_timestamps = has_composite(model, "timestamps") || model.options.timestamps;
-    let has_publishing = has_composite(model, "publishable");
+    // From the model's `versions` declaration, not from a field literally named `publishable`.
+    //
+    // That is the regression this replaces. `has_composite(model, "publishable")` was true only when
+    // a model had a *field* called `publishable`, which nothing but the deleted builder API ever
+    // emitted, so a `WithPublishable<…>` model got its `published_at` column and no publish widget:
+    // the feature read as present in the schema and was absent from the UI. A model declaring
+    // `versions` is publishable, and one that does not is not.
+    let versioning = crate::parser::accessors::versions_of(model);
+    let has_publishing = versioning.is_some();
     let has_soft_delete = has_composite(model, "softDelete") || model.options.soft_delete;
 
     let fields = build_fields_config(model, default_locale, ast);
@@ -141,6 +163,20 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         "indexes": indexes,
         "singleton": model.options.singleton,
         "publishing": has_publishing,
+        // The shape Studio needs to build a publish control, not just whether to show one. Its
+        // editor has to know that drafts are withheld (or that this is an audit model, where they
+        // are not), which columns are per locale, and where the versions live.
+        "versions": match versioning {
+            Some(options) => json!({
+                "drafts": options.drafts,
+                "keep": options.keep,
+                "versionsTable": crate::parser::accessors::versions_table_name(
+                    model.table_name()
+                ),
+                "localizedColumns": localized_column_names(model),
+            }),
+            None => Value::Null,
+        },
         "softDelete": has_soft_delete,
         "timestamps": has_timestamps,
         "listColumns": list_columns,
@@ -829,4 +865,18 @@ fn capitalise(s: &str) -> String {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
+}
+
+/// The model's columns that hold one value per locale.
+///
+/// Studio needs these to offer publishing per locale: a control that says "publish English" has to
+/// know which columns English is a key of.
+fn localized_column_names(model: &ModelAst) -> Vec<String> {
+    model
+        .fields
+        .iter()
+        .filter(|(_, field)| crate::parser::accessors::is_localized(field))
+        .flat_map(|(name, field)| crate::parser::accessors::column_names_for(name, field))
+        .filter(|name| !name.is_empty())
+        .collect()
 }

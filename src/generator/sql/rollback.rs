@@ -232,6 +232,12 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
         Operation::CreateJunctionTable { table, .. } => {
             format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;")
         }
+        // CreateVersionsTable → DROP TABLE. Safe to roll back exactly because the operation only
+        // ever *creates*: it runs when the table is absent, so a rollback removes a table this
+        // migration made and no history that predates it.
+        Operation::CreateVersionsTable { versions_table, .. } => {
+            format!("DROP TABLE IF EXISTS \"{schema}\".\"{versions_table}\" CASCADE;")
+        }
         // EnableExtension → DROP EXTENSION (risky — only emit a warning)
         Operation::EnableExtension { name, .. } => {
             format!(
@@ -396,6 +402,9 @@ fn forward_description(op: &Operation) -> String {
         }
         Operation::DropTrigger { table, trigger, .. } => format!("drop trigger {table}.{trigger}"),
         Operation::CreateJunctionTable { table, .. } => format!("create junction table {table}"),
+        Operation::CreateVersionsTable { versions_table, .. } => {
+            format!("create versions table {versions_table}")
+        }
         Operation::EnableExtension { name, .. } => format!("enable extension {name}"),
     }
 }

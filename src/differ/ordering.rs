@@ -23,6 +23,9 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::RenameTable { .. } => 4,
         Operation::CreateTable { .. } => 4,
         Operation::CreateJunctionTable { .. } => 5,
+        // Same tier as a junction table, and for the same reason: it carries a foreign key to a
+        // model table, which `CreateTable` above has just made exist.
+        Operation::CreateVersionsTable { .. } => 5,
         Operation::AddColumn { .. } => 6,
         Operation::RenameColumn { .. } => 6,
         Operation::AlterColumn { .. } => 7,

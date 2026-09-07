@@ -238,6 +238,21 @@ pub enum Operation {
         table_b: String,
         risk: Risk,
     },
+    /// The snapshot table behind a versioned model.
+    ///
+    /// Its own operation rather than a synthesised model, for the same reason a junction table has
+    /// one: the engine owns it outright, its shape is fixed, and putting a model in `ast.models` for
+    /// it would put it in the OpenAPI document, the generated types and Studio's navigation, none of
+    /// which should list a table nobody declared.
+    CreateVersionsTable {
+        table: String,
+        versions_table: String,
+        /// Type of the model's primary key, which `record_id` has to match to reference it.
+        record_id_type: String,
+        /// Column name of that primary key.
+        primary_key: String,
+        risk: Risk,
+    },
     EnableExtension {
         name: String,
         risk: Risk,
@@ -397,6 +412,7 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::CreateTrigger { risk, .. }
         | Operation::DropTrigger { risk, .. }
         | Operation::CreateJunctionTable { risk, .. }
+        | Operation::CreateVersionsTable { risk, .. }
         | Operation::EnableExtension { risk, .. } => risk,
     }
 }

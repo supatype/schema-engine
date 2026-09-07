@@ -108,7 +108,7 @@ fn ast_primary_key(model: &ModelAst) -> Vec<String> {
                 .and_then(|v| v.get("primaryKey").and_then(|p| p.as_bool()))
                 .unwrap_or(false)
         })
-        .flat_map(|(name, field)| crate::differ::column_diff::column_names_for(name, field))
+        .flat_map(|(name, field)| crate::parser::accessors::column_names_for(name, field))
         .collect()
 }
 
@@ -140,7 +140,7 @@ fn primary_key_columns(db: &DatabaseState, table: &str) -> Vec<String> {
 fn ast_columns(model: &ModelAst) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (field_name, field) in &model.fields {
-        for column in crate::differ::column_diff::column_names_for(field_name, field) {
+        for column in crate::parser::accessors::column_names_for(field_name, field) {
             if !column.is_empty() && !out.contains(&column) {
                 out.push(column);
             }

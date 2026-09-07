@@ -1,0 +1,108 @@
+{
+  "astVersion": 2,
+  "locales": ["en", "fr"],
+  "defaultLocale": "en",
+  "publishing": {
+    "draftVisibility": ["admin", "developer", "editor"],
+    "previewDefaultTtl": 900,
+    "previewMaxRecordTtl": 604800,
+    "previewMaxProjectTtl": 86400,
+    "previewAllowProjectScope": true
+  },
+  "models": [
+    {
+      "name": "Post",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false, "index": false } }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "annotations": { "db": { "pgType": "TEXT", "unique": false, "index": false } }
+        },
+        "body": {
+          "kind": "richText",
+          "required": false,
+          "localized": true,
+          "annotations": { "db": { "pgType": "JSONB", "unique": false, "index": false } }
+        },
+        "published_at": {
+          "kind": "timestamp",
+          "required": false,
+          "annotations": { "db": { "pgType": "TIMESTAMPTZ", "unique": false, "index": false } }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "softDelete": false,
+        "versions": { "drafts": true, "keep": 5 }
+      },
+      "annotations": {
+        "db": { "tableName": "posts", "indexes": [] },
+        "platform": {
+          "access": {
+            "read": { "type": "public" },
+            "update": { "type": "role", "roles": ["editor"] }
+          }
+        }
+      }
+    },
+    {
+      "name": "Ledger",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false, "index": false } }
+        },
+        "note": {
+          "kind": "text",
+          "required": true,
+          "annotations": { "db": { "pgType": "TEXT", "unique": false, "index": false } }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false,
+        "versions": { "drafts": false, "keep": 20 }
+      },
+      "annotations": {
+        "db": { "tableName": "ledger", "indexes": [] },
+        "platform": {
+          "access": {
+            "read": { "type": "authenticated" }
+          }
+        }
+      }
+    },
+    {
+      "name": "Tag",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": { "kind": "genRandomUuid" },
+          "annotations": { "db": { "pgType": "UUID", "unique": false, "index": false } }
+        },
+        "label": {
+          "kind": "text",
+          "required": true,
+          "annotations": { "db": { "pgType": "TEXT", "unique": false, "index": false } }
+        }
+      },
+      "options": { "timestamps": false, "softDelete": false },
+      "annotations": {
+        "db": { "tableName": "tags", "indexes": [] },
+        "platform": { "access": { "read": { "type": "public" } } }
+      }
+    }
+  ]
+}
