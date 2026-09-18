@@ -231,7 +231,32 @@ fn derive_list_columns(
     cols
 }
 
+/// The columns Studio's list view searches.
+///
+/// A declaration wins outright. Studio filters on the **first** entry, so which column is first is
+/// the whole decision, and guessing it from field order meant a model whose first text column was a
+/// slug searched slugs while the author's `Searchable<string>` on `title` did nothing. Order here is
+/// the order the schema wrote.
+///
+/// With nothing declared, every text-like column stays searchable, which is what every existing
+/// schema already gets: this is an opt-in narrowing, not a new requirement. A declared name that
+/// matches no field is dropped rather than trusted — the CLI refuses those, so one arriving here
+/// means a hand-written AST, and searching a column that does not exist is an error from PostgREST
+/// on every keystroke.
 fn derive_search_fields(model: &ModelAst) -> Vec<String> {
+    let declared: Vec<String> = model
+        .annotations
+        .platform
+        .search_fields
+        .iter()
+        .filter(|name| model.fields.contains_key(*name))
+        .cloned()
+        .collect();
+
+    if !declared.is_empty() {
+        return declared;
+    }
+
     model
         .fields
         .iter()

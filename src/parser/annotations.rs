@@ -28,6 +28,13 @@ pub struct DbModelAnnotations {
 pub struct PlatformModelAnnotations {
     #[serde(default)]
     pub access: AccessAst,
+    /// Columns Studio's list view searches, in the order the schema asked for.
+    ///
+    /// The CLI merges both spellings — `Searchable<T>` on a field and `searchable: [...]` on the
+    /// model — into this one list, so there is nothing per-field to read here. Empty means the
+    /// schema said nothing, not that search is off: see `derive_search_fields`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

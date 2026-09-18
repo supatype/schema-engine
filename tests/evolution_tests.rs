@@ -7198,6 +7198,90 @@ fn test_admin_config_honours_declared_editor_widget() {
     assert_eq!(widget_of("unknown_widget"), "json");
 }
 
+/// A schema that says which columns are searchable is obeyed.
+///
+/// Studio's list view filters on the **first** entry of `searchFields`, and that list used to be
+/// every text-like column in field order — so a model whose first text column was a slug searched
+/// slugs, and `Searchable<string>` on the column the author meant did nothing at all. The CLI
+/// merges both spellings into `annotations.platform.searchFields`; this asserts the engine stops
+/// guessing when it finds one.
+#[test]
+fn test_admin_config_honours_declared_search_fields() {
+    let model = |search_fields: &str| {
+        format!(
+            r#"{{
+  "astVersion": 2,
+  "models": [
+    {{
+      "name": "Talk",
+      "fields": {{
+        "id": {{
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {{ "kind": "genRandomUuid" }},
+          "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }}
+        }},
+        "slug": {{
+          "kind": "slug",
+          "required": true,
+          "from": "title",
+          "annotations": {{ "db": {{ "pgType": "TEXT", "unique": true }} }}
+        }},
+        "title": {{
+          "kind": "text",
+          "required": true,
+          "annotations": {{ "db": {{ "pgType": "TEXT" }}, "platform": {{ "searchable": true }} }}
+        }},
+        "views": {{
+          "kind": "integer",
+          "required": false,
+          "annotations": {{ "db": {{ "pgType": "INTEGER" }} }}
+        }}
+      }},
+      "options": {{ "timestamps": false, "softDelete": false }},
+      "annotations": {{
+        "db": {{ "tableName": "talk", "indexes": [] }},
+        "platform": {{ "access": {{}}{search_fields} }}
+      }}
+    }}
+  ]
+}}"#
+        )
+    };
+
+    let search_fields_of = |ast_json: String| -> Vec<String> {
+        let ast = parser::parse(&ast_json).unwrap();
+        let config = admin::generate(&ast).unwrap();
+        config["models"][0]["searchFields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // Declared: exactly those columns, in that order — `title` first, though `slug` comes first in
+    // the field list.
+    assert_eq!(
+        search_fields_of(model(r#", "searchFields": ["title", "slug"]"#)),
+        vec!["title".to_string(), "slug".to_string()],
+    );
+
+    // Nothing declared: every text-like column, as before. An existing schema keeps its search box.
+    assert_eq!(
+        search_fields_of(model("")),
+        vec!["slug".to_string(), "title".to_string()],
+    );
+
+    // A name matching no column is dropped rather than searched. The CLI refuses these, so one here
+    // means a hand-written AST; searching a column that does not exist errors on every keystroke.
+    assert_eq!(
+        search_fields_of(model(r#", "searchFields": ["nope"]"#)),
+        vec!["slug".to_string(), "title".to_string()],
+    );
+}
+
 /// Declared bounds reach Studio, not just Postgres.
 ///
 /// `FieldConfig.validation` has been read by four Studio widgets since the admin panel was built and
