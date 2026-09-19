@@ -24,7 +24,8 @@ jobs:
       - name: Compare
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          CRATE="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          CRATE="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "supatype-engine") | .version')"
           echo "tag: ${TAG}, Cargo.toml: ${CRATE}"
           if [ "${TAG}" != "${CRATE}" ]; then
             echo "::error::Tag v${TAG} does not match Cargo.toml ${CRATE}. Bump the crate version, or tag v${CRATE}."
