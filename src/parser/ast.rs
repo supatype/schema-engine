@@ -2,7 +2,7 @@ use super::annotations::{FieldAnnotations, ModelAnnotations};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-/// Top-level schema AST as produced by @supatype/schema and consumed by the engine.
+/// Top-level schema AST as produced by @supatype/cli and consumed by the engine.
 #[derive(Debug, Clone)]
 pub struct SchemaAst {
     pub ast_version: u32,
