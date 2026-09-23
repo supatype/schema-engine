@@ -79,7 +79,16 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTable>>
 }
 
 async fn read_columns(conn: &mut PgConnection, schema: &str, table: &str) -> Result<Vec<DbColumn>> {
-    let rows: Vec<(String, String, String, String, Option<String>, i32, Option<i32>, Option<i32>)> = sqlx::query_as(
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i32,
+        Option<i32>,
+        Option<i32>,
+    )> = sqlx::query_as(
         "SELECT column_name, data_type, udt_name, is_nullable, column_default, ordinal_position,
                 numeric_precision, numeric_scale
          FROM information_schema.columns
