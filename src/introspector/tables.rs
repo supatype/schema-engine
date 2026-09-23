@@ -78,17 +78,23 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTable>>
     Ok(tables)
 }
 
+/// One `information_schema.columns` row, in the order `COLUMN_QUERY` selects them.
+///
+/// Named because the tuple crossed clippy's complexity threshold once `numeric_precision` and
+/// `numeric_scale` joined it, and because eight positional fields are worth a label anyway.
+type ColumnRow = (
+    String,         // column_name
+    String,         // data_type
+    String,         // udt_name
+    String,         // is_nullable
+    Option<String>, // column_default
+    i32,            // ordinal_position
+    Option<i32>,    // numeric_precision
+    Option<i32>,    // numeric_scale
+);
+
 async fn read_columns(conn: &mut PgConnection, schema: &str, table: &str) -> Result<Vec<DbColumn>> {
-    let rows: Vec<(
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        i32,
-        Option<i32>,
-        Option<i32>,
-    )> = sqlx::query_as(
+    let rows: Vec<ColumnRow> = sqlx::query_as(
         "SELECT column_name, data_type, udt_name, is_nullable, column_default, ordinal_position,
                 numeric_precision, numeric_scale
          FROM information_schema.columns
