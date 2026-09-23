@@ -17,6 +17,7 @@ fn col(name: &str, data_type: &str) -> DbColumn {
         nullable: true,
         default: None,
         ordinal_position: 0,
+        ..Default::default()
     }
 }
 
@@ -28,6 +29,7 @@ fn col_pk(name: &str, data_type: &str, default: &str) -> DbColumn {
         nullable: false,
         default: Some(default.into()),
         ordinal_position: 0,
+        ..Default::default()
     }
 }
 

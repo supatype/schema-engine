@@ -232,12 +232,32 @@ fn column_type_matches(field: &FieldAst, db_col: &DbColumn) -> bool {
     }
     match field {
         FieldAst::Decimal(d) => {
-            let want = match (d.precision, d.scale) {
-                (Some(p), Some(s)) => format!("numeric({p},{s})"),
-                (Some(p), None) => format!("numeric({p})"),
-                _ => "numeric".into(),
-            };
-            db_col.data_type.to_lowercase().replace(' ', "") == want.replace(' ', "")
+            // Compared against `numeric_precision` / `numeric_scale`, not against `data_type`.
+            //
+            // `information_schema.columns.data_type` for `NUMERIC(5, 2)` is the bare string
+            // `numeric`; the precision and the scale are separate columns. This used to render
+            // `numeric(5,2)` and compare it to `data_type`, which cannot match for any decimal
+            // that declares either - so `Decimal<5, 2>` reported a type change on a column that
+            // already had exactly that type, on every diff, forever.
+            //
+            // The generated `ALTER` is one Postgres would accept and ignore, which is why this
+            // stayed invisible: it only bites where something depends on the column, and then it
+            // is fatal rather than noisy (`cannot alter type of a column used by a view or rule`).
+            // A model pairing `Decimal` with `versions: { drafts: true }` gets a `draft.<table>`
+            // view over the column, so it could be pushed once and never again.
+            //
+            // Unknown precision on the database side is treated as matching. A column the server
+            // does not report these for is one this cannot say anything about, and guessing
+            // "different" there is what produced the bug in the first place.
+            match (d.precision, d.scale) {
+                (Some(p), Some(sc)) => {
+                    db_col.numeric_precision.is_none_or(|dp| dp == p as i32)
+                        && db_col.numeric_scale.is_none_or(|ds| ds == sc as i32)
+                }
+                (Some(p), None) => db_col.numeric_precision.is_none_or(|dp| dp == p as i32),
+                // The schema asked for an unconstrained numeric, so any precision satisfies it.
+                _ => true,
+            }
         }
         FieldAst::Vector(v) => {
             let dt = db_col.data_type.to_lowercase();

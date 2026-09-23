@@ -307,6 +307,7 @@ fn col(name: &str, data_type: &str) -> DbColumn {
         nullable: true,
         default: None,
         ordinal_position: 0,
+        ..Default::default()
     }
 }
 

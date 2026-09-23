@@ -31,6 +31,7 @@ fn col(name: &str, data_type: &str) -> DbColumn {
         nullable: true,
         default: None,
         ordinal_position: 0,
+        ..Default::default()
     }
 }
 
@@ -1335,6 +1336,7 @@ fn col_nn(name: &str, udt: &str) -> DbColumn {
         nullable: false,
         default: None,
         ordinal_position: 0,
+        ..Default::default()
     }
 }
 
@@ -6190,6 +6192,7 @@ fn test_alter_column_richtext_to_text_extracts_lexical_plain_text() {
                     nullable: false,
                     default: None,
                     ordinal_position: 1,
+                    ..Default::default()
                 },
             ],
         }],
@@ -6693,6 +6696,7 @@ fn test_geo_to_json_emits_recreate_column() {
                     nullable: true,
                     default: None,
                     ordinal_position: 2,
+                    ..Default::default()
                 },
             ],
         }],

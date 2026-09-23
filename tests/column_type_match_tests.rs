@@ -17,6 +17,36 @@ fn pg_col(name: &str, data_type: &str, udt_name: &str, ordinal: i32, nullable: b
         nullable,
         default: None,
         ordinal_position: ordinal,
+        ..Default::default()
+    }
+}
+
+/// A `Decimal<p, s>` field, as the extractor produces one.
+fn decimal_field(precision: Option<u32>, scale: Option<u32>) -> FieldAst {
+    FieldAst::Decimal(supatype_engine::parser::ast::DecimalFieldAst {
+        pg_type: "NUMERIC".into(),
+        required: false,
+        precision,
+        scale,
+        check: None,
+        validation: None,
+        localized: false,
+        read_only: false,
+        annotations: Default::default(),
+    })
+}
+
+/// A numeric column as `information_schema` actually reports one.
+fn pg_numeric_col(name: &str, precision: Option<i32>, scale: Option<i32>) -> DbColumn {
+    DbColumn {
+        name: name.into(),
+        data_type: "numeric".into(),
+        udt_name: "numeric".into(),
+        nullable: true,
+        default: None,
+        ordinal_position: 1,
+        numeric_precision: precision,
+        numeric_scale: scale,
     }
 }
 
@@ -54,14 +84,11 @@ fn postgres_information_schema_types(field: &FieldAst) -> Option<(String, String
         FieldAst::TsQuery(_) => ("tsquery".into(), "tsquery".into()),
         FieldAst::TsVector(_) => ("tsvector".into(), "tsvector".into()),
         FieldAst::Money(_) => ("numeric".into(), "numeric".into()),
-        FieldAst::Decimal(d) => {
-            let data_type = match (d.precision, d.scale) {
-                (Some(p), Some(s)) => format!("numeric({p},{s})"),
-                (Some(p), None) => format!("numeric({p})"),
-                _ => "numeric".into(),
-            };
-            (data_type, "numeric".into())
-        }
+        // Postgres reports the bare word. The precision and the scale are `numeric_precision`
+        // and `numeric_scale`, separate columns, which is the whole point of the bug below: this
+        // helper used to render `numeric(5,2)` here, a string `information_schema` never returns,
+        // so every test in this file agreed with a differ that was wrong about real databases.
+        FieldAst::Decimal(_) => ("numeric".into(), "numeric".into()),
         FieldAst::Array(a) => {
             let elem = a.element_type.to_lowercase();
             ("ARRAY".into(), format!("_{elem}"))
@@ -200,4 +227,54 @@ fn test_geography_point_typmod_in_data_type_still_matches() {
 
     let col = pg_col("point", "geography(Point,4326)", "geography", 1, false);
     assert!(column_diff::column_type_matches_introspected(point, &col));
+}
+
+/// `Decimal<p, s>` against a column that already is exactly that.
+///
+/// `information_schema.columns.data_type` for `NUMERIC(5, 2)` is `numeric`: the precision and the
+/// scale live in `numeric_precision` and `numeric_scale`. The differ rendered `numeric(5,2)` and
+/// compared it to `data_type`, so it never matched, and every diff reported a type change on a
+/// column that needed none.
+///
+/// The `ALTER` that produced is one Postgres accepts and ignores - until something depends on the
+/// column, and then it is fatal: `cannot alter type of a column used by a view or rule`. A model
+/// declaring `Decimal` alongside `versions: { drafts: true }` gets a `draft.<table>` view over it,
+/// so such a schema could be pushed exactly once and every push after it failed.
+#[test]
+fn decimal_with_precision_matches_a_column_that_already_has_it() {
+    let fixture = include_str!("fixtures/geospatial.json");
+    let ast = parser::parse(fixture).unwrap();
+    // Any Decimal field will do; the fixture's shape is irrelevant to the comparison.
+    let _ = &ast;
+    let decimal = decimal_field(Some(5), Some(2));
+
+    let col = pg_numeric_col("equity_pct", Some(5), Some(2));
+    assert!(
+        column_diff::column_type_matches_introspected(&decimal, &col),
+        "numeric(5,2) reported as a type change against a numeric(5,2) column",
+    );
+}
+
+#[test]
+fn decimal_with_precision_still_detects_a_real_difference() {
+    // The fix must not be "always true": a column that genuinely differs still has to be caught.
+    let decimal = decimal_field(Some(5), Some(2));
+
+    assert!(!column_diff::column_type_matches_introspected(
+        &decimal,
+        &pg_numeric_col("equity_pct", Some(10), Some(2)),
+    ));
+    assert!(!column_diff::column_type_matches_introspected(
+        &decimal,
+        &pg_numeric_col("equity_pct", Some(5), Some(4)),
+    ));
+}
+
+#[test]
+fn unconstrained_decimal_accepts_any_precision() {
+    let decimal = decimal_field(None, None);
+    assert!(column_diff::column_type_matches_introspected(
+        &decimal,
+        &pg_numeric_col("amount", Some(12), Some(4)),
+    ));
 }
