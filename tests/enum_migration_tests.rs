@@ -71,6 +71,7 @@ fn make_db_with_enum(enum_name: &str, values: &[&str]) -> DatabaseState {
                     nullable: false,
                     default: Some("gen_random_uuid()".into()),
                     ordinal_position: 1,
+                    ..Default::default()
                 },
                 DbColumn {
                     name: "title".into(),
@@ -79,6 +80,7 @@ fn make_db_with_enum(enum_name: &str, values: &[&str]) -> DatabaseState {
                     nullable: false,
                     default: None,
                     ordinal_position: 2,
+                    ..Default::default()
                 },
                 DbColumn {
                     name: "status".into(),
@@ -87,6 +89,7 @@ fn make_db_with_enum(enum_name: &str, values: &[&str]) -> DatabaseState {
                     nullable: false,
                     default: None,
                     ordinal_position: 3,
+                    ..Default::default()
                 },
             ],
         }],

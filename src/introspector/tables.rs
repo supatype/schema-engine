@@ -35,7 +35,7 @@ pub struct DbTable {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbColumn {
     pub name: String,
@@ -44,6 +44,19 @@ pub struct DbColumn {
     pub nullable: bool,
     pub default: Option<String>,
     pub ordinal_position: i32,
+    /// `numeric_precision` and `numeric_scale`, which `data_type` does not carry.
+    ///
+    /// `information_schema.columns.data_type` for `NUMERIC(5, 2)` is the bare string `numeric`:
+    /// the precision and the scale are separate columns. The differ compared `data_type` against
+    /// a rendered `numeric(5,2)` and so never matched, which made every `Decimal<p, s>` column
+    /// report a type change on every diff. The generated `ALTER` was a no-op the database would
+    /// have accepted and ignored, except where a view depends on the column, where Postgres
+    /// refuses with `cannot alter type of a column used by a view or rule` - so a schema pairing
+    /// `Decimal` with `versions: { drafts: true }` could be pushed once and never again.
+    #[serde(default)]
+    pub numeric_precision: Option<i32>,
+    #[serde(default)]
+    pub numeric_scale: Option<i32>,
 }
 
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTable>> {
@@ -66,8 +79,9 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTable>>
 }
 
 async fn read_columns(conn: &mut PgConnection, schema: &str, table: &str) -> Result<Vec<DbColumn>> {
-    let rows: Vec<(String, String, String, String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT column_name, data_type, udt_name, is_nullable, column_default, ordinal_position
+    let rows: Vec<(String, String, String, String, Option<String>, i32, Option<i32>, Option<i32>)> = sqlx::query_as(
+        "SELECT column_name, data_type, udt_name, is_nullable, column_default, ordinal_position,
+                numeric_precision, numeric_scale
          FROM information_schema.columns
          WHERE table_schema = $1 AND table_name = $2
          ORDER BY ordinal_position",
@@ -80,13 +94,24 @@ async fn read_columns(conn: &mut PgConnection, schema: &str, table: &str) -> Res
     Ok(rows
         .into_iter()
         .map(
-            |(name, data_type, udt_name, is_nullable, default, ordinal_position)| DbColumn {
+            |(
+                name,
+                data_type,
+                udt_name,
+                is_nullable,
+                default,
+                ordinal_position,
+                numeric_precision,
+                numeric_scale,
+            )| DbColumn {
                 name,
                 data_type,
                 udt_name,
                 nullable: is_nullable == "YES",
                 default,
                 ordinal_position,
+                numeric_precision,
+                numeric_scale,
             },
         )
         .collect())
