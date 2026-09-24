@@ -1,0 +1,43 @@
+name: Release Please
+
+# Keeps a release PR open against main, and tags when it merges.
+#
+# The version lived in two places: `Cargo.toml`, and a tag a person typed. Only one of them was
+# automated, so they disagreed whenever the bump was forgotten -- which `release.yml`'s first job
+# catches, but only after the tag exists and the release has already gone red.
+#
+# This makes them one action. release-please reads the conventional commits since the last release,
+# opens a PR bumping `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md`, and creates the tag when that PR
+# merges. There is no moment where a tag exists and the crate has not caught up.
+#
+# `release.yml` is unchanged and still triggers on `v*`, so the tag this creates builds and publishes
+# exactly as a hand-made one did. Its version gate stays: under this it should never fire again, and
+# if it ever does, something has gone wrong that is worth stopping for.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One release PR at a time. Two runs racing would both try to force-push the same branch, and the
+# loser leaves a PR describing a version that is no longer next.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Maintain the release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # The default GITHUB_TOKEN is deliberate. A PAT would let the release commit trigger
+          # other workflows, which sounds useful and is how a release loop starts: the tag push
+          # runs `release.yml`, which is all this needs.
+          token: ${{ secrets.GITHUB_TOKEN }}
