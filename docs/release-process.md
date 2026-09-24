@@ -1,17 +1,40 @@
 # Engine Release Process
 
-Everything below describes what `.github/workflows/release.yml` and
-`.github/workflows/publish-docker.yml` actually do. Keep them in step: this file is a summary of
-those workflows, not a separate process.
+Everything below describes what `.github/workflows/release-please.yml`,
+`.github/workflows/release.yml` and `.github/workflows/publish-docker.yml` actually do. Keep them in
+step: this file is a summary of those workflows, not a separate process.
 
-## Release checklist
+## Releasing
 
-1. Bump `version` in `Cargo.toml`.
-2. Commit the bump.
-3. Tag it: `git tag v0.3.0`. The tag must be the `Cargo.toml` version with a `v` prefix.
-4. Push: `git push origin main --tags`.
+**Merge the release PR.** That is the whole procedure.
 
-The tag push runs `release.yml`, which does the rest in five stages.
+`release-please.yml` keeps one open against `main`, titled `chore(main): release X.Y.Z`. It reads
+the conventional commits since the last release, works out the next version, and stages the bump to
+`Cargo.toml` and `Cargo.lock` along with a `CHANGELOG.md` entry. Merging it commits that and creates
+the tag.
+
+The tag push then runs `release.yml` exactly as a hand-made tag did.
+
+### Why it is not a checklist any more
+
+It used to be four steps: bump `Cargo.toml`, commit, tag, push. The version lived in two places, a
+file and a tag someone typed, and only one of them was automated. The bump was forgotten often
+enough that the gate below exists to catch it, which it does -- after the tag is public and the
+release has gone red.
+
+Merging one PR makes the bump and the tag the same action, so they cannot disagree.
+
+### If you need a version the commits do not imply
+
+Conventional commits decide the bump: `fix:` patches, `feat:` minors, `!` or `BREAKING CHANGE:`
+majors. To force a different one, add a `Release-As: 1.2.3` footer to a commit on `main` and
+release-please will propose that instead.
+
+### Tagging by hand
+
+Still works, and the gate still applies: the tag must equal the `Cargo.toml` version with a `v`
+prefix. Use it for a release the automation cannot express, and expect release-please's next PR to
+carry on from whatever you tagged, because the manifest is updated by the same merge.
 
 ### 1. Tag matches Cargo.toml
 
@@ -23,6 +46,9 @@ is bound to every row of `_supatype` migration history, written into the generat
 and reported by both binaries. `Cargo.toml` once sat at `0.1.0` while tags ran to `v0.1.8`, so every
 migration applied in that window recorded an engine version that was never released. A forgotten
 bump is now a red release rather than a quiet mislabel.
+
+Kept under release-please, where it should never fire again. If it ever does, the two halves that
+are supposed to move together have come apart, which is worth stopping for rather than tolerating.
 
 ### 2. Test
 
