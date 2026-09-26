@@ -9,7 +9,11 @@ use std::collections::HashSet;
 fn expected_index_names(ast: &SchemaAst) -> HashSet<(String, String)> {
     let mut names = HashSet::new();
     for model in &ast.models {
-        for index in model.indexes() {
+        // Declared and implicit together. The generator creates three kinds nobody declares, each
+        // with a managed comment, so leaving them out of `expected` meant the differ saw a managed
+        // index it could not account for and proposed dropping it, every single push.
+        let implicit = crate::generator::sql::migration::implicit_model_indexes(model);
+        for index in model.indexes().iter().chain(implicit.iter()) {
             let derived = expected_model_index_name(model.table_name(), &index.fields);
             let idx_name = index
                 .name

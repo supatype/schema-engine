@@ -426,6 +426,55 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
 /// world-readable on a model whose `read` rule is `Public`, and publishing would stop meaning
 /// anything. A caller with no account reads a draft by holding a signed preview link, which carries
 /// `role: authenticated` and no subject.
+/// Drop every draft view, so the column operations that follow are not blocked by one.
+///
+/// The views are rebuilt at the end of the same migration by [`render_versions_layer`], which runs
+/// last on purpose: it reads the snapshot tables the operations create. That ordering is right for
+/// creating them and wrong for keeping them, because a view holds a dependency on every column it
+/// selects, and `jsonb_populate_record(NULL::public.post, ...)` selects all of them.
+///
+/// So removing a field from a versioned model failed, in Postgres' words rather than ours:
+///
+/// ```text
+/// cannot drop column probe of table post because other objects depend on it
+/// ```
+///
+/// Nothing in that names drafts, the view, or the `versions` block in the schema that caused it.
+/// The migration had already been applied up to that statement, so the push failed part-done.
+///
+/// `IF EXISTS` on both the schema check and the view: this runs on the first push for a model that
+/// has just become versioned, where neither exists yet.
+pub fn drop_draft_views_sql(ast: &SchemaAst) -> String {
+    // `drafts: true`, not merely versioned. A model keeping history with `drafts: false` has no
+    // pending version to preview and so no view, and naming one here would emit a drop for a
+    // relation that never exists.
+    let models: Vec<_> = versioned_models(ast)
+        .into_iter()
+        .filter(|m| versions_of(m).is_some_and(|v| v.drafts))
+        .collect();
+    if models.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::from(
+        "-- Drop draft views before column changes; recreated at the end of this migration.\n",
+    );
+    // Guarded on the schema rather than assuming it: a plain `DROP VIEW IF EXISTS draft.x` still
+    // raises when `draft` itself is absent, which is every first push.
+    out.push_str(
+        "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'draft') THEN\n",
+    );
+    for model in models {
+        out.push_str(&format!(
+            "    EXECUTE 'DROP VIEW IF EXISTS {draft}.{table}';\n",
+            draft = quoted(DRAFT_SCHEMA),
+            table = quoted(model.table_name()),
+        ));
+    }
+    out.push_str("  END IF;\nEND $$;\n\n");
+    out
+}
+
 fn draft_schema_preamble() -> String {
     format!(
         "REVOKE ALL ON SCHEMA {draft} FROM anon;\n\

@@ -275,10 +275,26 @@ pub fn diff(
 
             // For each expected policy, check if it exists and if its expression matches.
             let expected = expected_policies(model.access());
-            let expected_names: std::collections::HashSet<String> = expected
+            let mut expected_names: std::collections::HashSet<String> = expected
                 .iter()
                 .map(|(suffix, _)| format!("{table}_{suffix}"))
                 .collect();
+
+            // `<table>_draft_select` is owned by the versions layer, not by this differ, and has to
+            // be named here anyway so it is not treated as stale.
+            //
+            // It carries the managed marker, so the hand-written escape below does not save it: the
+            // differ dropped it on every push and the versions layer recreated it at the end of the
+            // same migration. A project with two publishable models reported the same two
+            // `drop_rls_policy` operations on every `supatype diff`, applied them, and reported
+            // them again immediately. A push that is not idempotent teaches people to ignore its
+            // output.
+            //
+            // The same shape as `versions_tables`, which exists so the removed-table pass does not
+            // drop the snapshot tables for the same reason. Tables were covered; policies were not.
+            if crate::parser::accessors::versions_of(model).is_some_and(|v| v.drafts) {
+                expected_names.insert(format!("{table}_draft_select"));
+            }
 
             for (suffix, rule_opt) in &expected {
                 let policy_name = format!("{table}_{suffix}");

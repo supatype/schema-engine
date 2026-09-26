@@ -278,3 +278,47 @@ fn unconstrained_decimal_accepts_any_precision() {
         &pg_numeric_col("amount", Some(12), Some(4)),
     ));
 }
+
+/// An `xml` column against an `xml` field proposes nothing.
+///
+/// It used to propose `type change xml -> TEXT may be lossy` on every diff, because `Xml` sat in
+/// the TEXT arms of both `expected_udt` and `field_pg_type` while the column Postgres created was
+/// `xml`. So `supatype push` was never idempotent for a schema containing one: it reported the
+/// same lossy change, applied it, and reported it again.
+///
+/// Found by the field conformance harness, which had never reached the assertion that catches it:
+/// `dev --no-watch` tore the stack down before the first API call, so steps 4 through 6 had never
+/// run. Once they did, this was the only failure among 120 checks.
+#[test]
+fn test_xml_column_matches_xml_field_without_drift() {
+    let fixture = r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "probe",
+      "annotations": { "db": { "tableName": "probe" } },
+      "fields": {
+        "id": { "kind": "uuid", "required": true },
+        "probeXml": { "kind": "xml", "required": false }
+      }
+    }
+  ]
+}"#;
+    let ast = parser::parse(fixture).expect("fixture parses");
+    let model = &ast.models[0];
+    let field = model.fields.get("probeXml").expect("the xml field");
+
+    // `information_schema` reports an XML column as data_type `xml`, udt_name `xml`.
+    let col = pg_col("probeXml", "xml", "xml", 2, true);
+    assert!(
+        column_diff::column_type_matches_introspected(field, &col),
+        "an xml field should match an xml column, or every push proposes a lossy change"
+    );
+
+    // The control: a text column really is drift, so the check above is not vacuously true.
+    let text_col = pg_col("probeXml", "text", "text", 2, true);
+    assert!(
+        !column_diff::column_type_matches_introspected(field, &text_col),
+        "an xml field against a text column is real drift and must still be reported"
+    );
+}

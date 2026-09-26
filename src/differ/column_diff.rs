@@ -191,8 +191,12 @@ fn expected_udt(field: &FieldAst) -> Option<String> {
         | FieldAst::Email(_)
         | FieldAst::Url(_)
         | FieldAst::Slug(_)
-        | FieldAst::Xml(_)
         | FieldAst::Enum(_) => Some("text".into()),
+        // `xml`, because that is what the column is. `migration.rs` creates it with `XML` and this
+        // side expected `text`, so every push after the first proposed converting the column the
+        // engine had just created: "type change xml -> TEXT may be lossy", flagged caution, and a
+        // user who accepted the prompt lost the type. Confirmed on a live database.
+        FieldAst::Xml(_) => Some("xml".into()),
         FieldAst::RichText(_)
         | FieldAst::Json(_)
         | FieldAst::Image(_)
@@ -299,8 +303,9 @@ pub(crate) fn field_pg_type(field: &FieldAst) -> String {
         | FieldAst::Email(_)
         | FieldAst::Url(_)
         | FieldAst::Slug(_)
-        | FieldAst::Xml(_)
         | FieldAst::Enum(_) => "TEXT".into(),
+        // Matches `migration.rs`, which renders this column as XML. See `expected_udt` above.
+        FieldAst::Xml(_) => "XML".into(),
         FieldAst::RichText(_)
         | FieldAst::Json(_)
         | FieldAst::Image(_)
