@@ -60,7 +60,8 @@ jobs:
             --test exact_value_types_tests \
             --test sdk_exact_value_types_tests \
             --test column_shape_tests \
-            --test implicit_index_tests
+            --test implicit_index_tests \
+            --test storage_grant_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})
