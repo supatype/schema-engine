@@ -4,9 +4,24 @@ on:
   push:
     tags:
       - "v*"
+  # Release Please creates the tag with GITHUB_TOKEN, and GitHub does not fire workflows for refs
+  # that token created: it is how recursive runs are prevented. So a release can exist, correctly
+  # tagged, with no binary and no image behind it, and nothing says so. v0.3.3 went out that way.
+  #
+  # This is the way back in. Give it a tag that already exists and it builds and publishes exactly
+  # what a tag push would have.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, for example v0.3.3"
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
+  # The tag this run is for. `github.ref_name` is the tag on a push and the branch on a dispatch,
+  # so every place that needs the version reads this instead.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   # ─── The tag is the version, and the binary has to agree ────────────────────
@@ -21,9 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - name: Compare
         run: |
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${RELEASE_TAG#v}"
           CRATE="$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "supatype-engine") | .version')"
           echo "tag: ${TAG}, Cargo.toml: ${CRATE}"
@@ -56,6 +73,8 @@ jobs:
           - 5432:5432
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       # wasm32 so `test_wasm_build` runs here rather than taking its "target not installed" branch.
       # It guards a break that only shows on that target: the library gates its sqlx and tokio
       # modules off wasm32, so a WASM-visible module reaching into a gated one builds clean on the
@@ -108,6 +127,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -179,6 +200,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Download all binaries
         uses: actions/download-artifact@v4
@@ -189,7 +212,7 @@ jobs:
       - name: Extract version
         id: version
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
@@ -246,9 +269,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           files: |
             supatype-engine-*
             checksums.sha256
