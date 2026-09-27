@@ -71,7 +71,9 @@ fn managed_gin() -> DbIndex {
 #[test]
 fn the_gin_index_a_blocks_field_creates_is_not_proposed_for_dropping() {
     let ast = parser::parse(schema()).expect("schema parses");
-    let ops = differ::diff(&ast, &live_db(vec![managed_gin()])).expect("diff runs").operations;
+    let ops = differ::diff(&ast, &live_db(vec![managed_gin()]))
+        .expect("diff runs")
+        .operations;
 
     let drops: Vec<&Operation> = ops
         .iter()
@@ -98,7 +100,9 @@ fn a_managed_index_nothing_declares_is_still_dropped() {
         comment: Some("supatype:managed;kind=index".into()),
     };
     let ast = parser::parse(schema()).expect("schema parses");
-    let ops = differ::diff(&ast, &live_db(vec![managed_gin(), orphan])).expect("diff runs").operations;
+    let ops = differ::diff(&ast, &live_db(vec![managed_gin(), orphan]))
+        .expect("diff runs")
+        .operations;
 
     let dropped: Vec<String> = ops
         .iter()

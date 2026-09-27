@@ -97,6 +97,12 @@ fn a_storage_reference_is_what_upload_returns() {
 #[test]
 fn image_and_file_both_use_it() {
     let row = row_block(&generated());
-    assert!(row.contains("headshot: StorageReference | null"), "got:\n{row}");
-    assert!(row.contains("attachment: StorageReference | null"), "got:\n{row}");
+    assert!(
+        row.contains("headshot: StorageReference | null"),
+        "got:\n{row}"
+    );
+    assert!(
+        row.contains("attachment: StorageReference | null"),
+        "got:\n{row}"
+    );
 }

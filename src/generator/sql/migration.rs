@@ -1172,8 +1172,10 @@ pub(crate) fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
         }
     }
 
-    let has_soft_delete_field = model.fields.contains_key("softDelete");
-    if has_soft_delete_field || (model.options.soft_delete && !has_soft_delete_field) {
+    // Either spelling asks for the same index, and only one is emitted. The guard reads as a
+    // plain `or` now that both branches live here; it was two blocks, and the second excluded the
+    // first to avoid adding the index twice.
+    if model.fields.contains_key("softDelete") || model.options.soft_delete {
         indexes.push(IndexAst {
             name: Some(format!("{table}_deleted_at_idx")),
             fields: vec!["deleted_at".into()],

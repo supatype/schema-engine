@@ -25,10 +25,11 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
     // A localized column is jsonb holding {"en": ..., "fr": ...}. Typing it as the bare value
     // invited `.toUpperCase()` on an object, which compiled and then failed in the browser.
-    let has_localized = ast
-        .models
-        .iter()
-        .any(|m| m.fields.values().any(crate::parser::accessors::is_localized));
+    let has_localized = ast.models.iter().any(|m| {
+        m.fields
+            .values()
+            .any(crate::parser::accessors::is_localized)
+    });
 
     let has_richtext = ast
         .models
@@ -314,10 +315,9 @@ fn ts_type_of(field: &FieldAst) -> (String, bool) {
         | FieldAst::Bytes(f)
         | FieldAst::Xml(f) => ("string".into(), !f.required),
         FieldAst::RichText(f) => ("RichText".into(), !f.required),
-        FieldAst::Integer(f)
-        | FieldAst::Float(f)
-        | FieldAst::SmallInt(f)
-        | FieldAst::Serial(f) => ("number".into(), !f.required),
+        FieldAst::Integer(f) | FieldAst::Float(f) | FieldAst::SmallInt(f) | FieldAst::Serial(f) => {
+            ("number".into(), !f.required)
+        }
         // The exact-value kinds. Each names a value no binary float holds, so the type
         // `@supatype/types` declares for it is the one that survives the wire: `bigint` for
         // BIGINT, and an exact decimal string for the two NUMERIC kinds. Money sat in the arm
