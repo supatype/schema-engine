@@ -37,7 +37,18 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          # The default GITHUB_TOKEN is deliberate. A PAT would let the release commit trigger
-          # other workflows, which sounds useful and is how a release loop starts: the tag push
-          # runs `release.yml`, which is all this needs.
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Not the default GITHUB_TOKEN, and the reason is the opposite of what it looks like.
+          #
+          # GitHub does not fire workflows for refs that GITHUB_TOKEN created, which is how it
+          # prevents a workflow from re-triggering itself. So this action tagged a release and
+          # `release.yml`, which waits on `push: tags`, never ran. The tag and the GitHub release
+          # appeared with no binary and no image behind them, and nothing reported it. v0.3.3 went
+          # out that way, and v0.3.1 and v0.3.2 each carry a failed Release run followed by a
+          # successful one, which is what re-pushing a tag by hand looks like.
+          #
+          # The comment that used to sit here said a PAT risked a release loop and that the tag
+          # push ran `release.yml`. The second half was the thing that never happened.
+          #
+          # There is no loop to start. `release.yml` builds and publishes; it does not push to
+          # main, so nothing brings this action back round.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
