@@ -434,6 +434,14 @@ fn render_forward_core(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Resu
     // A CHECK that calls a function is validated when the table is created, so the helper
     // functions have to exist before any operation line runs, not alongside the triggers.
     lines.push(super::constraint_helpers::generate());
+    // Before the operations, because a draft view depends on every column it selects and would
+    // otherwise refuse a column drop. Recreated by the versions layer at the end of this same
+    // migration, so the window where they are missing is inside one transaction.
+    let drop_drafts = crate::generator::sql::versions::drop_draft_views_sql(ast);
+    if !drop_drafts.trim().is_empty() {
+        lines.push(drop_drafts.trim_end().to_string());
+        lines.push(String::new());
+    }
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
     lines.extend(render_reasserted_lines(
         diff,
@@ -1106,45 +1114,11 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         statements.push(create_index_sql(table, index, schema)?);
     }
 
-    // Auto-indexes from fields with `index: true`
-    for (field_name, field) in &model.fields {
-        if let Some(true) = field_index_flag(field) {
-            let auto_idx = IndexAst {
-                name: None,
-                fields: vec![field_name.clone()],
-                unique: false,
-                using: IndexMethod::Btree,
-            };
-            statements.push(create_index_sql(table, &auto_idx, schema)?);
-        }
-    }
-
-    // Index on deleted_at when softDelete is active (composite field or option)
-    let needs_soft_delete_index = has_soft_delete_field
-        || (model.options.soft_delete && !model.fields.contains_key("softDelete"));
-    if needs_soft_delete_index {
-        let idx = IndexAst {
-            name: Some(format!("{table}_deleted_at_idx")),
-            fields: vec!["deleted_at".into()],
-            unique: false,
-            using: IndexMethod::Btree,
-        };
-        statements.push(create_index_sql(table, &idx, schema)?);
-    }
-
-    // GIN index for each Blocks field (enables JSONB containment queries).
-    for (field_name, field) in &model.fields {
-        if let FieldAst::Blocks(b) = field {
-            if b.index {
-                let gin_idx = IndexAst {
-                    name: Some(format!("{table}_{field_name}_gin_idx")),
-                    fields: vec![field_name.clone()],
-                    unique: false,
-                    using: IndexMethod::Gin,
-                };
-                statements.push(create_index_sql(table, &gin_idx, schema)?);
-            }
-        }
+    // And the ones nobody declares. Shared with the differ rather than written twice: these
+    // carry a managed comment, so an index the differ cannot account for is one it proposes
+    // dropping, and every push then dropped it and proposed dropping it again.
+    for index in implicit_model_indexes(model) {
+        statements.push(create_index_sql(table, &index, schema)?);
     }
 
     // Singleton (global config) — enforce exactly one row via a partial unique index.
@@ -1172,7 +1146,61 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
 }
 
 /// Returns Some(true) if the field has an `index: true` flag, None otherwise.
-fn field_index_flag(field: &FieldAst) -> Option<bool> {
+/// The indexes a model gets without declaring any.
+///
+/// Three rules, all of which emit a managed comment: a btree for a field marked `index`, a btree
+/// on `deleted_at` for a soft-deleting model, and a GIN for an indexed `Blocks` column.
+///
+/// Public to the crate because the differ needs the identical list. It previously expected only
+/// the indexes a schema *declares*, so each of these read as a managed index nothing accounted
+/// for, and the differ proposed dropping it. The push dropped it, recreated it from the rules
+/// above, and the next diff proposed dropping it again: `supatype push` was never idempotent for
+/// any model with an indexed Blocks column. One definition, read by both, is the only version of
+/// this that stays true.
+pub(crate) fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
+    let table = model.table_name();
+    let mut indexes = Vec::new();
+
+    for (field_name, field) in &model.fields {
+        if let Some(true) = field_index_flag(field) {
+            indexes.push(IndexAst {
+                name: None,
+                fields: vec![field_name.clone()],
+                unique: false,
+                using: IndexMethod::Btree,
+            });
+        }
+    }
+
+    // Either spelling asks for the same index, and only one is emitted. The guard reads as a
+    // plain `or` now that both branches live here; it was two blocks, and the second excluded the
+    // first to avoid adding the index twice.
+    if model.fields.contains_key("softDelete") || model.options.soft_delete {
+        indexes.push(IndexAst {
+            name: Some(format!("{table}_deleted_at_idx")),
+            fields: vec!["deleted_at".into()],
+            unique: false,
+            using: IndexMethod::Btree,
+        });
+    }
+
+    for (field_name, field) in &model.fields {
+        if let FieldAst::Blocks(b) = field {
+            if b.index {
+                indexes.push(IndexAst {
+                    name: Some(format!("{table}_{field_name}_gin_idx")),
+                    fields: vec![field_name.clone()],
+                    unique: false,
+                    using: IndexMethod::Gin,
+                });
+            }
+        }
+    }
+
+    indexes
+}
+
+pub(crate) fn field_index_flag(field: &FieldAst) -> Option<bool> {
     match field {
         FieldAst::Text(f)
         | FieldAst::Email(f)
@@ -1419,7 +1447,20 @@ pub fn field_check_expression(field: &FieldAst, name: &str) -> Option<String> {
             "TEXT".to_string(),
             false,
         ),
+        // Stated here rather than left to `pg_type`, for both. This is the one place the field's
+        // `pg_type` reaches generated SQL (a localized column's CHECK), so a Money field falling
+        // through to the catch-all below would have bounded a numeric column with a text
+        // expression. Decimal already named itself; Money was the one relying on the default.
         FieldAst::Decimal(f) => (
+            f.check.as_deref(),
+            f.validation.as_ref(),
+            f.localized,
+            "NUMERIC".to_string(),
+            false,
+        ),
+        // Separate arm rather than joined to Decimal above: Money carries a ScalarFieldAst and
+        // Decimal its own type, so one pattern cannot bind both.
+        FieldAst::Money(f) => (
             f.check.as_deref(),
             f.validation.as_ref(),
             f.localized,

@@ -296,6 +296,22 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
     out.push_str("-- Storage RLS\n\n");
     out.push_str("ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;\n\n");
 
+    // Immediately after the ENABLE, never before it, and never without it.
+    //
+    // The policies below are the bucket's declared read rule, and until now nothing evaluated
+    // them: the storage service connects as a superuser, which bypasses row level security, and
+    // decided access itself from `access_mode` alone. That hardcoded owner-only for every private
+    // bucket, so a bucket declaring `read: BucketLoggedIn` refused every caller but the uploader
+    // while the correct policy sat unreached.
+    //
+    // The service now switches to the caller's role and asks Postgres. That is refused before RLS
+    // is consulted unless the role can select the table at all, and no role held a grant here.
+    //
+    // Safe only because RLS is on: a bucket with no policy default-denies, so this exposes exactly
+    // what the schema said to expose and nothing else. The ordering is asserted by a test, because
+    // a grant that preceded the ENABLE would publish every object in the project.
+    out.push_str("GRANT SELECT ON storage.objects TO anon, authenticated;\n\n");
+
     for (label, _bq, read_expr, write_expr, delete_expr) in &bucket_level {
         let select_policy = format!("storage_{label}_sel");
         let insert_policy = format!("storage_{label}_ins");

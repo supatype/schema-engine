@@ -148,6 +148,9 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // Enums carry their default as a bare String on EnumFieldAst rather than a DefaultValueAst,
+    // so the structured value is not what that branch wants. It reads it through
+    // `enum_default_literal` instead.
     let default_val: Option<DefaultValueAst> = if kind == "enum" {
         None
     } else {
@@ -407,10 +410,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 .map(|v| serde_json::from_value(v.clone()))
                 .transpose()?
                 .unwrap_or_default();
-            let enum_default = value
-                .get("default")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            let enum_default = value.get("default").and_then(enum_default_literal);
             let pg_type = pg_type_or_default(&annotations.db, kind);
             Ok(FieldAst::Enum(EnumFieldAst {
                 pg_type,
@@ -696,6 +696,31 @@ fn custom_from_v2(
     })
 }
 
+/// The literal behind an enum field's `default`, or None when there is not one.
+///
+/// Every default reaches this parser as an object, `{"kind":"value","value":"user"}`. This used to
+/// call `.as_str()` on that object, which is None for anything but a bare string, so an enum's
+/// default was silently discarded on every schema.
+///
+/// The damage landed in the generated types rather than the database. `field_has_default` handles
+/// `FieldAst::Enum` correctly and was simply never told there was one, so
+/// `Default<"user" | "editor" | "admin", "user">` was emitted as **required** in `Insert` while
+/// `Default<Int, 0>` on the same model was optional. Callers were made to pass a value the
+/// database would have filled in.
+///
+/// The bare-string arm is kept for an AST written before defaults were structured.
+fn enum_default_literal(raw: &serde_json::Value) -> Option<String> {
+    if let Some(s) = raw.as_str() {
+        return Some(s.to_string());
+    }
+    match serde_json::from_value::<DefaultValueAst>(raw.clone()).ok()? {
+        DefaultValueAst::Value { value } => value.as_str().map(str::to_string),
+        // An enum column defaults to one of its own members. An expression or a generated value is
+        // not one, and `EnumFieldAst::default` is a String with nowhere to record the difference.
+        _ => None,
+    }
+}
+
 fn pg_type_or_default(db: &DbFieldAnnotations, kind: &str) -> String {
     if !db.pg_type.is_empty() {
         return db.pg_type.clone();
@@ -705,8 +730,30 @@ fn pg_type_or_default(db: &DbFieldAnnotations, kind: &str) -> String {
 
 pub fn default_pg_type(kind: &str) -> &'static str {
     match kind {
-        "text" | "email" | "url" | "slug" | "color" | "ip" | "cidr" | "macaddr" | "xml"
-        | "tsQuery" | "tsVector" | "money" | "enum" => "TEXT",
+        "text" | "email" | "url" | "slug" | "color" | "enum" => "TEXT",
+        // Each of these is its own Postgres type, and each sat in the TEXT arm above beside `email`
+        // and `url`. The columns were always right, because the DDL comes from the field variant.
+        // What was wrong is what the AST told anyone reading it, and the AST is a published
+        // contract: a consumer read TEXT, wrote a parser that rejected every value the column
+        // returns, and cast to the wrong type. Studio publishes this field too.
+        //
+        // Found by pushing one model carrying every field kind and comparing the AST against
+        // `information_schema`, which is what the conformance harness does.
+        "ip" => "INET",
+        "cidr" => "CIDR",
+        "macaddr" => "MACADDR",
+        "xml" => "XML",
+        "tsQuery" => "TSQUERY",
+        "tsVector" => "TSVECTOR",
+        // Matches the DDL the differ emits, which has always been NUMERIC(19,4). `money` sat in
+        // the TEXT arm above beside `email` and `url`, so the column was numeric while every
+        // consumer of the AST was told it was text. `decimal` below was already right, which is
+        // what made this look deliberate.
+        //
+        // The AST is a published contract, and someone acted on it: read TEXT, wrote a parser that
+        // rejected every value the column returns, and cast to the wrong type. Studio publishes
+        // this field too, so it was showing the same thing.
+        "money" => "NUMERIC(19,4)",
         "richText" | "json" | "button" | "image" | "file" | "blocks" => "JSONB",
         "integer" => "INTEGER",
         "smallInt" => "SMALLINT",

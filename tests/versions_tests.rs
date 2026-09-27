@@ -444,3 +444,123 @@ fn what_a_push_applies_carries_the_same_layer_as_the_migration_file() {
         );
     }
 }
+
+/// A column drop is not refused by the draft view that selects it.
+///
+/// `jsonb_populate_record(NULL::public.post, ...)` selects every column, so the view holds a
+/// dependency on each one. The versions layer runs last, deliberately, because it reads the
+/// snapshot tables the operations create. That is right for building the views and wrong for
+/// keeping them: removing a field from a versioned model failed in Postgres' own words,
+///
+///   cannot drop column probe of table post because other objects depend on it
+///
+/// which names neither drafts nor the `versions` block that caused it, and left the migration
+/// applied up to that statement.
+#[test]
+fn draft_views_are_dropped_before_column_changes() {
+    let ast = versioned_ast();
+    let sql = forward_sql();
+
+    let drop_view = sql
+        .find("DROP VIEW IF EXISTS")
+        .expect("draft views should be dropped somewhere in the migration");
+    let create_view = sql
+        .find("CREATE VIEW")
+        .expect("draft views should be recreated");
+
+    assert!(
+        drop_view < create_view,
+        "the drop has to come before the rebuild"
+    );
+
+    // The ordering that matters: every column operation sits between the two, so none of them can
+    // be blocked by a view. Asserted against the operation marker the migration emits rather than
+    // a specific DDL string, so this holds for drops, renames and type changes alike.
+    if let Some(first_op) = sql.find("ALTER TABLE") {
+        assert!(
+            drop_view < first_op,
+            "draft views must be dropped before the first ALTER TABLE, got drop at {drop_view} and alter at {first_op}"
+        );
+    }
+
+    // And it is guarded, because on the first push for a newly versioned model the schema is not
+    // there yet and an unguarded DROP VIEW raises rather than skipping.
+    assert!(
+        sql.contains("WHERE nspname = 'draft'"),
+        "the early drop must be guarded on the draft schema existing"
+    );
+
+    // A schema with no versioned model emits none of this.
+    let plain = parser::parse(include_str!("fixtures/basic_blog.json")).unwrap();
+    assert!(
+        versions::drop_draft_views_sql(&plain).is_empty(),
+        "a schema with no versioned model should emit no draft drops"
+    );
+    let _ = ast;
+}
+
+/// The draft policy is not proposed for dropping on a database that already has it.
+///
+/// `<table>_draft_select` is created by the versions layer and carries the managed marker, so the
+/// RLS differ neither expected it nor left it alone as hand-written: it dropped it on every push
+/// and the versions layer recreated it at the end of the same migration. A project with two
+/// publishable models reported the same two `drop_rls_policy` operations on every `supatype diff`,
+/// applied them, and reported them again immediately.
+///
+/// The same shape as `versions_tables`, which exists so the removed-table pass does not drop the
+/// snapshot tables for the same reason. Tables were covered; policies were not.
+///
+/// Driven against a `DatabaseState` carrying the policy, because a diff from empty has nothing to
+/// drop and would pass whatever the differ decided.
+#[test]
+fn the_draft_select_policy_is_not_dropped_on_the_next_push() {
+    use supatype_engine::introspector::rls::DbRlsPolicy;
+
+    let ast = versioned_ast();
+    let model = ast
+        .models
+        .iter()
+        .find(|m| supatype_engine::parser::accessors::versions_of(m).is_some_and(|v| v.drafts))
+        .expect("the fixture should have a model with drafts");
+    let table = model.table_name().to_string();
+
+    let existing = |name: String, managed: bool| DbRlsPolicy {
+        table: table.clone(),
+        name,
+        command: "r".into(),
+        permissive: true,
+        using_expr: Some("true".into()),
+        check_expr: None,
+        managed,
+    };
+
+    let db = DatabaseState {
+        rls_enabled_tables: vec![table.clone()],
+        rls_policies: vec![
+            existing(format!("{table}_draft_select"), true),
+            // A genuinely stale managed policy, so this cannot pass by the differ simply having
+            // stopped dropping anything.
+            existing(format!("{table}_obsolete"), true),
+        ],
+        ..DatabaseState::default()
+    };
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let dropped: Vec<&str> = diff
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            Operation::DropRlsPolicy { policy, .. } => Some(policy.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        !dropped.contains(&format!("{table}_draft_select").as_str()),
+        "the draft policy was proposed for dropping: {dropped:?}"
+    );
+    assert!(
+        dropped.contains(&format!("{table}_obsolete").as_str()),
+        "a stale managed policy should still be dropped, got {dropped:?}"
+    );
+}
