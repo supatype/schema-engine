@@ -132,6 +132,20 @@ async fn or_composition_reaches_the_database() {
             user_expr.contains("date_trunc"),
             "StartOf did not compile to date_trunc: {user_expr}"
         );
+
+        // `After<StartOf<"day">, { days: 30, hours: 9 }>`: the composition the single-unit
+        // operands could not express. Asserted on the stored text, in the form Postgres
+        // writes it, so this proves three things at once: the operand compiled, Postgres
+        // accepted it, and the differ can still match it (the convergence assertion above
+        // would fail otherwise). `9 hours` is stored as part of `30 days 09:00:00`.
+        assert!(
+            user_expr.contains("30 days 09:00:00"),
+            "After did not compose a multi-unit interval: {user_expr}"
+        );
+        assert!(
+            user_expr.contains("date_trunc('day'"),
+            "After did not keep its truncation base: {user_expr}"
+        );
     })
     .await;
 }

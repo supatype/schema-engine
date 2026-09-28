@@ -67,6 +67,25 @@
                     "kind": "startOf",
                     "unit": "year"
                   }
+                },
+                {
+                  "type": "compare",
+                  "op": "lte",
+                  "left": {
+                    "kind": "column",
+                    "name": "updated_at"
+                  },
+                  "right": {
+                    "kind": "after",
+                    "base": {
+                      "kind": "startOf",
+                      "unit": "day"
+                    },
+                    "interval": {
+                      "days": 30,
+                      "hours": 9
+                    }
+                  }
                 }
               ]
             },
