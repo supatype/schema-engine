@@ -326,7 +326,7 @@
                       "right": {
                         "kind": "ago",
                         "amount": 30,
-                        "unit": "days"
+                        "unit": "weeks"
                       }
                     },
                     {
@@ -339,7 +339,7 @@
                       "right": {
                         "kind": "fromNow",
                         "amount": 7,
-                        "unit": "days"
+                        "unit": "hours"
                       }
                     }
                   ]

@@ -94,7 +94,7 @@ async fn or_composition_reaches_the_database() {
 
         // The scheduled-publishing rule:
         //   Any<[Role<"editor">, All<[Lte<"created_at", Now>,
-        //        Gte<"created_at", Ago<30,"days">>, Lte<"updated_at", FromNow<7,"days">>]>]>
+        //        Gte<"created_at", Ago<30,"weeks">>, Lte<"updated_at", FromNow<7,"hours">>]>]>
         //
         // The staff branch is what keeps a scheduled row visible to its author in
         // Studio. Without it, FORCE ROW LEVEL SECURITY hides the post the moment a
@@ -102,8 +102,17 @@ async fn or_composition_reaches_the_database() {
         assert!(expr.contains(" OR "), "expected an OR-join, got: {expr}");
         assert!(expr.contains("auth.role()"), "staff branch missing: {expr}");
         assert!(expr.contains("now()"), "temporal branch missing: {expr}");
-        assert!(expr.contains("30 days"), "Ago interval missing: {expr}");
-        assert!(expr.contains("7 days"), "FromNow interval missing: {expr}");
+
+        // Asserted in the form Postgres *stores*, not the form the engine generates.
+        // The fixture deliberately uses two units that do not survive the round trip:
+        // `30 weeks` is stored as `210 days` and `7 hours` as `07:00:00`. Asserting on
+        // the generated spelling would pass while the stored policy said something the
+        // differ could not match, which is the bug this pairing exists to catch.
+        assert!(expr.contains("210 days"), "Ago interval missing: {expr}");
+        assert!(
+            expr.contains("07:00:00"),
+            "FromNow interval missing: {expr}"
+        );
 
         // `now()`, never `clock_timestamp()` — the latter is VOLATILE and would make
         // the affordance functions' STABLE declaration a lie.
@@ -439,18 +448,22 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
         assert!(!can_delete, "delete is admin-only, so anon must be refused");
 
         // `posts.read` is the scheduled-publishing rule. The seeded row was created
-        // just now, so it is inside the 30-day window and visible. Every rule answers
+        // just now, so it is inside the window and visible. Every rule answers
         // definitively — there is no "unknown" state here, which is the entire point
         // of these functions.
         assert_eq!(can_read, Some(true), "a row created now must be visible");
 
         // And it is really evaluating the temporal predicate, not defaulting to true:
-        // the same row dated 60 days ago falls outside `Ago<30, "days">`, and with no
-        // editor role nothing else rescues it. This is what makes Studio able to say
-        // "scheduled, visible in N days" rather than just hiding the row.
+        // the same row dated 400 days ago falls outside `Ago<30, "weeks">` (210 days),
+        // and with no editor role nothing else rescues it. This is what makes Studio
+        // able to say "scheduled, visible in N days" rather than just hiding the row.
+        //
+        // 400 rather than a value just past the edge: the fixture's unit is chosen to
+        // exercise interval canonicalisation, so this assertion should not also become
+        // a test of boundary arithmetic.
         let can_read_stale: Option<bool> = sqlx::query_scalar(
             "SELECT can_read_posts(ROW(p.id, p.title, p.slug, p.content, p.author_id,
-                                       p.category_id, now() - INTERVAL '60 days',
+                                       p.category_id, now() - INTERVAL '400 days',
                                        p.updated_at)::posts)
                FROM posts p LIMIT 1",
         )
