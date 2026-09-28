@@ -7,6 +7,7 @@
 pub mod generator;
 pub mod licensing;
 pub mod parser;
+pub mod seed;
 pub mod wasm;
 
 pub mod managed;
