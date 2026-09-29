@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/supatype/schema-engine/compare/v0.4.0...v0.4.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **schema:** normalise a localised rich text column one locale at a time ([9d07513](https://github.com/supatype/schema-engine/commit/9d07513e907cbdf368cef0bff10c7833622816f7))
+* **schema:** normalise a localised rich text column one locale at a time ([37fe388](https://github.com/supatype/schema-engine/commit/37fe3885a409028817029971d55e3b9d0523bef6))
+
 ## [0.4.0](https://github.com/supatype/schema-engine/compare/v0.3.3...v0.4.0) (2026-09-29)
 
 
