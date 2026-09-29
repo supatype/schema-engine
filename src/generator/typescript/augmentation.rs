@@ -90,6 +90,7 @@ mod tests {
                     "status": {"kind": "enum", "required": true,
                                "values": ["draft", "published"], "default": "draft"},
                     "price": {"kind": "money", "required": false},
+                    "description": {"kind": "richText", "required": false},
                     "organiser": {
                         "kind": "relation", "cardinality": "belongsTo", "target": "Organiser",
                         "required": true, "annotations": {"db": {"foreignKey": "organiser_id"}}
@@ -182,6 +183,27 @@ mod tests {
             !rendered().contains("speakers"),
             "a hasMany has no column on this table"
         );
+    }
+
+    /// The three modes differ by more than optionality here, which they do nowhere else. A
+    /// rich text column returns a document and accepts prose that a trigger turns into one,
+    /// so flattening them back would either demand hand-built Lexical JSON from every caller
+    /// or claim a read might return a string, which after the trigger it cannot.
+    #[test]
+    fn rich_text_is_a_document_to_read_and_prose_to_write() {
+        let out = rendered();
+        let block = |name: &str| {
+            out.split(&format!("{name}: {{"))
+                .nth(1)
+                .expect("a block")
+                .split("      }")
+                .next()
+                .expect("its body")
+                .to_string()
+        };
+        assert_contains(&block("Row"), "description: RichText | null");
+        assert_contains(&block("Insert"), "description?: RichText | string | null");
+        assert_contains(&block("Update"), "description?: RichText | string | null");
     }
 
     /// Money is `NUMERIC(19,4)`, and the exact value is the point.

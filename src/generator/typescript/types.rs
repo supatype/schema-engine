@@ -184,6 +184,7 @@ pub(crate) fn emit_fields(model: &ModelAst, mode: Mode, out: &mut String, ind: &
                 } else {
                     ts
                 };
+                let ts = widen_for_writes(other, &ts, mode);
                 let has_def = field_has_default(other);
                 emit_one(name, &ts, nullable, has_def, mode, out, ind);
             }
@@ -249,6 +250,20 @@ fn emit_one(
 }
 
 // ─── Composite expansions ────────────────────────────────────────────────────
+
+/// What a column accepts on the way in, where that is wider than what it returns.
+///
+/// A rich text column holds a Lexical document, and a trigger normalises a plain string into
+/// one on insert and update, so writing prose is a string and reading it is always a document.
+/// This is the only place the three modes differ by more than optionality, and flattening them
+/// back would either demand hand-built Lexical JSON from every caller or claim a read might
+/// return a string, which after the trigger it cannot.
+fn widen_for_writes(field: &FieldAst, ts: &str, mode: Mode) -> String {
+    if mode == Mode::Row || !matches!(field, FieldAst::RichText(_)) {
+        return ts.to_string();
+    }
+    format!("{ts} | string")
+}
 
 fn emit_timestamps(mode: Mode, out: &mut String, ind: &str, ca: bool, ua: bool) {
     let opt = if mode == Mode::Row { "" } else { "?" };

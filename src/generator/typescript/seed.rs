@@ -110,6 +110,15 @@ type SeedJson =
 /** What `storage.upload()` produces, and the bucket it went to. */
 type SeedStorage = {{ bucket: string; path: string }}
 
+/**
+ * A Lexical document.
+ *
+ * Structural rather than imported, so the builder depends on nothing but the runtime. A rich
+ * text column also accepts a plain string, which a trigger normalises into one of these on the
+ * way in, so prose can be written as prose and a read always returns the document.
+ */
+type SeedRichText = {{ root: {{ children: unknown[] }} }}
+
 "#
     )
 }
@@ -449,7 +458,12 @@ fn base_type(column: &SeedColumn) -> String {
         ScalarKind::Timestamp | ScalarKind::Date => "string | Date".to_string(),
         ScalarKind::Enum => enum_union(column),
         ScalarKind::Storage => "SeedStorage".to_string(),
-        ScalarKind::Json | ScalarKind::RichText | ScalarKind::Geo => "SeedJson".to_string(),
+        ScalarKind::Json | ScalarKind::Geo => "SeedJson".to_string(),
+        // What the column holds. `SeedJson` accepted any JSON at all, so a seed could put a
+        // bare number or an arbitrary object in a rich text column while the database types
+        // said it held a document. The prose a trigger turns into one is added by
+        // `create_type`, on the way in only.
+        ScalarKind::RichText => "SeedRichText".to_string(),
         ScalarKind::Vector => "number[]".to_string(),
         // A field that knows its own shape says so. Without this every JSONB column
         // collapses to an opaque object in the builder, and a `Currency` arrives as
@@ -473,6 +487,12 @@ fn base_type(column: &SeedColumn) -> String {
 /// database.
 fn create_type(model: &SeedModel, column: &SeedColumn) -> String {
     let mut parts = vec![branded(model, column, &base_type(column))];
+    // Prose, which a trigger normalises into a document on the way in. Only here: a reference
+    // resolves from a row that has already been through that trigger, so reading one back is
+    // always a document.
+    if column.kind == ScalarKind::RichText {
+        parts.push("string".to_string());
+    }
     if column.nullable {
         parts.push("null".to_string());
     }
@@ -574,6 +594,7 @@ mod tests {
                     "name": {"kind": "text", "required": true},
                     "tier": {"kind": "enum", "required": true, "values": ["free", "pro"], "default": "free"},
                     "commission": {"kind": "money", "required": false},
+                    "bio": {"kind": "richText", "required": false},
                     "events": {"kind": "relation", "cardinality": "hasMany", "target": "Event"},
                     "tags": {"kind": "relation", "cardinality": "manyToMany", "target": "Tag"}
                 },
@@ -797,6 +818,25 @@ mod tests {
         assert!(
             flipped.find("// --- Event ---") < flipped.find("// --- Organiser ---"),
             "and reversing the schema reverses the file: {flipped}"
+        );
+    }
+
+    /// A rich text column holds a document and accepts prose, and the two directions are not
+    /// the same type. `SeedJson` let a seed write a bare number into one while the database
+    /// types said it held a document; widening the read side would claim a reference could
+    /// resolve to a string, which after the normalising trigger it cannot.
+    #[test]
+    fn rich_text_is_a_document_to_read_and_prose_to_write() {
+        let out = rendered();
+        assert_contains(&out, "bio?: SeedRichText | string | null");
+        assert_contains(
+            &out,
+            "readonly bio: SeedRichText
+",
+        );
+        assert!(
+            !out.contains("bio?: SeedJson"),
+            "any JSON at all is not what the column holds: {out}"
         );
     }
 
