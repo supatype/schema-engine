@@ -977,6 +977,14 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(&create_migrations_table_sql())
         .execute(pool)
         .await?;
+    // Created in the same bootstrap as `migrations`, so a seed run never has to create
+    // its own table mid-transaction.
+    sqlx::raw_sql(&crate::seed::ledger::create_seeds_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&crate::seed::ledger::create_seeds_index_sql())
+        .execute(pool)
+        .await?;
     sqlx::raw_sql(&create_studio_members_table_sql())
         .execute(pool)
         .await?;

@@ -61,7 +61,10 @@ jobs:
             --test sdk_exact_value_types_tests \
             --test column_shape_tests \
             --test implicit_index_tests \
-            --test storage_grant_tests
+            --test storage_grant_tests \
+            --test seed_ir_tests \
+            --test seed_validate_tests \
+            --test seed_plan_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})
@@ -157,6 +160,10 @@ jobs:
             --test migration_conversion_integration \
             --test grants_tests \
             --test rls_convergence_tests \
+            --test seed_execute_tests \
+            --test seed_ledger_tests \
+            --test seed_command_tests \
+            --test richtext_trigger_tests \
             --test schema_isolation_tests \
             --test studio_members_tests \
             --test table_adoption_tests \

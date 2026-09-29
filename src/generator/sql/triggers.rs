@@ -37,6 +37,16 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
                 ));
             }
         }
+
+        let rich_text: Vec<&str> = model
+            .fields
+            .iter()
+            .filter(|(_, field)| matches!(field, FieldAst::RichText(_)))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        if !rich_text.is_empty() {
+            out.push_str(&rich_text_trigger(schema, model.table_name(), &rich_text));
+        }
     }
 
     // Trigger functions must be executable by whichever role performs the
@@ -121,6 +131,56 @@ pub fn generate_realtime_trigger_drop(schema: &str, table_name: &str) -> String 
         "DROP TRIGGER IF EXISTS {table_name}_changes_trigger ON \"{schema}\".\"{table_name}\";\n\
          DROP FUNCTION IF EXISTS _platform.notify_{table_name}_changes();\n\
          DROP FUNCTION IF EXISTS public.notify_{table_name}_changes();\n\n"
+    )
+}
+
+/// Keep a rich text column holding a Lexical document, whoever writes to it.
+///
+/// The column is JSONB with no check constraint, so `'"hello"'::jsonb` is accepted, while
+/// `types/database.ts` types the column as a document and has never said otherwise. That made
+/// the type a claim the database did not keep: a seed, a hook or a person with psql could put a
+/// bare string in one, and the next read returned something the generated types say is
+/// impossible.
+///
+/// **A trigger rather than the writers.** Wrapping in the seed executor fixes seeds and wrapping
+/// in the API fixes API writes; neither makes the *read* type true, which is the thing being
+/// claimed. This is the only place that holds for every writer.
+///
+/// The expression is `jsonb_to_lexical_migrate_expr`, the same one the migration uses when a
+/// text column becomes a rich text one. It already returns NULL unchanged and a document
+/// unchanged, and wraps a string, an array or any other JSON value, so there is no guard here
+/// and no second implementation of the wrapping to drift from the first.
+///
+/// One trigger per table rather than one per column, so a model with five rich text fields
+/// fires one function instead of five.
+fn rich_text_trigger(schema: &str, table: &str, fields: &[&str]) -> String {
+    let fn_name = format!("_platform.normalise_{table}_rich_text");
+    let assignments: String = fields
+        .iter()
+        .map(|field| {
+            format!(
+                "  NEW.\"{field}\" := {expr};\n",
+                field = field,
+                expr = super::column_conversion::jsonb_to_lexical_migrate_expr(&format!(
+                    "NEW.\"{field}\""
+                )),
+            )
+        })
+        .collect();
+
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {fn_name}()
+RETURNS TRIGGER AS $$
+BEGIN
+{assignments}  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER "{table}_rich_text_trigger"
+BEFORE INSERT OR UPDATE ON "{schema}"."{table}"
+FOR EACH ROW EXECUTE FUNCTION {fn_name}();
+
+"#
     )
 }
 
