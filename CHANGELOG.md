@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0](https://github.com/supatype/schema-engine/compare/v0.3.3...v0.4.0) (2026-09-29)
+
+
+### Features
+
+* **access:** compose time operands with After and Before ([b75f925](https://github.com/supatype/schema-engine/commit/b75f9256b3ccdc2b08191cc9534b4a7f2ce27cea))
+* **generate:** a rich text column reads as a document and writes as prose ([29ebd0f](https://github.com/supatype/schema-engine/commit/29ebd0fc6e559e1851d7ee21a010f48642c54405))
+* **generate:** a rich text column reads as a document and writes as prose ([084d4ca](https://github.com/supatype/schema-engine/commit/084d4cab6e1ce349360072565c426b035b2d0863))
+* **schema:** keep a rich text column holding a document ([ddf7880](https://github.com/supatype/schema-engine/commit/ddf78805e8942e984ce6acb97192edcbb8f1a29c))
+* **seed:** generate a typed builder and apply a seed document ([f4d98db](https://github.com/supatype/schema-engine/commit/f4d98dbd8ce178e26ed7b872a8238a81ee107695))
+* **seed:** record what has been seeded in _supatype.seeds ([7018a00](https://github.com/supatype/schema-engine/commit/7018a0069bfc28e99523e56b77d2910c49527cea))
+* **seed:** the seed IR, its validator, planner and executor ([d10c54b](https://github.com/supatype/schema-engine/commit/d10c54bd1f0ce7f9006a2ded26ba8814ad31e56c))
+
+
+### Bug Fixes
+
+* **differ:** compare interval literals by value, and add After/Before ([0c33940](https://github.com/supatype/schema-engine/commit/0c33940b7de2c4b1eee35c847b9c66918c4480cd))
+* **differ:** compare interval literals by value, not by spelling ([8ebd91d](https://github.com/supatype/schema-engine/commit/8ebd91d565db3d1ae99c397901450efc37180e29))
+* **seed:** box the failure so the error fits in an async frame ([1bd1779](https://github.com/supatype/schema-engine/commit/1bd1779977df3b829023e1c31f44288b6e4dd1f6))
+* **seed:** make nested writes and connect reach the database ([59b122e](https://github.com/supatype/schema-engine/commit/59b122e0c41fd30a6ea77ff87d7a92370ccc738d))
+* the shared expression produced invalid SQL ([ddf7880](https://github.com/supatype/schema-engine/commit/ddf78805e8942e984ce6acb97192edcbb8f1a29c))
+
 ## [0.3.3](https://github.com/supatype/schema-engine/compare/v0.3.2...v0.3.3) (2026-09-27)
 
 
