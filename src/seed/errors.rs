@@ -85,7 +85,13 @@ impl std::fmt::Display for SeedFailure {
 /// A failure, with where in the document it happened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeedError {
-    pub failure: SeedFailure,
+    /// Boxed because the whole `SeedError` is the `Err` half of every executor signature.
+    ///
+    /// Those are `async fn`s, so the error travels in the future's state machine and costs its
+    /// full width on the path where nothing goes wrong, which is almost all of them. Unboxed this
+    /// was 152 bytes against clippy's 128 threshold; the indirection is one allocation on a path
+    /// that is already ending.
+    pub failure: Box<SeedFailure>,
     /// The dotted position in the IR, so a nested write says where it was.
     pub path: String,
     /// The author's own label, when they gave one.
@@ -95,6 +101,22 @@ pub struct SeedError {
     /// Attached rather than substituted: a failed rollback usually means a dropped
     /// connection, and the original error is still the one that explains the run.
     pub rollback_error: Option<String>,
+}
+
+impl SeedError {
+    /// A failure at a position in the document, with no operation label and no rollback attached.
+    ///
+    /// The shape every caller but one wants, and the only place that knows the failure is boxed.
+    /// The one exception adds `op_id` with struct update syntax rather than taking a fifth
+    /// argument that four callers would pass `None` to.
+    pub fn at(path: impl Into<String>, failure: SeedFailure) -> Self {
+        Self {
+            failure: Box::new(failure),
+            path: path.into(),
+            op_id: None,
+            rollback_error: None,
+        }
+    }
 }
 
 impl std::fmt::Display for SeedError {
@@ -463,10 +485,12 @@ mod tests {
     #[test]
     fn a_failed_rollback_is_attached_to_the_original() {
         let error = SeedError {
-            failure: map_failure(&failure("23505", Some("event_slug_key")), &index()),
-            path: "operations[0]".to_string(),
             op_id: Some("conference".to_string()),
             rollback_error: Some("connection closed".to_string()),
+            ..SeedError::at(
+                "operations[0]",
+                map_failure(&failure("23505", Some("event_slug_key")), &index()),
+            )
         };
         let rendered = error.to_string();
         assert!(rendered.contains("already taken"), "{rendered}");

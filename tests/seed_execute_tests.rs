@@ -255,7 +255,7 @@ async fn a_failure_halfway_leaves_no_rows() {
         .expect_err("the duplicate slug fails");
 
         assert!(
-            matches!(error.failure, SeedFailure::Constraint { .. }),
+            matches!(*error.failure, SeedFailure::Constraint { .. }),
             "{error}"
         );
         assert_eq!(
@@ -365,7 +365,7 @@ async fn a_unique_violation_names_the_model_and_field() {
         .await
         .expect_err("the duplicate fails");
 
-        match &error.failure {
+        match &*error.failure {
             SeedFailure::Constraint { sqlstate, .. } => assert_eq!(sqlstate, "23505"),
             other => panic!("expected a constraint failure, got {other:?}"),
         }
@@ -388,7 +388,7 @@ async fn a_foreign_key_violation_is_reported_as_one() {
         .await
         .expect_err("the missing parent fails");
 
-        match &error.failure {
+        match &*error.failure {
             SeedFailure::Constraint { sqlstate, .. } => assert_eq!(sqlstate, "23503"),
             other => panic!("expected a foreign key failure, got {other:?}"),
         }
@@ -406,7 +406,7 @@ async fn a_not_null_violation_is_reported_as_one() {
         .await
         .expect_err("a null in a required column fails");
 
-        match &error.failure {
+        match &*error.failure {
             SeedFailure::Constraint { sqlstate, .. } => assert_eq!(sqlstate, "23502"),
             other => panic!("expected a not-null failure, got {other:?}"),
         }
@@ -424,7 +424,7 @@ async fn a_check_violation_is_reported_as_one() {
         .await
         .expect_err("a negative seat count fails the check");
 
-        match &error.failure {
+        match &*error.failure {
             SeedFailure::Constraint { sqlstate, .. } => assert_eq!(sqlstate, "23514"),
             other => panic!("expected a check failure, got {other:?}"),
         }
@@ -450,7 +450,7 @@ async fn a_missing_table_is_reported_as_schema_drift_with_a_remedy() {
         .await
         .expect_err("a missing table fails");
 
-        match &error.failure {
+        match &*error.failure {
             SeedFailure::SchemaDrift { remedy, .. } => {
                 assert!(remedy.contains("supatype push"), "{remedy}")
             }
@@ -470,7 +470,7 @@ async fn a_missing_column_is_reported_as_schema_drift() {
         .await
         .expect_err("a missing column fails");
 
-        match &error.failure {
+        match &*error.failure {
             SeedFailure::SchemaDrift { remedy, .. } => {
                 assert!(remedy.contains("supatype generate"), "{remedy}")
             }
@@ -495,7 +495,7 @@ async fn a_raw_statement_shares_the_transaction() {
         .expect_err("the raw statement violates the unique index");
 
         assert!(
-            matches!(error.failure, SeedFailure::Constraint { .. }),
+            matches!(*error.failure, SeedFailure::Constraint { .. }),
             "{error}"
         );
         assert_eq!(

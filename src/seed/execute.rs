@@ -278,26 +278,26 @@ pub async fn execute(
     schema: &str,
     environment: Option<&str>,
 ) -> Result<Report, SeedError> {
-    let mut tx: Transaction<'_, Postgres> = pool.begin().await.map_err(|e| SeedError {
-        failure: SeedFailure::Other {
-            message: format!("could not start a transaction: {e}"),
-        },
-        path: String::new(),
-        op_id: None,
-        rollback_error: None,
+    let mut tx: Transaction<'_, Postgres> = pool.begin().await.map_err(|e| {
+        SeedError::at(
+            "",
+            SeedFailure::Other {
+                message: format!("could not start a transaction: {e}"),
+            },
+        )
     })?;
 
     let outcome = run_steps(plan, &mut tx, ast, constraints, schema, environment).await;
 
     match outcome {
         Ok(report) => {
-            tx.commit().await.map_err(|e| SeedError {
-                failure: SeedFailure::Other {
-                    message: format!("the seed could not be committed: {e}"),
-                },
-                path: String::new(),
-                op_id: None,
-                rollback_error: None,
+            tx.commit().await.map_err(|e| {
+                SeedError::at(
+                    "",
+                    SeedFailure::Other {
+                        message: format!("the seed could not be committed: {e}"),
+                    },
+                )
             })?;
             Ok(report)
         }
@@ -470,17 +470,14 @@ async fn evaluate(
         return Ok(true);
     };
 
-    let row = sqlx::query(&sql)
-        .fetch_one(&mut **tx)
-        .await
-        .map_err(|e| SeedError {
-            failure: SeedFailure::Other {
+    let row = sqlx::query(&sql).fetch_one(&mut **tx).await.map_err(|e| {
+        SeedError::at(
+            path,
+            SeedFailure::Other {
                 message: format!("the condition could not be evaluated: {e}"),
             },
-            path: path.to_string(),
-            op_id: None,
-            rollback_error: None,
-        })?;
+        )
+    })?;
 
     Ok(row.try_get::<bool, _>(0).unwrap_or(false))
 }
@@ -497,10 +494,8 @@ fn to_seed_error(
             message: error.to_string(),
         });
     SeedError {
-        failure,
-        path: path.to_string(),
         op_id,
-        rollback_error: None,
+        ..SeedError::at(path, failure)
     }
 }
 
