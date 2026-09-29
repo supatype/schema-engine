@@ -10,6 +10,9 @@
 //! moving anything across that boundary would change the outcome rather than the schedule.
 
 use super::{Condition, DataMap, Operation, SeedIr, Value};
+use crate::generator::seed_model::{describe, RelationKind, SeedModel, SeedSchema};
+use crate::parser::ast::SchemaAst;
+use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// The kind of statement a write becomes.
@@ -17,6 +20,22 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 pub enum WriteKind {
     Insert,
     Upsert,
+}
+
+/// Where a `connect` has to look to find the id it names.
+///
+/// Present only when the author connected by a unique key that is not the referenced
+/// column. The value bound for the column is then that key, and the executor wraps it in a
+/// scalar subquery against the target table, one subquery in the statement rather than one
+/// round trip per row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectLookup {
+    /// The model holding the row, resolved to a table by the executor.
+    pub model: String,
+    /// The unique column the author named.
+    pub key_column: String,
+    /// The column the foreign key points at, almost always `id`.
+    pub referenced_column: String,
 }
 
 /// One row to write, lifted out of whatever nesting it arrived in.
@@ -31,6 +50,10 @@ pub struct PlannedWrite {
     pub data: DataMap,
     /// Conflict columns, for an upsert.
     pub conflict: BTreeSet<String>,
+    /// Columns whose bound value is a unique key to look up, not the value itself.
+    ///
+    /// Keyed by the foreign-key column. Empty for almost every write.
+    pub lookups: IndexMap<String, ConnectLookup>,
     /// Which conditional groups enclose this write, outermost first.
     ///
     /// Two writes batch together only when these match: one statement cannot run for some
@@ -136,6 +159,9 @@ pub struct Batch {
     pub kind: WriteKind,
     pub columns: Vec<String>,
     pub conflict: BTreeSet<String>,
+    /// Shared by every row in the batch, because one statement renders one expression per
+    /// column. Two writes that look up different columns cannot be one statement.
+    pub lookups: IndexMap<String, ConnectLookup>,
     pub rows: Vec<PlannedWrite>,
     pub guards: Vec<usize>,
 }
@@ -150,195 +176,322 @@ pub struct Plan {
 }
 
 /// Lift every write out of its nesting, numbering them in document order.
-pub fn flatten(ir: &SeedIr) -> Vec<PlannedStep> {
-    let mut steps = Vec::new();
-    let mut sequence = 0usize;
-    let mut next_guard = 0usize;
-    flatten_operations(
-        &ir.operations,
-        &mut steps,
-        &mut sequence,
-        &mut next_guard,
-        &[],
-        "operations",
-    );
-    steps
+pub fn flatten(ir: &SeedIr, schema: &SeedSchema) -> Vec<PlannedStep> {
+    let mut flattener = Flattener::new(schema);
+    flattener.operations(&ir.operations, &[], "operations");
+    flattener.steps
 }
 
-fn flatten_operations(
-    operations: &[Operation],
-    steps: &mut Vec<PlannedStep>,
-    sequence: &mut usize,
-    next_guard: &mut usize,
-    guards: &[usize],
-    path: &str,
-) {
-    for (position, operation) in operations.iter().enumerate() {
-        let at = format!("{path}[{position}]");
-        flatten_operation(operation, steps, sequence, next_guard, guards, &at);
-    }
-}
-
-fn flatten_operation(
-    operation: &Operation,
-    steps: &mut Vec<PlannedStep>,
-    sequence: &mut usize,
-    next_guard: &mut usize,
-    guards: &[usize],
-    path: &str,
-) {
-    match operation {
-        Operation::Create { model, id, data } => {
-            push_write(
-                steps,
-                sequence,
-                model,
-                WriteKind::Insert,
-                id.clone(),
-                data.clone(),
-                BTreeSet::new(),
-                guards,
-                path,
-            );
-        }
-
-        Operation::CreateMany { model, rows } => {
-            for (position, row) in rows.iter().enumerate() {
-                push_write(
-                    steps,
-                    sequence,
-                    model,
-                    WriteKind::Insert,
-                    None,
-                    row.clone(),
-                    BTreeSet::new(),
-                    guards,
-                    &format!("{path}.rows[{position}]"),
-                );
-            }
-        }
-
-        Operation::Upsert {
-            model,
-            id,
-            where_,
-            data,
-        } => {
-            let mut combined = data.clone();
-            for (key, value) in where_ {
-                combined.entry(key.clone()).or_insert_with(|| value.clone());
-            }
-            push_write(
-                steps,
-                sequence,
-                model,
-                WriteKind::Upsert,
-                id.clone(),
-                combined,
-                where_.keys().cloned().collect(),
-                guards,
-                path,
-            );
-        }
-
-        Operation::Sql { text, params } => {
-            steps.push(PlannedStep::Sql {
-                text: text.clone(),
-                params: params.clone(),
-                path: path.to_string(),
-                sequence: *sequence,
-                guards: guards.to_vec(),
-            });
-            *sequence += 1;
-        }
-
-        Operation::Group { if_, operations } => {
-            let mut inner_guards = guards.to_vec();
-            if let Some(condition) = if_ {
-                let guard = *next_guard;
-                *next_guard += 1;
-                steps.push(PlannedStep::Condition {
-                    guard,
-                    condition: condition.clone(),
-                    path: format!("{path}.if"),
-                    sequence: *sequence,
-                    guards: guards.to_vec(),
-                });
-                *sequence += 1;
-                inner_guards.push(guard);
-            }
-            flatten_operations(
-                operations,
-                steps,
-                sequence,
-                next_guard,
-                &inner_guards,
-                &format!("{path}.operations"),
-            );
-        }
-    }
-}
-
-/// Push one write, then the rows nested inside it.
-///
-/// Nested rows are emitted **after** their parent, which is what makes the parent's
-/// generated id available to them. The ordering pass may move them further apart but never
-/// in front, because the dependency edge says so.
-#[allow(clippy::too_many_arguments)]
-fn push_write(
-    steps: &mut Vec<PlannedStep>,
-    sequence: &mut usize,
-    model: &str,
+/// One row on its way into the plan, before its nesting has been taken apart.
+struct Pending {
+    model: String,
     kind: WriteKind,
     op_id: Option<String>,
     data: DataMap,
     conflict: BTreeSet<String>,
-    guards: &[usize],
-    path: &str,
-) {
-    let mut own = DataMap::new();
-    let mut nested: Vec<(String, Vec<DataMap>)> = Vec::new();
+}
 
-    for (key, value) in data {
-        match value {
-            Value::NestedCreate { create } => nested.push((key, create)),
-            Value::NestedCreateMany { create_many } => nested.push((key, create_many)),
-            other => {
-                own.insert(key, other);
+/// What flattening needs, rather than threaded through eight arguments.
+///
+/// The schema is the part that matters. A nested write names a **relation**, and only the
+/// schema says which model that relation targets and which column links the two. Without
+/// it the planner emitted a write against a model called `events` and the executor used
+/// that as a table name, so a nested fixture failed with `relation "events" does not
+/// exist` rather than being written.
+struct Flattener<'a> {
+    schema: &'a SeedSchema,
+    steps: Vec<PlannedStep>,
+    sequence: usize,
+    next_guard: usize,
+    /// How many labels have been invented, for naming the next one.
+    synthesised: usize,
+}
+
+impl<'a> Flattener<'a> {
+    fn new(schema: &'a SeedSchema) -> Self {
+        Flattener {
+            schema,
+            steps: Vec::new(),
+            sequence: 0,
+            next_guard: 0,
+            synthesised: 0,
+        }
+    }
+
+    fn model(&self, name: &str) -> Option<&'a SeedModel> {
+        self.schema.models.iter().find(|model| model.name == name)
+    }
+
+    /// A label for a parent whose children need something to point at.
+    ///
+    /// Invented during flattening rather than written into the IR, so it happens after
+    /// validation and cannot collide with a label an author gave: `$` is not a character
+    /// any builder puts in one.
+    fn synthesise_label(&mut self) -> String {
+        self.synthesised += 1;
+        format!("$nested:{}", self.synthesised)
+    }
+
+    fn operations(&mut self, operations: &[Operation], guards: &[usize], path: &str) {
+        for (position, operation) in operations.iter().enumerate() {
+            self.operation(operation, guards, &format!("{path}[{position}]"));
+        }
+    }
+
+    fn operation(&mut self, operation: &Operation, guards: &[usize], path: &str) {
+        match operation {
+            Operation::Create { model, id, data } => self.write(
+                Pending {
+                    model: model.clone(),
+                    kind: WriteKind::Insert,
+                    op_id: id.clone(),
+                    data: data.clone(),
+                    conflict: BTreeSet::new(),
+                },
+                guards,
+                path,
+            ),
+
+            Operation::CreateMany { model, rows } => {
+                for (position, row) in rows.iter().enumerate() {
+                    self.write(
+                        Pending {
+                            model: model.clone(),
+                            kind: WriteKind::Insert,
+                            op_id: None,
+                            data: row.clone(),
+                            conflict: BTreeSet::new(),
+                        },
+                        guards,
+                        &format!("{path}.rows[{position}]"),
+                    );
+                }
+            }
+
+            Operation::Upsert {
+                model,
+                id,
+                where_,
+                data,
+            } => {
+                let mut combined = data.clone();
+                for (key, value) in where_ {
+                    combined.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+                self.write(
+                    Pending {
+                        model: model.clone(),
+                        kind: WriteKind::Upsert,
+                        op_id: id.clone(),
+                        data: combined,
+                        conflict: where_.keys().cloned().collect(),
+                    },
+                    guards,
+                    path,
+                );
+            }
+
+            Operation::Sql { text, params } => {
+                self.steps.push(PlannedStep::Sql {
+                    text: text.clone(),
+                    params: params.clone(),
+                    path: path.to_string(),
+                    sequence: self.sequence,
+                    guards: guards.to_vec(),
+                });
+                self.sequence += 1;
+            }
+
+            Operation::Group { if_, operations } => {
+                let mut inner = guards.to_vec();
+                if let Some(condition) = if_ {
+                    let guard = self.next_guard;
+                    self.next_guard += 1;
+                    self.steps.push(PlannedStep::Condition {
+                        guard,
+                        condition: condition.clone(),
+                        path: format!("{path}.if"),
+                        sequence: self.sequence,
+                        guards: guards.to_vec(),
+                    });
+                    self.sequence += 1;
+                    inner.push(guard);
+                }
+                self.operations(operations, &inner, &format!("{path}.operations"));
             }
         }
     }
 
-    steps.push(PlannedStep::Write(PlannedWrite {
-        model: model.to_string(),
-        kind,
-        op_id: op_id.clone(),
-        path: path.to_string(),
-        data: own,
-        conflict,
-        guards: guards.to_vec(),
-        sequence: *sequence,
-    }));
-    *sequence += 1;
+    /// Push one write, then the rows nested inside it.
+    ///
+    /// Nested rows are emitted **after** their parent, which is what makes the parent's
+    /// generated id available to them. The ordering pass may move them further apart but
+    /// never in front, because the reference is a dependency edge.
+    fn write(&mut self, pending: Pending, guards: &[usize], path: &str) {
+        let model = self.model(&pending.model).cloned();
+        let mut own = DataMap::new();
+        let mut nested: Vec<(String, Vec<DataMap>)> = Vec::new();
+        let mut lookups: IndexMap<String, ConnectLookup> = IndexMap::new();
 
-    for (relation, rows) in nested {
-        for (position, row) in rows.into_iter().enumerate() {
-            // The nested model is not named in the IR: it is the relation's target, which
-            // validation has already resolved. Carried as the relation name here and
-            // resolved by the caller against the schema.
-            push_write(
-                steps,
-                sequence,
-                &relation,
-                WriteKind::Insert,
-                None,
-                row,
-                BTreeSet::new(),
+        for (key, value) in pending.data {
+            match value {
+                Value::NestedCreate { create } => nested.push((key, create)),
+                Value::NestedCreateMany { create_many } => nested.push((key, create_many)),
+                Value::Connect { connect } => {
+                    match model
+                        .as_ref()
+                        .and_then(|m| lower_connect(m, &key, &connect))
+                    {
+                        Some(lowered) => {
+                            if let Some(lookup) = lowered.lookup {
+                                lookups.insert(lowered.column.clone(), lookup);
+                            }
+                            own.insert(lowered.column, lowered.value);
+                        }
+                        // Validation refuses every shape this cannot lower, so arriving
+                        // here means the document was planned without being validated.
+                        // The value is kept as it was, so the failure names the field the
+                        // author wrote rather than disappearing.
+                        None => {
+                            own.insert(key, Value::Connect { connect });
+                        }
+                    }
+                }
+                other => {
+                    // A later value for a column replaces an earlier one, and the lookup that
+                    // came with the earlier one has to go with it. An upsert keyed on a
+                    // foreign key does exactly this: `where` names the id and `data` connects
+                    // by slug, and a lookup left behind searched for a row whose slug was a
+                    // uuid, found none, and wrote NULL into a column that refuses it.
+                    lookups.shift_remove(&key);
+                    own.insert(key, other);
+                }
+            }
+        }
+
+        // A child's foreign key is a reference to its parent's id, so a parent with
+        // children needs a label for them to point at. Most writes have none: an author
+        // labels an operation only when they mean to refer to it themselves.
+        let op_id = match (&pending.op_id, nested.is_empty()) {
+            (Some(given), _) => Some(given.clone()),
+            (None, false) => Some(self.synthesise_label()),
+            (None, true) => None,
+        };
+
+        self.steps.push(PlannedStep::Write(PlannedWrite {
+            model: pending.model,
+            kind: pending.kind,
+            op_id: op_id.clone(),
+            path: path.to_string(),
+            data: own,
+            conflict: pending.conflict,
+            lookups,
+            guards: guards.to_vec(),
+            sequence: self.sequence,
+        }));
+        self.sequence += 1;
+
+        let label = op_id.unwrap_or_default();
+        for (field, rows) in nested {
+            self.nested(model.as_ref(), &field, rows, &label, guards, path);
+        }
+    }
+
+    /// The rows of one nested relation, resolved to the model they actually write.
+    fn nested(
+        &mut self,
+        parent: Option<&SeedModel>,
+        field: &str,
+        rows: Vec<DataMap>,
+        label: &str,
+        guards: &[usize],
+        path: &str,
+    ) {
+        let relation = parent.and_then(|model| model.relations.iter().find(|r| r.field == field));
+
+        for (position, mut row) in rows.into_iter().enumerate() {
+            // Validation names every relation a nested write may use, so an unresolved one
+            // is a document that skipped it. The field name is carried through unchanged
+            // so the failure still names what the author wrote.
+            let (model, key) = match relation {
+                Some(resolved) => (resolved.target.clone(), resolved.foreign_key.clone()),
+                None => (field.to_string(), None),
+            };
+
+            // `or_insert_with`, not `insert`: an author who wrote the foreign key by hand
+            // meant that value, and overwriting it would silently move the row.
+            if let Some(key) = key {
+                row.entry(key).or_insert_with(|| Value::Ref {
+                    reference: format!("{label}.id"),
+                });
+            }
+
+            self.write(
+                Pending {
+                    model,
+                    kind: WriteKind::Insert,
+                    op_id: None,
+                    data: row,
+                    conflict: BTreeSet::new(),
+                },
                 guards,
-                &format!("{path}.{relation}[{position}]"),
+                &format!("{path}.{field}[{position}]"),
             );
         }
     }
+}
+
+/// A `connect` lowered to the column it fills.
+struct LoweredConnect {
+    column: String,
+    value: Value,
+    lookup: Option<ConnectLookup>,
+}
+
+/// Turn `{ connect: { ... } }` into the foreign-key column it means.
+///
+/// Two shapes come out of it. Naming the referenced column, `{ connect: { id: alex.id } }`,
+/// gives a value the planner already holds, so the column takes it directly. Naming another
+/// unique key, `{ connect: { slug: "northern" } }`, gives a value only the database holds,
+/// so the column takes the key and a [`ConnectLookup`] saying where the id is found.
+///
+/// Neither shape reaches the executor as a `connect`, which is the point: it used to be
+/// written out as a column named after the relation, so `connect` failed with
+/// `column "organiser" of relation "event" does not exist`.
+fn lower_connect(
+    model: &SeedModel,
+    field: &str,
+    connect: &IndexMap<String, Value>,
+) -> Option<LoweredConnect> {
+    let relation = model.relations.iter().find(|r| r.field == field)?;
+    if relation.kind != RelationKind::BelongsTo {
+        return None;
+    }
+    let column = relation.foreign_key.clone()?;
+    let referenced = model
+        .column(&column)
+        .and_then(|c| c.references_column.clone())
+        .unwrap_or_else(|| "id".to_string());
+
+    // One key only. A composite unique key would need one bound column per part and a
+    // lookup joining on all of them; validation refuses it by name rather than letting a
+    // guess pick the first part.
+    if connect.len() != 1 {
+        return None;
+    }
+    let (named, value) = connect.iter().next()?;
+
+    let lookup = (named != &referenced).then(|| ConnectLookup {
+        model: relation.target.clone(),
+        key_column: named.clone(),
+        referenced_column: referenced,
+    });
+
+    Some(LoweredConnect {
+        column,
+        value: value.clone(),
+        lookup,
+    })
 }
 
 /// Every `$ref` label a write's data points at.
@@ -534,6 +687,7 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 kind: WriteKind::Insert,
                 columns: Vec::new(),
                 conflict: BTreeSet::new(),
+                lookups: IndexMap::new(),
                 rows: Vec::new(),
                 guards: step.guards().to_vec(),
             });
@@ -547,6 +701,7 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 && last.kind == write.kind
                 && last.columns == columns
                 && last.conflict == write.conflict
+                && last.lookups == write.lookups
                 && last.guards == write.guards
         });
 
@@ -562,6 +717,7 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 kind: write.kind,
                 columns,
                 conflict: write.conflict.clone(),
+                lookups: write.lookups.clone(),
                 rows: vec![write.clone()],
                 guards: write.guards.clone(),
             });
@@ -573,8 +729,9 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
 }
 
 /// Flatten, order and group in one call.
-pub fn plan(ir: &SeedIr) -> Result<Plan, CycleError> {
-    let flattened = flatten(ir);
+pub fn plan(ir: &SeedIr, ast: &SchemaAst) -> Result<Plan, CycleError> {
+    let schema = describe(ast);
+    let flattened = flatten(ir, &schema);
     let (ordered, warnings) = order(flattened)?;
     let batches = group(&ordered);
     Ok(Plan {

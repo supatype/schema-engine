@@ -21,7 +21,8 @@ const SCHEMA: &str = r#"{
                        "annotations": {"db": {"unique": true}}},
                 "slug": {"kind": "text", "required": true, "annotations": {"db": {"unique": true}}},
                 "name": {"kind": "text", "required": true},
-                "website": {"kind": "text", "required": false}
+                "website": {"kind": "text", "required": false},
+                "events": {"kind": "relation", "cardinality": "hasMany", "target": "Event"}
             },
             "annotations": {"db": {"tableName": "organiser"}}
         },
@@ -451,4 +452,115 @@ fn errors_name_the_operation_label() {
         &["northern"],
     );
     assert!(message.contains("operation `northern`"), "{message}");
+}
+
+// --- Relation shapes the planner cannot lower ---
+
+/// The inverse side is where a nested write belongs, because that is the side whose rows
+/// carry the foreign key.
+#[test]
+fn a_nested_create_on_the_side_holding_the_key_is_refused() {
+    rejects(
+        r#"[{"op":"create","model":"Event","data":{
+            "title":"Conf","starts_at":"2026-01-01T00:00:00Z",
+            "organiser":{"create":[{"slug":"n","name":"N"}]}
+        }}]"#,
+        &["organiser", "foreign key", "connect"],
+    );
+}
+
+/// And the same relation written the way it is meant to be is accepted, or the check above
+/// would pass by refusing everything.
+#[test]
+fn a_connect_on_the_side_holding_the_key_is_accepted() {
+    accepts(
+        r#"[{"op":"create","model":"Event","data":{
+            "title":"Conf","starts_at":"2026-01-01T00:00:00Z",
+            "organiser":{"connect":{"slug":"n"}}
+        }}]"#,
+    );
+}
+
+/// A nested write under the inverse side is the whole point of nesting, so it must be
+/// accepted. Without this the refusals above could be refusing the feature itself.
+#[test]
+fn a_nested_create_on_the_inverse_side_is_accepted() {
+    accepts(
+        r#"[{"op":"create","model":"Organiser","data":{
+            "slug":"n","name":"N",
+            "events":{"create":[{"title":"Conf","starts_at":"2026-01-01T00:00:00Z"}]}
+        }}]"#,
+    );
+}
+
+/// A composite key names a row with two columns, and one bound column cannot carry both.
+/// Picking the first part would connect a row the author did not name.
+#[test]
+fn a_connect_on_a_composite_key_is_refused() {
+    rejects(
+        r#"[{"op":"create","model":"Event","data":{
+            "title":"Conf","starts_at":"2026-01-01T00:00:00Z",
+            "organiser":{"connect":{"organiser_id":"x","title":"y"}}
+        }}]"#,
+        &["connect"],
+    );
+}
+
+/// Two relations back to the same model leave nothing to say which key a nested write
+/// fills, and filling the wrong one would be silent.
+#[test]
+fn a_nested_create_with_an_ambiguous_back_reference_is_refused() {
+    let ambiguous = SCHEMA.replace(
+        r#""starts_at": {"kind": "datetime", "required": true},"#,
+        r#""starts_at": {"kind": "datetime", "required": true},
+           "co_organiser": {"kind": "relation", "cardinality": "belongsTo", "target": "Organiser",
+                            "required": false,
+                            "annotations": {"db": {"foreignKey": "co_organiser_id"}}},"#,
+    );
+    let ast: SchemaAst = serde_json::from_str(&ambiguous).expect("the fixture parses");
+    let document = ir(r#"[{"op":"create","model":"Organiser","data":{
+        "slug":"n","name":"N",
+        "events":{"create":[{"title":"Conf","starts_at":"2026-01-01T00:00:00Z"}]}
+    }}]"#);
+
+    let error = validate(&document, &ast, FINGERPRINT)
+        .expect_err("an ambiguous back reference cannot be nested");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("more than one relation"),
+        "the message names the ambiguity: {rendered}"
+    );
+}
+
+// --- Values that nearly parsed ---
+
+/// `Value` is untagged, so anything that fails to read as an operand falls through to being a
+/// plain value without a word said. A negative interval component does exactly that, because
+/// the components are unsigned, and the expression then reached the database as JSON text in
+/// a timestamp column: `invalid input syntax for type timestamp with time zone`, naming
+/// neither the field nor the real mistake.
+#[test]
+fn an_expression_that_could_not_be_read_is_refused_by_name() {
+    let error = rejects(
+        r#"[{"op":"create","model":"Event","data":{
+            "title":"Conf",
+            "starts_at":{"kind":"after","base":{"kind":"now"},"interval":{"days":-20}}
+        }}]"#,
+        &["after", "written as text"],
+    );
+    assert!(
+        error.contains("direction is in the"),
+        "and it says what to do instead: {error}"
+    );
+}
+
+/// A JSON column may legitimately hold an object with a `kind` in it, so only the kinds this
+/// engine would have recognised are refused.
+#[test]
+fn a_json_value_that_happens_to_have_a_kind_is_left_alone() {
+    accepts(
+        r#"[{"op":"create","model":"Organiser","data":{
+            "slug":"n","name":"N","website":"x"
+        }}]"#,
+    );
 }

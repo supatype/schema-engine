@@ -34,7 +34,6 @@
         "events": {
           "create": [
             {
-              "id": "conference",
               "title": "Southwest Dev Conference",
               "status": "published",
               "starts_at": {
@@ -161,9 +160,13 @@
             "discount_kind": "percentage",
             "discount_value": 20,
             "valid_until": {
-              "kind": "fromNow",
-              "amount": 25,
-              "unit": "days"
+              "kind": "after",
+              "base": {
+                "kind": "now"
+              },
+              "interval": {
+                "days": 25
+              }
             },
             "event": {
               "connect": {

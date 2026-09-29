@@ -11,6 +11,7 @@
 //! validators in the product that can disagree after a partial push.
 
 use super::{Condition, DataMap, Operation, SeedIr, Value, IR_VERSION};
+use crate::generator::seed_model::{describe, RelationKind, SeedRelation, SeedSchema};
 use crate::parser::accessors::db_foreign_key;
 use crate::parser::ast::{AccessRule, FieldAst, ModelAst, Operand, SchemaAst};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -74,6 +75,9 @@ fn with_remedy(mut error: SeedValidationError, remedy: impl Into<String>) -> See
 /// Built once per model rather than rederived per value: a `createMany` of a thousand rows
 /// would otherwise rescan the model's fields a thousand times.
 struct ModelIndex {
+    /// The model this describes, so a check that needs the far side of a relation can ask
+    /// the schema for it.
+    name: String,
     /// Field names, plus the foreign-key column each relation generates. Both are writable
     /// and an author may reasonably use either.
     writable: HashSet<String>,
@@ -132,6 +136,7 @@ fn json_text(value: &serde_json::Value, key: &str) -> String {
 impl ModelIndex {
     fn build(model: &ModelAst) -> Self {
         let mut index = ModelIndex {
+            name: model.name.clone(),
             writable: HashSet::new(),
             unique_columns: HashSet::new(),
             unique_composites: Vec::new(),
@@ -221,6 +226,13 @@ impl ModelIndex {
 /// The schema, indexed by model name.
 struct SchemaIndex {
     models: HashMap<String, ModelIndex>,
+    /// The same schema as a generator sees it.
+    ///
+    /// Carried rather than rederived because the checks below are about the *shape* of a
+    /// relation, which is what a builder is generated from: whether a nested write can be
+    /// lowered into a foreign key at all. Answering that from a second reading of the AST
+    /// would be a second set of rules, and the planner would eventually disagree with it.
+    shapes: SeedSchema,
 }
 
 impl SchemaIndex {
@@ -231,7 +243,30 @@ impl SchemaIndex {
                 .iter()
                 .map(|model| (model.name.clone(), ModelIndex::build(model)))
                 .collect(),
+            shapes: describe(ast),
         }
+    }
+
+    /// One relation, from the model that declares it.
+    fn relation(&self, model: &str, field: &str) -> Option<&SeedRelation> {
+        self.shapes
+            .models
+            .iter()
+            .find(|m| m.name == model)?
+            .relations
+            .iter()
+            .find(|r| r.field == field)
+    }
+
+    /// The column a relation's foreign key points at, `id` unless it named another.
+    fn referenced_column(&self, model: &str, key: &str) -> String {
+        self.shapes
+            .models
+            .iter()
+            .find(|m| m.name == model)
+            .and_then(|m| m.column(key))
+            .and_then(|c| c.references_column.clone())
+            .unwrap_or_else(|| "id".to_string())
     }
 
     fn get(&self, model: &str, path: &str) -> Result<&ModelIndex> {
@@ -502,6 +537,42 @@ fn validate_data(
     Ok(())
 }
 
+/// Operand kinds, so a value that nearly is one can be told apart from a JSON column value.
+const OPERAND_KINDS: [&str; 8] = [
+    "literal", "column", "now", "startOf", "ago", "fromNow", "after", "before",
+];
+
+/// Catch a value that was meant to be an operand and did not parse as one.
+///
+/// `Value` is untagged: anything that fails to deserialise as an `Operand` falls through to
+/// `Scalar` without a word. A negative interval component does that, because the components
+/// are unsigned, and the operand then reached the database as a JSON string in a timestamp
+/// column. Postgres refused it with `invalid input syntax`, naming neither the field nor the
+/// real mistake.
+///
+/// A JSON column may legitimately hold an object with a `kind` in it, so only the kinds this
+/// engine would have recognised are refused.
+fn reject_malformed_operand(scalar: &serde_json::Value, path: &str) -> Result<()> {
+    let Some(kind) = scalar.get("kind").and_then(|k| k.as_str()) else {
+        return Ok(());
+    };
+    if !OPERAND_KINDS.contains(&kind) {
+        return Ok(());
+    }
+    Err(with_remedy(
+        err(
+            path,
+            format!(
+                "this looks like a `{kind}` expression that could not be read, so it would be \
+                 written as text rather than evaluated."
+            ),
+        ),
+        "An interval's components are whole and not negative: the direction is in the \
+         operand's name, so use `before`/`ago` rather than a negative amount."
+            .to_string(),
+    ))
+}
+
 fn validate_value(
     value: &Value,
     column: Option<(&String, &ModelIndex)>,
@@ -510,7 +581,7 @@ fn validate_value(
     path: &str,
 ) -> Result<()> {
     match value {
-        Value::Scalar(_) => Ok(()),
+        Value::Scalar(scalar) => reject_malformed_operand(scalar, path),
 
         Value::Numeric { numeric } => {
             if numeric.trim().is_empty() || numeric.trim().parse::<f64>().is_err() {
@@ -557,6 +628,7 @@ fn validate_value(
                     ),
                 ));
             }
+            check_connectable(index, &model_index.name, name, columns.len(), path)?;
             for (key, inner) in connect {
                 validate_value(inner, None, index, scope, &format!("{path}.{key}"))?;
             }
@@ -575,6 +647,149 @@ fn validate_value(
     }
 }
 
+/// Whether a `connect` on this relation can be lowered into a foreign key.
+///
+/// The planner writes the key column, and only the `belongsTo` side has one. Connecting
+/// the other way round would mean updating a row on the far side, which is a different
+/// operation from the one the author wrote.
+fn check_connectable(
+    index: &SchemaIndex,
+    model: &str,
+    field: &str,
+    named_columns: usize,
+    path: &str,
+) -> Result<()> {
+    let Some(relation) = index.relation(model, field) else {
+        return Ok(());
+    };
+
+    if relation.kind != RelationKind::BelongsTo {
+        return Err(with_remedy(
+            err(
+                path,
+                format!(
+                    "`{field}` is a {} relation, and the foreign key for it is on `{}`, not here.",
+                    relation.kind.as_str(),
+                    relation.target
+                ),
+            ),
+            format!(
+                "Connect from the other side, or nest a `create` under `{field}` to write                  the `{}` rows this one owns.",
+                relation.target
+            ),
+        ));
+    }
+
+    if relation.foreign_key.is_none() {
+        return Err(err(
+            path,
+            format!("`{field}` has no foreign-key column, so there is nothing to connect."),
+        ));
+    }
+
+    // One bound column per key part and a join on all of them: buildable, but nothing
+    // asks for it yet, and guessing which part to use would connect the wrong row.
+    if named_columns != 1 {
+        return Err(with_remedy(
+            err(
+                path,
+                format!(
+                    "`connect` on `{field}` names {named_columns} columns, and a composite key                      cannot be resolved to one id."
+                ),
+            ),
+            "Name a single-column unique key, or write the foreign key directly.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Whether a nested write on this relation can be lowered into rows of its own.
+///
+/// A nested write becomes an insert into the target's table, with the foreign key set to a
+/// reference to the parent's id. Three shapes have no such key, and each of them used to
+/// be planned as a write against a model named after the relation, which failed as
+/// `relation "events" does not exist` rather than as anything an author could act on.
+fn check_nestable(
+    index: &SchemaIndex,
+    model: &str,
+    field: &str,
+    what: &str,
+    path: &str,
+) -> Result<()> {
+    let Some(relation) = index.relation(model, field) else {
+        return Ok(());
+    };
+
+    match relation.kind {
+        // The key is on this table, so the target row must exist before this one does.
+        // That is what `connect` is, and writing it as a nested create would need the two
+        // inserts in the other order.
+        RelationKind::BelongsTo => {
+            return Err(with_remedy(
+                err(
+                    path,
+                    format!(
+                        "`{field}` holds the foreign key, so a nested `{what}` cannot fill it."
+                    ),
+                ),
+                format!(
+                    "Use `{{ connect: {{ ... }} }}` to point at an existing `{}`, or create \
+                     that row first and reference it.",
+                    relation.target
+                ),
+            ));
+        }
+        // Rows of a junction table, which the IR has no operation for.
+        RelationKind::ManyToMany => {
+            return Err(with_remedy(
+                err(
+                    path,
+                    format!(
+                        "`{field}` is a many-to-many relation, and its rows live in a junction \
+                         table a nested `{what}` cannot write."
+                    ),
+                ),
+                "Write the junction rows as their own operation.".to_string(),
+            ));
+        }
+        RelationKind::HasOne | RelationKind::HasMany => {}
+    }
+
+    let Some(key) = &relation.foreign_key else {
+        return Err(with_remedy(
+            err(
+                path,
+                format!(
+                    "`{}` declares more than one relation back to `{model}`, so a nested `{what}` \
+                     under `{field}` cannot tell which foreign key it fills.",
+                    relation.target
+                ),
+            ),
+            "Write the rows as their own operation and set the foreign key yourself.".to_string(),
+        ));
+    };
+
+    // The parent's id is what the child gets, because that is the only column the
+    // executor reads back from an insert.
+    let referenced = index.referenced_column(&relation.target, key);
+    if referenced != "id" {
+        return Err(with_remedy(
+            err(
+                path,
+                format!(
+                    "`{field}` points at `{}.{referenced}` rather than its id, and a nested \
+                     `{what}` can only carry the parent's id.",
+                    relation.target
+                ),
+            ),
+            "Write the rows as their own operation and set the foreign key yourself.".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_nested(
     rows: &[DataMap],
     column: Option<(&String, &ModelIndex)>,
@@ -585,6 +800,7 @@ fn validate_nested(
 ) -> Result<()> {
     let (name, model_index) =
         column.ok_or_else(|| err(path, format!("`{what}` has no meaning outside a relation.")))?;
+    check_nestable(index, &model_index.name, name, what, path)?;
     let target = model_index
         .relation_targets
         .get(name)

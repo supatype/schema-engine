@@ -5,5 +5,6 @@ pub mod sql;
 pub mod config;
 pub mod openapi;
 pub mod sdk;
+pub mod seed_model;
 pub mod studio;
 pub mod typescript;

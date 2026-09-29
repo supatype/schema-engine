@@ -8,7 +8,7 @@
 //! data.
 
 use super::errors::{database_failure_from, map_failure, ConstraintIndex, SeedError, SeedFailure};
-use super::plan::{Batch, Plan, PlannedStep, PlannedWrite, WriteKind};
+use super::plan::{Batch, ConnectLookup, Plan, PlannedStep, PlannedWrite, WriteKind};
 use super::{Condition, Value};
 use crate::generator::sql::rls::{access_rule_to_expr, operand_to_expr};
 use crate::parser::ast::{ModelAst, Operand, SchemaAst};
@@ -58,6 +58,10 @@ fn render(value: &Value) -> Rendered {
         Value::Operand(operand) => Rendered::Inline(operand_to_expr(operand)),
         // Resolved before rendering; a reference that reaches here is a planner bug.
         Value::Ref { .. } => Rendered::Bound(None),
+        // Lowered by the planner: a `connect` becomes its foreign-key column and a nested
+        // write becomes a write of its own. Reaching here means the document was planned
+        // without being validated, and validation is what refuses the shapes that cannot
+        // be lowered.
         Value::Connect { .. } | Value::NestedCreate { .. } | Value::NestedCreateMany { .. } => {
             Rendered::Bound(None)
         }
@@ -84,6 +88,7 @@ fn batch_sql(
     batch: &Batch,
     table: &str,
     column_types: &HashMap<String, String>,
+    lookups: &HashMap<String, String>,
 ) -> (String, Vec<Option<String>>) {
     let mut bound_columns: Vec<&str> = Vec::new();
     let mut inline: Vec<(&str, String)> = Vec::new();
@@ -120,9 +125,15 @@ fn batch_sql(
 
     let select_list: Vec<String> = bound_columns
         .iter()
-        .map(|c| {
-            let target = column_types.get(*c).map(String::as_str).unwrap_or("text");
-            format!("src.{}::{}", quote(c), target)
+        .map(|c| match lookups.get(*c) {
+            // The bound value is a unique key, not the id, so the column is the id that
+            // key names. Still one statement: the subquery reads `src`, so it is evaluated
+            // once per row of the same `UNNEST` rather than once per round trip.
+            Some(expression) => expression.clone(),
+            None => {
+                let target = column_types.get(*c).map(String::as_str).unwrap_or("text");
+                format!("src.{}::{}", quote(c), target)
+            }
         })
         .chain(inline.iter().map(|(_, expression)| expression.clone()))
         .collect();
@@ -174,6 +185,45 @@ fn batch_sql(
     }
 
     (sql, parameters)
+}
+
+/// The scalar subquery a `connect` by natural key becomes, per column.
+///
+/// `{ connect: { slug: "northern" } }` names a row the planner cannot resolve, because
+/// only the database knows which id that slug has. Rather than a round trip per row, the
+/// key travels as the column's bound value and is joined here, inside the one statement
+/// the batch already is.
+///
+/// The key is cast to the **target** column's type, not the foreign key's: comparing a
+/// `uuid` column to text is an error, and the two columns differ whenever the key is a
+/// natural one.
+fn lookup_expressions(
+    lookups: &IndexMap<String, ConnectLookup>,
+    ast: &SchemaAst,
+    tables: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    lookups
+        .iter()
+        .map(|(column, lookup)| {
+            let table = tables
+                .get(&lookup.model)
+                .cloned()
+                .unwrap_or_else(|| lookup.model.clone());
+            let key_type = column_types_for(ast, &lookup.model)
+                .get(&lookup.key_column)
+                .cloned()
+                .unwrap_or_else(|| "text".to_string());
+            let expression = format!(
+                "(SELECT {alias}.{referenced} FROM {table} AS {alias} WHERE {alias}.{key} = src.{column}::{key_type})",
+                alias = quote("__connect"),
+                referenced = quote(&lookup.referenced_column),
+                table = quote(&table),
+                key = quote(&lookup.key_column),
+                column = quote(column),
+            );
+            (column.clone(), expression)
+        })
+        .collect()
 }
 
 /// Postgres array literal for a column of text values.
@@ -265,61 +315,83 @@ fn condition_sql(
     }
 }
 
-/// Run a plan.
+/// Everything a run needs besides the plan itself.
+///
+/// Grouped rather than passed as five arguments, because the caller that owns the
+/// transaction has to hand the same set to every document it runs in that transaction.
+#[derive(Clone, Copy)]
+pub struct Context<'a> {
+    pub ast: &'a SchemaAst,
+    pub constraints: &'a ConstraintIndex,
+    /// The Postgres schema the tables live in.
+    pub schema: &'a str,
+    /// The environment this run targets, for an `environment` condition to match.
+    pub environment: Option<&'a str>,
+}
+
+/// Anything that went wrong outside a statement, in the shape the rest of this module uses.
+fn outside_a_statement(message: String) -> SeedError {
+    SeedError::at("", SeedFailure::Other { message })
+}
+
+/// Run a plan inside a transaction the caller owns.
+///
+/// Separate from [`execute`] so a caller can do more in the same transaction than run one
+/// document: write the ledger row beside the writes it describes, which is what makes the
+/// ledger trustworthy, and run several documents together under `--atomic`. Neither is
+/// possible if the only entry point commits before returning.
+pub async fn execute_in(
+    tx: &mut Transaction<'_, Postgres>,
+    plan: &Plan,
+    cx: Context<'_>,
+) -> Result<Report, SeedError> {
+    run_steps(plan, tx, cx).await
+}
+
+/// Run a plan in a transaction of its own.
 ///
 /// One transaction: it commits or it rolls back. A seed that dies halfway leaving rows
 /// behind is worse than one that fails, because seeds are re-run and that partial state is
 /// what the next run collides with.
-pub async fn execute(
-    plan: &Plan,
-    pool: &PgPool,
-    ast: &SchemaAst,
-    constraints: &ConstraintIndex,
-    schema: &str,
-    environment: Option<&str>,
-) -> Result<Report, SeedError> {
-    let mut tx: Transaction<'_, Postgres> = pool.begin().await.map_err(|e| {
-        SeedError::at(
-            "",
-            SeedFailure::Other {
-                message: format!("could not start a transaction: {e}"),
-            },
-        )
-    })?;
+pub async fn execute(pool: &PgPool, plan: &Plan, cx: Context<'_>) -> Result<Report, SeedError> {
+    let mut tx: Transaction<'_, Postgres> = pool
+        .begin()
+        .await
+        .map_err(|e| outside_a_statement(format!("could not start a transaction: {e}")))?;
 
-    let outcome = run_steps(plan, &mut tx, ast, constraints, schema, environment).await;
-
-    match outcome {
+    match execute_in(&mut tx, plan, cx).await {
         Ok(report) => {
             tx.commit().await.map_err(|e| {
-                SeedError::at(
-                    "",
-                    SeedFailure::Other {
-                        message: format!("the seed could not be committed: {e}"),
-                    },
-                )
+                outside_a_statement(format!("the seed could not be committed: {e}"))
             })?;
             Ok(report)
         }
-        Err(mut error) => {
-            // Attached, never substituted: a failed rollback usually means a dropped
-            // connection, and the original error still explains the run.
-            if let Err(rollback) = tx.rollback().await {
-                error.rollback_error = Some(rollback.to_string());
-            }
-            Err(error)
-        }
+        Err(error) => Err(rolling_back(tx, error).await),
     }
+}
+
+/// Roll back, and say so if that failed too.
+///
+/// Attached, never substituted: a failed rollback usually means a dropped connection, and
+/// the original error still explains the run.
+pub async fn rolling_back(tx: Transaction<'_, Postgres>, mut error: SeedError) -> SeedError {
+    if let Err(rollback) = tx.rollback().await {
+        error.rollback_error = Some(rollback.to_string());
+    }
+    error
 }
 
 async fn run_steps(
     plan: &Plan,
     tx: &mut Transaction<'_, Postgres>,
-    ast: &SchemaAst,
-    constraints: &ConstraintIndex,
-    schema: &str,
-    environment: Option<&str>,
+    cx: Context<'_>,
 ) -> Result<Report, SeedError> {
+    let Context {
+        ast,
+        constraints,
+        schema,
+        environment,
+    } = cx;
     let tables: HashMap<String, String> = ast
         .models
         .iter()
@@ -387,7 +459,8 @@ async fn run_steps(
         }
 
         let column_types = column_types_for(ast, &batch.model);
-        let (sql, parameters) = batch_sql(&prepared, &table, &column_types);
+        let lookups = lookup_expressions(&batch.lookups, ast, &tables);
+        let (sql, parameters) = batch_sql(&prepared, &table, &column_types, &lookups);
         let needs_ids: Vec<(usize, String)> = prepared
             .rows
             .iter()
@@ -505,6 +578,30 @@ mod tests {
     use crate::seed::plan::plan as build_plan;
     use crate::seed::SeedIr;
 
+    /// The models these statements are built for.
+    ///
+    /// Planning reads the schema now, because a nested write names a relation and only the
+    /// schema says which model that is.
+    const SCHEMA: &str = r#"{
+        "astVersion": 2,
+        "models": [
+            {"name": "Venue",
+             "fields": {"id": {"kind": "uuid", "required": true, "primaryKey": true},
+                        "name": {"kind": "text", "required": false},
+                        "capacity": {"kind": "integer", "required": false}},
+             "annotations": {"db": {"tableName": "venue"}}},
+            {"name": "Event",
+             "fields": {"id": {"kind": "uuid", "required": true, "primaryKey": true},
+                        "title": {"kind": "text", "required": false},
+                        "created_at": {"kind": "datetime", "required": false}},
+             "annotations": {"db": {"tableName": "event"}}}
+        ]
+    }"#;
+
+    fn schema() -> SchemaAst {
+        serde_json::from_str(SCHEMA).expect("the schema fixture parses")
+    }
+
     fn ir(operations: &str) -> SeedIr {
         let document = format!(
             r#"{{"irVersion":1,"schemaFingerprint":"sha256:x","operations":{operations}}}"#
@@ -513,8 +610,13 @@ mod tests {
     }
 
     fn sql_for(operations: &str) -> String {
-        let planned = build_plan(&ir(operations)).expect("plans");
-        let (sql, _) = batch_sql(&planned.batches[0], "venue", &HashMap::new());
+        let planned = build_plan(&ir(operations), &schema()).expect("plans");
+        let (sql, _) = batch_sql(
+            &planned.batches[0],
+            "venue",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         sql
     }
 
@@ -523,13 +625,21 @@ mod tests {
     #[test]
     fn a_batch_binds_one_parameter_per_column() {
         let rows: Vec<String> = (0..500).map(|n| format!(r#"{{"name":"v{n}"}}"#)).collect();
-        let planned = build_plan(&ir(&format!(
-            r#"[{{"op":"createMany","model":"Venue","rows":[{}]}}]"#,
-            rows.join(",")
-        )))
+        let planned = build_plan(
+            &ir(&format!(
+                r#"[{{"op":"createMany","model":"Venue","rows":[{}]}}]"#,
+                rows.join(",")
+            )),
+            &schema(),
+        )
         .expect("plans");
 
-        let (sql, parameters) = batch_sql(&planned.batches[0], "venue", &HashMap::new());
+        let (sql, parameters) = batch_sql(
+            &planned.batches[0],
+            "venue",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(parameters.len(), 1, "one column, so one parameter");
         assert!(sql.contains("UNNEST($1::text[])"), "{sql}");
         assert!(
@@ -573,13 +683,21 @@ mod tests {
     /// inline and lifted out of the array set.
     #[test]
     fn an_expression_column_moves_into_the_select_list() {
-        let planned = build_plan(&ir(r#"[{"op":"createMany","model":"Event","rows":[
+        let planned = build_plan(
+            &ir(r#"[{"op":"createMany","model":"Event","rows":[
                 {"title":"A","created_at":{"kind":"now"}},
                 {"title":"B","created_at":{"kind":"now"}}
-            ]}]"#))
+            ]}]"#),
+            &schema(),
+        )
         .expect("plans");
 
-        let (sql, parameters) = batch_sql(&planned.batches[0], "event", &HashMap::new());
+        let (sql, parameters) = batch_sql(
+            &planned.batches[0],
+            "event",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert_eq!(parameters.len(), 1, "only `title` is bound");
         assert!(sql.contains("SELECT now()"), "{sql}");
         assert!(
@@ -592,11 +710,19 @@ mod tests {
     /// seed and an access rule cannot disagree about what an operand means.
     #[test]
     fn operands_render_through_the_policy_renderer() {
-        let planned = build_plan(&ir(r#"[{"op":"create","model":"Event","data":{"starts_at":
+        let planned = build_plan(
+            &ir(r#"[{"op":"create","model":"Event","data":{"starts_at":
                 {"kind":"after","base":{"kind":"startOf","unit":"day"},
-                 "interval":{"days":30,"hours":9}}}}]"#))
+                 "interval":{"days":30,"hours":9}}}}]"#),
+            &schema(),
+        )
         .expect("plans");
-        let (sql, _) = batch_sql(&planned.batches[0], "event", &HashMap::new());
+        let (sql, _) = batch_sql(
+            &planned.batches[0],
+            "event",
+            &HashMap::new(),
+            &HashMap::new(),
+        );
         assert!(
             sql.contains("date_trunc('day', now()) + INTERVAL '30 days 9 hours'"),
             "{sql}"

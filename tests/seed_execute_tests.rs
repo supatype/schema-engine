@@ -29,7 +29,8 @@ const SCHEMA: &str = r#"{
                        "annotations": {"db": {"unique": true}}},
                 "slug": {"kind": "text", "required": true, "annotations": {"db": {"unique": true}}},
                 "name": {"kind": "text", "required": true},
-                "seats": {"kind": "integer", "required": false, "check": "seats > 0"}
+                "seats": {"kind": "integer", "required": false, "check": "seats > 0"},
+                "events": {"kind": "relation", "cardinality": "hasMany", "target": "Event"}
             },
             "annotations": {"db": {"tableName": "organiser"}}
         },
@@ -43,9 +44,23 @@ const SCHEMA: &str = r#"{
                 "starts_at": {"kind": "datetime", "required": false},
                 "organiser": {"kind": "relation", "cardinality": "belongsTo", "target": "Organiser",
                               "required": false,
-                              "annotations": {"db": {"foreignKey": "organiser_id"}}}
+                              "annotations": {"db": {"foreignKey": "organiser_id"}}},
+                "ticket_types": {"kind": "relation", "cardinality": "hasMany", "target": "TicketType"}
             },
             "annotations": {"db": {"tableName": "event"}}
+        },
+        {
+            "name": "TicketType",
+            "fields": {
+                "id": {"kind": "uuid", "required": true, "primaryKey": true,
+                       "default": {"kind": "genRandomUuid"},
+                       "annotations": {"db": {"unique": true}}},
+                "name": {"kind": "text", "required": true},
+                "event": {"kind": "relation", "cardinality": "belongsTo", "target": "Event",
+                          "required": false,
+                          "annotations": {"db": {"foreignKey": "event_id"}}}
+            },
+            "annotations": {"db": {"tableName": "ticket_type"}}
         }
     ]
 }"#;
@@ -79,14 +94,16 @@ async fn run(
     ast: &parser::ast::SchemaAst,
     operations: &str,
 ) -> Result<supatype_engine::seed::execute::Report, supatype_engine::seed::errors::SeedError> {
-    let planned = plan(&ir(operations)).expect("plans");
+    let planned = plan(&ir(operations), ast).expect("plans");
     execute(
-        &planned,
         pool,
-        ast,
-        &constraint_index_for(ast),
-        "public",
-        None,
+        &planned,
+        supatype_engine::seed::execute::Context {
+            ast,
+            constraints: &constraint_index_for(ast),
+            schema: "public",
+            environment: None,
+        },
     )
     .await
 }
@@ -503,5 +520,166 @@ async fn a_raw_statement_shares_the_transaction() {
             0,
             "the typed write rolled back with the raw one"
         );
+    });
+}
+
+// --- Relations ---
+
+/// A nested write has to reach the target's table, and the child has to point at the
+/// parent. Both were broken: the planner carried the relation's name as the model, so the
+/// executor used `events` as a table name and the insert failed with
+/// `relation "events" does not exist`.
+#[tokio::test]
+async fn a_nested_create_writes_the_target_table_and_links_it() {
+    with_seeded_schema!(|pool, ast| {
+        let report = run(
+            &pool,
+            &ast,
+            r#"[{"op":"create","model":"Organiser","id":"northern","data":{
+                "slug":"n","name":"Northern",
+                "events":{"create":[{"title":"Conf"}]}
+            }}]"#,
+        )
+        .await
+        .expect("the nested seed runs");
+
+        assert_eq!(report.written.get("Event"), Some(&1));
+        assert_eq!(count(&pool, "event").await, 1);
+
+        let linked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM event e JOIN organiser o ON o.id = e.organiser_id \
+             WHERE o.slug = 'n'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("counts");
+        assert_eq!(linked, 1, "the nested event points at its parent");
+    });
+}
+
+/// Three levels, because the middle one is both a child and a parent: it needs a label of
+/// its own for its children to reference, and nothing in the document gave it one.
+#[tokio::test]
+async fn a_three_level_nested_create_links_every_level() {
+    with_seeded_schema!(|pool, ast| {
+        run(
+            &pool,
+            &ast,
+            r#"[{"op":"create","model":"Organiser","id":"northern","data":{
+                "slug":"n","name":"Northern",
+                "events":{"create":[
+                    {"title":"Conf","ticket_types":{"createMany":[{"name":"Early"},{"name":"Std"}]}}
+                ]}
+            }}]"#,
+        )
+        .await
+        .expect("the nested seed runs");
+
+        let linked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM ticket_type t \
+             JOIN event e ON e.id = t.event_id \
+             JOIN organiser o ON o.id = e.organiser_id WHERE o.slug = 'n'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("counts");
+        assert_eq!(linked, 2, "both ticket types reach the organiser");
+    });
+}
+
+/// `connect` by the referenced column: the value is one the plan already holds.
+#[tokio::test]
+async fn a_connect_by_reference_fills_the_foreign_key() {
+    with_seeded_schema!(|pool, ast| {
+        run(
+            &pool,
+            &ast,
+            r#"[
+                {"op":"create","model":"Organiser","id":"northern","data":{"slug":"n","name":"N"}},
+                {"op":"create","model":"Event","data":{
+                    "title":"Conf",
+                    "organiser":{"connect":{"id":{"$ref":"northern.id"}}}
+                }}
+            ]"#,
+        )
+        .await
+        .expect("the seed runs");
+
+        let linked: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM event e JOIN organiser o ON o.id = e.organiser_id \
+             WHERE o.slug = 'n'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("counts");
+        assert_eq!(linked, 1);
+    });
+}
+
+/// `connect` by a natural key: only the database knows which id that slug has, and it
+/// resolves it inside the one statement rather than in a round trip per row.
+#[tokio::test]
+async fn a_connect_by_natural_key_resolves_against_the_database() {
+    with_seeded_schema!(|pool, ast| {
+        run(
+            &pool,
+            &ast,
+            r#"[{"op":"createMany","model":"Organiser","rows":[
+                {"slug":"north","name":"North"},
+                {"slug":"south","name":"South"}
+            ]}]"#,
+        )
+        .await
+        .expect("the organisers are written");
+
+        run(
+            &pool,
+            &ast,
+            r#"[{"op":"createMany","model":"Event","rows":[
+                {"title":"A","organiser":{"connect":{"slug":"north"}}},
+                {"title":"B","organiser":{"connect":{"slug":"south"}}}
+            ]}]"#,
+        )
+        .await
+        .expect("the events are written");
+
+        let pairs: Vec<(String, String)> = sqlx::query_as(
+            "SELECT e.title, o.slug FROM event e JOIN organiser o ON o.id = e.organiser_id \
+             ORDER BY e.title",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("reads back");
+        assert_eq!(
+            pairs,
+            vec![
+                ("A".to_string(), "north".to_string()),
+                ("B".to_string(), "south".to_string())
+            ],
+            "each row connected to the organiser its own key named"
+        );
+    });
+}
+
+/// A key that matches nothing is not silently a null foreign key on a nullable column.
+#[tokio::test]
+async fn a_connect_that_matches_nothing_leaves_the_key_null() {
+    with_seeded_schema!(|pool, ast| {
+        run(
+            &pool,
+            &ast,
+            r#"[{"op":"create","model":"Event","data":{
+                "title":"Orphan","organiser":{"connect":{"slug":"nobody"}}
+            }}]"#,
+        )
+        .await
+        .expect("a nullable foreign key accepts no match");
+
+        let orphans: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM event WHERE organiser_id IS NULL")
+                .fetch_one(&pool)
+                .await
+                .expect("counts");
+        assert_eq!(orphans, 1);
     });
 }
