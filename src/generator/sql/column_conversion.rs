@@ -99,6 +99,17 @@ pub fn text_to_lexical_jsonb_expr(column: &str) -> String {
 }
 
 /// Convert existing JSONB values to Lexical (json arrays, strings, scalars, etc.).
+/// Whether a field stores one value per locale.
+///
+/// Only rich text is asked about here, but every scalar carries the flag, so this reads it rather
+/// than matching on the one variant and quietly returning false for a future one.
+pub(crate) fn is_localised(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::RichText(f) => f.localized,
+        _ => false,
+    }
+}
+
 pub fn jsonb_to_lexical_migrate_expr(col: &str) -> String {
     // Parenthesised, because the caller appends `::text` and a cast binds tighter than the
     // operator: `col #>> '{}'::text` is read as `jsonb #>> text`, which does not exist. The
@@ -122,6 +133,47 @@ pub fn jsonb_to_lexical_migrate_expr(col: &str) -> String {
         lex_array = text_to_lexical_jsonb_expr(&array_text),
         lex_fallback = text_to_lexical_jsonb_expr(&format!("{col}::text")),
     )
+}
+
+/// The same wrap, applied to each locale of a localized column rather than to the column.
+///
+/// A localized value is `{"en": ..., "fr": ...}`, and it is each locale's value that is the
+/// document, not the map holding them. The map has no top-level `root`, is not a string and is
+/// not an array, so handing it to {@link jsonb_to_lexical_migrate_expr} falls through to that
+/// function's catch-all and stringifies every locale at once into a single text node. The result
+/// is a valid Lexical document, which is why nothing downstream complains: the column still type
+/// checks, and the content is gone.
+///
+/// Each locale goes through the ordinary wrap, so a locale already holding a document is left
+/// alone by that function's own `? 'root'` guard and this stays safe to re-run.
+pub fn jsonb_to_localised_lexical_expr(col: &str) -> String {
+    format!(
+        "CASE WHEN {col} IS NULL THEN NULL \
+         WHEN {col} ? 'root' THEN {col} \
+         WHEN jsonb_typeof({col}) <> 'object' THEN {whole} \
+         ELSE COALESCE(\
+            (SELECT jsonb_object_agg(locale.key, {per_locale}) FROM jsonb_each({col}) AS locale), \
+            {col}\
+         ) END",
+        col = col,
+        // A column that is not an object at all is not localized data, whatever the schema says.
+        // Wrapping it whole is what the non-localized column would do, and losing it is not.
+        whole = jsonb_to_lexical_migrate_expr(col),
+        per_locale = jsonb_to_lexical_migrate_expr("locale.value"),
+    )
+}
+
+/// The normalising expression for a rich text column, localized or not.
+///
+/// One entry point so the trigger and the `json -> richText` migration cannot disagree about what
+/// a rich text column should hold. They ran the same expression before, and shared the same blind
+/// spot with it.
+pub fn lexical_normalise_expr(col: &str, localised: bool) -> String {
+    if localised {
+        jsonb_to_localised_lexical_expr(col)
+    } else {
+        jsonb_to_lexical_migrate_expr(col)
+    }
 }
 
 fn storage_ref_from_text_expr(col: &str, bucket: &str) -> String {
@@ -257,7 +309,7 @@ pub fn kind_migrate_pre_update(
         ("json", "richText") => Some(format!(
             "UPDATE \"{schema}\".\"{table}\" SET \"{column}\" = {expr} \
              WHERE \"{column}\" IS NOT NULL AND NOT (\"{column}\" ? 'root');",
-            expr = jsonb_to_lexical_migrate_expr(&col),
+            expr = lexical_normalise_expr(&col, is_localised(target_field)),
         )),
         ("json", "blocks") => {
             let block = first_block_name(target_field).unwrap_or_else(|| "block".into());
@@ -621,5 +673,75 @@ pub fn using_expr_for_alter(strategy: &ConversionStrategy, column: &str, to_pg: 
         ConversionStrategyKind::RecreateColumn | ConversionStrategyKind::Blocked => {
             format!("\"{column}\"::{to_pg}")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::ScalarFieldAst;
+
+    fn rich_text(localized: bool) -> FieldAst {
+        let mut scalar = ScalarFieldAst {
+            pg_type: "JSONB".into(),
+            required: false,
+            unique: false,
+            ..Default::default()
+        };
+        scalar.localized = localized;
+        FieldAst::RichText(scalar)
+    }
+
+    /// A localized column is wrapped per locale, and a plain one is not.
+    ///
+    /// Asserted on `jsonb_each`, because that is the whole difference: without it the locale map
+    /// is handed to the wrap as a single value and comes back as one text node holding every
+    /// locale as literal JSON.
+    #[test]
+    fn a_localised_rich_text_column_is_normalised_one_locale_at_a_time() {
+        let localised = lexical_normalise_expr("\"bio\"", true);
+        assert!(
+            localised.contains("jsonb_each"),
+            "per locale, not whole: {localised}"
+        );
+        assert!(
+            !lexical_normalise_expr("\"bio\"", false).contains("jsonb_each"),
+            "a plain column keeps the single-value wrap"
+        );
+    }
+
+    /// The migration reads the flag off the field, so it and the trigger cannot disagree.
+    #[test]
+    fn the_json_to_rich_text_migration_follows_the_field() {
+        let localised = kind_migrate_pre_update(
+            "article",
+            "summary",
+            "public",
+            "json",
+            "richText",
+            &rich_text(true),
+        )
+        .expect("the conversion is supported");
+        assert!(
+            localised.contains("jsonb_each"),
+            "localized target: {localised}"
+        );
+
+        let plain = kind_migrate_pre_update(
+            "article",
+            "body",
+            "public",
+            "json",
+            "richText",
+            &rich_text(false),
+        )
+        .expect("the conversion is supported");
+        assert!(!plain.contains("jsonb_each"), "plain target: {plain}");
+    }
+
+    #[test]
+    fn only_rich_text_can_be_localised_here() {
+        assert!(is_localised(&rich_text(true)));
+        assert!(!is_localised(&rich_text(false)));
     }
 }
