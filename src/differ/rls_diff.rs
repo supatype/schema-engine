@@ -42,7 +42,9 @@ fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
 ///     shape so the planner evaluates them once per query, so without this every
 ///     policy would look changed on every push.
 fn normalise(s: &str, table: &str) -> String {
-    let mut out = s.replace("auth.", "");
+    // First, while the `INTERVAL` keyword and the `::interval` cast are both still
+    // present to mark which literals are intervals. Both are removed further down.
+    let mut out = canonicalise_interval_literals(s).replace("auth.", "");
     // Parens become spaces rather than vanishing. Deleting them welded tokens
     // together on one side only: generated `ANY(ARRAY[…])` collapsed to
     // `ANYARRAY[…]` while Postgres stores `ANY (ARRAY[…])`, which survives as
@@ -65,6 +67,224 @@ fn normalise(s: &str, table: &str) -> String {
     out = out.replace(&table_prefix, "");
     out = canonicalise_keywords_and_casts(&out);
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Postgres's internal interval representation: months, days and microseconds, kept
+/// apart because it never folds one into another. `30 days` is stored as 30 days, not
+/// as one month, so collapsing them here would make two different intervals compare
+/// equal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct IntervalParts {
+    months: i64,
+    days: i64,
+    micros: i64,
+}
+
+/// `HH:MM:SS[.ffffff]`, optionally negative, as Postgres prints the time component.
+/// Hours are not bounded by 24.
+fn parse_interval_clock(token: &str) -> Option<i64> {
+    let (negative, body) = match token.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, token),
+    };
+    let mut fields = body.split(':');
+    let hours: i64 = fields.next()?.parse().ok()?;
+    let minutes: i64 = fields.next()?.parse().ok()?;
+    let seconds_field = fields.next()?;
+    if fields.next().is_some() {
+        return None;
+    }
+    let (seconds, micros) = match seconds_field.split_once('.') {
+        Some((whole, fraction)) => {
+            if fraction.is_empty()
+                || fraction.len() > 6
+                || !fraction.bytes().all(|b| b.is_ascii_digit())
+            {
+                return None;
+            }
+            let mut padded = fraction.to_string();
+            while padded.len() < 6 {
+                padded.push('0');
+            }
+            (whole.parse::<i64>().ok()?, padded.parse::<i64>().ok()?)
+        }
+        None => (seconds_field.parse::<i64>().ok()?, 0),
+    };
+    if hours < 0 || minutes < 0 || seconds < 0 {
+        return None;
+    }
+    let total = hours
+        .checked_mul(3_600_000_000)?
+        .checked_add(minutes.checked_mul(60_000_000)?)?
+        .checked_add(seconds.checked_mul(1_000_000)?)?
+        .checked_add(micros)?;
+    Some(if negative { -total } else { total })
+}
+
+/// Unit words Postgres accepts on input or prints on output. Single letters are
+/// deliberately absent: `m` is ambiguous between months and minutes, and neither the
+/// generator nor Postgres emits it, so accepting it could only ever guess wrong.
+fn add_interval_unit(parts: &mut IntervalParts, amount: i64, unit: &str) -> Option<()> {
+    match unit.to_ascii_lowercase().as_str() {
+        "year" | "years" | "yr" | "yrs" => {
+            parts.months = parts.months.checked_add(amount.checked_mul(12)?)?
+        }
+        "mon" | "mons" | "month" | "months" => parts.months = parts.months.checked_add(amount)?,
+        "week" | "weeks" => parts.days = parts.days.checked_add(amount.checked_mul(7)?)?,
+        "day" | "days" => parts.days = parts.days.checked_add(amount)?,
+        "hour" | "hours" | "hr" | "hrs" => {
+            parts.micros = parts
+                .micros
+                .checked_add(amount.checked_mul(3_600_000_000)?)?
+        }
+        "min" | "mins" | "minute" | "minutes" => {
+            parts.micros = parts.micros.checked_add(amount.checked_mul(60_000_000)?)?
+        }
+        "sec" | "secs" | "second" | "seconds" => {
+            parts.micros = parts.micros.checked_add(amount.checked_mul(1_000_000)?)?
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+/// Parse either spelling of an interval literal into its parts.
+///
+/// Covers the input grammar the generator emits (`30 days 9 hours`) and the output
+/// grammar Postgres prints (`30 days 09:00:00`, `7 mons`, `1 year 2 mons -00:00:07`).
+/// Returns `None` for anything it does not fully understand, which is what keeps a
+/// literal it cannot read from being rewritten into something that compares wrongly.
+fn parse_interval(text: &str) -> Option<IntervalParts> {
+    let mut parts = IntervalParts {
+        months: 0,
+        days: 0,
+        micros: 0,
+    };
+    let mut tokens = text.split_whitespace().peekable();
+    let mut saw_component = false;
+    let mut negate_all = false;
+
+    while let Some(token) = tokens.next() {
+        if token.eq_ignore_ascii_case("ago") {
+            if tokens.peek().is_some() {
+                return None;
+            }
+            negate_all = true;
+            break;
+        }
+        if token.contains(':') {
+            parts.micros = parts.micros.checked_add(parse_interval_clock(token)?)?;
+            saw_component = true;
+            continue;
+        }
+        let amount: i64 = token.parse().ok()?;
+        let unit = tokens.next()?;
+        add_interval_unit(&mut parts, amount, unit)?;
+        saw_component = true;
+    }
+
+    if !saw_component {
+        return None;
+    }
+    if negate_all {
+        parts = IntervalParts {
+            months: parts.months.checked_neg()?,
+            days: parts.days.checked_neg()?,
+            micros: parts.micros.checked_neg()?,
+        };
+    }
+    Some(parts)
+}
+
+/// True when `haystack` ends with `word` as a whole word, ignoring trailing space.
+fn ends_with_word(haystack: &str, word: &str) -> bool {
+    let trimmed = haystack.trim_end();
+    let Some(head) = trimmed.get(trimmed.len().saturating_sub(word.len())..) else {
+        return false;
+    };
+    if !head.eq_ignore_ascii_case(word) {
+        return false;
+    }
+    let before = trimmed.len() - head.len();
+    trimmed[..before]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !c.is_alphanumeric() && c != '_')
+}
+
+/// Rewrite interval literals to one canonical form, in whichever spelling they arrive.
+///
+/// Postgres canonicalises an interval when it stores it, and only two of the seven units
+/// survive the round trip verbatim: `INTERVAL '7 hours'` comes back as `'07:00:00'`,
+/// `'7 weeks'` as `'49 days'`, `'7 months'` as `'7 mons'`. `normalise` copies string
+/// literals verbatim by design, so without this pass an access rule using any of the
+/// other five generates a policy that looks changed on every push and is dropped and
+/// recreated each time, which is the exact failure the convergence suite exists to catch.
+///
+/// Only literals actually marked as intervals are touched, by the `INTERVAL` keyword
+/// before or the `::interval` cast after. Canonicalising every literal that happened to
+/// parse would be simpler and would quietly rewrite a text value that reads like a
+/// duration; in a policy a wrong comparison is a security question, not a cosmetic one.
+/// Anything this cannot parse is left exactly as it was, so the pass can only ever make
+/// two spellings of one interval agree, never make two different intervals agree.
+fn canonicalise_interval_literals(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index] != '\'' {
+            out.push(chars[index]);
+            index += 1;
+            continue;
+        }
+
+        let literal_start = index;
+        index += 1;
+        let mut content = String::new();
+        let mut terminated = false;
+        while index < chars.len() {
+            if chars[index] == '\'' {
+                if chars.get(index + 1) == Some(&'\'') {
+                    content.push('\'');
+                    index += 2;
+                    continue;
+                }
+                index += 1;
+                terminated = true;
+                break;
+            }
+            content.push(chars[index]);
+            index += 1;
+        }
+        if !terminated {
+            // Unterminated literal: copy the remainder untouched rather than guess.
+            out.extend(chars[literal_start..].iter());
+            return out;
+        }
+
+        let trailing: String = chars[index..].iter().collect();
+        let marked_by_cast = trailing
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("::interval");
+        let marked_by_keyword = ends_with_word(&out, "interval");
+
+        match (marked_by_cast || marked_by_keyword)
+            .then(|| parse_interval(&content))
+            .flatten()
+        {
+            Some(parts) => {
+                out.push('\'');
+                out.push_str(&format!("{}/{}/{}", parts.months, parts.days, parts.micros));
+                out.push('\'');
+            }
+            None => {
+                out.extend(chars[literal_start..index].iter());
+            }
+        }
+    }
+    out
 }
 
 /// Single quote-aware pass that removes `::type` casts, drops `AS <alias>` and
@@ -824,6 +1044,56 @@ mod tests {
         let generated = "created_at >= (SELECT now() - INTERVAL '30 days')";
         let stored = "(post.created_at >= ( SELECT (now() - '30 days'::interval)))";
         assert_eq!(normalise(generated, "post"), normalise(stored, "post"));
+    }
+
+    // Regression: Postgres canonicalises an interval literal when it stores it, and
+    // only `days` and `years` survive the round trip verbatim. Measured against a live
+    // Postgres 17: seconds/minutes/hours collapse into `HH:MM:SS`, weeks are converted
+    // to days, and months is abbreviated to `mons`. `normalise` copies string literals
+    // verbatim by design, so without an interval-aware pass an access rule using any of
+    // those five units generates a policy that looks changed on every push and is
+    // dropped and recreated each time.
+    #[test]
+    fn normalise_matches_a_stored_interval_for_every_unit() {
+        // (generated unit, the text Postgres stores for `7 <unit>`)
+        let cases = [
+            ("seconds", "00:00:07"),
+            ("minutes", "00:07:00"),
+            ("hours", "07:00:00"),
+            ("days", "7 days"),
+            ("weeks", "49 days"),
+            ("months", "7 mons"),
+            ("years", "7 years"),
+        ];
+        for (unit, stored_text) in cases {
+            let generated = format!("created_at >= (SELECT now() - INTERVAL '7 {unit}')");
+            let stored =
+                format!("(post.created_at >= ( SELECT (now() - '{stored_text}'::interval)))");
+            assert_eq!(
+                normalise(&generated, "post"),
+                normalise(&stored, "post"),
+                "interval '7 {unit}' must compare equal to the stored form '{stored_text}'"
+            );
+        }
+    }
+
+    // A multi-unit interval is the shape `After`/`Before` generate, and Postgres
+    // rewrites it into mixed notation: `30 days 9 hours` is stored `30 days 09:00:00`.
+    #[test]
+    fn normalise_matches_a_stored_multi_unit_interval() {
+        let generated =
+            "starts_at >= (SELECT date_trunc('day', now()) + INTERVAL '30 days 9 hours')";
+        let stored = "(event.starts_at >= ( SELECT (date_trunc('day'::text, now()) + '30 days 09:00:00'::interval)))";
+        assert_eq!(normalise(generated, "event"), normalise(stored, "event"));
+    }
+
+    // Two intervals that mean different things must not be conflated by the
+    // canonicalisation: this is what stops the fix from being "make everything equal".
+    #[test]
+    fn normalise_keeps_different_intervals_distinct() {
+        let seven_hours = "x > (SELECT now() - INTERVAL '7 hours')";
+        let seven_days = "x > (SELECT now() - INTERVAL '7 days')";
+        assert_ne!(normalise(seven_hours, "t"), normalise(seven_days, "t"));
     }
 
     #[test]

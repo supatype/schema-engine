@@ -67,6 +67,25 @@
                     "kind": "startOf",
                     "unit": "year"
                   }
+                },
+                {
+                  "type": "compare",
+                  "op": "lte",
+                  "left": {
+                    "kind": "column",
+                    "name": "updated_at"
+                  },
+                  "right": {
+                    "kind": "after",
+                    "base": {
+                      "kind": "startOf",
+                      "unit": "day"
+                    },
+                    "interval": {
+                      "days": 30,
+                      "hours": 9
+                    }
+                  }
                 }
               ]
             },
@@ -326,7 +345,7 @@
                       "right": {
                         "kind": "ago",
                         "amount": 30,
-                        "unit": "days"
+                        "unit": "weeks"
                       }
                     },
                     {
@@ -339,7 +358,7 @@
                       "right": {
                         "kind": "fromNow",
                         "amount": 7,
-                        "unit": "days"
+                        "unit": "hours"
                       }
                     }
                   ]

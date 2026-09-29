@@ -681,6 +681,29 @@ pub enum Operand {
     /// `now() + INTERVAL 'n unit'`.
     FromNow { amount: u32, unit: TimeUnit },
 
+    /// `base + INTERVAL '...'`, where `base` is [`Operand::Now`] or [`Operand::StartOf`].
+    ///
+    /// `Ago` and `FromNow` carry a single amount and unit, so "thirty days from now at
+    /// 09:00" cannot be said: it needs `date_trunc('day', now()) + INTERVAL '30 days 9
+    /// hours'`. These two compose a truncation base with a multi-unit duration, which a
+    /// fixture calendar wants constantly and an access rule guarding on "since the start
+    /// of this week plus two days" wants as well.
+    ///
+    /// Direction is in the name rather than the sign of the interval, which is the rule
+    /// `Ago`/`FromNow` already follow and the CLI already enforces: a negative amount is
+    /// refused with a message naming the opposite operand, because relying on a double
+    /// negative reads wrongly. A signed duration here would quietly undo that.
+    After {
+        base: Box<Operand>,
+        interval: IntervalSpec,
+    },
+
+    /// `base - INTERVAL '...'`. See [`Operand::After`].
+    Before {
+        base: Box<Operand>,
+        interval: IntervalSpec,
+    },
+
     /// How much of a column there is, for a model constraint.
     ///
     /// `form` is resolved by the CLI, which is the only layer holding both the field's kind and the
@@ -727,6 +750,77 @@ impl TruncUnit {
             TruncUnit::Month => "month",
             TruncUnit::Year => "year",
         }
+    }
+}
+
+/// A multi-unit duration for [`Operand::After`] and [`Operand::Before`].
+///
+/// Named `IntervalSpec` rather than `Interval` because [`FieldAst::Interval`] in this
+/// same module is a *column type*. One name for a duration and for a column kind would
+/// read as one concept in a file where they are two.
+///
+/// Every component is non-negative: direction belongs to the operand name, not to the
+/// sign of the duration. Omitted components are zero, so `{ "days": 30 }` is a valid
+/// spec and the other six are absent rather than required.
+///
+/// `deny_unknown_fields` is deliberately **not** set, matching every other type in this
+/// module: the AST is deserialised forward-compatibly so an older engine can read a
+/// newer document. A misspelled unit therefore deserialises to all zeroes rather than
+/// failing here, which is exactly what [`IntervalSpec::is_zero`] exists to catch at
+/// validation, where the error can name the operand and the model.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct IntervalSpec {
+    #[serde(skip_serializing_if = "is_zero_unit")]
+    pub years: u32,
+    #[serde(skip_serializing_if = "is_zero_unit")]
+    pub months: u32,
+    #[serde(skip_serializing_if = "is_zero_unit")]
+    pub weeks: u32,
+    #[serde(skip_serializing_if = "is_zero_unit")]
+    pub days: u32,
+    #[serde(skip_serializing_if = "is_zero_unit")]
+    pub hours: u32,
+    #[serde(skip_serializing_if = "is_zero_unit")]
+    pub minutes: u32,
+    #[serde(skip_serializing_if = "is_zero_unit")]
+    pub seconds: u32,
+}
+
+/// Absent units are zero, so writing the zeroes back adds seven keys to every interval
+/// and makes the compact form an SDK emits differ from the form the engine writes.
+fn is_zero_unit(amount: &u32) -> bool {
+    *amount == 0
+}
+
+impl IntervalSpec {
+    /// True when no component was given.
+    ///
+    /// An all-zero duration is never what an author meant. It arrives one of two ways:
+    /// an empty object, or a misspelled unit that deserialised to nothing. Both are
+    /// mistakes, and rendering `now() + INTERVAL ''` for either would hide them behind a
+    /// policy that silently means `now()`.
+    pub fn is_zero(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The components that were given, largest unit first, as `(amount, unit)` pairs.
+    ///
+    /// Ordered so the rendered literal reads the way Postgres prints one, and so two
+    /// specs with the same components always produce the same text.
+    pub fn components(&self) -> Vec<(u32, TimeUnit)> {
+        [
+            (self.years, TimeUnit::Years),
+            (self.months, TimeUnit::Months),
+            (self.weeks, TimeUnit::Weeks),
+            (self.days, TimeUnit::Days),
+            (self.hours, TimeUnit::Hours),
+            (self.minutes, TimeUnit::Minutes),
+            (self.seconds, TimeUnit::Seconds),
+        ]
+        .into_iter()
+        .filter(|(amount, _)| *amount > 0)
+        .collect()
     }
 }
 

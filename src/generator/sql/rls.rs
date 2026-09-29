@@ -3,8 +3,8 @@ use crate::parser::accessors::{
     db_foreign_key, db_table_name, platform_access, resolve_owner_column,
 };
 use crate::parser::ast::{
-    AccessRule, DefaultValueAst, FieldAst, LiteralValue, MembershipSource, ModelAst, Operand,
-    SchemaAst,
+    AccessRule, DefaultValueAst, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst,
+    Operand, SchemaAst,
 };
 use anyhow::Result;
 
@@ -547,8 +547,50 @@ fn join_rules(
     parts.join(&format!("\n    {joiner}\n    "))
 }
 
+/// The bare SQL for a time base, without the scalar-subquery wrapper.
+///
+/// `After`/`Before` wrap the whole expression once rather than nesting a subquery inside
+/// another: `(SELECT (SELECT now()) + INTERVAL '...')` is valid but gives the differ a
+/// second shape to normalise for no gain.
+///
+/// Returns `None` for anything that is not a time base. Validation refuses those before
+/// a policy is built, so the fallback in the caller is a backstop for an AST that did not
+/// come through it, not a supported shape.
+fn time_base_expr(operand: &Operand) -> Option<String> {
+    match operand {
+        Operand::Now => Some("now()".to_string()),
+        Operand::StartOf { unit } => Some(format!("date_trunc('{}', now())", unit.sql())),
+        _ => None,
+    }
+}
+
+/// The text inside `INTERVAL '...'`, built from the spec's integers.
+///
+/// No author-supplied text reaches Postgres: every amount is a parsed integer and every
+/// unit a keyword from the closed set, which is what keeps this from being a small
+/// escape hatch. Components are emitted largest unit first so one spec always produces
+/// one string.
+///
+/// An empty spec renders `0 seconds` rather than an empty literal. `INTERVAL ''` is a
+/// syntax error, and emitting nothing at all would silently turn the operand into a bare
+/// `now()`. Validation refuses an all-zero spec so the author hears about it; this keeps
+/// the generated SQL honest and valid if one ever reaches here.
+fn interval_literal(spec: &IntervalSpec) -> String {
+    let components = spec.components();
+    if components.is_empty() {
+        return "0 seconds".to_string();
+    }
+    components
+        .into_iter()
+        .map(|(amount, unit)| format!("{amount} {}", unit.sql()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Renders one side of a comparison.
-fn operand_to_expr(operand: &Operand) -> String {
+/// Also used by the seed executor, so a seed and a policy cannot disagree about what an
+/// operand means: `fromNow` renders once, here.
+pub(crate) fn operand_to_expr(operand: &Operand) -> String {
     match operand {
         // Constraint-only operands, refused inside `access` by the CLI. Rendered so the match stays
         // exhaustive; a policy that reached one would be comparing against a measure, not a caller.
@@ -579,6 +621,22 @@ fn operand_to_expr(operand: &Operand) -> String {
         }
         Operand::FromNow { amount, unit } => {
             format!("(SELECT now() + INTERVAL '{amount} {}')", unit.sql())
+        }
+        // The base is rendered unwrapped and the whole expression wrapped once. The
+        // fallback covers a base validation should already have refused.
+        Operand::After { base, interval } => {
+            let rendered = time_base_expr(base).unwrap_or_else(|| operand_to_expr(base));
+            format!(
+                "(SELECT {rendered} + INTERVAL '{}')",
+                interval_literal(interval)
+            )
+        }
+        Operand::Before { base, interval } => {
+            let rendered = time_base_expr(base).unwrap_or_else(|| operand_to_expr(base));
+            format!(
+                "(SELECT {rendered} - INTERVAL '{}')",
+                interval_literal(interval)
+            )
         }
     }
 }
@@ -1032,4 +1090,125 @@ fn render_can_function(schema: &str, table: &str, op: &str, expr: &str) -> Strin
          FROM (SELECT ($1).*) AS \"{alias}\";\n  \
          $can$;\n\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::TruncUnit;
+
+    #[test]
+    fn after_now_renders_a_wrapped_addition() {
+        let operand = Operand::After {
+            base: Box::new(Operand::Now),
+            interval: IntervalSpec {
+                days: 30,
+                ..IntervalSpec::default()
+            },
+        };
+        assert_eq!(
+            operand_to_expr(&operand),
+            "(SELECT now() + INTERVAL '30 days')"
+        );
+    }
+
+    #[test]
+    fn before_now_renders_a_wrapped_subtraction() {
+        let operand = Operand::Before {
+            base: Box::new(Operand::Now),
+            interval: IntervalSpec {
+                days: 30,
+                ..IntervalSpec::default()
+            },
+        };
+        assert_eq!(
+            operand_to_expr(&operand),
+            "(SELECT now() - INTERVAL '30 days')"
+        );
+    }
+
+    // The composition the single-unit operands could not express.
+    #[test]
+    fn after_a_truncation_base_composes_date_trunc_with_a_multi_unit_interval() {
+        let operand = Operand::After {
+            base: Box::new(Operand::StartOf {
+                unit: TruncUnit::Day,
+            }),
+            interval: IntervalSpec {
+                days: 30,
+                hours: 9,
+                ..IntervalSpec::default()
+            },
+        };
+        assert_eq!(
+            operand_to_expr(&operand),
+            "(SELECT date_trunc('day', now()) + INTERVAL '30 days 9 hours')"
+        );
+    }
+
+    // One subquery, not two. Nesting is valid SQL but hands the differ a second shape
+    // to normalise for nothing.
+    #[test]
+    fn after_does_not_nest_a_subquery_inside_another() {
+        let operand = Operand::After {
+            base: Box::new(Operand::Now),
+            interval: IntervalSpec {
+                hours: 1,
+                ..IntervalSpec::default()
+            },
+        };
+        let rendered = operand_to_expr(&operand);
+        assert_eq!(
+            rendered.matches("SELECT").count(),
+            1,
+            "expected exactly one subquery, got: {rendered}"
+        );
+    }
+
+    // Largest unit first, and always the same text for the same spec, so a policy does
+    // not change shape because a field order did.
+    #[test]
+    fn interval_components_render_largest_unit_first() {
+        let spec = IntervalSpec {
+            seconds: 7,
+            years: 1,
+            days: 3,
+            ..IntervalSpec::default()
+        };
+        assert_eq!(interval_literal(&spec), "1 years 3 days 7 seconds");
+    }
+
+    // An empty spec must not render `INTERVAL ''`, which is a syntax error, nor vanish
+    // into a bare `now()`, which would silently mean something else. Validation refuses
+    // it upstream; this keeps the generated SQL valid and honest if one reaches here.
+    #[test]
+    fn an_empty_interval_renders_zero_rather_than_nothing() {
+        assert_eq!(interval_literal(&IntervalSpec::default()), "0 seconds");
+    }
+
+    #[test]
+    fn an_empty_interval_spec_is_zero() {
+        assert!(IntervalSpec::default().is_zero());
+        assert!(!IntervalSpec {
+            seconds: 1,
+            ..IntervalSpec::default()
+        }
+        .is_zero());
+    }
+
+    // The clock stays STABLE. `clock_timestamp()` is VOLATILE and would make the
+    // generated `can_*` functions' STABLE declaration a lie.
+    #[test]
+    fn after_never_reaches_for_a_volatile_clock() {
+        let operand = Operand::After {
+            base: Box::new(Operand::StartOf {
+                unit: TruncUnit::Week,
+            }),
+            interval: IntervalSpec {
+                days: 2,
+                ..IntervalSpec::default()
+            },
+        };
+        assert!(!operand_to_expr(&operand).contains("clock_timestamp"));
+    }
 }
