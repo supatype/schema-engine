@@ -100,7 +100,11 @@ pub fn text_to_lexical_jsonb_expr(column: &str) -> String {
 
 /// Convert existing JSONB values to Lexical (json arrays, strings, scalars, etc.).
 pub fn jsonb_to_lexical_migrate_expr(col: &str) -> String {
-    let string_text = format!("{col} #>> '{{}}'");
+    // Parenthesised, because the caller appends `::text` and a cast binds tighter than the
+    // operator: `col #>> '{}'::text` is read as `jsonb #>> text`, which does not exist. The
+    // `json -> richText` migration has produced that since it was written, and nothing caught
+    // it because nothing tested that conversion.
+    let string_text = format!("({col} #>> '{{}}')");
     let array_text = format!(
         "COALESCE((SELECT string_agg(\
             CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{{}}' ELSE elem::text END, \
