@@ -25,7 +25,8 @@ const SCHEMA: &str = r#"{
                        "default": {"kind": "genRandomUuid"}},
                 "title": {"kind": "text", "required": true},
                 "body": {"kind": "richText", "required": false},
-                "notes": {"kind": "richText", "required": false}
+                "notes": {"kind": "richText", "required": false},
+                "summary": {"kind": "richText", "required": false, "localized": true}
             },
             "annotations": {"db": {"tableName": "article"}}
         },
@@ -77,6 +78,17 @@ async fn body_of(pool: &sqlx::PgPool, title: &str) -> serde_json::Value {
 
 /// The text a Lexical document carries, so a test can say what survived rather than compare
 /// the whole shape.
+async fn summary_of(pool: &sqlx::PgPool, title: &str) -> serde_json::Value {
+    sqlx::query_scalar::<_, Option<serde_json::Value>>(
+        "SELECT summary FROM article WHERE title = $1",
+    )
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .expect("the row is there")
+    .unwrap_or(serde_json::Value::Null)
+}
+
 fn text_in(document: &serde_json::Value) -> String {
     document["root"]["children"][0]["children"][0]["text"]
         .as_str()
@@ -262,6 +274,75 @@ fn the_trigger_is_emitted_only_for_models_that_need_it() {
 /// produced `col #>> '{}'::text`, which Postgres reads as `jsonb #>> text` and refuses. The
 /// trigger surfaced it; nothing had tested that migration, so it had been broken since it was
 /// written. Covered here so it stays fixed for both callers.
+/// A localized column holds one value per locale, and each of those is the document.
+///
+/// `{"en": "...", "fr": "..."}` has no top-level `root`, is not a string and is not an array, so
+/// a wrap that only knows those shapes falls through to its catch-all and stringifies the whole
+/// locale map into one text node. That loses every locale at once, and the column still type
+/// checks, because the result is a valid document.
+#[tokio::test]
+async fn each_locale_of_a_localised_column_becomes_its_own_document() {
+    with_schema!(|pool| {
+        sqlx::query(
+            r#"INSERT INTO article (title, summary)
+               VALUES ('localised', '{"en": "Hello there", "fr": "Bonjour"}'::jsonb)"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("the insert succeeds");
+
+        let stored = summary_of(&pool, "localised").await;
+        let map = stored.as_object().expect("a locale map, not a document");
+
+        assert_eq!(
+            map.keys().collect::<Vec<_>>(),
+            vec!["en", "fr"],
+            "both locales survive: {stored}"
+        );
+        assert_eq!(text_in(&map["en"]), "Hello there", "en: {stored}");
+        assert_eq!(text_in(&map["fr"]), "Bonjour", "fr: {stored}");
+        assert!(
+            map["en"].get("root").is_some(),
+            "each locale holds a document: {stored}"
+        );
+    });
+}
+
+/// The half that would hide the bug: a locale map already holding documents must not be re-wrapped.
+#[tokio::test]
+async fn a_localised_column_already_holding_documents_is_untouched() {
+    with_schema!(|pool| {
+        let document = r#"{"en": {"root": {"type": "root", "format": "", "indent": 0,
+            "version": 1, "direction": "ltr", "children": [{"type": "paragraph", "format": "",
+            "indent": 0, "version": 1, "direction": "ltr", "children": [{"mode": "normal",
+            "text": "Already a document", "type": "text", "style": "", "detail": 0,
+            "format": 0, "version": 1}]}]}}}"#;
+        sqlx::query("INSERT INTO article (title, summary) VALUES ('kept', $1::jsonb)")
+            .bind(document)
+            .execute(&pool)
+            .await
+            .expect("the insert succeeds");
+
+        let stored = summary_of(&pool, "kept").await;
+        assert_eq!(
+            text_in(&stored["en"]),
+            "Already a document",
+            "not re-wrapped: {stored}"
+        );
+    });
+}
+
+#[tokio::test]
+async fn a_null_localised_column_stays_null() {
+    with_schema!(|pool| {
+        sqlx::query("INSERT INTO article (title, summary) VALUES ('empty', NULL)")
+            .execute(&pool)
+            .await
+            .expect("the insert succeeds");
+        assert!(summary_of(&pool, "empty").await.is_null());
+    });
+}
+
 #[tokio::test]
 async fn a_json_column_holding_a_string_converts_to_a_document() {
     common::with_integration_pool(|pool| async move {

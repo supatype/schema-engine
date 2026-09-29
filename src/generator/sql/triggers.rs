@@ -38,11 +38,13 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
             }
         }
 
-        let rich_text: Vec<&str> = model
+        // Carries the localized flag, not just the name: a localized column holds one document
+        // per locale, and normalising the map as though it were the document loses every locale.
+        let rich_text: Vec<(&str, bool)> = model
             .fields
             .iter()
             .filter(|(_, field)| matches!(field, FieldAst::RichText(_)))
-            .map(|(name, _)| name.as_str())
+            .map(|(name, field)| (name.as_str(), super::column_conversion::is_localised(field)))
             .collect();
         if !rich_text.is_empty() {
             out.push_str(&rich_text_trigger(schema, model.table_name(), &rich_text));
@@ -153,17 +155,18 @@ pub fn generate_realtime_trigger_drop(schema: &str, table_name: &str) -> String 
 ///
 /// One trigger per table rather than one per column, so a model with five rich text fields
 /// fires one function instead of five.
-fn rich_text_trigger(schema: &str, table: &str, fields: &[&str]) -> String {
+fn rich_text_trigger(schema: &str, table: &str, fields: &[(&str, bool)]) -> String {
     let fn_name = format!("_platform.normalise_{table}_rich_text");
     let assignments: String = fields
         .iter()
-        .map(|field| {
+        .map(|(field, localised)| {
             format!(
                 "  NEW.\"{field}\" := {expr};\n",
                 field = field,
-                expr = super::column_conversion::jsonb_to_lexical_migrate_expr(&format!(
-                    "NEW.\"{field}\""
-                )),
+                expr = super::column_conversion::lexical_normalise_expr(
+                    &format!("NEW.\"{field}\""),
+                    *localised
+                ),
             )
         })
         .collect();
