@@ -1,3 +1,5 @@
+mod seed_command;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
@@ -92,6 +94,9 @@ enum Command {
         /// Target language: typescript (default), python, go, php, swift, kotlin, dart
         #[arg(long, default_value = "typescript")]
         lang: String,
+        /// Which artifact: types (default), seed, augmentation
+        #[arg(long, default_value = "types")]
+        artifact: String,
     },
     /// Generate trigger SQL (updated_at + slug)
     Triggers {
@@ -165,6 +170,32 @@ enum Command {
         )]
         strict: bool,
     },
+    /// Apply a seed IR document to the database
+    Seed {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long, default_value = "public")]
+        schema: String,
+        #[arg(
+            long,
+            help = "Seed IR document, repeatable; applied in the order given"
+        )]
+        ir: Vec<String>,
+        #[arg(long, help = "Environment name, for an `environment` condition")]
+        environment: Option<String>,
+        #[arg(long, help = "Run every document in one transaction")]
+        atomic: bool,
+        #[arg(
+            long,
+            help = "Skip a document already committed with this exact content"
+        )]
+        run_once: bool,
+        #[arg(
+            long,
+            help = "Report what has been applied, and what has changed since"
+        )]
+        status: bool,
+    },
     /// Stamp managed comments on DB objects matching the AST (adoption ceremony)
     Adopt {
         #[arg(long, env = "DATABASE_URL")]
@@ -200,6 +231,7 @@ async fn main() -> Result<()> {
 
     let input = match &cli.command {
         Command::Migrations { .. } | Command::Rollback { .. } => String::new(),
+        Command::Seed { status: true, .. } => String::new(),
         _ => read_input(cli.input.as_deref())?,
     };
 
@@ -626,15 +658,62 @@ async fn main() -> Result<()> {
                 warnings_json
             );
         }
-        Command::Generate { lang } => {
+        Command::Generate { lang, artifact } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let output = match lang.as_str() {
-                "typescript" | "ts" => {
-                    supatype_engine::generator::typescript::types::generate(&ast)?
+            let typescript = matches!(lang.as_str(), "typescript" | "ts");
+            let output = match (typescript, artifact.as_str()) {
+                (true, "types") => supatype_engine::generator::typescript::types::generate(&ast)?,
+                (true, "seed") => supatype_engine::generator::typescript::seed::generate(&ast)?,
+                (true, "augmentation") => {
+                    supatype_engine::generator::typescript::augmentation::generate(&ast)?
                 }
-                other => supatype_engine::generator::sdk::generate(&ast, other)?,
+                (false, "types") => supatype_engine::generator::sdk::generate(&ast, &lang)?,
+                // Named rather than silently falling back to the type artifact: a runner
+                // that asked for a builder and got a types file would fail later, at an
+                // import, with nothing pointing back here.
+                (false, other) => anyhow::bail!(
+                    "The `{other}` artifact is generated for TypeScript only.                      The other languages are tracked separately."
+                ),
+                (true, other) => anyhow::bail!(
+                    "Unknown artifact '{other}'. Supported: types, seed, augmentation."
+                ),
             };
             println!("{output}");
+        }
+        Command::Seed {
+            database_url,
+            schema,
+            ir,
+            environment,
+            atomic,
+            run_once,
+            status,
+        } => {
+            let code = if status {
+                seed_command::status(&database_url).await?
+            } else {
+                if ir.is_empty() {
+                    anyhow::bail!("`seed` needs at least one `--ir <document.json>`.");
+                }
+                let ast = supatype_engine::parser::parse(&input)?;
+                seed_command::run(
+                    ast,
+                    seed_command::SeedArgs {
+                        database_url,
+                        schema,
+                        ir,
+                        environment,
+                        atomic,
+                        run_once,
+                    },
+                )
+                .await?
+            };
+            // The result document is the answer, so a failed seed still exits through the
+            // code rather than through an error that would print twice.
+            if code != 0 {
+                std::process::exit(code);
+            }
         }
         Command::Triggers { schema } => {
             let ast = supatype_engine::parser::parse(&input)?;

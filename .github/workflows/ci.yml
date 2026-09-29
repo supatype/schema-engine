@@ -162,6 +162,7 @@ jobs:
             --test rls_convergence_tests \
             --test seed_execute_tests \
             --test seed_ledger_tests \
+            --test seed_command_tests \
             --test schema_isolation_tests \
             --test studio_members_tests \
             --test table_adoption_tests \

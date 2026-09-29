@@ -25,6 +25,17 @@ pub enum ConstraintKind {
 }
 
 impl ConstraintKind {
+    /// The name the result document carries, so a runner can branch on the kind without
+    /// matching on prose that is free to be reworded.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConstraintKind::Unique => "unique",
+            ConstraintKind::ForeignKey => "foreignKey",
+            ConstraintKind::NotNull => "notNull",
+            ConstraintKind::Check => "check",
+        }
+    }
+
     fn describe(self, model: &str, fields: &str) -> String {
         match self {
             ConstraintKind::Unique => {
