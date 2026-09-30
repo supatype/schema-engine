@@ -262,3 +262,35 @@ fn a_condition_filter_is_a_schema_access_rule() {
         other => panic!("expected a compare, got {other:?}"),
     }
 }
+
+/// The golden IR is vendored into supatype/supatype, and this hash is how the two stay one file.
+///
+/// The CLI's builder is checked against the same hand-written document, because a builder checked
+/// against whatever the engine happens to emit is checked against itself. That used to work by
+/// reading this file across a sibling checkout, which does not exist in that repository's CI, so
+/// the test had never run there.
+///
+/// Both repositories now assert this hash. Editing this file turns this test red until the hash is
+/// updated, and updating the hash turns the other repository red until its copy follows. Neither
+/// copy can drift quietly, which is the only thing the shared path was ever buying.
+///
+/// Other side: `packages/cli/tests/seed-ir.test.ts`, same constant.
+#[test]
+fn the_golden_ir_matches_the_copy_vendored_into_the_cli() {
+    use sha2::{Digest, Sha256};
+
+    const GOLDEN_SHA256: &str = "6ec5e51820868e0e303abe3c5aa57e034ff27c53374998d760d425863e538ea6";
+
+    // Line endings normalised first. git hands this file out as CRLF on Windows and LF on Linux,
+    // so hashing the bytes as checked out pins the platform rather than the content, and the two
+    // repositories would disagree depending on who ran the test.
+    let raw = include_str!("fixtures/seed_golden_ir.json");
+    let normalised = raw.replace("\r\n", "\n");
+    let digest = format!("{:x}", Sha256::digest(normalised.as_bytes()));
+    assert_eq!(
+        digest, GOLDEN_SHA256,
+        "the golden IR changed. Update supatype/supatype's copy at \
+         packages/cli/tests/fixtures/seed_golden_ir.json and the constant in both repositories, \
+         or the two builders are no longer checked against the same document."
+    );
+}
