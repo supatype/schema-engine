@@ -157,7 +157,7 @@ fn render_ref(model: &SeedModel) -> String {
         lines.push_str(&format!(
             "  readonly {}: {}\n",
             quote_key(&column.name),
-            branded(model, column, &base_type(column))
+            branded(model, column, &base_type(column, false))
         ));
     }
     format!(
@@ -198,7 +198,7 @@ fn render_where(model: &SeedModel) -> String {
                     Some(c) => format!(
                         "{}: {}",
                         quote_key(column),
-                        branded(model, c, &base_type(c))
+                        branded(model, c, &base_type(c, false))
                     ),
                     None => format!("{}: string", quote_key(column)),
                 })
@@ -445,7 +445,7 @@ fn render_manifest(models: &[SeedModel]) -> String {
 // --- Types ---
 
 /// A column's type with nothing added: no null, no expression, no brand.
-fn base_type(column: &SeedColumn) -> String {
+fn base_type(column: &SeedColumn, prose: bool) -> String {
     let mut base = match column.kind {
         // The exact kinds. A `number` here is the defect `NUMERIC(19,4)` exists to prevent,
         // so neither of these is ever one.
@@ -474,6 +474,14 @@ fn base_type(column: &SeedColumn) -> String {
         }
     };
 
+    // Prose, which a trigger normalises into a document on the way in. Applied to the element,
+    // before the array and locale wrappers go on: a localized column holds one document per
+    // locale and the trigger normalises each of them, so what accepts prose is the locale's
+    // value. Widening the wrapper instead would say a bare string is a valid write to the
+    // column, and the trigger would store it as a single document where a locale map belongs.
+    if prose && column.kind == ScalarKind::RichText {
+        base = format!("{base} | string");
+    }
     if column.array {
         base = format!("({base})[]");
     }
@@ -486,13 +494,9 @@ fn base_type(column: &SeedColumn) -> String {
 /// A column's type in a create shape: what it holds, plus the ways it can be left to the
 /// database.
 fn create_type(model: &SeedModel, column: &SeedColumn) -> String {
-    let mut parts = vec![branded(model, column, &base_type(column))];
-    // Prose, which a trigger normalises into a document on the way in. Only here: a reference
-    // resolves from a row that has already been through that trigger, so reading one back is
-    // always a document.
-    if column.kind == ScalarKind::RichText {
-        parts.push("string".to_string());
-    }
+    // `prose` only here: a reference resolves from a row that has already been through the
+    // trigger, so reading one back is always a document.
+    let mut parts = vec![branded(model, column, &base_type(column, true))];
     if column.nullable {
         parts.push("null".to_string());
     }
