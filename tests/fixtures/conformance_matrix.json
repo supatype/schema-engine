@@ -1,0 +1,1498 @@
+{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Every",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "text_plain": {
+          "kind": "text",
+          "required": false
+        },
+        "richText_plain": {
+          "kind": "richText",
+          "required": false
+        },
+        "integer_plain": {
+          "kind": "integer",
+          "required": false
+        },
+        "float_plain": {
+          "kind": "float",
+          "required": false
+        },
+        "boolean_plain": {
+          "kind": "boolean",
+          "required": false
+        },
+        "datetime_plain": {
+          "kind": "datetime",
+          "required": false
+        },
+        "uuid_plain": {
+          "kind": "uuid",
+          "required": false
+        },
+        "email_plain": {
+          "kind": "email",
+          "required": false
+        },
+        "bigInt_plain": {
+          "kind": "bigInt",
+          "required": false
+        },
+        "bytes_plain": {
+          "kind": "bytes",
+          "required": false
+        },
+        "smallInt_plain": {
+          "kind": "smallInt",
+          "required": false
+        },
+        "date_plain": {
+          "kind": "date",
+          "required": false
+        },
+        "timestamp_plain": {
+          "kind": "timestamp",
+          "required": false
+        },
+        "money_plain": {
+          "kind": "money",
+          "required": false
+        },
+        "url_plain": {
+          "kind": "url",
+          "required": false
+        },
+        "ip_plain": {
+          "kind": "ip",
+          "required": false
+        },
+        "cidr_plain": {
+          "kind": "cidr",
+          "required": false
+        },
+        "macaddr_plain": {
+          "kind": "macaddr",
+          "required": false
+        },
+        "interval_plain": {
+          "kind": "interval",
+          "required": false
+        },
+        "tsQuery_plain": {
+          "kind": "tsQuery",
+          "required": false
+        },
+        "tsVector_plain": {
+          "kind": "tsVector",
+          "required": false
+        },
+        "xml_plain": {
+          "kind": "xml",
+          "required": false
+        },
+        "color_plain": {
+          "kind": "color",
+          "required": false
+        },
+        "slug_plain": {
+          "kind": "slug",
+          "required": false,
+          "from": "text_plain",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "enum_plain": {
+          "kind": "enum",
+          "required": false,
+          "values": [
+            "a",
+            "b",
+            "c"
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "TEXT"
+            }
+          }
+        },
+        "json_plain": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "button_plain": {
+          "kind": "button",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "decimal_plain": {
+          "kind": "decimal",
+          "required": false,
+          "precision": 18,
+          "scale": 4,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          }
+        },
+        "image_plain": {
+          "kind": "image",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "file_plain": {
+          "kind": "file",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "blocks_plain": {
+          "kind": "blocks",
+          "required": false,
+          "blocks": [
+            {
+              "name": "hero",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "TEXT",
+                  "required": true,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            }
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "serial_plain": {
+          "kind": "serial",
+          "required": false
+        },
+        "bigSerial_plain": {
+          "kind": "bigSerial",
+          "required": false
+        },
+        "array_plain": {
+          "kind": "array",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT[]",
+              "elementType": "TEXT"
+            }
+          }
+        },
+        "geo_plain": {
+          "kind": "geo",
+          "required": false,
+          "geoType": "point",
+          "srid": 4326,
+          "annotations": {
+            "db": {
+              "pgType": "GEOGRAPHY(POINT,4326)"
+            }
+          }
+        },
+        "vector_plain": {
+          "kind": "vector",
+          "required": false,
+          "dimensions": 8,
+          "annotations": {
+            "db": {
+              "pgType": "vector(8)"
+            }
+          }
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "every"
+        }
+      }
+    },
+    {
+      "name": "EveryLocalised",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "text_plain": {
+          "kind": "text",
+          "required": false
+        },
+        "text_loc": {
+          "kind": "text",
+          "required": false,
+          "localized": true
+        },
+        "richText_loc": {
+          "kind": "richText",
+          "required": false,
+          "localized": true
+        },
+        "integer_loc": {
+          "kind": "integer",
+          "required": false,
+          "localized": true
+        },
+        "float_loc": {
+          "kind": "float",
+          "required": false,
+          "localized": true
+        },
+        "boolean_loc": {
+          "kind": "boolean",
+          "required": false,
+          "localized": true
+        },
+        "datetime_loc": {
+          "kind": "datetime",
+          "required": false,
+          "localized": true
+        },
+        "uuid_loc": {
+          "kind": "uuid",
+          "required": false,
+          "localized": true
+        },
+        "email_loc": {
+          "kind": "email",
+          "required": false,
+          "localized": true
+        },
+        "bigInt_loc": {
+          "kind": "bigInt",
+          "required": false,
+          "localized": true
+        },
+        "bytes_loc": {
+          "kind": "bytes",
+          "required": false,
+          "localized": true
+        },
+        "smallInt_loc": {
+          "kind": "smallInt",
+          "required": false,
+          "localized": true
+        },
+        "date_loc": {
+          "kind": "date",
+          "required": false,
+          "localized": true
+        },
+        "timestamp_loc": {
+          "kind": "timestamp",
+          "required": false,
+          "localized": true
+        },
+        "money_loc": {
+          "kind": "money",
+          "required": false,
+          "localized": true
+        },
+        "url_loc": {
+          "kind": "url",
+          "required": false,
+          "localized": true
+        },
+        "ip_loc": {
+          "kind": "ip",
+          "required": false,
+          "localized": true
+        },
+        "cidr_loc": {
+          "kind": "cidr",
+          "required": false,
+          "localized": true
+        },
+        "macaddr_loc": {
+          "kind": "macaddr",
+          "required": false,
+          "localized": true
+        },
+        "interval_loc": {
+          "kind": "interval",
+          "required": false,
+          "localized": true
+        },
+        "tsQuery_loc": {
+          "kind": "tsQuery",
+          "required": false,
+          "localized": true
+        },
+        "tsVector_loc": {
+          "kind": "tsVector",
+          "required": false,
+          "localized": true
+        },
+        "xml_loc": {
+          "kind": "xml",
+          "required": false,
+          "localized": true
+        },
+        "color_loc": {
+          "kind": "color",
+          "required": false,
+          "localized": true
+        },
+        "slug_loc": {
+          "kind": "slug",
+          "required": false,
+          "from": "text_plain",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          },
+          "localized": true
+        },
+        "enum_loc": {
+          "kind": "enum",
+          "required": false,
+          "values": [
+            "a",
+            "b",
+            "c"
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "TEXT"
+            }
+          },
+          "localized": true
+        },
+        "json_loc": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "localized": true
+        },
+        "button_loc": {
+          "kind": "button",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "localized": true
+        },
+        "decimal_loc": {
+          "kind": "decimal",
+          "required": false,
+          "precision": 18,
+          "scale": 4,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          },
+          "localized": true
+        },
+        "image_loc": {
+          "kind": "image",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "localized": true
+        },
+        "file_loc": {
+          "kind": "file",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "localized": true
+        },
+        "blocks_loc": {
+          "kind": "blocks",
+          "required": false,
+          "blocks": [
+            {
+              "name": "hero",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "TEXT",
+                  "required": true,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            }
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "localized": true
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "every_localised"
+        }
+      }
+    },
+    {
+      "name": "EveryRequired",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "text_plain": {
+          "kind": "text",
+          "required": false
+        },
+        "text_req": {
+          "kind": "text",
+          "required": true
+        },
+        "richText_req": {
+          "kind": "richText",
+          "required": true
+        },
+        "integer_req": {
+          "kind": "integer",
+          "required": true
+        },
+        "float_req": {
+          "kind": "float",
+          "required": true
+        },
+        "boolean_req": {
+          "kind": "boolean",
+          "required": true
+        },
+        "datetime_req": {
+          "kind": "datetime",
+          "required": true
+        },
+        "uuid_req": {
+          "kind": "uuid",
+          "required": true
+        },
+        "email_req": {
+          "kind": "email",
+          "required": true
+        },
+        "bigInt_req": {
+          "kind": "bigInt",
+          "required": true
+        },
+        "bytes_req": {
+          "kind": "bytes",
+          "required": true
+        },
+        "smallInt_req": {
+          "kind": "smallInt",
+          "required": true
+        },
+        "date_req": {
+          "kind": "date",
+          "required": true
+        },
+        "timestamp_req": {
+          "kind": "timestamp",
+          "required": true
+        },
+        "money_req": {
+          "kind": "money",
+          "required": true
+        },
+        "url_req": {
+          "kind": "url",
+          "required": true
+        },
+        "ip_req": {
+          "kind": "ip",
+          "required": true
+        },
+        "cidr_req": {
+          "kind": "cidr",
+          "required": true
+        },
+        "macaddr_req": {
+          "kind": "macaddr",
+          "required": true
+        },
+        "interval_req": {
+          "kind": "interval",
+          "required": true
+        },
+        "tsQuery_req": {
+          "kind": "tsQuery",
+          "required": true
+        },
+        "tsVector_req": {
+          "kind": "tsVector",
+          "required": true
+        },
+        "xml_req": {
+          "kind": "xml",
+          "required": true
+        },
+        "color_req": {
+          "kind": "color",
+          "required": true
+        },
+        "slug_req": {
+          "kind": "slug",
+          "required": true,
+          "from": "text_plain",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          }
+        },
+        "enum_req": {
+          "kind": "enum",
+          "required": true,
+          "values": [
+            "a",
+            "b",
+            "c"
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "TEXT"
+            }
+          }
+        },
+        "json_req": {
+          "kind": "json",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "button_req": {
+          "kind": "button",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "decimal_req": {
+          "kind": "decimal",
+          "required": true,
+          "precision": 18,
+          "scale": 4,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          }
+        },
+        "image_req": {
+          "kind": "image",
+          "required": true,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "file_req": {
+          "kind": "file",
+          "required": true,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "blocks_req": {
+          "kind": "blocks",
+          "required": true,
+          "blocks": [
+            {
+              "name": "hero",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "TEXT",
+                  "required": true,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            }
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          }
+        },
+        "serial_req": {
+          "kind": "serial",
+          "required": false
+        },
+        "bigSerial_req": {
+          "kind": "bigSerial",
+          "required": false
+        },
+        "array_req": {
+          "kind": "array",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT[]",
+              "elementType": "TEXT"
+            }
+          }
+        },
+        "geo_req": {
+          "kind": "geo",
+          "required": true,
+          "geoType": "point",
+          "srid": 4326,
+          "annotations": {
+            "db": {
+              "pgType": "GEOGRAPHY(POINT,4326)"
+            }
+          }
+        },
+        "vector_req": {
+          "kind": "vector",
+          "required": true,
+          "dimensions": 8,
+          "annotations": {
+            "db": {
+              "pgType": "vector(8)"
+            }
+          }
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "every_required"
+        }
+      }
+    },
+    {
+      "name": "EveryDefaulted",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "text_plain": {
+          "kind": "text",
+          "required": false
+        },
+        "text_def": {
+          "kind": "text",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "richText_def": {
+          "kind": "richText",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "integer_def": {
+          "kind": "integer",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": 1
+          }
+        },
+        "float_def": {
+          "kind": "float",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": 1.5
+          }
+        },
+        "boolean_def": {
+          "kind": "boolean",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": true
+          }
+        },
+        "datetime_def": {
+          "kind": "datetime",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "uuid_def": {
+          "kind": "uuid",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "email_def": {
+          "kind": "email",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "bigInt_def": {
+          "kind": "bigInt",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": 1
+          }
+        },
+        "bytes_def": {
+          "kind": "bytes",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "smallInt_def": {
+          "kind": "smallInt",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": 1
+          }
+        },
+        "date_def": {
+          "kind": "date",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "timestamp_def": {
+          "kind": "timestamp",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "money_def": {
+          "kind": "money",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": 1
+          }
+        },
+        "url_def": {
+          "kind": "url",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "ip_def": {
+          "kind": "ip",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "cidr_def": {
+          "kind": "cidr",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "macaddr_def": {
+          "kind": "macaddr",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "interval_def": {
+          "kind": "interval",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "tsQuery_def": {
+          "kind": "tsQuery",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "tsVector_def": {
+          "kind": "tsVector",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "xml_def": {
+          "kind": "xml",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "color_def": {
+          "kind": "color",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "slug_def": {
+          "kind": "slug",
+          "required": false,
+          "from": "text_plain",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "enum_def": {
+          "kind": "enum",
+          "required": false,
+          "values": [
+            "a",
+            "b",
+            "c"
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "TEXT"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "json_def": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "button_def": {
+          "kind": "button",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "decimal_def": {
+          "kind": "decimal",
+          "required": false,
+          "precision": 18,
+          "scale": 4,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": 1
+          }
+        },
+        "image_def": {
+          "kind": "image",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "file_def": {
+          "kind": "file",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "blocks_def": {
+          "kind": "blocks",
+          "required": false,
+          "blocks": [
+            {
+              "name": "hero",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "TEXT",
+                  "required": true,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            }
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "serial_def": {
+          "kind": "serial",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": 1
+          }
+        },
+        "bigSerial_def": {
+          "kind": "bigSerial",
+          "required": false,
+          "default": {
+            "kind": "value",
+            "value": 1
+          }
+        },
+        "array_def": {
+          "kind": "array",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT[]",
+              "elementType": "TEXT"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "geo_def": {
+          "kind": "geo",
+          "required": false,
+          "geoType": "point",
+          "srid": 4326,
+          "annotations": {
+            "db": {
+              "pgType": "GEOGRAPHY(POINT,4326)"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        },
+        "vector_def": {
+          "kind": "vector",
+          "required": false,
+          "dimensions": 8,
+          "annotations": {
+            "db": {
+              "pgType": "vector(8)"
+            }
+          },
+          "default": {
+            "kind": "value",
+            "value": "x"
+          }
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "every_defaulted"
+        }
+      }
+    },
+    {
+      "name": "EveryReadOnly",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "text_plain": {
+          "kind": "text",
+          "required": false
+        },
+        "text_ro": {
+          "kind": "text",
+          "required": false,
+          "readOnly": true
+        },
+        "richText_ro": {
+          "kind": "richText",
+          "required": false,
+          "readOnly": true
+        },
+        "integer_ro": {
+          "kind": "integer",
+          "required": false,
+          "readOnly": true
+        },
+        "float_ro": {
+          "kind": "float",
+          "required": false,
+          "readOnly": true
+        },
+        "boolean_ro": {
+          "kind": "boolean",
+          "required": false,
+          "readOnly": true
+        },
+        "datetime_ro": {
+          "kind": "datetime",
+          "required": false,
+          "readOnly": true
+        },
+        "uuid_ro": {
+          "kind": "uuid",
+          "required": false,
+          "readOnly": true
+        },
+        "email_ro": {
+          "kind": "email",
+          "required": false,
+          "readOnly": true
+        },
+        "bigInt_ro": {
+          "kind": "bigInt",
+          "required": false,
+          "readOnly": true
+        },
+        "bytes_ro": {
+          "kind": "bytes",
+          "required": false,
+          "readOnly": true
+        },
+        "smallInt_ro": {
+          "kind": "smallInt",
+          "required": false,
+          "readOnly": true
+        },
+        "date_ro": {
+          "kind": "date",
+          "required": false,
+          "readOnly": true
+        },
+        "timestamp_ro": {
+          "kind": "timestamp",
+          "required": false,
+          "readOnly": true
+        },
+        "money_ro": {
+          "kind": "money",
+          "required": false,
+          "readOnly": true
+        },
+        "url_ro": {
+          "kind": "url",
+          "required": false,
+          "readOnly": true
+        },
+        "ip_ro": {
+          "kind": "ip",
+          "required": false,
+          "readOnly": true
+        },
+        "cidr_ro": {
+          "kind": "cidr",
+          "required": false,
+          "readOnly": true
+        },
+        "macaddr_ro": {
+          "kind": "macaddr",
+          "required": false,
+          "readOnly": true
+        },
+        "interval_ro": {
+          "kind": "interval",
+          "required": false,
+          "readOnly": true
+        },
+        "tsQuery_ro": {
+          "kind": "tsQuery",
+          "required": false,
+          "readOnly": true
+        },
+        "tsVector_ro": {
+          "kind": "tsVector",
+          "required": false,
+          "readOnly": true
+        },
+        "xml_ro": {
+          "kind": "xml",
+          "required": false,
+          "readOnly": true
+        },
+        "color_ro": {
+          "kind": "color",
+          "required": false,
+          "readOnly": true
+        },
+        "slug_ro": {
+          "kind": "slug",
+          "required": false,
+          "from": "text_plain",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true
+            }
+          },
+          "readOnly": true
+        },
+        "enum_ro": {
+          "kind": "enum",
+          "required": false,
+          "values": [
+            "a",
+            "b",
+            "c"
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "TEXT"
+            }
+          },
+          "readOnly": true
+        },
+        "json_ro": {
+          "kind": "json",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "readOnly": true
+        },
+        "button_ro": {
+          "kind": "button",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "readOnly": true
+        },
+        "decimal_ro": {
+          "kind": "decimal",
+          "required": false,
+          "precision": 18,
+          "scale": 4,
+          "annotations": {
+            "db": {
+              "pgType": "NUMERIC"
+            }
+          },
+          "readOnly": true
+        },
+        "image_ro": {
+          "kind": "image",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "readOnly": true
+        },
+        "file_ro": {
+          "kind": "file",
+          "required": false,
+          "bucket": "assets",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "readOnly": true
+        },
+        "blocks_ro": {
+          "kind": "blocks",
+          "required": false,
+          "blocks": [
+            {
+              "name": "hero",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "TEXT",
+                  "required": true,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            }
+          ],
+          "annotations": {
+            "db": {
+              "pgType": "JSONB"
+            }
+          },
+          "readOnly": true
+        },
+        "serial_ro": {
+          "kind": "serial",
+          "required": false,
+          "readOnly": true
+        },
+        "bigSerial_ro": {
+          "kind": "bigSerial",
+          "required": false,
+          "readOnly": true
+        },
+        "array_ro": {
+          "kind": "array",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT[]",
+              "elementType": "TEXT"
+            }
+          },
+          "readOnly": true
+        },
+        "geo_ro": {
+          "kind": "geo",
+          "required": false,
+          "geoType": "point",
+          "srid": 4326,
+          "annotations": {
+            "db": {
+              "pgType": "GEOGRAPHY(POINT,4326)"
+            }
+          },
+          "readOnly": true
+        },
+        "vector_ro": {
+          "kind": "vector",
+          "required": false,
+          "dimensions": 8,
+          "annotations": {
+            "db": {
+              "pgType": "vector(8)"
+            }
+          },
+          "readOnly": true
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "every_read_only"
+        }
+      }
+    },
+    {
+      "name": "Relations",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "owner": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "Every",
+          "required": false,
+          "annotations": {
+            "db": {
+              "foreignKey": "owner_id"
+            }
+          }
+        },
+        "children": {
+          "kind": "relation",
+          "cardinality": "hasMany",
+          "target": "Every",
+          "required": false
+        },
+        "profile": {
+          "kind": "relation",
+          "cardinality": "hasOne",
+          "target": "Every",
+          "required": false
+        },
+        "tags": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Every",
+          "required": false,
+          "through": "relations_every"
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "relations"
+        }
+      }
+    },
+    {
+      "name": "Composites",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "timestamps": {
+          "kind": "timestamps"
+        },
+        "publishable": {
+          "kind": "publishable"
+        },
+        "softDelete": {
+          "kind": "softDelete"
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "composites"
+        }
+      }
+    }
+  ]
+}

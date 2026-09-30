@@ -64,7 +64,8 @@ jobs:
             --test storage_grant_tests \
             --test seed_ir_tests \
             --test seed_validate_tests \
-            --test seed_plan_tests
+            --test seed_plan_tests \
+            --test conformance_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})

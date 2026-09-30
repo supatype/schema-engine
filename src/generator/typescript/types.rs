@@ -179,12 +179,17 @@ pub(crate) fn emit_fields(model: &ModelAst, mode: Mode, out: &mut String, ind: &
             FieldAst::SoftDelete => emit_soft_delete(mode, out, ind),
             other => {
                 let (ts, nullable) = ts_type_of(other);
+                // Widen before wrapping, not after. A localized column holds one value per
+                // locale and the trigger normalises each of them, so prose is accepted per
+                // locale: `LocalizedValue<RichText | string>`. Widening the wrapper instead
+                // says a bare string is a valid write to the column, which the trigger then
+                // stores as a single document where a locale map belongs.
+                let ts = widen_for_writes(other, &ts, mode);
                 let ts = if crate::parser::accessors::is_localized(other) {
                     format!("LocalizedValue<{ts}>")
                 } else {
                     ts
                 };
-                let ts = widen_for_writes(other, &ts, mode);
                 let has_def = field_has_default(other);
                 emit_one(name, &ts, nullable, has_def, mode, out, ind);
             }
