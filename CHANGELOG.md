@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/supatype/schema-engine/compare/v0.4.1...v0.4.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* **generate:** widen a localised rich text column inside the locale map ([c3c3040](https://github.com/supatype/schema-engine/commit/c3c30409d75f33fa1893784dfe15e84989b77c19))
+* **generate:** widen a localised rich text column inside the locale map ([63c1c49](https://github.com/supatype/schema-engine/commit/63c1c49a9e21c14cb253b8cbe0d5f80a4c6bea4a))
+
 ## [0.4.1](https://github.com/supatype/schema-engine/compare/v0.4.0...v0.4.1) (2026-09-29)
 
 
