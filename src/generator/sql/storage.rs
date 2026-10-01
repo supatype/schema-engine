@@ -11,8 +11,14 @@ use anyhow::Result;
 ///   3. RLS policies on `storage.objects`, from each bucket's rules or the models that use it.
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     if ast.storage_buckets.is_empty() {
-        return Ok("-- No storage buckets declared in schema.\n".to_string());
+        // Still swept: a schema that has just removed its last bucket must take that bucket's
+        // policies with it, or they keep granting what the schema no longer declares.
+        return Ok(format!(
+            "-- No storage buckets declared in schema.\n\n{}",
+            retire_unexpected_policies_sql(&[])
+        ));
     }
+    refuse_colliding_policy_labels(ast)?;
 
     let mut out = String::new();
 
@@ -28,6 +34,27 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
     out.push_str(&generate_storage_rls(ast));
 
     Ok(out)
+}
+
+/// Refuse two bucket ids whose policies would share names.
+///
+/// A policy is named from the bucket id with every non-alphanumeric character made `_`, so
+/// `user-avatars` and `user_avatars` both name `storage_user_avatars_*`, and whichever renders
+/// second drops the first one's policies. The first bucket would then be refused everything while
+/// its warnings said it was covered.
+fn refuse_colliding_policy_labels(ast: &SchemaAst) -> Result<()> {
+    let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+    for bucket in &ast.storage_buckets {
+        let label = storage_policy_label(&bucket.id);
+        if let Some(other) = seen.insert(label.clone(), &bucket.id) {
+            anyhow::bail!(
+                "Buckets \"{other}\" and \"{}\" would share storage policy names \
+                 (storage_{label}_*), so one would remove the other's access rules. Rename one of them.",
+                bucket.id
+            );
+        }
+    }
+    Ok(())
 }
 
 /// DDL that sets up the storage schema and tables.
@@ -366,6 +393,13 @@ fn object_policy_sets(ast: &SchemaAst) -> Vec<ObjectPolicies<'_>> {
 /// the schema, a model renamed, or a file field pointed elsewhere leaves policies no set names, and
 /// a permissive policy left behind is ORed with whatever replaced it. The managed marker is what
 /// tells ours from a policy someone wrote by hand, which this never touches.
+///
+/// Engines before the marker wrote bucket policies as `storage_<label>_sel|ins|del` with no comment,
+/// so an unmarked policy of exactly that shape is treated as ours too. Left behind they matter more
+/// than they did: the caller roles now hold INSERT, UPDATE and DELETE, so an old "any signed-in
+/// user" delete policy would take effect. A model's policies from before the marker
+/// (`<table>_<bucket>_*`) cannot be told from a hand-written one once the model is gone, so those
+/// are left alone.
 fn retire_unexpected_policies_sql(sets: &[ObjectPolicies<'_>]) -> String {
     let expected = sets
         .iter()
@@ -378,10 +412,13 @@ fn retire_unexpected_policies_sql(sets: &[ObjectPolicies<'_>]) -> String {
         "DO $retire_storage_policies$\n\
          DECLARE p record;\n\
          BEGIN\n  \
+           IF to_regclass('storage.objects') IS NULL THEN RETURN; END IF;\n  \
            FOR p IN\n    \
              SELECT polname FROM pg_policy\n     \
               WHERE polrelid = 'storage.objects'::regclass\n       \
-                AND obj_description(oid, 'pg_policy') LIKE '{marker}'\n       \
+                AND (obj_description(oid, 'pg_policy') LIKE '{marker}'\n         \
+                     OR (obj_description(oid, 'pg_policy') IS NULL\n             \
+                         AND polname ~ '^storage_[A-Za-z0-9_]+_(sel|ins|del)$'))\n       \
                 AND polname <> ALL (ARRAY[{expected}]::text[])\n  \
            LOOP\n    \
              EXECUTE format('DROP POLICY %I ON storage.objects', p.polname);\n  \
@@ -442,6 +479,35 @@ pub fn rule_warnings(ast: &SchemaAst) -> Vec<String> {
                 bucket.id, names.key, names.refused, names.key,
             ));
         }
+        warnings.extend(unreadable_change_warnings(&sets, &bucket.id));
     }
     warnings
+}
+
+/// An update or delete rule with no read rule beside it does nothing, and says nothing.
+///
+/// Postgres applies a table's SELECT policies to the rows an UPDATE or DELETE reads in its `WHERE`,
+/// so with no read policy those commands match no rows. Warned even on a public bucket, whose public
+/// URL serves files without asking the read policy: that is the case it is easiest to miss.
+fn unreadable_change_warnings(sets: &[ObjectPolicies<'_>], bucket_id: &str) -> Vec<String> {
+    let allows = |op: ObjectOp| {
+        let i = ObjectOp::ALL.iter().position(|o| *o == op).unwrap_or(0);
+        sets.iter()
+            .any(|s| s.bucket_id == bucket_id && s.rules[i].is_some())
+    };
+    if allows(ObjectOp::Read) {
+        return Vec::new();
+    }
+    [ObjectOp::Update, ObjectOp::Delete]
+        .into_iter()
+        .filter(|op| allows(*op))
+        .map(|op| {
+            format!(
+                "Bucket \"{bucket_id}\" declares {} but no read rule: Postgres only lets a caller change \
+                 objects it can read, so {} match nothing. Add a `read` rule.",
+                op.names().key,
+                if op == ObjectOp::Update { "overwrites" } else { "deletes" },
+            )
+        })
+        .collect()
 }

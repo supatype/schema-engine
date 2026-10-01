@@ -251,3 +251,59 @@ fn objects_carry_the_version_their_bytes_are_stored_under() {
         "got:\n{sql}"
     );
 }
+
+#[test]
+fn removing_the_last_bucket_still_sweeps_the_policies_it_had() {
+    // With no buckets the generator used to return early, so nothing dropped what an earlier push
+    // had created and the caller roles kept every grant those policies relied on.
+    let sql = storage::generate(&ast_for("", "")).expect("storage sql generates");
+    assert!(sql.contains("DO $retire_storage_policies$"), "got:\n{sql}");
+    assert!(
+        sql.contains("ARRAY[]::text[]"),
+        "nothing is expected, so everything marked goes:\n{sql}"
+    );
+    assert!(
+        sql.contains("to_regclass('storage.objects') IS NULL"),
+        "a database that never had storage has nothing to sweep:\n{sql}"
+    );
+}
+
+#[test]
+fn the_sweep_also_reaches_bucket_policies_older_engines_left_unmarked() {
+    // Older engines wrote `storage_<label>_sel|ins|del` with no marker. Left behind, they now take
+    // effect, because the caller roles hold INSERT, UPDATE and DELETE.
+    let sql = sql_for(AVATARS_READ_CREATE, "");
+    assert!(
+        sql.contains("polname ~ '^storage_[A-Za-z0-9_]+_(sel|ins|del)$'"),
+        "got:\n{sql}"
+    );
+}
+
+#[test]
+fn an_update_or_delete_rule_without_a_read_rule_is_warned_about_even_on_a_public_bucket() {
+    // Postgres only lets a caller change rows it can read, so with no read policy these rules
+    // match nothing, silently.
+    let public_delete_only = r#"{
+      "id": "drop", "public": true, "accessMode": "public",
+      "access": { "create": { "type": "authenticated" }, "delete": { "type": "owner", "field": "owner_id" } }
+    }"#;
+    let joined = warnings_for(public_delete_only, "").join("\n");
+    assert!(
+        joined.contains("Bucket \"drop\" declares delete but no read rule"),
+        "{joined}"
+    );
+}
+
+#[test]
+fn two_bucket_ids_with_the_same_policy_names_are_refused() {
+    // `user-avatars` and `user_avatars` both become `storage_user_avatars_*`, so one bucket's
+    // drops would remove the other's policies.
+    let two = r#"{ "id": "user-avatars", "public": false, "accessMode": "private" },
+                 { "id": "user_avatars", "public": false, "accessMode": "private" }"#;
+    let err = storage::generate(&ast_for(two, "")).expect_err("must refuse");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("user-avatars") && msg.contains("user_avatars"),
+        "{msg}"
+    );
+}
