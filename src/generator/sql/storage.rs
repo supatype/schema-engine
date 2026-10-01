@@ -1,11 +1,14 @@
-use crate::parser::ast::{AccessRule, FieldAst, SchemaAst, StorageAccessMode, StorageBucketAst};
+use crate::managed::{managed_comment, MANAGED_PREFIX};
+use crate::parser::ast::{
+    AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageAccessMode, StorageBucketAst,
+};
 use crate::parser::resolver::{bucket_uses_declared_storage_rls, storage_policy_label};
 use anyhow::Result;
 
 /// Generates SQL for the storage subsystem:
 ///   1. `storage` schema + `storage.buckets` + `storage.objects` DDL (idempotent).
 ///   2. UPSERT for every bucket inferred from image/file fields.
-///   3. RLS policies on `storage.objects` inheriting model access rules.
+///   3. RLS policies on `storage.objects`, from each bucket's rules or the models that use it.
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     if ast.storage_buckets.is_empty() {
         return Ok("-- No storage buckets declared in schema.\n".to_string());
@@ -22,16 +25,13 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         out.push('\n');
     }
 
-    let rls = generate_storage_rls(ast);
-    if !rls.is_empty() {
-        out.push_str(&rls);
-    }
+    out.push_str(&generate_storage_rls(ast));
 
     Ok(out)
 }
 
 /// DDL that sets up the storage schema and tables.
-/// Safe to run repeatedly — uses IF NOT EXISTS throughout.
+/// Safe to run repeatedly: it uses IF NOT EXISTS throughout.
 pub fn storage_schema_ddl() -> &'static str {
     r#"-- Storage schema
 -- Safe to run repeatedly (IF NOT EXISTS / CREATE OR REPLACE).
@@ -59,10 +59,16 @@ CREATE TABLE IF NOT EXISTS storage.objects (
     name        TEXT NOT NULL,
     owner       UUID,
     metadata    JSONB,
+    version     TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (bucket_id, name)
 );
+
+-- The key the live bytes are stored under is `name/<version>`, a fresh one per upload, so an
+-- overwrite never replaces the bytes being served until its row commits. Null means the bytes are
+-- at `name`, which is where every object written before versions lives.
+ALTER TABLE storage.objects ADD COLUMN IF NOT EXISTS version TEXT;
 
 "#
 }
@@ -165,197 +171,277 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
     }
 }
 
-fn access_exprs_for_bucket(
-    bucket_id: &str,
-    access: &crate::parser::ast::AccessAst,
-) -> (String, String, String) {
-    let b = sql_quote_bucket_id(bucket_id);
-    let read_expr = access
-        .read
-        .as_ref()
-        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_storage_expr(r)))
-        .unwrap_or_else(|| format!("bucket_id = '{b}' AND auth.uid() IS NOT NULL"));
-    let write_expr = access
-        .create
-        .as_ref()
-        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_storage_expr(r)))
-        .unwrap_or_else(|| format!("bucket_id = '{b}' AND auth.uid() IS NOT NULL"));
-    let delete_expr = access
-        .delete
-        .as_ref()
-        .map(|r| format!("bucket_id = '{b}' AND ({})", access_rule_to_storage_expr(r)))
-        .unwrap_or_else(|| format!("bucket_id = '{b}' AND auth.uid() IS NOT NULL"));
-    (read_expr, write_expr, delete_expr)
+/// The four operations on `storage.objects`, each governed by its own rule.
+///
+/// A rule that is left out produces no policy, and with RLS on, an operation no policy allows is
+/// refused. That is the deny-by-default models already have. Buckets used to fill a missing rule
+/// with "any signed-in user", which for `delete` meant anyone could remove anyone's files.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ObjectOp {
+    Read,
+    Create,
+    Update,
+    Delete,
+}
+
+/// What an operation is called: in the schema, in its policy's name, and in a warning.
+struct OpNames {
+    key: &'static str,
+    /// `sel`, `ins` and `del` predate `update` and are kept so a push still replaces the policies
+    /// earlier engines created.
+    suffix: &'static str,
+    refused: &'static str,
+}
+
+impl ObjectOp {
+    const ALL: [ObjectOp; 4] = [Self::Read, Self::Create, Self::Update, Self::Delete];
+
+    fn rule(self, access: &AccessAst) -> Option<&AccessRule> {
+        match self {
+            Self::Read => access.read.as_ref(),
+            Self::Create => access.create.as_ref(),
+            Self::Update => access.update.as_ref(),
+            Self::Delete => access.delete.as_ref(),
+        }
+    }
+
+    fn names(self) -> OpNames {
+        let (key, suffix, refused) = match self {
+            Self::Read => ("read", "sel", "reads through the API are refused"),
+            Self::Create => ("create", "ins", "uploads are refused"),
+            Self::Update => ("update", "upd", "overwrites are refused"),
+            Self::Delete => ("delete", "del", "deletes are refused"),
+        };
+        OpNames {
+            key,
+            suffix,
+            refused,
+        }
+    }
+
+    fn clause(self, expr: &str) -> String {
+        match self {
+            Self::Read => format!("FOR SELECT USING (\n    {expr}\n  )"),
+            Self::Create => format!("FOR INSERT WITH CHECK (\n    {expr}\n  )"),
+            // An overwrite may only replace an object the rule allows, and only with one the rule
+            // still allows, so the same rule is both the row selection and the result check.
+            Self::Update => {
+                format!("FOR UPDATE USING (\n    {expr}\n  ) WITH CHECK (\n    {expr}\n  )")
+            }
+            Self::Delete => format!("FOR DELETE USING (\n    {expr}\n  )"),
+        }
+    }
+}
+
+/// One named set of policies on `storage.objects`: a bucket's own, or a model's for a bucket one
+/// of its file fields uses. `rules` is indexed like [`ObjectOp::ALL`]; a set with none declared
+/// renders as drops only, which is what retires it.
+struct ObjectPolicies<'a> {
+    name: String,
+    bucket_id: &'a str,
+    comment: String,
+    rules: [Option<&'a AccessRule>; 4],
+}
+
+impl<'a> ObjectPolicies<'a> {
+    fn new(
+        name: String,
+        comment: String,
+        bucket_id: &'a str,
+        access: Option<&'a AccessAst>,
+    ) -> Self {
+        let rules = ObjectOp::ALL.map(|op| access.and_then(|a| op.rule(a)));
+        Self {
+            name,
+            bucket_id,
+            comment,
+            rules,
+        }
+    }
+
+    fn policy_name(&self, op: ObjectOp) -> String {
+        format!("{}_{}", self.name, op.names().suffix)
+    }
+
+    /// The names of the policies this set creates.
+    fn created(&self) -> impl Iterator<Item = String> + '_ {
+        ObjectOp::ALL
+            .into_iter()
+            .zip(&self.rules)
+            .filter(|(_, rule)| rule.is_some())
+            .map(|(op, _)| self.policy_name(op))
+    }
+
+    fn render(&self) -> String {
+        let b = sql_quote_bucket_id(self.bucket_id);
+        let mut out = format!("-- {}\n", self.comment);
+        for (op, rule) in ObjectOp::ALL.into_iter().zip(&self.rules) {
+            let policy = self.policy_name(op);
+            // Dropped whether or not the rule is still declared. A rule removed from the schema
+            // has to take its policy with it, or the access it granted outlives the rule.
+            out.push_str(&format!(
+                "DROP POLICY IF EXISTS \"{policy}\" ON storage.objects;\n"
+            ));
+            let Some(rule) = rule else { continue };
+            let expr = format!(
+                "bucket_id = '{b}' AND ({})",
+                access_rule_to_storage_expr(rule)
+            );
+            let marker = managed_comment(STORAGE_POLICY_KIND, "objects", &[&policy]);
+            out.push_str(&format!(
+                "CREATE POLICY \"{policy}\" ON storage.objects\n  {};\n\
+                 COMMENT ON POLICY \"{policy}\" ON storage.objects IS '{}';\n",
+                op.clause(&expr),
+                marker.replace('\'', "''"),
+            ));
+        }
+        out.push('\n');
+        out
+    }
+}
+
+/// The `kind` in the managed marker on every policy this module creates.
+const STORAGE_POLICY_KIND: &str = "storage_policy";
+
+/// Each `(model, bucket)` pair where a model's file or image field stores into the bucket.
+fn model_bucket_uses(ast: &SchemaAst) -> Vec<(&ModelAst, &str)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut uses = Vec::new();
+    for model in &ast.models {
+        for field in model.fields.values() {
+            let bucket_id = match field {
+                FieldAst::Image(s) | FieldAst::File(s) => s.bucket.as_str(),
+                _ => continue,
+            };
+            if seen.insert((model.table_name(), bucket_id)) {
+                uses.push((model, bucket_id));
+            }
+        }
+    }
+    uses
+}
+
+/// Every policy set on `storage.objects`, in emission order.
+///
+/// A bucket that declares its own `access` uses that and nothing else, so any set a model would
+/// otherwise contribute for it is retired: left in place, it would be ORed with the bucket's rules
+/// and grant what the bucket no longer does. A bucket that declares nothing still gets its own
+/// set, retired, so the policies it had while it did declare rules are removed.
+fn object_policy_sets(ast: &SchemaAst) -> Vec<ObjectPolicies<'_>> {
+    let mut sets = Vec::new();
+    let mut declared = std::collections::HashSet::new();
+    for bucket in &ast.storage_buckets {
+        let label = storage_policy_label(&bucket.id);
+        let own = bucket
+            .access
+            .as_ref()
+            .filter(|_| bucket_uses_declared_storage_rls(bucket));
+        if own.is_some() {
+            declared.insert(bucket.id.as_str());
+        }
+        sets.push(ObjectPolicies::new(
+            format!("storage_{label}"),
+            format!("Declarative storage policies for bucket id (sanitized label: {label})"),
+            &bucket.id,
+            own,
+        ));
+    }
+
+    for (model, bucket_id) in model_bucket_uses(ast) {
+        let table = model.table_name();
+        let access = (!declared.contains(bucket_id)).then(|| model.access());
+        sets.push(ObjectPolicies::new(
+            format!("{table}_{bucket_id}"),
+            format!("Storage policies for model '{table}', bucket '{bucket_id}'"),
+            bucket_id,
+            access,
+        ));
+    }
+    sets
+}
+
+/// Drop every policy this module created on an earlier push that the schema no longer asks for.
+///
+/// The per-set drops only reach names the current schema can still spell. A bucket removed from
+/// the schema, a model renamed, or a file field pointed elsewhere leaves policies no set names, and
+/// a permissive policy left behind is ORed with whatever replaced it. The managed marker is what
+/// tells ours from a policy someone wrote by hand, which this never touches.
+fn retire_unexpected_policies_sql(sets: &[ObjectPolicies<'_>]) -> String {
+    let expected = sets
+        .iter()
+        .flat_map(ObjectPolicies::created)
+        .map(|name| format!("'{}'", name.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let marker = format!("{MANAGED_PREFIX};kind={STORAGE_POLICY_KIND};%");
+    format!(
+        "DO $retire_storage_policies$\n\
+         DECLARE p record;\n\
+         BEGIN\n  \
+           FOR p IN\n    \
+             SELECT polname FROM pg_policy\n     \
+              WHERE polrelid = 'storage.objects'::regclass\n       \
+                AND obj_description(oid, 'pg_policy') LIKE '{marker}'\n       \
+                AND polname <> ALL (ARRAY[{expected}]::text[])\n  \
+           LOOP\n    \
+             EXECUTE format('DROP POLICY %I ON storage.objects', p.polname);\n  \
+           END LOOP;\n\
+         END\n\
+         $retire_storage_policies$;\n\n"
+    )
 }
 
 /// Generates RLS policies for `storage.objects`.
 /// Buckets with declarative `access` get a single policy set per bucket; others inherit model `access`.
 fn generate_storage_rls(ast: &SchemaAst) -> String {
     let mut out = String::new();
-
-    let mut bucket_level = Vec::new();
-    for bucket in &ast.storage_buckets {
-        if !bucket_uses_declared_storage_rls(bucket) {
-            continue;
-        }
-        let Some(access) = bucket.access.as_ref() else {
-            continue;
-        };
-        let label = storage_policy_label(&bucket.id);
-        let bq = sql_quote_bucket_id(&bucket.id);
-        let (read_expr, write_expr, delete_expr) = access_exprs_for_bucket(&bucket.id, access);
-        bucket_level.push((label, bq, read_expr, write_expr, delete_expr));
-    }
-
-    struct ModelBucketAccess<'a> {
-        table: &'a str,
-        bucket_id: &'a str,
-        read_expr: String,
-        write_expr: String,
-        delete_expr: String,
-    }
-
-    let declared: std::collections::HashSet<String> = ast
-        .storage_buckets
-        .iter()
-        .filter(|b| bucket_uses_declared_storage_rls(b))
-        .map(|b| b.id.clone())
-        .collect();
-
-    let mut model_entries: Vec<ModelBucketAccess<'_>> = Vec::new();
-
-    for model in &ast.models {
-        for field in model.fields.values() {
-            let bucket_id = match field {
-                FieldAst::Image(s) | FieldAst::File(s) => &s.bucket,
-                _ => continue,
-            };
-
-            if declared.contains(bucket_id.as_str()) {
-                continue;
-            }
-
-            let already = model_entries
-                .iter()
-                .any(|e| e.table == model.table_name() && e.bucket_id == bucket_id.as_str());
-            if already {
-                continue;
-            }
-
-            let bq = sql_quote_bucket_id(bucket_id);
-            let read_expr = model
-                .access()
-                .read
-                .as_ref()
-                .map(|r| {
-                    format!(
-                        "bucket_id = '{bq}' AND ({})",
-                        access_rule_to_storage_expr(r)
-                    )
-                })
-                .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
-
-            let write_expr = model
-                .access()
-                .create
-                .as_ref()
-                .map(|r| {
-                    format!(
-                        "bucket_id = '{bq}' AND ({})",
-                        access_rule_to_storage_expr(r)
-                    )
-                })
-                .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
-
-            let delete_expr = model
-                .access()
-                .delete
-                .as_ref()
-                .map(|r| {
-                    format!(
-                        "bucket_id = '{bq}' AND ({})",
-                        access_rule_to_storage_expr(r)
-                    )
-                })
-                .unwrap_or_else(|| format!("bucket_id = '{bq}' AND auth.uid() IS NOT NULL"));
-
-            model_entries.push(ModelBucketAccess {
-                table: model.table_name(),
-                bucket_id,
-                read_expr,
-                write_expr,
-                delete_expr,
-            });
-        }
-    }
-
-    if bucket_level.is_empty() && model_entries.is_empty() {
-        return out;
-    }
-
     out.push_str("-- Storage RLS\n\n");
     out.push_str("ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;\n\n");
 
     // Immediately after the ENABLE, never before it, and never without it.
     //
-    // The policies below are the bucket's declared read rule, and until now nothing evaluated
-    // them: the storage service connects as a superuser, which bypasses row level security, and
-    // decided access itself from `access_mode` alone. That hardcoded owner-only for every private
-    // bucket, so a bucket declaring `read: BucketLoggedIn` refused every caller but the uploader
-    // while the correct policy sat unreached.
-    //
-    // The service now switches to the caller's role and asks Postgres. That is refused before RLS
-    // is consulted unless the role can select the table at all, and no role held a grant here.
-    //
-    // Safe only because RLS is on: a bucket with no policy default-denies, so this exposes exactly
-    // what the schema said to expose and nothing else. The ordering is asserted by a test, because
-    // a grant that preceded the ENABLE would publish every object in the project.
-    out.push_str("GRANT SELECT ON storage.objects TO anon, authenticated;\n\n");
+    // The storage service runs every read, write and delete as the caller, so the policies below
+    // decide. A role is refused before RLS is consulted unless it holds the grant for the command,
+    // so each caller role needs all four. That is safe only because RLS is on: an operation no
+    // policy allows is refused, so this exposes exactly what the schema declared. The ordering is
+    // asserted by a test, because a grant that preceded the ENABLE would let any caller read,
+    // replace or delete every object in the project.
+    out.push_str("GRANT USAGE ON SCHEMA storage TO anon, authenticated;\n");
+    out.push_str(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON storage.objects TO anon, authenticated;\n\n",
+    );
 
-    for (label, _bq, read_expr, write_expr, delete_expr) in &bucket_level {
-        let select_policy = format!("storage_{label}_sel");
-        let insert_policy = format!("storage_{label}_ins");
-        let delete_policy = format!("storage_{label}_del");
-        out.push_str(&format!(
-            "-- Declarative storage policies for bucket id (sanitized label: {label})\n\
-             DROP POLICY IF EXISTS \"{select_policy}\" ON storage.objects;\n\
-             CREATE POLICY \"{select_policy}\" ON storage.objects\n  \
-               FOR SELECT USING (\n    {read_expr}\n  );\n\n\
-             DROP POLICY IF EXISTS \"{insert_policy}\" ON storage.objects;\n\
-             CREATE POLICY \"{insert_policy}\" ON storage.objects\n  \
-               FOR INSERT WITH CHECK (\n    {write_expr}\n  );\n\n\
-             DROP POLICY IF EXISTS \"{delete_policy}\" ON storage.objects;\n\
-             CREATE POLICY \"{delete_policy}\" ON storage.objects\n  \
-               FOR DELETE USING (\n    {delete_expr}\n  );\n\n",
-            read_expr = read_expr,
-            write_expr = write_expr,
-            delete_expr = delete_expr,
-        ));
+    let sets = object_policy_sets(ast);
+    out.push_str(&retire_unexpected_policies_sql(&sets));
+    for set in &sets {
+        out.push_str(&set.render());
     }
-
-    for e in &model_entries {
-        let table = e.table;
-        let bucket_id = e.bucket_id;
-        let select_policy = format!("{table}_{bucket_id}_sel");
-        let insert_policy = format!("{table}_{bucket_id}_ins");
-        let delete_policy = format!("{table}_{bucket_id}_del");
-
-        out.push_str(&format!(
-            "-- Storage policies for model '{table}', bucket '{bucket_id}'\n\
-             DROP POLICY IF EXISTS \"{select_policy}\" ON storage.objects;\n\
-             CREATE POLICY \"{select_policy}\" ON storage.objects\n  \
-               FOR SELECT USING (\n    {read_expr}\n  );\n\n\
-             DROP POLICY IF EXISTS \"{insert_policy}\" ON storage.objects;\n\
-             CREATE POLICY \"{insert_policy}\" ON storage.objects\n  \
-               FOR INSERT WITH CHECK (\n    {write_expr}\n  );\n\n\
-             DROP POLICY IF EXISTS \"{delete_policy}\" ON storage.objects;\n\
-             CREATE POLICY \"{delete_policy}\" ON storage.objects\n  \
-               FOR DELETE USING (\n    {delete_expr}\n  );\n\n",
-            read_expr = e.read_expr,
-            write_expr = e.write_expr,
-            delete_expr = e.delete_expr,
-        ));
-    }
-
     out
+}
+
+/// One warning per bucket operation that no rule allows, so a refusal is never a surprise.
+///
+/// Rules left out are refused, the same as for models. The read warning is skipped for a bucket
+/// whose `accessMode` is `public`, because its public URL serves files without asking the policy.
+pub fn rule_warnings(ast: &SchemaAst) -> Vec<String> {
+    let sets = object_policy_sets(ast);
+    let mut warnings = Vec::new();
+    for bucket in &ast.storage_buckets {
+        let public = matches!(bucket.access_mode, Some(StorageAccessMode::Public));
+        for (i, op) in ObjectOp::ALL.into_iter().enumerate() {
+            let allowed = sets
+                .iter()
+                .any(|s| s.bucket_id == bucket.id && s.rules[i].is_some());
+            if allowed || (op == ObjectOp::Read && public) {
+                continue;
+            }
+            let names = op.names();
+            warnings.push(format!(
+                "Bucket \"{}\" declares no {} rule: {}. Add `{}: BucketOwner` (or another rule) \
+                 to its access to allow them.",
+                bucket.id, names.key, names.refused, names.key,
+            ));
+        }
+    }
+    warnings
 }

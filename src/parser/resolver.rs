@@ -76,7 +76,7 @@ fn check_plugin_versions(ast: &mut SchemaAst) {
         if plugin.plugin_api != SUPPORTED_PLUGIN_API {
             ast.warnings.push(format!(
                 "Plugin '{}' declares pluginApi {} but this engine supports pluginApi {}. \
-                 The plugin may not work correctly — update it or check compatibility.",
+                 The plugin may not work correctly. Update it or check compatibility.",
                 plugin.name, plugin.plugin_api, SUPPORTED_PLUGIN_API
             ));
         }
@@ -137,7 +137,7 @@ fn resolve_storage_buckets(ast: &mut SchemaAst) -> Result<()> {
         use std::collections::hash_map::Entry;
         match by_id.entry(bucket_id.clone()) {
             Entry::Occupied(_) => {
-                // Declarative config takes precedence — do not patch from fields.
+                // Declarative config takes precedence, so do not patch from fields.
             }
             Entry::Vacant(v) => {
                 let public = matches!(field_access_mode.as_ref(), Some(StorageAccessMode::Public));
@@ -208,7 +208,10 @@ fn bucket_to_field_access_mode(bucket: &StorageBucketAst) -> StorageAccessMode {
 }
 
 fn bucket_has_explicit_storage_access(access: &AccessAst) -> bool {
-    access.read.is_some() || access.create.is_some() || access.delete.is_some()
+    access.read.is_some()
+        || access.create.is_some()
+        || access.update.is_some()
+        || access.delete.is_some()
 }
 
 pub(crate) fn bucket_uses_declared_storage_rls(bucket: &StorageBucketAst) -> bool {

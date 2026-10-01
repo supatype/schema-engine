@@ -102,7 +102,7 @@ fn test_storage_buckets_merge_and_declarative_rls() {
         .find(|x| x.id == "docs")
         .expect("docs bucket");
     assert_eq!(
-        b.allowed_mime_types.as_ref().map(|v| v.as_slice()),
+        b.allowed_mime_types.as_deref(),
         Some(&["application/pdf".to_string()][..])
     );
     assert_eq!(b.file_size_limit, Some(52428800));
@@ -110,8 +110,10 @@ fn test_storage_buckets_merge_and_declarative_rls() {
 
     let sql = storage::generate(&ast).unwrap();
     assert!(sql.contains("storage_docs_sel"));
+    // Named only to be dropped: a model policy left over from before the bucket declared rules
+    // would be ORed with them.
     assert!(
-        !sql.contains("posts_docs_sel"),
+        !sql.contains("CREATE POLICY \"posts_docs_sel\""),
         "declarative bucket RLS should suppress model/table-prefixed policies for that bucket"
     );
 }

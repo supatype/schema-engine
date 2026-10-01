@@ -25,7 +25,7 @@ pub struct DiffOutput {
     pub warnings: Vec<String>,
     /// Tables a model declares that already exist **and** carry no ownership marker.
     ///
-    /// Nothing that changes them may be emitted — not RLS, not policies, not grants, not security
+    /// Nothing that changes them may be emitted: not RLS, not policies, not grants, not security
     /// labels. Declaring a model is not permission to alter a table Supatype did not create: enabling
     /// row level security on it can stop another application reading its own data, and it is the same
     /// argument that would license dropping its columns.
@@ -35,8 +35,8 @@ pub struct DiffOutput {
     pub unmanaged_model_tables: Vec<String>,
     /// How field rules will be enforced on *this* database.
     ///
-    /// Decided here for the same reason as above: the answer is a property of the database — is the
-    /// masking extension installed? — and the generators only see the schema.
+    /// Decided here for the same reason as above: the answer is a property of the database (is the
+    /// masking extension installed?) and the generators only see the schema.
     #[serde(default)]
     pub field_masking: FieldMaskingTier,
     /// The tables tier 2's `api` layer has to cover, with their columns and keys.
@@ -58,7 +58,7 @@ pub enum FieldMaskingTier {
     Extension,
     /// Generated `api`-schema views carry the masking expression, and PostgREST is pointed at them.
     ///
-    /// The fallback for a database that cannot load an extension — which is most managed Postgres, and
+    /// The fallback for a database that cannot load an extension, which is most managed Postgres, and
     /// therefore most of what `database.external` made possible.
     Views,
 }
@@ -70,7 +70,7 @@ pub enum FieldMaskingTier {
 pub enum Operation {
     CreateTable {
         table: String,
-        /// Full model definition — SQL generator uses this to emit CREATE TABLE DDL.
+        /// Full model definition. The SQL generator uses this to emit CREATE TABLE DDL.
         model: Box<ModelAst>,
         risk: Risk,
     },
@@ -129,7 +129,7 @@ pub enum Operation {
     },
     AddForeignKey {
         table: String,
-        /// Schema field name (e.g. "author") — used to derive FK column when `relation.foreign_key` is absent.
+        /// Schema field name (e.g. "author"), used to derive the FK column when `relation.foreign_key` is absent.
         field_name: String,
         relation: Box<RelationFieldAst>,
         ref_table: String,
@@ -317,6 +317,7 @@ pub fn diff_with_previous(
     index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
     field_access_diff::validate(ast, db, &mut warnings)?;
+    warnings.extend(crate::generator::sql::storage::rule_warnings(ast));
     trigger_diff::diff(ast, db, &mut ops)?;
 
     let ordered_ops = ordering::topological_sort(ops)?;
@@ -339,8 +340,8 @@ pub fn diff_with_previous(
         _ => Vec::new(),
     };
 
-    // Model tables that already exist without an ownership marker. The security apparatus — grants,
-    // column privileges, field labels — is re-asserted from the AST alone on every push, so the
+    // Model tables that already exist without an ownership marker. The security apparatus (grants,
+    // column privileges, field labels) is re-asserted from the AST alone on every push, so the
     // renderer has no way to know which tables are ours unless it is told.
     let unmanaged_model_tables: Vec<String> = ast
         .models
