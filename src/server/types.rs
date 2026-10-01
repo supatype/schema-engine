@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize)]
 pub struct AstRequest {
     pub ast: serde_json::Value,
-    /// Schema Supatype manages. Defaults to `public`, so an older client keeps working — the DB
+    /// Schema Supatype manages. Defaults to `public`, so an older client keeps working; the DB
     /// endpoints have always carried this, and the previews rendered `public` regardless.
     #[serde(default = "default_schema")]
     pub schema: String,
@@ -103,9 +103,15 @@ pub struct HealthResponse {
     pub version: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct ErrorResponse {
     pub error: String,
+    /// A stable name for a refusal a caller can act on, such as `unmanaged_model_tables`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
+    /// The tables a refusal is about, when it is about tables.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tables: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]

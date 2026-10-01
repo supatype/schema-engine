@@ -169,6 +169,7 @@ jobs:
             --test schema_isolation_tests \
             --test studio_members_tests \
             --test table_adoption_tests \
+            --test live_state_tests \
             --test table_ownership_tests \
             --test field_access_contract_tests \
             --test field_access_tamper_tests \

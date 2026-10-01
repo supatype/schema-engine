@@ -17,6 +17,39 @@ use crate::parser::ast::{
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 
+/// A push refused because the schema declares tables Supatype does not manage.
+///
+/// A type rather than only a message so a caller can act on it: the CLI offers to adopt exactly
+/// these tables, which it used to find out by matching the wording below.
+#[derive(Debug)]
+pub struct UnmanagedModelTables {
+    pub tables: Vec<String>,
+}
+
+/// The stable name a caller matches on, in the engine's JSON output and the server's response.
+pub const UNMANAGED_MODEL_TABLES: &str = "unmanaged_model_tables";
+
+impl std::fmt::Display for UnmanagedModelTables {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tables = self.tables.join(", ");
+        write!(
+            f,
+            "Your schema declares model(s) for table(s) Supatype does not manage: {tables}.\n\n\
+             Nothing was applied. These tables already exist without Supatype's ownership marker, so \
+             a push may neither alter them nor attach access rules to them, and leaving them in the \
+             API without those rules would serve them under whatever privileges they already \
+             have.\n\n\
+             What to do:\n\
+             • Run `supatype adopt` to bring them under management (it shows the SQL first)\n\
+             • Or point the model at a different table with `tableName`\n\n\
+             If these tables were created by an older Supatype that did not stamp tables, `adopt` \
+             is the right move: one run and pushes work as before."
+        )
+    }
+}
+
+impl std::error::Error for UnmanagedModelTables {}
+
 /// Refuse a push whose schema declares a table Supatype does not manage.
 ///
 /// Public because the check has to happen at the *entry* to a push, not only where SQL is rendered:
@@ -26,18 +59,10 @@ pub fn assert_no_unmanaged_model_tables(diff: &DiffOutput) -> Result<()> {
     if diff.unmanaged_model_tables.is_empty() {
         return Ok(());
     }
-    let tables = diff.unmanaged_model_tables.join(", ");
-    bail!(
-        "Your schema declares model(s) for table(s) Supatype does not manage: {tables}.\n\n\
-         Nothing was applied. These tables already exist without Supatype's ownership marker, so a \
-         push may neither alter them nor attach access rules to them — and leaving them in the API \
-         without those rules would serve them under whatever privileges they already have.\n\n\
-         What to do:\n\
-         • Run `supatype adopt` to bring them under management (it shows the SQL first)\n\
-         • Or point the model at a different table with `tableName`\n\n\
-         If these tables were created by an older Supatype that did not stamp tables, `adopt` is \
-         the right move — one run and pushes work as before."
-    );
+    Err(UnmanagedModelTables {
+        tables: diff.unmanaged_model_tables.clone(),
+    }
+    .into())
 }
 
 fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
@@ -53,7 +78,7 @@ fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
     Ok(())
 }
 
-/// Returns only the forward (apply) SQL — suitable for execution against a live DB.
+/// Returns only the forward (apply) SQL, suitable for execution against a live DB.
 ///
 /// Layout: preamble (header + optional `CREATE EXTENSION`), then `BEGIN`, model DDL, `COMMIT`.
 /// Extension lines are emitted **before** the explicit `BEGIN` (legacy layout; still one
@@ -81,7 +106,7 @@ pub fn forward_sql_outer_body(
 }
 
 /// `storage` SQL followed by [`forward_sql_outer_body`], for execution inside an existing
-/// `sqlx::Transaction` (no surrounding `BEGIN`/`COMMIT` — the transaction provides atomicity).
+/// `sqlx::Transaction` (no surrounding `BEGIN`/`COMMIT`; the transaction provides atomicity).
 pub fn push_storage_and_model_apply_body(
     storage_sql: &str,
     diff: &DiffOutput,
@@ -232,7 +257,7 @@ fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
 /// Emitted at the end rather than in the preamble: each takes its table's composite
 /// type as a parameter, so the table has to exist first. `CREATE OR REPLACE` makes
 /// re-emission free, and emitting them on every push is what keeps them in step
-/// with the policies — a stale affordance function is a UI that lies.
+/// with the policies: a stale affordance function is a UI that lies.
 fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
     let sql = crate::generator::sql::rls::generate_can_functions(ast, schema);
     if sql.trim().is_empty() {
@@ -288,8 +313,8 @@ fn render_security_label_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -
 
 /// Everything re-asserted on every push rather than diffed.
 ///
-/// These three are idempotent by construction — `CREATE OR REPLACE`, `GRANT`/`REVOKE`
-/// pairs, and `SECURITY LABEL` upserts — so re-running them is what keeps them tracking
+/// These three are idempotent by construction (`CREATE OR REPLACE`, `GRANT`/`REVOKE`
+/// pairs, and `SECURITY LABEL` upserts), so re-running them is what keeps them tracking
 /// the schema instead of drifting from it.
 ///
 /// Shared by both forward paths deliberately. They diverged before: the wrapped path
@@ -331,7 +356,7 @@ fn render_reasserted_lines(
         }
     }
 
-    // Under tier 2 the API reads the `api` views, so that is where the privileges belong — and the
+    // Under tier 2 the API reads the `api` views, so that is where the privileges belong, and the
     // base tables lose theirs, or `Accept-Profile: public` walks straight round the mask.
     let serve_from = views.then_some(crate::generator::sql::field_views::VIEW_SCHEMA);
     lines.extend(render_grant_lines(ast, schema, skip, serve_from));
@@ -350,7 +375,7 @@ fn render_reasserted_lines(
     lines
 }
 
-/// Column-level write privileges derived from the field rules — a second layer under the
+/// Column-level write privileges derived from the field rules: a second layer under the
 /// masking extension, for what a database role provably can never write.
 fn render_column_grant_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
     let sql = crate::generator::sql::grants::generate_column_grants(ast, schema, skip);
@@ -585,7 +610,7 @@ fn render_create_rls_policy_sql(
         ));
     }
 
-    // Junction tables have no model of their own — their policies are derived
+    // Junction tables have no model of their own, so their policies are derived
     // from the intersection of both parents' rules (see differ::rls_diff).
     let junction = ast
         .junction_tables
@@ -801,11 +826,11 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
             Ok(format!("CREATE TYPE \"{name}\" AS ENUM ({vals});"))
         }
         Operation::DropEnum { name, .. } => Ok(format!("DROP TYPE IF EXISTS \"{name}\";")),
-        // Task 67: Add enum value — Postgres 12+ supports this inside transactions.
+        // Task 67: Add enum value. Postgres 12+ supports this inside transactions.
         Operation::AddEnumValue {
             enum_name, value, ..
         } => Ok(format!("ALTER TYPE \"{enum_name}\" ADD VALUE '{value}';")),
-        // Task 68: Remove enum value — Postgres has no ALTER TYPE ... REMOVE VALUE.
+        // Task 68: Remove enum value. Postgres has no ALTER TYPE ... REMOVE VALUE.
         // Strategy: rename old type → create new type without value → alter columns → drop old.
         Operation::RemoveEnumValue {
             enum_name,
@@ -832,7 +857,7 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
                 "ALTER TYPE \"{enum_name}\" RENAME TO \"{old_name}\";"
             ));
 
-            // 3. We need the new values — they are all old values minus the removed one.
+            // 3. We need the new values: they are all old values minus the removed one.
             //    Since we don't carry the full old values list in RemoveEnumValue,
             //    we build the new type dynamically from pg_enum.
             stmts.push(format!(
@@ -863,7 +888,7 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
 
             Ok(stmts.join("\n"))
         }
-        // Task 69: Rename enum value — Postgres 10+ native support.
+        // Task 69: Rename enum value. Postgres 10+ native support.
         Operation::RenameEnumValue {
             enum_name,
             from,
@@ -872,7 +897,7 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
         } => Ok(format!(
             "ALTER TYPE \"{enum_name}\" RENAME VALUE '{from}' TO '{to}';"
         )),
-        // Task 70: Reorder enum values — must recreate the type since Postgres
+        // Task 70: Reorder enum values. Must recreate the type since Postgres
         // enum ordering is determined by creation order.
         Operation::ReorderEnumValues {
             enum_name,
@@ -920,7 +945,7 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
             "DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";"
         )),
         Operation::CreateTrigger { table, trigger, .. } => Ok(format!(
-            "-- Trigger '{trigger}' on '{table}' — run: supatype-engine generate (triggers)"
+            "-- Trigger '{trigger}' on '{table}': run supatype-engine generate (triggers)"
         )),
         Operation::DropTrigger { table, trigger, .. } => Ok(format!(
             "DROP TRIGGER IF EXISTS \"{trigger}\" ON \"{schema}\".\"{table}\";"
@@ -935,8 +960,8 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
         } => {
             let (ref_table_a, pk_a, type_a) = junction_ref_for_model(ast, table_a);
             let (ref_table_b, pk_b, type_b) = junction_ref_for_model(ast, table_b);
-            // Stamped like any other table Supatype creates. A junction table is *entirely* ours —
-            // it has no model of its own — so without the marker the ownership gate would refuse to
+            // Stamped like any other table Supatype creates. A junction table is *entirely* ours
+            // (it has no model of its own), so without the marker the ownership gate would refuse to
             // drop it ever, and a removed many-to-many would leave its junction behind for good.
             let marker = managed_comment("table", table, &[]);
             Ok(format!(
@@ -1121,7 +1146,7 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         statements.push(create_index_sql(table, &index, schema)?);
     }
 
-    // Singleton (global config) — enforce exactly one row via a partial unique index.
+    // Singleton (global config): enforce exactly one row via a partial unique index.
     if model.options.singleton {
         let idx_name = format!("{table}_singleton_idx");
         statements.push(format!(
@@ -1135,7 +1160,7 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
     // Stamp ownership, exactly as indexes, constraints and RLS policies already do.
     //
     // This is what lets the differ destroy this table later and refuse to destroy one it merely
-    // found. Without it, every table in the managed schema was a drop candidate — which on a
+    // found. Without it, every table in the managed schema was a drop candidate, which on a
     // database Supatype did not create is someone else's data.
     let table_marker = managed_comment("table", table, &[]);
     statements.push(format!(
@@ -1267,7 +1292,7 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         FieldAst::Date(f) => Ok(scalar_col(table, name, "DATE", f, false)),
         FieldAst::Timestamp(f) => Ok(scalar_col(table, name, "TIMESTAMP", f, false)),
         FieldAst::Serial(f) => {
-            // SERIAL is self-declaring — NOT NULL + sequence default are implicit.
+            // SERIAL is self-declaring: NOT NULL + sequence default are implicit.
             // primary_key / unique flags still apply.
             let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
             let uniq = if f.unique && !f.primary_key {
@@ -1390,7 +1415,7 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("\"{name}\" vector({}){req}", f.dimensions))
         }
-        // Plugin-defined custom field type — use the declared pg_type directly.
+        // Plugin-defined custom field type: use the declared pg_type directly.
         FieldAst::Custom(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = if f.unique { " UNIQUE" } else { "" };

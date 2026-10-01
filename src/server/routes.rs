@@ -117,34 +117,23 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         .await
         .map_err(engine_error)?;
 
-    // Load DB state: from cache unless no_cache
-    let db_state = if !req.no_cache {
-        migration_history::load_schema_state(&pool).await
-    } else {
-        None
-    };
-    let db_state = match db_state {
-        Some(cached) => {
-            info!("Using cached schema state");
-            cached
-        }
-        None => crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?,
-    };
+    if req.no_cache {
+        tracing::warn!("{}", migration_history::NO_CACHE_NOTICE);
+    }
+    // Always the live catalog, as the CLI path reads it. See `Command::Push` in main.rs.
+    let db_state = crate::introspector::introspect(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
 
-    let previous_ast = if !req.no_cache {
-        load_previous_schema(&pool).await
-    } else {
-        None
-    };
+    // History, not a cache of the database: how a rename is told apart from a drop and an add.
+    let previous_ast = load_previous_schema(&pool).await;
     let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
         .map_err(engine_error)?;
 
     // Same reason as the CLI path: an empty diff must not report success over a table whose rules
     // were never applied.
     crate::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
 
     if diff.operations.is_empty() {
         // Same reason as the CLI path: the publishing layer is the kind of change that produces no
@@ -476,6 +465,7 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
                     error: format!("Migration {name} has no schema snapshot"),
+                    ..Default::default()
                 }),
             )),
         }
@@ -518,6 +508,7 @@ pub async fn studio_config(
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: "No schema pushed yet. Run: supatype push".to_string(),
+                ..Default::default()
             }),
         )),
     }
@@ -586,17 +577,13 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
         .await
         .map_err(engine_error)?;
 
-    let db_state = if req.no_cache {
-        crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?
-    } else if let Some(cached) = migration_history::load_schema_state(&pool).await {
-        cached
-    } else {
-        crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?
-    };
+    if req.no_cache {
+        tracing::warn!("{}", migration_history::NO_CACHE_NOTICE);
+    }
+    // Live, as push reads it, so adopt stamps exactly what push would refuse.
+    let db_state = crate::introspector::introspect(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
 
     let stamp_sql = crate::differ::doctor::adopt_stamp_sql(&ast, &db_state, &req.schema);
     let doctor_report = crate::differ::doctor::report(&ast, &db_state);
@@ -656,12 +643,32 @@ async fn load_previous_schema(pool: &PgPool) -> Option<crate::parser::ast::Schem
         .and_then(|v| serde_json::from_value(v).ok())
 }
 
+/// A refused push, as 409 with the reason and tables when it is one a caller can act on.
+fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
+    use crate::generator::sql::migration::{UnmanagedModelTables, UNMANAGED_MODEL_TABLES};
+    let Some(refusal) = e.downcast_ref::<UnmanagedModelTables>() else {
+        return engine_error(e);
+    };
+    error!(tables = ?refusal.tables, "push refused: unmanaged model tables");
+    (
+        StatusCode::CONFLICT,
+        Json(ErrorResponse {
+            error: refusal.to_string(),
+            reason: Some(UNMANAGED_MODEL_TABLES),
+            tables: Some(refusal.tables.clone()),
+        }),
+    )
+}
+
 fn engine_error(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
     let msg = e.to_string();
     error!(%msg, "engine error");
     (
         StatusCode::UNPROCESSABLE_ENTITY,
-        Json(ErrorResponse { error: msg }),
+        Json(ErrorResponse {
+            error: msg,
+            ..Default::default()
+        }),
     )
 }
 
@@ -674,6 +681,7 @@ fn require_ast(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Missing 'ast' field in request body".to_string(),
+                ..Default::default()
             }),
         )),
     }
@@ -705,10 +713,8 @@ fn resolve_database_url(
             if !body.is_empty() && body != env {
                 return Err((
                     StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "database_url in request body is not allowed when DATABASE_URL is configured on the engine"
-                            .to_string(),
-                    }),
+                    Json(ErrorResponse { error: "database_url in request body is not allowed when DATABASE_URL is configured on the engine"
+                            .to_string(), ..Default::default() }),
                 ));
             }
         }
@@ -718,10 +724,8 @@ fn resolve_database_url(
     explicit.filter(|s| !s.is_empty()).ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "DATABASE_URL is not set on the schema engine. Configure it for the engine service (or pass database_url from a trusted proxy)."
-                    .to_string(),
-            }),
+            Json(ErrorResponse { error: "DATABASE_URL is not set on the schema engine. Configure it for the engine service (or pass database_url from a trusted proxy)."
+                    .to_string(), ..Default::default() }),
         )
     })
 }
@@ -798,6 +802,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "Schema must not be empty".to_string(),
+                    ..Default::default()
                 }),
             ));
         }
@@ -811,6 +816,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "Invalid schema identifier".to_string(),
+                    ..Default::default()
                 }),
             ));
         }

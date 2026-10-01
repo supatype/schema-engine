@@ -74,10 +74,9 @@ enum Command {
         name: Option<String>,
         #[arg(long, help = "Skip interactive rename confirmation prompts (for CI)")]
         non_interactive: bool,
-        #[arg(
-            long,
-            help = "Bypass schema state cache and do a full DB introspection"
-        )]
+        /// No longer does anything: the database is always read live. Accepted for one release so
+        /// scripts that pass it keep working, and says so.
+        #[arg(long, hide = true)]
         no_cache: bool,
         #[arg(
             long,
@@ -204,10 +203,9 @@ enum Command {
         schema: String,
         #[arg(long, help = "Apply stamp SQL without interactive confirmation")]
         yes: bool,
-        #[arg(
-            long,
-            help = "Bypass schema state cache and do a full DB introspection"
-        )]
+        /// No longer does anything: the database is always read live. Accepted for one release so
+        /// scripts that pass it keep working, and says so.
+        #[arg(long, hide = true)]
         no_cache: bool,
     },
 }
@@ -341,27 +339,18 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to create supatype.daily_content_creates function")?;
 
-            // Load DB state: from cache unless --no-cache
-            let db_state = if !no_cache {
-                migration_history::load_schema_state(&pool).await
-            } else {
-                None
-            };
-            let db_state = match db_state {
-                Some(cached) => {
-                    info!("Using cached schema state (use --no-cache to force full introspection)");
-                    cached
-                }
-                None => supatype_engine::introspector::introspect(&pool, &schema).await?,
-            };
+            if no_cache {
+                eprintln!("{}", migration_history::NO_CACHE_NOTICE);
+            }
+            // Always the live catalog. A snapshot from the last push cannot see what changed
+            // outside Supatype since, so `diff` showed one plan and push applied another.
+            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
 
-            let previous_ast = if !no_cache {
-                migration_history::load_latest_schema_snapshot(&pool)
-                    .await
-                    .and_then(|v| serde_json::from_value(v).ok())
-            } else {
-                None
-            };
+            // History, not a cache of the database: what the schema looked like at the last push,
+            // which is how a rename is told apart from a drop and an add.
+            let previous_ast = migration_history::load_latest_schema_snapshot(&pool)
+                .await
+                .and_then(|v| serde_json::from_value(v).ok());
 
             let mut diff = supatype_engine::differ::diff_with_previous(
                 &ast,
@@ -378,29 +367,22 @@ async fn main() -> Result<()> {
             // Before either branch: an unchanged schema produces an empty diff, so the renderer's
             // own check would never run and the push would report success while a declared table sat
             // in the API with none of its rules applied.
-            supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)?;
-
-            // The field-masking tier is decided from the introspected extension list. A cached schema
-            // state that predates extension introspection would claim there are none, silently
-            // switching a tier-1 database to views *and* revoking the API roles' access to its base
-            // tables. Cheap to rule out while a connection is open, and not something to discover
-            // afterwards.
-            if diff.field_masking == supatype_engine::differ::FieldMaskingTier::Views {
-                let installed: bool = sqlx::query_scalar(
-                    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)",
-                )
-                .bind(supatype_engine::generator::sql::rls::MASK_EXTENSION)
-                .fetch_one(&pool)
-                .await?;
-                if installed {
-                    anyhow::bail!(
-                        "This database has {ext} installed, but the schema state used for this diff \
-                         says otherwise, so the push was about to switch field masking to generated \
-                         views and take the API roles off your tables.\n\n\
-                         Re-run with --no-cache to diff against the live database.",
-                        ext = supatype_engine::generator::sql::rls::MASK_EXTENSION
+            if let Err(e) =
+                supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
+            {
+                // On stdout, where the CLI reads the push result, so it can name the tables and
+                // offer to adopt them. The message still goes to stderr through the error.
+                if let Some(refusal) = e.downcast_ref::<supatype_engine::generator::sql::migration::UnmanagedModelTables>() {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "status": "refused",
+                            "reason": supatype_engine::generator::sql::migration::UNMANAGED_MODEL_TABLES,
+                            "tables": refusal.tables,
+                        })
                     );
                 }
+                return Err(e);
             }
 
             if diff.operations.is_empty() {
@@ -873,13 +855,13 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to bootstrap _supatype internal state")?;
 
-            let db_state = if no_cache {
-                supatype_engine::introspector::introspect(&pool, &schema).await?
-            } else if let Some(cached) = migration_history::load_schema_state(&pool).await {
-                cached
-            } else {
-                supatype_engine::introspector::introspect(&pool, &schema).await?
-            };
+            if no_cache {
+                eprintln!("{}", migration_history::NO_CACHE_NOTICE);
+            }
+            // Live, as push reads it, so adopt stamps exactly what push would refuse. Reading the
+            // last push's snapshot, it found nothing to stamp for a table that had since lost its
+            // marker, while push refused it: no way forward through the CLI.
+            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
 
             let stamp_sql =
                 supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db_state, &schema);
