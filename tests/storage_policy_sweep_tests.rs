@@ -38,6 +38,12 @@ async fn policies(pool: &sqlx::PgPool) -> Vec<String> {
 #[tokio::test]
 async fn removing_the_last_bucket_drops_ours_and_keeps_a_hand_written_policy() {
     common::with_integration_pool(|pool| async move {
+        // The policies call `auth.uid()`, which a push installs first. A fresh database (what CI
+        // gives each test) has no `auth` schema until it does.
+        sqlx::raw_sql(&supatype_engine::generator::sql::rls::generate_auth_helpers())
+            .execute(&pool)
+            .await
+            .expect("auth helpers apply");
         sqlx::raw_sql(&storage_sql(MEDIA))
             .execute(&pool)
             .await
