@@ -1,7 +1,12 @@
 //! Shared helpers for Postgres integration tests.
 //!
-//! Uses **`supatype/postgres`** (PostGIS, pgvector, etc.) — same image as local dev / self-host.
+//! Uses **`supatype/postgres`** (PostGIS, pgvector, etc.), the same image as local dev and self-host.
 //! Override with **`INTEGRATION_POSTGRES_IMAGE`** (e.g. `supatype/postgres:17-latest`).
+//!
+//! Compiled into every integration suite, and each uses only some of it, so unused items here
+//! are expected rather than dead.
+
+#![allow(dead_code)]
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -127,7 +132,7 @@ where
 /// Returns false when the image cannot provide it, so a test that needs field-level access
 /// can skip rather than fail. Deliberately not fatal and deliberately not called for every
 /// pool: the extension ships from **`supatype-postgres`**, so requiring it here would make
-/// this whole suite red until that image is republished — and the tests that would break
+/// this whole suite red until that image is republished, and the tests that would break
 /// are the policy-convergence ones, which have nothing to do with field rules.
 ///
 /// A schema that declares `fields` rules genuinely refuses to apply without it. That is the

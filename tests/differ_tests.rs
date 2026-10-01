@@ -189,7 +189,7 @@ fn test_existing_index_not_regenerated_when_name_matches() {
 
     assert!(
         add_index_for_posts.is_empty(),
-        "index 'posts_author_id_idx' already exists — must not generate AddIndex op"
+        "index 'posts_author_id_idx' already exists, so must not generate an AddIndex op"
     );
 }
 
@@ -245,10 +245,7 @@ fn test_index_rebuilt_when_uniqueness_changes() {
     let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
     let drop_at = sql
         .find(r#"DROP INDEX IF EXISTS "public"."posts_author_id_idx""#)
-        .expect(&format!(
-            "rebuild must drop the old index:
-{sql}"
-        ));
+        .unwrap_or_else(|| panic!("rebuild must drop the old index:\n{sql}"));
     let create_at = sql
         .find(r#"INDEX IF NOT EXISTS "posts_author_id_idx""#)
         .expect("rebuild must create the new index");
@@ -312,7 +309,7 @@ fn col(name: &str, data_type: &str) -> DbColumn {
 }
 
 // A model that declares no `access` used to be published with RLS off while
-// anon/authenticated hold broad grants — world-readable, and writable by any
+// anon/authenticated hold broad grants: world-readable, and writable by any
 // signed-in user. The default is now deny: RLS on, no policies.
 #[test]
 fn test_models_without_access_get_rls_enabled_by_default() {
@@ -341,7 +338,7 @@ fn test_models_without_access_get_rls_enabled_by_default() {
         );
     }
 
-    // No policies may be created for them — RLS with zero policies is the deny.
+    // No policies may be created for them: RLS with zero policies is the deny.
     assert!(
         !diff
             .operations
