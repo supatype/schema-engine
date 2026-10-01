@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.5.0](https://github.com/supatype/schema-engine/compare/v0.4.2...v0.5.0) (2026-10-01)
+
+
+### Features
+
+* **push:** report the schema's warnings in the push result ([8b0a9c6](https://github.com/supatype/schema-engine/commit/8b0a9c6fd65ca5b33e97e53e93059dcff3d90d74))
+* **storage:** bucket rules as four operations, refused when left out ([dd0673b](https://github.com/supatype/schema-engine/commit/dd0673be2a3047d7bbf7650b15e4568ec2ce6304))
+
+
+### Bug Fixes
+
+* **generate:** set a relation to a model the seed builder has no type for by its key ([0bc4885](https://github.com/supatype/schema-engine/commit/0bc4885e83adbb2f7644da41ba196c9b7c26772d))
+* **push,adopt:** read the database live, and refuse unmanaged tables by name ([687bade](https://github.com/supatype/schema-engine/commit/687badeae0d9873ff95dcb311b63c33762b43461))
+* **push,adopt:** read the database live, and refuse unmanaged tables by name ([20e33a3](https://github.com/supatype/schema-engine/commit/20e33a30aa287bd71e6a2e846b42cd8dd851f22c)), closes [#86](https://github.com/supatype/schema-engine/issues/86) [#87](https://github.com/supatype/schema-engine/issues/87)
+* **storage:** sweep stale policies with no buckets, refuse colliding names, warn on unreadable changes ([85b67e5](https://github.com/supatype/schema-engine/commit/85b67e5cc8de75b4c0b785be86eb2e5369ed3dbf))
+
 ## [0.4.2](https://github.com/supatype/schema-engine/compare/v0.4.1...v0.4.2) (2026-09-30)
 
 
