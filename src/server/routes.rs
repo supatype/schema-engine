@@ -53,7 +53,7 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     Ok(Json(serde_json::to_value(&diff).unwrap()))
 }
 
-// ── Migrate (DB — generate SQL only, does not apply) ────────────────────────
+// ── Migrate (DB: generate SQL only, does not apply) ────────────────────────
 
 pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> {
     let ast_json = require_ast(&req.ast)?;
@@ -71,7 +71,7 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
     Ok(Json(SqlResponse { sql }))
 }
 
-// ── Push (DB — diff + apply + record in history) ────────────────────────────
+// ── Push (DB: diff + apply + record in history) ────────────────────────────
 
 pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     use crate::state::{migration_history, studio_state};
@@ -164,7 +164,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
                 .await
                 .map_err(engine_error)?;
         }
-        info!("Schema is up to date — refreshing Studio metadata.");
+        info!("Schema is up to date, refreshing Studio metadata.");
         let admin_cfg =
             crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
         let schema_snap = serde_json::to_value(&ast).map_err(engine_error)?;
@@ -174,7 +174,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         return Ok(Json(serde_json::json!({
             "status": "up_to_date",
             "operations": 0,
-            "admin_refreshed": true
+            "admin_refreshed": true,
+            "warnings": diff.warnings
         })));
     }
 
@@ -321,7 +322,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
 
     // Studio metadata was previously persisted to `_supatype.schema_state` only on
     // the up-to-date branch above, so any project whose last push applied a
-    // migration had null `ast_snapshot`/`admin_config` — leaving Studio with no
+    // migration had null `ast_snapshot`/`admin_config`, leaving Studio with no
     // server-side schema source. Refresh it here too; failure must not undo an
     // applied migration, so it only warns.
     if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
@@ -333,11 +334,15 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     }
 
     info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
+    // The schema's own warnings first (a bucket rule left out, say), then what the database looked
+    // like once applied. Both used to be visible only to `supatype diff`, so a push said nothing
+    // about an operation it had just made unreachable.
+    let warnings: Vec<&String> = diff.warnings.iter().chain(&drift_warnings).collect();
     Ok(Json(serde_json::json!({
         "status": "applied",
         "name": migration_name,
         "operations": diff.operations.len(),
-        "warnings": drift_warnings
+        "warnings": warnings
     })))
 }
 
@@ -497,7 +502,7 @@ pub async fn rollback(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::
     Ok(Json(serde_json::to_value(&result).unwrap()))
 }
 
-// ── Studio config (DB) — latest persisted AdminConfig ─────────────────────
+// ── Studio config (DB): latest persisted AdminConfig ─────────────────────
 
 /// Returns the AdminConfig JSON stored at last successful `push`.
 /// Single-tenant: resolve `DATABASE_URL` from the engine environment (or optional body for CLI).
@@ -518,7 +523,7 @@ pub async fn studio_config(
     }
 }
 
-// ── SQL execution (DB) — dev / self-host Studio only ────────────────────────
+// ── SQL execution (DB): dev / self-host Studio only ────────────────────────
 //
 // Multi-tenant deployments should route SQL through the cloud control plane (org-scoped proxy with
 // SET LOCAL ROLE), not this endpoint. Here, `DATABASE_URL` is the single project database.
@@ -550,7 +555,7 @@ pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
 
-// ── Doctor (DB — read-only drift report) ────────────────────────────────────
+// ── Doctor (DB: read-only drift report) ────────────────────────────────────
 
 pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     let ast_json = require_ast(&req.ast)?;
@@ -564,7 +569,7 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
 
-// ── Adopt (DB — stamp managed comments) ─────────────────────────────────────
+// ── Adopt (DB: stamp managed comments) ─────────────────────────────────────
 
 pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     use crate::state::migration_history;
@@ -575,7 +580,7 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
     let pool = connect_db(&url).await?;
 
     // Adopt hand-wrote this sequence and had already fallen behind it (no
-    // `schema_state` studio columns, no migrations-column repairs) — the exact
+    // `schema_state` studio columns, no migrations-column repairs), the exact
     // drift `bootstrap_internal_state` exists to prevent.
     migration_history::bootstrap_internal_state(&pool)
         .await

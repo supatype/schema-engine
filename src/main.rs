@@ -53,7 +53,7 @@ enum Command {
         #[arg(long, default_value = "public")]
         schema: String,
     },
-    /// Generate SQL migration from a diff (print only — does not apply)
+    /// Generate SQL migration from a diff (print only, does not apply)
     Migrate {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
@@ -394,8 +394,9 @@ async fn main() -> Result<()> {
                 .await?;
                 if installed {
                     anyhow::bail!(
-                        "This database has {ext} installed, but the schema state used for this diff                          says otherwise — so the push was about to switch field masking to generated                          views and take the API roles off your tables.
-                         
+                        "This database has {ext} installed, but the schema state used for this diff \
+                         says otherwise, so the push was about to switch field masking to generated \
+                         views and take the API roles off your tables.\n\n\
                          Re-run with --no-cache to diff against the live database.",
                         ext = supatype_engine::generator::sql::rls::MASK_EXTENSION
                     );
@@ -423,7 +424,7 @@ async fn main() -> Result<()> {
                     .context("Failed to apply storage schema/policies")?;
 
                 // Trigger functions (slug / updated_at) are idempotent and not part of
-                // the model diff — ensure they exist on every push so an up-to-date
+                // the model diff, so ensure they exist on every push so an up-to-date
                 // schema still gets its slug/updated_at triggers installed.
                 let triggers_sql =
                     supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
@@ -441,7 +442,7 @@ async fn main() -> Result<()> {
 
                 // AST-only changes (widgets, labels, etc.) still need admin_config / snapshot
                 // so Studio and tooling see the latest schema without a DDL migration.
-                info!("Schema is up to date — refreshing Studio metadata.");
+                info!("Schema is up to date, refreshing Studio metadata.");
                 let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast)?;
                 let schema_snap = serde_json::to_value(&ast)?;
                 migration_history::refresh_metadata_on_up_to_date_push(
@@ -451,7 +452,15 @@ async fn main() -> Result<()> {
                 )
                 .await
                 .context("Failed to refresh Studio metadata on up-to-date push")?;
-                println!("{{\"status\":\"up_to_date\",\"operations\":0,\"admin_refreshed\":true}}");
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "up_to_date",
+                        "operations": 0,
+                        "admin_refreshed": true,
+                        "warnings": diff.warnings,
+                    })
+                );
                 return Ok(());
             }
 
@@ -605,7 +614,7 @@ async fn main() -> Result<()> {
             let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
             // Kept for the schema_state refresh after commit: Studio reads its schema
             // from `_supatype.schema_state`, which was only written on the up-to-date
-            // branch — so any project whose last push applied a migration had none.
+            // branch, so any project whose last push applied a migration had none.
             let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
             let migration_sources = migration_history::AppliedMigrationSources {
                 sql_down,
@@ -650,12 +659,17 @@ async fn main() -> Result<()> {
             }
 
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
-            let warnings_json = serde_json::to_string(&drift_warnings)?;
+            // The schema's own warnings, then what the database looked like once applied. See the
+            // same output in `server::routes::push`.
+            let warnings: Vec<&String> = diff.warnings.iter().chain(&drift_warnings).collect();
             println!(
-                "{{\"status\":\"applied\",\"name\":\"{}\",\"operations\":{},\"warnings\":{}}}",
-                migration_name,
-                diff.operations.len(),
-                warnings_json
+                "{}",
+                serde_json::json!({
+                    "status": "applied",
+                    "name": migration_name,
+                    "operations": diff.operations.len(),
+                    "warnings": warnings,
+                })
             );
         }
         Command::Generate { lang, artifact } => {
@@ -974,7 +988,7 @@ fn confirm_renames(
                 let answer = line.trim().to_lowercase();
 
                 if answer == "n" || answer == "no" {
-                    // User declined — emit DropColumn + AddColumn instead
+                    // User declined, so emit DropColumn + AddColumn instead
                     final_ops.push(Operation::DropColumn {
                         table: table.clone(),
                         column: from.clone(),
@@ -1166,6 +1180,19 @@ fn destructive_op_summary(op: &supatype_engine::differ::Operation) -> String {
     }
 }
 
+fn read_input(path: Option<&str>) -> Result<String> {
+    match path {
+        None | Some("-") => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("Failed to read from stdin")?;
+            Ok(buf)
+        }
+        Some(p) => std::fs::read_to_string(p).with_context(|| format!("Failed to read {p}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{destructive_confirmed, destructive_op_summary, has_destructive_ops};
@@ -1213,18 +1240,5 @@ mod tests {
             destructive_op_summary(&op),
             "Drop column 'comment.legacy_col'"
         );
-    }
-}
-
-fn read_input(path: Option<&str>) -> Result<String> {
-    match path {
-        None | Some("-") => {
-            let mut buf = String::new();
-            io::stdin()
-                .read_to_string(&mut buf)
-                .context("Failed to read from stdin")?;
-            Ok(buf)
-        }
-        Some(p) => std::fs::read_to_string(p).with_context(|| format!("Failed to read {p}")),
     }
 }
