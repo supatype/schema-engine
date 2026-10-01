@@ -1,11 +1,11 @@
-//! Integration test — Task 98: Enum migration
+//! Integration test, Task 98: Enum migration
 //!
 //! Tests:
 //!   - Add enum value → safe
 //!   - Remove with rows → destructive warning
 //!   - Remove unused → succeeds with type recreation
 //!
-//! These are pure diff tests — no DB required.
+//! These are pure diff tests, with no DB required.
 
 use supatype_engine::{
     differ::{self, Operation, Risk},
@@ -339,7 +339,7 @@ fn test_new_enum_field_creates_enum() {
         .collect();
 
     assert!(
-        create_ops.len() >= 1,
+        !create_ops.is_empty(),
         "a new enum field should produce a CreateEnum operation"
     );
 

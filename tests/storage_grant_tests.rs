@@ -50,7 +50,9 @@ fn generated() -> String {
 fn the_caller_roles_can_select_objects() {
     let sql = generated();
     assert!(
-        sql.contains("GRANT SELECT ON storage.objects TO anon, authenticated"),
+        sql.contains(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON storage.objects TO anon, authenticated"
+        ),
         "without this the service cannot evaluate the policy as the caller, got:\n{sql}"
     );
 }
@@ -68,10 +70,11 @@ fn row_level_security_is_enabled_on_the_same_table() {
 #[test]
 fn the_grant_never_appears_without_the_enable() {
     // Ordering matters as much as presence: a grant applied before RLS is on leaves a window in
-    // which every object is readable by any signed-in caller.
+    // which every object is readable, replaceable and deletable by any caller. The first grant of
+    // any kind is the one that has to follow the ENABLE.
     let sql = generated();
     let enable = sql.find("ENABLE ROW LEVEL SECURITY");
-    let grant = sql.find("GRANT SELECT ON storage.objects");
+    let grant = sql.find("GRANT ");
     match (enable, grant) {
         (Some(e), Some(g)) => assert!(e < g, "RLS must be enabled before the grant, got:\n{sql}"),
         (_, None) => panic!("no grant emitted:\n{sql}"),

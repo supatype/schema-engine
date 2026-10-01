@@ -82,7 +82,7 @@ pub fn create_schema_state_table_sql() -> String {
     )
 }
 
-/// Studio membership — who may use the admin UI, and with what capability set.
+/// Studio membership: who may use the admin UI, and with what capability set.
 ///
 /// Deliberately NOT a JWT claim and NOT in the `public` schema: `_supatype` is
 /// absent from PGRST_DB_SCHEMAS, so nothing the developer's app or API surface
@@ -91,9 +91,9 @@ pub fn create_schema_state_table_sql() -> String {
 ///
 /// A row identifies its holder by exactly one of two identities:
 ///
-/// * `user_id` — a project `auth.users` id. How self-host grants access, and how
+/// * `user_id`: a project `auth.users` id. How self-host grants access, and how
 ///   a project's own users are admitted in either host.
-/// * `platform_user_id` — a Supatype Cloud account. Cloud callers are platform
+/// * `platform_user_id`: a Supatype Cloud account. Cloud callers are platform
 ///   accounts, not project users, so they cannot be looked up by `user_id`.
 ///
 /// Keeping both in one table means "who may use Studio for this project" has a
@@ -119,14 +119,14 @@ pub fn create_studio_members_table_sql() -> String {
 ///
 /// Access-control changes need a durable record, not a log line that rotates
 /// away: "who gave this person admin, and when" has to be answerable months
-/// later. Lives in `_supatype` for the same reason `studio_members` does —
+/// later. Lives in `_supatype` for the same reason `studio_members` does:
 /// nothing reachable through the data plane can read or rewrite it.
 ///
 /// `actor_id` is nullable because a change can come from the CLI against the
 /// database directly, where there is no signed-in actor to attribute it to.
 /// `target_id` is nullable because not every audited event is *about* someone:
 /// an elevated request has an actor and no target. `detail` carries the shape of
-/// whatever the action was — the method and path of an elevated request, say.
+/// whatever the action was: the method and path of an elevated request, say.
 pub fn create_studio_audit_table_sql() -> String {
     format!(
         r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.studio_audit (
@@ -160,8 +160,8 @@ END $$"#
 /// membership: `user_id` was the primary key and the only identity.
 ///
 /// Written as a guarded DO block rather than plain `ALTER`s because the target
-/// shape has to be reached from either starting point — the pre-cloud table or
-/// the current one — and a push must never fail on a table that is already right.
+/// shape has to be reached from either starting point (the pre-cloud table or
+/// the current one), and a push must never fail on a table that is already right.
 pub fn ensure_studio_members_platform_identity_sql() -> String {
     format!(
         r#"DO $$
@@ -226,7 +226,7 @@ END $$"#
 /// become the Studio role `admin`:
 ///
 /// * `app_metadata.role` was the developer's own namespace, so it holds arbitrary
-///   application roles — `moderator`, `staff`, whatever their app needed. Those
+///   application roles: `moderator`, `staff`, whatever their app needed. Those
 ///   never granted Studio access (`STUDIO_ADMIN_ROLES` did, defaulting to `admin`
 ///   and `supatype_admin`), so seeding them would *hand out* access rather than
 ///   preserve it.
@@ -234,7 +234,7 @@ END $$"#
 ///   check refuses it. Copying claim strings verbatim would seed rows that deny.
 ///
 /// A deployment that customised `STUDIO_ADMIN_ROLES` seeds nobody and falls
-/// through to the CLI's first-admin prompt, which is the right recovery — better
+/// through to the CLI's first-admin prompt, which is the right recovery, better
 /// than guessing which app roles were meant to be administrators.
 pub fn seed_studio_members_from_claims_sql() -> String {
     format!(
@@ -371,8 +371,8 @@ pub fn ensure_schema_state_capabilities_column_sql() -> String {
 /// on demand is a value that can disagree with the push that actually applied the
 /// schema. Writing it makes the tier a recorded fact.
 ///
-/// A database with field rules cannot reach here without the extension — the migration
-/// refuses to apply first — so `unenforced` means only "no field rules in this schema".
+/// A database with field rules cannot reach here without the extension (the migration
+/// refuses to apply first), so `unenforced` means only "no field rules in this schema".
 /// That distinction is the point: a deployment that quietly stopped enforcing must be
 /// visible, not inferred.
 pub async fn record_field_enforcement(
@@ -386,7 +386,7 @@ pub async fn record_field_enforcement(
             .await?
             .flatten();
 
-    // Tier 2 is real enforcement, not a failure — but only if the views are actually there. Asking
+    // Tier 2 is real enforcement, not a failure, but only if the views are actually there. Asking
     // the database rather than assuming: a schema that *should* have views and does not is exactly
     // the state worth recording as broken.
     let views_present: bool = sqlx::query_scalar(
@@ -428,7 +428,7 @@ pub async fn record_field_enforcement(
     Ok(())
 }
 
-/// How many columns the schema declares field rules for — the number recorded alongside
+/// How many columns the schema declares field rules for: the number recorded alongside
 /// the tier, and what makes "no field rules" distinguishable from "rules that stopped
 /// being enforced".
 pub fn labelled_column_count(ast: &crate::parser::ast::SchemaAst) -> usize {
@@ -501,30 +501,14 @@ pub async fn load_latest_admin_config(pool: &PgPool) -> Option<serde_json::Value
         .map(|(v,)| v)
 }
 
-/// The cached snapshot of the database, or `None` when it cannot be trusted.
+/// Printed when `--no-cache` is passed to push or adopt, which no longer read a cache at all.
 ///
-/// The cache is a record of what one engine build saw, so it is only valid for that build. What the
-/// introspector reads is part of the engine's behaviour and does change: a version that skipped
-/// check constraints mentioning `IS NOT NULL` wrote snapshots missing them, and a later engine
-/// diffing against one of those snapshots would try to add a constraint the database already had,
-/// failing every push from then on. A snapshot written by any other version is therefore discarded
-/// rather than repaired, and the caller introspects instead: slower, and always right.
-pub async fn load_schema_state(
-    pool: &PgPool,
-) -> Option<crate::state::database_state::DatabaseState> {
-    let sql = format!("SELECT db_state, engine_version FROM {SCHEMA}.schema_state WHERE id = 1");
-    let row: Option<(serde_json::Value, String)> = sqlx::query_as(&sql)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
-
-    let (val, written_by) = row?;
-    if written_by != env!("ENGINE_VERSION") {
-        return None;
-    }
-    serde_json::from_value(val).ok()
-}
+/// Both used to diff against the snapshot the last push wrote, which cannot see anything changed
+/// outside Supatype since: a table that lost its ownership marker, a column dropped by hand. They
+/// read the database live now, so the flag has nothing left to bypass. It is still accepted, for
+/// one release, so a script that passes it keeps working.
+pub const NO_CACHE_NOTICE: &str = "--no-cache is no longer needed: push and adopt always read the \
+     database live. The flag does nothing and will be removed in a future release.";
 
 pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
     let sql = format!(
@@ -575,6 +559,11 @@ pub async fn list_migrations(pool: &PgPool) -> Result<Vec<MigrationRecord>> {
         .collect())
 }
 
+/// Record what the database looks like after a push or an adoption.
+///
+/// Nothing diffs against `db_state` any more: push and adopt introspect live. It is still written
+/// because this is the statement that creates the `schema_state` row, and the Studio metadata and
+/// capability writers are all `UPDATE ... WHERE id = 1` against it.
 pub async fn save_schema_state<'e, E>(
     executor: E,
     state: &crate::state::database_state::DatabaseState,
@@ -936,7 +925,7 @@ pub async fn load_migration_sources(
 ///
 /// These were only ever written at provision time, so an engine change to
 /// `auth.role()` (for example, resolving application roles from
-/// `app_metadata.role`) never reached an existing project — its policies kept
+/// `app_metadata.role`) never reached an existing project: its policies kept
 /// calling the old definition indefinitely. They are CREATE OR REPLACE, so
 /// re-applying on every push is cheap and idempotent.
 ///
@@ -964,8 +953,8 @@ pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bo
 /// Create and repair everything the engine owns inside `_supatype`, and re-apply
 /// the auth helper functions.
 ///
-/// Both push implementations — the CLI binary (`main.rs`) and the HTTP server
-/// (`server/routes.rs`) — call this. They previously each wrote out the same
+/// Both push implementations (the CLI binary, `main.rs`, and the HTTP server,
+/// `server/routes.rs`) call this. They previously each wrote out the same
 /// sequence by hand, so every new internal object or repair had to be added
 /// twice; forgetting one produced exactly the silent drift this engine has been
 /// accumulating (a migrations table with no `hash`, RLS state that never

@@ -1,7 +1,12 @@
 //! Shared helpers for Postgres integration tests.
 //!
-//! Uses **`supatype/postgres`** (PostGIS, pgvector, etc.) — same image as local dev / self-host.
+//! Uses **`supatype/postgres`** (PostGIS, pgvector, etc.), the same image as local dev and self-host.
 //! Override with **`INTEGRATION_POSTGRES_IMAGE`** (e.g. `supatype/postgres:17-latest`).
+//!
+//! Compiled into every integration suite, and each uses only some of it, so unused items here
+//! are expected rather than dead.
+
+#![allow(dead_code)]
 
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -127,7 +132,7 @@ where
 /// Returns false when the image cannot provide it, so a test that needs field-level access
 /// can skip rather than fail. Deliberately not fatal and deliberately not called for every
 /// pool: the extension ships from **`supatype-postgres`**, so requiring it here would make
-/// this whole suite red until that image is republished — and the tests that would break
+/// this whole suite red until that image is republished, and the tests that would break
 /// are the policy-convergence ones, which have nothing to do with field rules.
 ///
 /// A schema that declares `fields` rules genuinely refuses to apply without it. That is the
@@ -158,6 +163,45 @@ pub async fn mask_extension_available(pool: &sqlx::PgPool) -> bool {
             );
             false
         }
+    }
+}
+
+/// Runs `f` with the URL of an isolated, empty database, for a test that drives the engine binary
+/// rather than the library.
+///
+/// The URL rather than a pool because a child process has to connect for itself. Same isolation
+/// and skip rules as [`with_integration_pool`].
+pub async fn with_integration_url<F, Fut>(f: F)
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if let Ok(admin_url) = std::env::var("DATABASE_URL") {
+        let admin = sqlx::PgPool::connect(&admin_url)
+            .await
+            .expect("DATABASE_URL: connect admin pool");
+        let n = EPHEMERAL_SEQ.fetch_add(1, Ordering::SeqCst);
+        let db_name = format!("st_engine_url_{}_{}", std::process::id(), n);
+        sqlx::raw_sql(&format!(r#"CREATE DATABASE "{db_name}""#))
+            .execute(&admin)
+            .await
+            .unwrap_or_else(|e| panic!("CREATE DATABASE {db_name} failed: {e}"));
+        f(database_url_with_name(&admin_url, &db_name)).await;
+        terminate_db_sessions(&admin, &db_name).await;
+        let _ = sqlx::raw_sql(&format!(r#"DROP DATABASE IF EXISTS "{db_name}""#))
+            .execute(&admin)
+            .await;
+        admin.close().await;
+        return;
+    }
+
+    match start_supatype_postgres().await {
+        Ok((container, url)) => {
+            f(url).await;
+            drop(container);
+        }
+        Err(e) if force_integration_tests() => panic!("no database: {e}"),
+        Err(e) => eprintln!("SKIP integration: DATABASE_URL not set and Docker unavailable ({e})"),
     }
 }
 

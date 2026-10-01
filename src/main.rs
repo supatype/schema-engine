@@ -53,7 +53,7 @@ enum Command {
         #[arg(long, default_value = "public")]
         schema: String,
     },
-    /// Generate SQL migration from a diff (print only — does not apply)
+    /// Generate SQL migration from a diff (print only, does not apply)
     Migrate {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
@@ -74,10 +74,9 @@ enum Command {
         name: Option<String>,
         #[arg(long, help = "Skip interactive rename confirmation prompts (for CI)")]
         non_interactive: bool,
-        #[arg(
-            long,
-            help = "Bypass schema state cache and do a full DB introspection"
-        )]
+        /// No longer does anything: the database is always read live. Accepted for one release so
+        /// scripts that pass it keep working, and says so.
+        #[arg(long, hide = true)]
         no_cache: bool,
         #[arg(
             long,
@@ -204,10 +203,9 @@ enum Command {
         schema: String,
         #[arg(long, help = "Apply stamp SQL without interactive confirmation")]
         yes: bool,
-        #[arg(
-            long,
-            help = "Bypass schema state cache and do a full DB introspection"
-        )]
+        /// No longer does anything: the database is always read live. Accepted for one release so
+        /// scripts that pass it keep working, and says so.
+        #[arg(long, hide = true)]
         no_cache: bool,
     },
 }
@@ -341,27 +339,18 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to create supatype.daily_content_creates function")?;
 
-            // Load DB state: from cache unless --no-cache
-            let db_state = if !no_cache {
-                migration_history::load_schema_state(&pool).await
-            } else {
-                None
-            };
-            let db_state = match db_state {
-                Some(cached) => {
-                    info!("Using cached schema state (use --no-cache to force full introspection)");
-                    cached
-                }
-                None => supatype_engine::introspector::introspect(&pool, &schema).await?,
-            };
+            if no_cache {
+                eprintln!("{}", migration_history::NO_CACHE_NOTICE);
+            }
+            // Always the live catalog. A snapshot from the last push cannot see what changed
+            // outside Supatype since, so `diff` showed one plan and push applied another.
+            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
 
-            let previous_ast = if !no_cache {
-                migration_history::load_latest_schema_snapshot(&pool)
-                    .await
-                    .and_then(|v| serde_json::from_value(v).ok())
-            } else {
-                None
-            };
+            // History, not a cache of the database: what the schema looked like at the last push,
+            // which is how a rename is told apart from a drop and an add.
+            let previous_ast = migration_history::load_latest_schema_snapshot(&pool)
+                .await
+                .and_then(|v| serde_json::from_value(v).ok());
 
             let mut diff = supatype_engine::differ::diff_with_previous(
                 &ast,
@@ -378,28 +367,22 @@ async fn main() -> Result<()> {
             // Before either branch: an unchanged schema produces an empty diff, so the renderer's
             // own check would never run and the push would report success while a declared table sat
             // in the API with none of its rules applied.
-            supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)?;
-
-            // The field-masking tier is decided from the introspected extension list. A cached schema
-            // state that predates extension introspection would claim there are none, silently
-            // switching a tier-1 database to views *and* revoking the API roles' access to its base
-            // tables. Cheap to rule out while a connection is open, and not something to discover
-            // afterwards.
-            if diff.field_masking == supatype_engine::differ::FieldMaskingTier::Views {
-                let installed: bool = sqlx::query_scalar(
-                    "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = $1)",
-                )
-                .bind(supatype_engine::generator::sql::rls::MASK_EXTENSION)
-                .fetch_one(&pool)
-                .await?;
-                if installed {
-                    anyhow::bail!(
-                        "This database has {ext} installed, but the schema state used for this diff                          says otherwise — so the push was about to switch field masking to generated                          views and take the API roles off your tables.
-                         
-                         Re-run with --no-cache to diff against the live database.",
-                        ext = supatype_engine::generator::sql::rls::MASK_EXTENSION
+            if let Err(e) =
+                supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
+            {
+                // On stdout, where the CLI reads the push result, so it can name the tables and
+                // offer to adopt them. The message still goes to stderr through the error.
+                if let Some(refusal) = e.downcast_ref::<supatype_engine::generator::sql::migration::UnmanagedModelTables>() {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "status": "refused",
+                            "reason": supatype_engine::generator::sql::migration::UNMANAGED_MODEL_TABLES,
+                            "tables": refusal.tables,
+                        })
                     );
                 }
+                return Err(e);
             }
 
             if diff.operations.is_empty() {
@@ -423,7 +406,7 @@ async fn main() -> Result<()> {
                     .context("Failed to apply storage schema/policies")?;
 
                 // Trigger functions (slug / updated_at) are idempotent and not part of
-                // the model diff — ensure they exist on every push so an up-to-date
+                // the model diff, so ensure they exist on every push so an up-to-date
                 // schema still gets its slug/updated_at triggers installed.
                 let triggers_sql =
                     supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
@@ -441,7 +424,7 @@ async fn main() -> Result<()> {
 
                 // AST-only changes (widgets, labels, etc.) still need admin_config / snapshot
                 // so Studio and tooling see the latest schema without a DDL migration.
-                info!("Schema is up to date — refreshing Studio metadata.");
+                info!("Schema is up to date, refreshing Studio metadata.");
                 let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast)?;
                 let schema_snap = serde_json::to_value(&ast)?;
                 migration_history::refresh_metadata_on_up_to_date_push(
@@ -451,7 +434,15 @@ async fn main() -> Result<()> {
                 )
                 .await
                 .context("Failed to refresh Studio metadata on up-to-date push")?;
-                println!("{{\"status\":\"up_to_date\",\"operations\":0,\"admin_refreshed\":true}}");
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "up_to_date",
+                        "operations": 0,
+                        "admin_refreshed": true,
+                        "warnings": diff.warnings,
+                    })
+                );
                 return Ok(());
             }
 
@@ -605,7 +596,7 @@ async fn main() -> Result<()> {
             let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
             // Kept for the schema_state refresh after commit: Studio reads its schema
             // from `_supatype.schema_state`, which was only written on the up-to-date
-            // branch — so any project whose last push applied a migration had none.
+            // branch, so any project whose last push applied a migration had none.
             let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
             let migration_sources = migration_history::AppliedMigrationSources {
                 sql_down,
@@ -650,12 +641,17 @@ async fn main() -> Result<()> {
             }
 
             info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
-            let warnings_json = serde_json::to_string(&drift_warnings)?;
+            // The schema's own warnings, then what the database looked like once applied. See the
+            // same output in `server::routes::push`.
+            let warnings: Vec<&String> = diff.warnings.iter().chain(&drift_warnings).collect();
             println!(
-                "{{\"status\":\"applied\",\"name\":\"{}\",\"operations\":{},\"warnings\":{}}}",
-                migration_name,
-                diff.operations.len(),
-                warnings_json
+                "{}",
+                serde_json::json!({
+                    "status": "applied",
+                    "name": migration_name,
+                    "operations": diff.operations.len(),
+                    "warnings": warnings,
+                })
             );
         }
         Command::Generate { lang, artifact } => {
@@ -859,13 +855,13 @@ async fn main() -> Result<()> {
                 .await
                 .context("Failed to bootstrap _supatype internal state")?;
 
-            let db_state = if no_cache {
-                supatype_engine::introspector::introspect(&pool, &schema).await?
-            } else if let Some(cached) = migration_history::load_schema_state(&pool).await {
-                cached
-            } else {
-                supatype_engine::introspector::introspect(&pool, &schema).await?
-            };
+            if no_cache {
+                eprintln!("{}", migration_history::NO_CACHE_NOTICE);
+            }
+            // Live, as push reads it, so adopt stamps exactly what push would refuse. Reading the
+            // last push's snapshot, it found nothing to stamp for a table that had since lost its
+            // marker, while push refused it: no way forward through the CLI.
+            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
 
             let stamp_sql =
                 supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db_state, &schema);
@@ -974,7 +970,7 @@ fn confirm_renames(
                 let answer = line.trim().to_lowercase();
 
                 if answer == "n" || answer == "no" {
-                    // User declined — emit DropColumn + AddColumn instead
+                    // User declined, so emit DropColumn + AddColumn instead
                     final_ops.push(Operation::DropColumn {
                         table: table.clone(),
                         column: from.clone(),
@@ -1166,6 +1162,19 @@ fn destructive_op_summary(op: &supatype_engine::differ::Operation) -> String {
     }
 }
 
+fn read_input(path: Option<&str>) -> Result<String> {
+    match path {
+        None | Some("-") => {
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("Failed to read from stdin")?;
+            Ok(buf)
+        }
+        Some(p) => std::fs::read_to_string(p).with_context(|| format!("Failed to read {p}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{destructive_confirmed, destructive_op_summary, has_destructive_ops};
@@ -1213,18 +1222,5 @@ mod tests {
             destructive_op_summary(&op),
             "Drop column 'comment.legacy_col'"
         );
-    }
-}
-
-fn read_input(path: Option<&str>) -> Result<String> {
-    match path {
-        None | Some("-") => {
-            let mut buf = String::new();
-            io::stdin()
-                .read_to_string(&mut buf)
-                .context("Failed to read from stdin")?;
-            Ok(buf)
-        }
-        Some(p) => std::fs::read_to_string(p).with_context(|| format!("Failed to read {p}")),
     }
 }

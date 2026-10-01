@@ -53,7 +53,7 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     Ok(Json(serde_json::to_value(&diff).unwrap()))
 }
 
-// ── Migrate (DB — generate SQL only, does not apply) ────────────────────────
+// ── Migrate (DB: generate SQL only, does not apply) ────────────────────────
 
 pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> {
     let ast_json = require_ast(&req.ast)?;
@@ -71,7 +71,7 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
     Ok(Json(SqlResponse { sql }))
 }
 
-// ── Push (DB — diff + apply + record in history) ────────────────────────────
+// ── Push (DB: diff + apply + record in history) ────────────────────────────
 
 pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     use crate::state::{migration_history, studio_state};
@@ -117,34 +117,23 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         .await
         .map_err(engine_error)?;
 
-    // Load DB state: from cache unless no_cache
-    let db_state = if !req.no_cache {
-        migration_history::load_schema_state(&pool).await
-    } else {
-        None
-    };
-    let db_state = match db_state {
-        Some(cached) => {
-            info!("Using cached schema state");
-            cached
-        }
-        None => crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?,
-    };
+    if req.no_cache {
+        tracing::warn!("{}", migration_history::NO_CACHE_NOTICE);
+    }
+    // Always the live catalog, as the CLI path reads it. See `Command::Push` in main.rs.
+    let db_state = crate::introspector::introspect(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
 
-    let previous_ast = if !req.no_cache {
-        load_previous_schema(&pool).await
-    } else {
-        None
-    };
+    // History, not a cache of the database: how a rename is told apart from a drop and an add.
+    let previous_ast = load_previous_schema(&pool).await;
     let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
         .map_err(engine_error)?;
 
     // Same reason as the CLI path: an empty diff must not report success over a table whose rules
     // were never applied.
     crate::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
 
     if diff.operations.is_empty() {
         // Same reason as the CLI path: the publishing layer is the kind of change that produces no
@@ -164,7 +153,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
                 .await
                 .map_err(engine_error)?;
         }
-        info!("Schema is up to date — refreshing Studio metadata.");
+        info!("Schema is up to date, refreshing Studio metadata.");
         let admin_cfg =
             crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
         let schema_snap = serde_json::to_value(&ast).map_err(engine_error)?;
@@ -174,7 +163,8 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         return Ok(Json(serde_json::json!({
             "status": "up_to_date",
             "operations": 0,
-            "admin_refreshed": true
+            "admin_refreshed": true,
+            "warnings": diff.warnings
         })));
     }
 
@@ -321,7 +311,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
 
     // Studio metadata was previously persisted to `_supatype.schema_state` only on
     // the up-to-date branch above, so any project whose last push applied a
-    // migration had null `ast_snapshot`/`admin_config` — leaving Studio with no
+    // migration had null `ast_snapshot`/`admin_config`, leaving Studio with no
     // server-side schema source. Refresh it here too; failure must not undo an
     // applied migration, so it only warns.
     if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
@@ -333,11 +323,15 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     }
 
     info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
+    // The schema's own warnings first (a bucket rule left out, say), then what the database looked
+    // like once applied. Both used to be visible only to `supatype diff`, so a push said nothing
+    // about an operation it had just made unreachable.
+    let warnings: Vec<&String> = diff.warnings.iter().chain(&drift_warnings).collect();
     Ok(Json(serde_json::json!({
         "status": "applied",
         "name": migration_name,
         "operations": diff.operations.len(),
-        "warnings": drift_warnings
+        "warnings": warnings
     })))
 }
 
@@ -471,6 +465,7 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse {
                     error: format!("Migration {name} has no schema snapshot"),
+                    ..Default::default()
                 }),
             )),
         }
@@ -497,7 +492,7 @@ pub async fn rollback(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::
     Ok(Json(serde_json::to_value(&result).unwrap()))
 }
 
-// ── Studio config (DB) — latest persisted AdminConfig ─────────────────────
+// ── Studio config (DB): latest persisted AdminConfig ─────────────────────
 
 /// Returns the AdminConfig JSON stored at last successful `push`.
 /// Single-tenant: resolve `DATABASE_URL` from the engine environment (or optional body for CLI).
@@ -513,12 +508,13 @@ pub async fn studio_config(
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: "No schema pushed yet. Run: supatype push".to_string(),
+                ..Default::default()
             }),
         )),
     }
 }
 
-// ── SQL execution (DB) — dev / self-host Studio only ────────────────────────
+// ── SQL execution (DB): dev / self-host Studio only ────────────────────────
 //
 // Multi-tenant deployments should route SQL through the cloud control plane (org-scoped proxy with
 // SET LOCAL ROLE), not this endpoint. Here, `DATABASE_URL` is the single project database.
@@ -550,7 +546,7 @@ pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
 
-// ── Doctor (DB — read-only drift report) ────────────────────────────────────
+// ── Doctor (DB: read-only drift report) ────────────────────────────────────
 
 pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     let ast_json = require_ast(&req.ast)?;
@@ -564,7 +560,7 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
 
-// ── Adopt (DB — stamp managed comments) ─────────────────────────────────────
+// ── Adopt (DB: stamp managed comments) ─────────────────────────────────────
 
 pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     use crate::state::migration_history;
@@ -575,23 +571,19 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
     let pool = connect_db(&url).await?;
 
     // Adopt hand-wrote this sequence and had already fallen behind it (no
-    // `schema_state` studio columns, no migrations-column repairs) — the exact
+    // `schema_state` studio columns, no migrations-column repairs), the exact
     // drift `bootstrap_internal_state` exists to prevent.
     migration_history::bootstrap_internal_state(&pool)
         .await
         .map_err(engine_error)?;
 
-    let db_state = if req.no_cache {
-        crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?
-    } else if let Some(cached) = migration_history::load_schema_state(&pool).await {
-        cached
-    } else {
-        crate::introspector::introspect(&pool, &req.schema)
-            .await
-            .map_err(engine_error)?
-    };
+    if req.no_cache {
+        tracing::warn!("{}", migration_history::NO_CACHE_NOTICE);
+    }
+    // Live, as push reads it, so adopt stamps exactly what push would refuse.
+    let db_state = crate::introspector::introspect(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
 
     let stamp_sql = crate::differ::doctor::adopt_stamp_sql(&ast, &db_state, &req.schema);
     let doctor_report = crate::differ::doctor::report(&ast, &db_state);
@@ -651,12 +643,32 @@ async fn load_previous_schema(pool: &PgPool) -> Option<crate::parser::ast::Schem
         .and_then(|v| serde_json::from_value(v).ok())
 }
 
+/// A refused push, as 409 with the reason and tables when it is one a caller can act on.
+fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
+    use crate::generator::sql::migration::{UnmanagedModelTables, UNMANAGED_MODEL_TABLES};
+    let Some(refusal) = e.downcast_ref::<UnmanagedModelTables>() else {
+        return engine_error(e);
+    };
+    error!(tables = ?refusal.tables, "push refused: unmanaged model tables");
+    (
+        StatusCode::CONFLICT,
+        Json(ErrorResponse {
+            error: refusal.to_string(),
+            reason: Some(UNMANAGED_MODEL_TABLES),
+            tables: Some(refusal.tables.clone()),
+        }),
+    )
+}
+
 fn engine_error(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
     let msg = e.to_string();
     error!(%msg, "engine error");
     (
         StatusCode::UNPROCESSABLE_ENTITY,
-        Json(ErrorResponse { error: msg }),
+        Json(ErrorResponse {
+            error: msg,
+            ..Default::default()
+        }),
     )
 }
 
@@ -669,6 +681,7 @@ fn require_ast(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: "Missing 'ast' field in request body".to_string(),
+                ..Default::default()
             }),
         )),
     }
@@ -700,10 +713,8 @@ fn resolve_database_url(
             if !body.is_empty() && body != env {
                 return Err((
                     StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: "database_url in request body is not allowed when DATABASE_URL is configured on the engine"
-                            .to_string(),
-                    }),
+                    Json(ErrorResponse { error: "database_url in request body is not allowed when DATABASE_URL is configured on the engine"
+                            .to_string(), ..Default::default() }),
                 ));
             }
         }
@@ -713,10 +724,8 @@ fn resolve_database_url(
     explicit.filter(|s| !s.is_empty()).ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: "DATABASE_URL is not set on the schema engine. Configure it for the engine service (or pass database_url from a trusted proxy)."
-                    .to_string(),
-            }),
+            Json(ErrorResponse { error: "DATABASE_URL is not set on the schema engine. Configure it for the engine service (or pass database_url from a trusted proxy)."
+                    .to_string(), ..Default::default() }),
         )
     })
 }
@@ -793,6 +802,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "Schema must not be empty".to_string(),
+                    ..Default::default()
                 }),
             ));
         }
@@ -806,6 +816,7 @@ mod tests {
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: "Invalid schema identifier".to_string(),
+                    ..Default::default()
                 }),
             ));
         }

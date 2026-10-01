@@ -62,6 +62,7 @@ jobs:
             --test column_shape_tests \
             --test implicit_index_tests \
             --test storage_grant_tests \
+            --test storage_rule_tests \
             --test seed_ir_tests \
             --test seed_validate_tests \
             --test seed_plan_tests \
@@ -122,7 +123,7 @@ jobs:
           sdk: stable
 
       # ── Run all exec tests ──────────────────────────────────────────────────
-      - name: Run SDK exec tests (hard-fail — all toolchains present)
+      - name: Run SDK exec tests (hard-fail, all toolchains present)
         env:
           SUPATYPE_FORCE_EXEC_TESTS: "1"
         run: cargo test --test sdk_exec_tests -- --nocapture
@@ -168,6 +169,8 @@ jobs:
             --test schema_isolation_tests \
             --test studio_members_tests \
             --test table_adoption_tests \
+            --test live_state_tests \
+            --test storage_policy_sweep_tests \
             --test table_ownership_tests \
             --test field_access_contract_tests \
             --test field_access_tamper_tests \
