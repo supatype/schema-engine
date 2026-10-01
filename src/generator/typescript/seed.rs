@@ -221,7 +221,7 @@ fn render_create(model: &SeedModel, all: &[SeedModel]) -> String {
     let mut lines = String::new();
 
     for column in &model.columns {
-        let covered = covered_by_relation(model, column);
+        let covered = covered_by_relation(model, column, all);
         if covered && !column.optional_on_insert {
             lines.push_str("  /** Required: set this, or name the row through its relation. */\n");
         }
@@ -256,11 +256,20 @@ fn render_create(model: &SeedModel, all: &[SeedModel]) -> String {
 /// the author would have to supply the id they are trying not to hardcode. Marked
 /// optional here and enforced by the column's own `NOT NULL`, which the error mapper
 /// reports in schema terms rather than as a Postgres code.
-fn covered_by_relation(model: &SeedModel, column: &SeedColumn) -> bool {
+fn covered_by_relation(model: &SeedModel, column: &SeedColumn, all: &[SeedModel]) -> bool {
     model.relations.iter().any(|relation| {
         relation.kind == RelationKind::BelongsTo
             && relation.foreign_key.as_deref() == Some(column.name.as_str())
+            && seeds(all, &relation.target)
     })
+}
+
+/// Whether the builder has a model for this target, and so a `...Where` type to name its rows by.
+///
+/// Not the case for a system target such as the auth user a profile belongs to, which lives in
+/// another schema and is not seeded here. A relation to one is set through its key column.
+fn seeds(all: &[SeedModel], target: &str) -> bool {
+    all.iter().any(|model| model.name == target)
 }
 
 /// One relation's line in a create shape, or nothing when it cannot be written that way.
@@ -270,6 +279,7 @@ fn relation_input(relation: &SeedRelation, all: &[SeedModel]) -> Option<String> 
 
     match relation.kind {
         // This side holds the key, so the row is named rather than created.
+        RelationKind::BelongsTo if !seeds(all, target) => None,
         RelationKind::BelongsTo => Some(format!(
             "  /** Point at an existing `{target}`. The foreign key `{}` takes its id. */\n  \
              {field}?: {{ connect: {target}Where }}\n",
@@ -926,5 +936,34 @@ mod tests {
             "a generated TypeScript file documents itself with `/** */`:\n{out}"
         );
         assert_contains(&out, "/**\n * The schema this builder was generated from.");
+    }
+
+    /// A relation to something the builder has no model for, such as the auth user a profile
+    /// belongs to, cannot be written as `{ connect }`: there is no `...Where` type to name it by.
+    /// It emitted `{ connect: supatype:userWhere }`, which is not TypeScript, and every app that
+    /// imported the builder failed to type-check. The key column is set directly instead.
+    #[test]
+    fn a_relation_to_a_model_it_does_not_seed_is_set_by_its_key() {
+        let ast: SchemaAst = serde_json::from_str(
+            r#"{
+            "astVersion": 2,
+            "models": [{
+                "name": "Profile",
+                "fields": {
+                    "id": {"kind": "uuid", "required": true, "primaryKey": true},
+                    "authUser": {
+                        "kind": "relation", "cardinality": "belongsTo", "target": "supatype:user",
+                        "required": true, "annotations": {"db": {"foreignKey": "auth_user_id"}}
+                    }
+                },
+                "annotations": {"db": {"tableName": "profile"}}
+            }]
+        }"#,
+        )
+        .expect("the fixture parses");
+        let out = generate(&ast).expect("the builder renders");
+        assert!(!out.contains("supatype:userWhere"), "got:\n{out}");
+        assert!(!out.contains("authUser?:"), "got:\n{out}");
+        assert_contains(&out, "  auth_user_id: ");
     }
 }
