@@ -206,7 +206,7 @@ pub enum FieldAst {
     // Geo / vector
     Geo(GeoFieldAst),
     Vector(VectorFieldAst),
-    // Repeatable blocks — stored as JSONB array with type discriminator.
+    // Repeatable blocks, stored as a JSONB array with a type discriminator.
     Blocks(BlocksFieldAst),
     // Plugin-defined custom field type
     Custom(CustomFieldAst),
@@ -368,7 +368,7 @@ pub enum StorageAccessMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageFieldAst {
-    pub pg_type: String, // JSONB — stores storage reference
+    pub pg_type: String, // JSONB holding the storage reference
     pub required: bool,
     pub bucket: String,
     #[serde(default)]
@@ -407,7 +407,7 @@ pub struct VectorFieldAst {
     pub annotations: FieldAnnotations,
 }
 
-/// A repeatable-blocks field — stored as a JSONB array where each entry has a
+/// A repeatable-blocks field, stored as a JSONB array where each entry has a
 /// `"type"` discriminator key and a `"data"` object with the block's fields.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -522,7 +522,7 @@ pub struct AccessAst {
     /// An update policy has both: `USING` picks the rows that may be changed and
     /// `WITH CHECK` constrains what they may be changed *into*. With one rule for
     /// both, "you may edit your own posts" also silently means "you may reassign
-    /// one to somebody else" is refused — usually right, but it makes rules like
+    /// one to somebody else" is refused. That is usually right, but it makes rules like
     /// "an editor may move a post between their own sites" inexpressible. When
     /// absent, `update` is used for both, which is the safe default and what every
     /// existing schema means.
@@ -577,11 +577,11 @@ pub enum AccessRule {
     Role {
         roles: Vec<String>,
     },
-    /// OR-join of multiple rules — any one matching grants access.
+    /// OR-join of multiple rules: any one matching grants access.
     Any {
         rules: Vec<AccessRule>,
     },
-    /// AND-join — every rule must match.
+    /// AND-join: every rule must match.
     All {
         rules: Vec<AccessRule>,
     },
@@ -636,7 +636,7 @@ pub enum AccessRule {
 pub enum MembershipSource {
     /// A JWT claim holding an array, e.g. `app_metadata.sites`.
     Claim { path: String },
-    /// Rows of another table — a join table, typically. `where` narrows it to the
+    /// Rows of another table, typically a join table. `where` narrows it to the
     /// caller's own rows, which is what makes it a membership check rather than a
     /// lookup of everything.
     Rows {
@@ -664,7 +664,7 @@ pub enum Operand {
     /// A constant supplied in the schema.
     Literal { value: LiteralValue },
 
-    /// `now()` — transaction start time.
+    /// `now()`, the transaction start time.
     ///
     /// Deliberately not `clock_timestamp()`: that is VOLATILE, which would make the
     /// generated `can_*` functions' `STABLE` declaration a lie and defeat the
@@ -672,7 +672,7 @@ pub enum Operand {
     /// A closed operand set is what prevents anyone reaching for the volatile one.
     Now,
 
-    /// `date_trunc(unit, now())` — the start of the current day, week, month or year.
+    /// `date_trunc(unit, now())`, the start of the current day, week, month or year.
     StartOf { unit: TruncUnit },
 
     /// `now() - INTERVAL 'n unit'`.
@@ -827,7 +827,7 @@ impl IntervalSpec {
 /// Interval unit for [`Operand::Ago`] / [`Operand::FromNow`].
 ///
 /// A closed set, so the rendered interval is assembled from a parsed integer and a
-/// keyword chosen here — the author's text never reaches Postgres.
+/// keyword chosen here, so the author's text never reaches Postgres.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TimeUnit {
@@ -895,7 +895,7 @@ pub struct ModelOptions {
     pub timestamps: bool,
     #[serde(default)]
     pub soft_delete: bool,
-    /// When true the model is a singleton (global config) — exactly one row enforced.
+    /// When true the model is a singleton (global config), with exactly one row enforced.
     #[serde(default)]
     pub singleton: bool,
     /// Drafts and version history, when the model declares `versions`.
@@ -904,6 +904,16 @@ pub struct ModelOptions {
     /// adds a table per model, so it is opt-in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub versions: Option<VersionsAst>,
+    /// What Studio calls one record, when the project overrides the name derived from the type.
+    ///
+    /// Presentation only: carried into `admin-config.json` and nowhere else, so changing it never
+    /// produces a migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// What Studio calls many records, when the project overrides it. Studio inflects
+    /// [`ModelOptions::label`] when this is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_plural: Option<String>,
 }
 
 /// What a model's `versions` declaration asked for.

@@ -159,6 +159,10 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     json!({
         "name": model.name,
         "tableName": model.table_name(),
+        // The project's own words for the model, null when it left them to Studio, which then
+        // derives both from `name`.
+        "label": model.options.label,
+        "labelPlural": model.options.label_plural,
         "constraints": constraints,
         "indexes": indexes,
         "singleton": model.options.singleton,
@@ -240,7 +244,7 @@ fn derive_list_columns(
 ///
 /// With nothing declared, every text-like column stays searchable, which is what every existing
 /// schema already gets: this is an opt-in narrowing, not a new requirement. A declared name that
-/// matches no field is dropped rather than trusted — the CLI refuses those, so one arriving here
+/// matches no field is dropped rather than trusted. The CLI refuses those, so one arriving here
 /// means a hand-written AST, and searching a column that does not exist is an error from PostgREST
 /// on every keystroke.
 fn derive_search_fields(model: &ModelAst) -> Vec<String> {
@@ -838,7 +842,7 @@ fn field_is_read_only(field: &FieldAst) -> bool {
     }
 }
 
-/// DB-assigned columns (defaults, sequences, audit timestamps) — read-only in Studio.
+/// DB-assigned columns (defaults, sequences, audit timestamps), read-only in Studio.
 fn field_is_server_managed(field: &FieldAst) -> bool {
     match field {
         FieldAst::Datetime(f) | FieldAst::Timestamp(f) | FieldAst::Date(f) => {
