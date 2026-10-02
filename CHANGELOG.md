@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/supatype/schema-engine/compare/v0.5.0...v0.6.0) (2026-10-02)
+
+
+### Features
+
+* **admin:** carry a model's label overrides into admin-config.json ([3b56e5c](https://github.com/supatype/schema-engine/commit/3b56e5c95aebe1ac4f91ea11cd23e4ee5bbd7d7b))
+* **admin:** carry a model's label overrides into admin-config.json ([7d65c59](https://github.com/supatype/schema-engine/commit/7d65c59e995ddc4a2498c38b5d8429bc3f028c40))
+
 ## [0.5.0](https://github.com/supatype/schema-engine/compare/v0.4.2...v0.5.0) (2026-10-01)
 
 
