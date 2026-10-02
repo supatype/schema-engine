@@ -56,6 +56,7 @@ jobs:
             --test field_access_validation_tests \
             --test field_write_privileges_tests \
             --test versions_tests \
+            --test admin_labels_tests \
             --test generated_types_contract_tests \
             --test exact_value_types_tests \
             --test sdk_exact_value_types_tests \
