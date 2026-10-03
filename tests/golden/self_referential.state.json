@@ -1,0 +1,924 @@
+{
+  "database": {
+    "schema": "public",
+    "tables": [
+      {
+        "schema": "public",
+        "name": "categories",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "slug",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "parent_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": true,
+            "default": null,
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "depth",
+            "dataType": "integer",
+            "udtName": "int4",
+            "nullable": false,
+            "default": "0",
+            "ordinalPosition": 5,
+            "numericPrecision": 32,
+            "numericScale": 0
+          },
+          {
+            "name": "path",
+            "dataType": "ARRAY",
+            "udtName": "_text",
+            "nullable": true,
+            "default": null,
+            "ordinalPosition": 6,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 7,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 8,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=categories;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "employees",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "email",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "manager_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": true,
+            "default": null,
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 5,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 6,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=employees;fields=;v=1"
+      }
+    ],
+    "indexes": [
+      {
+        "table": "categories",
+        "name": "categories_parent_id_idx",
+        "columns": [
+          "parent_id"
+        ],
+        "unique": false,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": "supatype:managed;kind=index;table=categories;fields=parent_id;v=1",
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE INDEX categories_parent_id_idx ON public.categories USING btree (parent_id)"
+      },
+      {
+        "table": "categories",
+        "name": "categories_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX categories_pkey ON public.categories USING btree (id)"
+      },
+      {
+        "table": "categories",
+        "name": "categories_slug_key",
+        "columns": [
+          "slug"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX categories_slug_key ON public.categories USING btree (slug)"
+      },
+      {
+        "table": "employees",
+        "name": "employees_email_key",
+        "columns": [
+          "email"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX employees_email_key ON public.employees USING btree (email)"
+      },
+      {
+        "table": "employees",
+        "name": "employees_manager_id_idx",
+        "columns": [
+          "manager_id"
+        ],
+        "unique": false,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": "supatype:managed;kind=index;table=employees;fields=manager_id;v=1",
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE INDEX employees_manager_id_idx ON public.employees USING btree (manager_id)"
+      },
+      {
+        "table": "employees",
+        "name": "employees_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX employees_pkey ON public.employees USING btree (id)"
+      }
+    ],
+    "constraints": [
+      {
+        "table": "categories",
+        "name": "categories_parent_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "parent_id"
+        ],
+        "foreignTable": "categories",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "SET NULL",
+        "comment": null
+      },
+      {
+        "table": "categories",
+        "name": "categories_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "categories",
+        "name": "categories_slug_key",
+        "constraintType": "unique",
+        "columns": [
+          "slug"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=categories;fields=slug;v=1"
+      },
+      {
+        "table": "employees",
+        "name": "employees_email_check",
+        "constraintType": "check",
+        "columns": [],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": "CHECK ((email ~* '^[^@]+@[^@]+\\.[^@]+$'::text))",
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "employees",
+        "name": "employees_email_key",
+        "constraintType": "unique",
+        "columns": [
+          "email"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=employees;fields=email;v=1"
+      },
+      {
+        "table": "employees",
+        "name": "employees_manager_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "manager_id"
+        ],
+        "foreignTable": "employees",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "SET NULL",
+        "comment": null
+      },
+      {
+        "table": "employees",
+        "name": "employees_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      }
+    ],
+    "rlsPolicies": [
+      {
+        "table": "categories",
+        "name": "categories_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "categories",
+        "name": "categories_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "managed": true
+      },
+      {
+        "table": "categories",
+        "name": "categories_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "managed": true
+      },
+      {
+        "table": "categories",
+        "name": "categories_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "true",
+        "checkExpr": null,
+        "managed": true
+      }
+    ],
+    "triggers": [
+      {
+        "table": "categories",
+        "name": "categories_slug_trigger",
+        "event": "INSERT",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
+      },
+      {
+        "table": "categories",
+        "name": "categories_slug_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
+      },
+      {
+        "table": "categories",
+        "name": "categories_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "employees",
+        "name": "employees_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      }
+    ],
+    "extensions": [
+      "pgcrypto",
+      "plpgsql",
+      "unaccent"
+    ],
+    "enums": [],
+    "rlsEnabledTables": [
+      "categories",
+      "employees"
+    ]
+  },
+  "catalog": {
+    "expressionIndexes": [],
+    "triggers": [
+      {
+        "schema": "public",
+        "table": "categories",
+        "name": "categories_slug_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "INSERT",
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_categories_slug",
+        "definition": "CREATE TRIGGER categories_slug_trigger BEFORE INSERT OR UPDATE ON public.categories FOR EACH ROW EXECUTE FUNCTION _platform.set_categories_slug()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "name": "categories_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER categories_updated_at_trigger BEFORE UPDATE ON public.categories FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "employees",
+        "name": "employees_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER employees_updated_at_trigger BEFORE UPDATE ON public.employees FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      }
+    ],
+    "functions": [
+      {
+        "schema": "_platform",
+        "name": "set_categories_slug",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "set_updated_at",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "slugify",
+        "identityArguments": "val text",
+        "returnType": "text",
+        "language": "plpgsql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_max",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_min",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_max",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_min",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "richtext_text",
+        "identityArguments": "v jsonb",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim",
+        "identityArguments": "claim_path text",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim_text",
+        "identityArguments": "claim_path text",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "email",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "jwt",
+        "identityArguments": "",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "role",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "roles",
+        "identityArguments": "",
+        "returnType": "text[]",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "uid",
+        "identityArguments": "",
+        "returnType": "uuid",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_employees",
+        "identityArguments": "employees employees",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"employees\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_employees",
+        "identityArguments": "employees employees",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"employees\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_employees",
+        "identityArguments": "employees employees",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"employees\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_employees",
+        "identityArguments": "employees employees",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"employees\";\n  ",
+        "comment": null
+      }
+    ],
+    "views": [],
+    "schemas": [
+      {
+        "name": "_platform",
+        "comment": null
+      },
+      {
+        "name": "_supatype",
+        "comment": null
+      },
+      {
+        "name": "auth",
+        "comment": null
+      },
+      {
+        "name": "public",
+        "comment": "standard public schema"
+      }
+    ],
+    "sequences": [],
+    "enumTypes": [],
+    "tableGrants": [
+      {
+        "schema": "public",
+        "table": "categories",
+        "grantee": "anon",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "employees",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      }
+    ],
+    "columnGrants": [],
+    "securityLabels": [],
+    "cronJobs": [],
+    "rlsAttributes": [
+      {
+        "schema": "auth",
+        "table": "users",
+        "enabled": false,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "employees",
+        "enabled": true,
+        "forced": false
+      }
+    ],
+    "policyRoles": [
+      {
+        "table": "categories",
+        "policy": "categories_delete",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "categories",
+        "policy": "categories_insert",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "categories",
+        "policy": "categories_select",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "categories",
+        "policy": "categories_update",
+        "roles": [
+          "public"
+        ]
+      }
+    ]
+  }
+}

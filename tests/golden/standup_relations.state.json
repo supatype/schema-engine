@@ -1,0 +1,841 @@
+{
+  "database": {
+    "schema": "public",
+    "tables": [
+      {
+        "schema": "public",
+        "name": "profile",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "display_name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=profile;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "team",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "slug",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "owner_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=team;fields=;v=1"
+      }
+    ],
+    "indexes": [
+      {
+        "table": "profile",
+        "name": "profile_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX profile_pkey ON public.profile USING btree (id)"
+      },
+      {
+        "table": "team",
+        "name": "team_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX team_pkey ON public.team USING btree (id)"
+      },
+      {
+        "table": "team",
+        "name": "team_slug_key",
+        "columns": [
+          "slug"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX team_slug_key ON public.team USING btree (slug)"
+      }
+    ],
+    "constraints": [
+      {
+        "table": "profile",
+        "name": "profile_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "team",
+        "name": "team_owner_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "owner_id"
+        ],
+        "foreignTable": "profile",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "team",
+        "name": "team_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "team",
+        "name": "team_slug_key",
+        "constraintType": "unique",
+        "columns": [
+          "slug"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=team;fields=slug;v=1"
+      }
+    ],
+    "rlsPolicies": [
+      {
+        "table": "profile",
+        "name": "profile_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "profile",
+        "name": "profile_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "managed": true
+      },
+      {
+        "table": "profile",
+        "name": "profile_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "managed": true
+      },
+      {
+        "table": "profile",
+        "name": "profile_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "true",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "team",
+        "name": "team_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "team",
+        "name": "team_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "managed": true
+      },
+      {
+        "table": "team",
+        "name": "team_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'authenticated'::text)",
+        "managed": true
+      },
+      {
+        "table": "team",
+        "name": "team_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "true",
+        "checkExpr": null,
+        "managed": true
+      }
+    ],
+    "triggers": [
+      {
+        "table": "profile",
+        "name": "profile_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "team",
+        "name": "team_slug_trigger",
+        "event": "INSERT",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_team_slug()"
+      },
+      {
+        "table": "team",
+        "name": "team_slug_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_team_slug()"
+      }
+    ],
+    "extensions": [
+      "pgcrypto",
+      "plpgsql",
+      "unaccent"
+    ],
+    "enums": [],
+    "rlsEnabledTables": [
+      "profile",
+      "team"
+    ]
+  },
+  "catalog": {
+    "expressionIndexes": [],
+    "triggers": [
+      {
+        "schema": "public",
+        "table": "profile",
+        "name": "profile_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER profile_updated_at_trigger BEFORE UPDATE ON public.profile FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "team",
+        "name": "team_slug_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "INSERT",
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_team_slug",
+        "definition": "CREATE TRIGGER team_slug_trigger BEFORE INSERT OR UPDATE ON public.team FOR EACH ROW EXECUTE FUNCTION _platform.set_team_slug()",
+        "enabled": true,
+        "comment": null
+      }
+    ],
+    "functions": [
+      {
+        "schema": "_platform",
+        "name": "set_team_slug",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "set_updated_at",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "slugify",
+        "identityArguments": "val text",
+        "returnType": "text",
+        "language": "plpgsql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_max",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_min",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_max",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_min",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "richtext_text",
+        "identityArguments": "v jsonb",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim",
+        "identityArguments": "claim_path text",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim_text",
+        "identityArguments": "claim_path text",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "email",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "jwt",
+        "identityArguments": "",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "role",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "roles",
+        "identityArguments": "",
+        "returnType": "text[]",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "uid",
+        "identityArguments": "",
+        "returnType": "uuid",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_profile",
+        "identityArguments": "profile profile",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_team",
+        "identityArguments": "team team",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.role()) = 'authenticated'\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_profile",
+        "identityArguments": "profile profile",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_team",
+        "identityArguments": "team team",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.uid()) = \"owner_id\"\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_profile",
+        "identityArguments": "profile profile",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_team",
+        "identityArguments": "team team",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_profile",
+        "identityArguments": "profile profile",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_team",
+        "identityArguments": "team team",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT (SELECT auth.uid()) = \"owner_id\"\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
+        "comment": null
+      }
+    ],
+    "views": [],
+    "schemas": [
+      {
+        "name": "_platform",
+        "comment": null
+      },
+      {
+        "name": "_supatype",
+        "comment": null
+      },
+      {
+        "name": "auth",
+        "comment": null
+      },
+      {
+        "name": "public",
+        "comment": "standard public schema"
+      }
+    ],
+    "sequences": [],
+    "enumTypes": [],
+    "tableGrants": [
+      {
+        "schema": "public",
+        "table": "profile",
+        "grantee": "anon",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "profile",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "profile",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "team",
+        "grantee": "anon",
+        "privileges": [
+          "SELECT"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "team",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "team",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      }
+    ],
+    "columnGrants": [],
+    "securityLabels": [],
+    "cronJobs": [],
+    "rlsAttributes": [
+      {
+        "schema": "auth",
+        "table": "users",
+        "enabled": false,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "profile",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "team",
+        "enabled": true,
+        "forced": false
+      }
+    ],
+    "policyRoles": [
+      {
+        "table": "profile",
+        "policy": "profile_delete",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "profile",
+        "policy": "profile_insert",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "profile",
+        "policy": "profile_select",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "profile",
+        "policy": "profile_update",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "team",
+        "policy": "team_delete",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "team",
+        "policy": "team_insert",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "team",
+        "policy": "team_select",
+        "roles": [
+          "public"
+        ]
+      },
+      {
+        "table": "team",
+        "policy": "team_update",
+        "roles": [
+          "public"
+        ]
+      }
+    ]
+  }
+}

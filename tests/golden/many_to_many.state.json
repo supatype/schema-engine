@@ -1,0 +1,1090 @@
+{
+  "database": {
+    "schema": "public",
+    "tables": [
+      {
+        "schema": "public",
+        "name": "course_tags",
+        "columns": [
+          {
+            "name": "tag_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "course_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=course_tags;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "courses",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "title",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "slug",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "credits",
+            "dataType": "smallint",
+            "udtName": "int2",
+            "nullable": false,
+            "default": "3",
+            "ordinalPosition": 4,
+            "numericPrecision": 16,
+            "numericScale": 0
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 5,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 6,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=courses;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "enrollments",
+        "columns": [
+          {
+            "name": "student_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "course_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=enrollments;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "students",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "email",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 5,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=students;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "tags",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=tags;fields=;v=1"
+      }
+    ],
+    "indexes": [
+      {
+        "table": "course_tags",
+        "name": "course_tags_pkey",
+        "columns": [
+          "tag_id",
+          "course_id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX course_tags_pkey ON public.course_tags USING btree (tag_id, course_id)"
+      },
+      {
+        "table": "courses",
+        "name": "courses_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX courses_pkey ON public.courses USING btree (id)"
+      },
+      {
+        "table": "courses",
+        "name": "courses_slug_key",
+        "columns": [
+          "slug"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX courses_slug_key ON public.courses USING btree (slug)"
+      },
+      {
+        "table": "enrollments",
+        "name": "enrollments_pkey",
+        "columns": [
+          "student_id",
+          "course_id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX enrollments_pkey ON public.enrollments USING btree (student_id, course_id)"
+      },
+      {
+        "table": "students",
+        "name": "students_email_key",
+        "columns": [
+          "email"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX students_email_key ON public.students USING btree (email)"
+      },
+      {
+        "table": "students",
+        "name": "students_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX students_pkey ON public.students USING btree (id)"
+      },
+      {
+        "table": "tags",
+        "name": "tags_name_key",
+        "columns": [
+          "name"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX tags_name_key ON public.tags USING btree (name)"
+      },
+      {
+        "table": "tags",
+        "name": "tags_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX tags_pkey ON public.tags USING btree (id)"
+      }
+    ],
+    "constraints": [
+      {
+        "table": "course_tags",
+        "name": "course_tags_course_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "course_id"
+        ],
+        "foreignTable": "courses",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "course_tags",
+        "name": "course_tags_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "tag_id",
+          "course_id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "course_tags",
+        "name": "course_tags_tag_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "tag_id"
+        ],
+        "foreignTable": "tags",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "courses",
+        "name": "courses_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "courses",
+        "name": "courses_slug_key",
+        "constraintType": "unique",
+        "columns": [
+          "slug"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=courses;fields=slug;v=1"
+      },
+      {
+        "table": "enrollments",
+        "name": "enrollments_course_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "course_id"
+        ],
+        "foreignTable": "courses",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "enrollments",
+        "name": "enrollments_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "student_id",
+          "course_id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "enrollments",
+        "name": "enrollments_student_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "student_id"
+        ],
+        "foreignTable": "students",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "students",
+        "name": "students_email_check",
+        "constraintType": "check",
+        "columns": [],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": "CHECK ((email ~* '^[^@]+@[^@]+\\.[^@]+$'::text))",
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "students",
+        "name": "students_email_key",
+        "constraintType": "unique",
+        "columns": [
+          "email"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=students;fields=email;v=1"
+      },
+      {
+        "table": "students",
+        "name": "students_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "tags",
+        "name": "tags_name_key",
+        "constraintType": "unique",
+        "columns": [
+          "name"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1"
+      },
+      {
+        "table": "tags",
+        "name": "tags_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      }
+    ],
+    "rlsPolicies": [],
+    "triggers": [
+      {
+        "table": "courses",
+        "name": "courses_slug_trigger",
+        "event": "INSERT",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_courses_slug()"
+      },
+      {
+        "table": "courses",
+        "name": "courses_slug_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_courses_slug()"
+      },
+      {
+        "table": "courses",
+        "name": "courses_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "students",
+        "name": "students_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      }
+    ],
+    "extensions": [
+      "pgcrypto",
+      "plpgsql",
+      "unaccent"
+    ],
+    "enums": [],
+    "rlsEnabledTables": [
+      "enrollments",
+      "course_tags",
+      "students",
+      "courses",
+      "tags"
+    ]
+  },
+  "catalog": {
+    "expressionIndexes": [],
+    "triggers": [
+      {
+        "schema": "public",
+        "table": "courses",
+        "name": "courses_slug_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "INSERT",
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_courses_slug",
+        "definition": "CREATE TRIGGER courses_slug_trigger BEFORE INSERT OR UPDATE ON public.courses FOR EACH ROW EXECUTE FUNCTION _platform.set_courses_slug()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "courses",
+        "name": "courses_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER courses_updated_at_trigger BEFORE UPDATE ON public.courses FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "students",
+        "name": "students_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER students_updated_at_trigger BEFORE UPDATE ON public.students FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      }
+    ],
+    "functions": [
+      {
+        "schema": "_platform",
+        "name": "set_courses_slug",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "set_updated_at",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "slugify",
+        "identityArguments": "val text",
+        "returnType": "text",
+        "language": "plpgsql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_max",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_min",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_max",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_min",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "richtext_text",
+        "identityArguments": "v jsonb",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim",
+        "identityArguments": "claim_path text",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim_text",
+        "identityArguments": "claim_path text",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "email",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "jwt",
+        "identityArguments": "",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "role",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "roles",
+        "identityArguments": "",
+        "returnType": "text[]",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "uid",
+        "identityArguments": "",
+        "returnType": "uuid",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_courses",
+        "identityArguments": "courses courses",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_students",
+        "identityArguments": "students students",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_courses",
+        "identityArguments": "courses courses",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_students",
+        "identityArguments": "students students",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_courses",
+        "identityArguments": "courses courses",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_students",
+        "identityArguments": "students students",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_courses",
+        "identityArguments": "courses courses",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_students",
+        "identityArguments": "students students",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      }
+    ],
+    "views": [],
+    "schemas": [
+      {
+        "name": "_platform",
+        "comment": null
+      },
+      {
+        "name": "_supatype",
+        "comment": null
+      },
+      {
+        "name": "auth",
+        "comment": null
+      },
+      {
+        "name": "public",
+        "comment": "standard public schema"
+      }
+    ],
+    "sequences": [],
+    "enumTypes": [],
+    "tableGrants": [
+      {
+        "schema": "public",
+        "table": "courses",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "students",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "tags",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      }
+    ],
+    "columnGrants": [],
+    "securityLabels": [],
+    "cronJobs": [],
+    "rlsAttributes": [
+      {
+        "schema": "auth",
+        "table": "users",
+        "enabled": false,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "course_tags",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "courses",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "enrollments",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "students",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "tags",
+        "enabled": true,
+        "forced": false
+      }
+    ],
+    "policyRoles": []
+  }
+}
