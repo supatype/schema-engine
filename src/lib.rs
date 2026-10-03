@@ -15,6 +15,7 @@ pub mod managed;
 // DB-dependent modules, not needed in WASM context
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desired;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod differ;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod introspector;
