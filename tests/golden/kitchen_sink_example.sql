@@ -1164,7 +1164,7 @@ CREATE SCHEMA IF NOT EXISTS _supatype;
 -- The API roles need to *resolve* names here, because the draft policies on the model
 -- tables call helpers in this schema and a policy expression runs as the caller. Without
 -- it an anonymous read of a versioned model fails `42501 permission denied for schema
--- _supatype` — on published content, which is most of what a reader asks for.
+-- _supatype`, on published content, which is most of what a reader asks for.
 --
 -- USAGE alone discloses nothing: every table here still requires its own grant and none
 -- is given. Functions are the exception, and the reason for the revokes below.
@@ -1741,8 +1741,8 @@ GRANT EXECUTE ON FUNCTION "supatype".unschedule_publish(text, text, integer, tex
 -- them, so they can only publish what they could have published by hand. One implementation, no
 -- second permission model, and no privilege to escalate through.
 --
--- Each record is published in its own block so one failure — a constraint the draft violates, a
--- record deleted since — does not strand every other schedule behind it. The failure is reported as
+-- Each record is published in its own block so one failure (a constraint the draft violates, a
+-- record deleted since) does not strand every other schedule behind it. The failure is reported as
 -- a warning and the schedule cleared, because a schedule that cannot be honoured will not start
 -- working on the next tick and retrying it every minute for ever is worse than saying so once.
 CREATE OR REPLACE FUNCTION _supatype.run_due_publishes(now_at timestamptz DEFAULT now())

@@ -14,7 +14,7 @@ fn is_extension_managed_table(name: &str) -> bool {
 }
 
 /// **Ownership gate.** Destructive operations here are conditional on a table carrying Supatype's
-/// `COMMENT ON TABLE` marker — see `crate::managed::is_managed_comment`.
+/// `COMMENT ON TABLE` marker, as read by `crate::managed::is_managed_comment`.
 ///
 /// Indexes, constraints and RLS policies have been gated this way for a long time; `doctor` even
 /// reports an unmanaged index as "push will not drop; manual decision required". Tables were never
@@ -23,7 +23,7 @@ fn is_extension_managed_table(name: &str) -> bool {
 /// data.
 ///
 /// Additive operations are deliberately not gated: a table you do not own may gain a column, which
-/// is intrusive but recoverable — it may not lose one.
+/// is intrusive but recoverable. It may not lose one.
 pub fn diff(
     ast: &SchemaAst,
     db: &DatabaseState,
@@ -33,14 +33,14 @@ pub fn diff(
 ) -> Result<()> {
     let db_table_names: std::collections::HashSet<&str> =
         db.tables.iter().map(|t| t.name.as_str()).collect();
-    // Junction tables are first-class schema objects — include them so the
+    // Junction tables are first-class schema objects, so they are included: otherwise the
     // "removed table" pass does not drop live M2M tables as orphans (and then
     // skip recreate because they still appear in the initial db snapshot).
     //
     // Snapshot tables likewise, and there the stakes are higher: they carry the managed marker, so
     // the ownership gate below is no protection at all, and dropping one takes every version of
     // every record with it. A model that *stops* declaring `versions` does fall out of this set, so
-    // its history is dropped — destructively, which needs `--force`, which is the right ceremony for
+    // its history is dropped, destructively, which needs `--force`, the right ceremony for
     // deliberately discarding history.
     let versions_tables = crate::generator::sql::versions::versions_tables(ast);
     let schema_table_names: std::collections::HashSet<&str> = ast
@@ -70,7 +70,7 @@ pub fn diff(
     // Only tables Supatype owns are rename *candidates*.
     //
     // Rename detection is a similarity heuristic (jaro-winkler ≥ 0.7), so an unmanaged table whose
-    // name merely resembles a new model would be renamed into it — quietly taking over someone
+    // name merely resembles a new model would be renamed into it, quietly taking over someone
     // else's table, and taking its data with it. That is worse than the drop this gate was written
     // for, because the result looks like a successful migration.
     let removed_tables: Vec<&str> = db
@@ -104,7 +104,7 @@ pub fn diff(
                 risk: Risk::Cautious,
             });
             warnings.push(format!(
-                "Table '{removed}' not found in schema but '{matched_new}' is new — \
+                "Table '{removed}' not found in schema but '{matched_new}' is new, so it is \
                  treating as rename. Run with --force to skip confirmation."
             ));
             renamed_from.insert(removed.to_string());
@@ -115,7 +115,7 @@ pub fn diff(
     for model in &ast.models {
         if !db_table_names.contains(model.table_name()) {
             if renamed_to.contains(model.table_name()) {
-                // This table is the target of a rename — diff columns against the source table
+                // This table is the target of a rename: diff columns against the source table
                 let from_name = ops
                     .iter()
                     .find_map(|op| match op {
@@ -138,7 +138,7 @@ pub fn diff(
                 )?;
                 emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
             } else {
-                // Genuinely new table — create it + FK constraints
+                // Genuinely new table: create it and its FK constraints
                 ops.push(Operation::CreateTable {
                     table: model.table_name().to_string(),
                     model: Box::new(model.clone()),
@@ -147,7 +147,7 @@ pub fn diff(
                 emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
             }
         } else {
-            // Existing table — diff columns
+            // Existing table: diff its columns
             let db_table = db
                 .tables
                 .iter()
@@ -182,14 +182,14 @@ pub fn diff(
             if !crate::managed::is_managed_comment(db_table.comment.as_deref()) {
                 warnings.push(format!(
                     "Table \"{}\" is not managed by Supatype (no ownership marker) and is not in \
-                     your schema — leaving it alone. Run `supatype adopt` to bring it under \
+                     your schema, so it is left alone. Run `supatype adopt` to bring it under \
                      management, or remove it by hand.",
                     db_table.name
                 ));
                 continue;
             }
 
-            // Genuinely removed table — drop FKs then drop table
+            // Genuinely removed table: drop its FKs, then the table
             for constraint in &db.constraints {
                 if constraint.table == db_table.name
                     && constraint.constraint_type == DbConstraintType::ForeignKey

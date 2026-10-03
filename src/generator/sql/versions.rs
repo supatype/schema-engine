@@ -230,7 +230,7 @@ fn settings_sql(publishing: &PublishingAst) -> String {
          -- The API roles need to *resolve* names here, because the draft policies on the model\n\
          -- tables call helpers in this schema and a policy expression runs as the caller. Without\n\
          -- it an anonymous read of a versioned model fails `42501 permission denied for schema\n\
-         -- _supatype` — on published content, which is most of what a reader asks for.\n\
+         -- _supatype`, on published content, which is most of what a reader asks for.\n\
          --\n\
          -- USAGE alone discloses nothing: every table here still requires its own grant and none\n\
          -- is given. Functions are the exception, and the reason for the revokes below.\n\
@@ -786,7 +786,7 @@ fn sees_draft_function_name(table: &str) -> String {
 /// asks.
 ///
 /// **The helper is `SECURITY DEFINER`, and that is the whole point of it.** The policy asks a
-/// question about drafts, and answering it means reading the snapshot table — which `anon`
+/// question about drafts, and answering it means reading the snapshot table, which `anon`
 /// deliberately holds no privilege on. Written inline, as an `EXISTS` over that table, the policy
 /// therefore failed for every anonymous caller with `42501 permission denied for table
 /// <table>_versions`, on ordinary reads of *published* content. A blog served nothing to the public.
@@ -993,12 +993,12 @@ CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
 /// **All four are `SECURITY INVOKER`.** Every write they make is a write the caller could have made
 /// themselves: an insert into the snapshot table, gated by that table's policy, and an update of the
 /// model's row, gated by the model's own `update` rule. Nothing runs with borrowed privilege, so
-/// there is no second permission model to keep in step with the first — which was the whole reason
+/// there is no second permission model to keep in step with the first, which was the whole reason
 /// to generate these rather than write them in application code.
 /// The search path a function that writes a user's table must run under.
 ///
 /// **Not `''`, and that distinction cost a real schema.** An empty search path is right for SQL that
-/// only ever names its own objects, and every reference in these functions is fully qualified — but
+/// only ever names its own objects, and every reference in these functions is fully qualified, but
 /// the `UPDATE` they perform fires the *user's* triggers, and those inherit it. A generated slug
 /// trigger calling `unaccent(...)` unqualified, which is how it is written and how it works for an
 /// ordinary write, then fails with `function unaccent(text) does not exist` and takes the publish
@@ -1439,8 +1439,8 @@ GRANT EXECUTE ON FUNCTION "{rpc}".unschedule_publish(text, text, integer, text[]
 -- them, so they can only publish what they could have published by hand. One implementation, no
 -- second permission model, and no privilege to escalate through.
 --
--- Each record is published in its own block so one failure — a constraint the draft violates, a
--- record deleted since — does not strand every other schedule behind it. The failure is reported as
+-- Each record is published in its own block so one failure (a constraint the draft violates, a
+-- record deleted since) does not strand every other schedule behind it. The failure is reported as
 -- a warning and the schedule cleared, because a schedule that cannot be honoured will not start
 -- working on the next tick and retrying it every minute for ever is worse than saying so once.
 CREATE OR REPLACE FUNCTION {helper}.run_due_publishes(now_at timestamptz DEFAULT now())
