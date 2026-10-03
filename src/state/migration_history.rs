@@ -627,7 +627,7 @@ pub fn insert_migration_sql() -> String {
     format!(
         "INSERT INTO {SCHEMA}.migrations \
          (name, hash, engine_version, schema_snapshot, admin_config, sql_up, sql_down, schema_sources, schema_sources_manifest) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id"
     )
 }
 
@@ -638,7 +638,8 @@ pub struct AppliedMigrationSources {
     pub schema_sources_manifest: Option<serde_json::Value>,
 }
 
-/// Record a successful migration row (same shape as [`insert_migration_sql`]).
+/// Record a successful migration row (same shape as [`insert_migration_sql`]). Returns the row's
+/// id, which the ledger points its rows at.
 pub async fn insert_applied_migration<'e, E>(
     executor: E,
     name: &str,
@@ -647,12 +648,12 @@ pub async fn insert_applied_migration<'e, E>(
     admin_config: Option<serde_json::Value>,
     sql_up: &str,
     sources: &AppliedMigrationSources,
-) -> Result<()>
+) -> Result<i32>
 where
     E: Executor<'e, Database = Postgres>,
 {
     let sql = insert_migration_sql();
-    sqlx::query(&sql)
+    let id = sqlx::query_scalar(&sql)
         .bind(name)
         .bind(hash)
         .bind(env!("ENGINE_VERSION"))
@@ -662,9 +663,9 @@ where
         .bind(sources.sql_down.as_deref())
         .bind(sources.schema_sources.as_deref())
         .bind(sources.schema_sources_manifest.as_ref())
-        .execute(executor)
+        .fetch_one(executor)
         .await?;
-    Ok(())
+    Ok(id)
 }
 
 /// Updates `admin_config` and `schema_snapshot` on the latest non-rolled-back migration row.

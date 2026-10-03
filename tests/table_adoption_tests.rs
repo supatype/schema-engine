@@ -62,7 +62,7 @@ async fn doctor_reports_an_unmanaged_table_absent_from_the_schema() {
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
         let db = introspector::introspect(&pool, "public").await.expect("introspect");
-        let report = doctor::report(&ast, &db);
+        let report = doctor::report(&ast, &db, &[]);
 
         // Not ours, not in the schema: push will leave it, and the report says so in the same words
         // the index and constraint cases use.
@@ -112,7 +112,7 @@ async fn doctor_explains_why_columns_survive_on_an_unstamped_model_table() {
         let db = introspector::introspect(&pool, "public")
             .await
             .expect("introspect");
-        let report = doctor::report(&ast, &db);
+        let report = doctor::report(&ast, &db, &[]);
 
         let unmanaged = messages(&report.unmanaged_drift);
         assert!(
@@ -201,7 +201,7 @@ async fn adopting_a_table_makes_push_manage_it_thereafter() {
         );
 
         // And doctor stops complaining about it.
-        let report = doctor::report(&ast, &after);
+        let report = doctor::report(&ast, &after, &[]);
         assert!(
             !messages(&report.unmanaged_drift)
                 .iter()

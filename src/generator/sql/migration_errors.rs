@@ -2,12 +2,25 @@
 
 use crate::differ::{DiffOutput, Operation};
 
+/// A check constraint the push is adding or replacing, for naming the rows that breach it.
+/// Built by the push from the reconcile's actions, which is where checks live now.
+pub struct CheckSite<'a> {
+    pub table: &'a str,
+    pub constraint: &'a str,
+    pub expression: &'a str,
+}
+
 /// Turn raw Postgres / driver errors into actionable guidance when possible.
 ///
 /// `diff` lets a message name the column at fault. Postgres reports an impossible column conversion
-/// as bare `cannot cast type integer to uuid` — no table, no column, no hint that a schema field is
-/// what asked for it — and the diff is the only place that correspondence exists.
-pub fn enrich_migration_error(raw: &str, diff: Option<&DiffOutput>) -> String {
+/// as bare `cannot cast type integer to uuid`: no table, no column, no hint that a schema field is
+/// what asked for it, and the diff is the only place that correspondence exists. `checks` does the
+/// same for a check constraint the rows breach.
+pub fn enrich_migration_error(
+    raw: &str,
+    diff: Option<&DiffOutput>,
+    checks: &[CheckSite<'_>],
+) -> String {
     if let Some((from, to)) = parse_impossible_cast(raw) {
         let site = diff.and_then(|d| find_type_change(d, from, to));
         let what = match &site {
@@ -35,23 +48,15 @@ pub fn enrich_migration_error(raw: &str, diff: Option<&DiffOutput>) -> String {
     }
 
     if let Some(constraint) = parse_check_violation(raw) {
-        // One lookup for all three facts: naming the column and handing over a query that finds the
-        // offending rows is the difference between "your push failed" and "here is what to fix".
-        let site = diff.and_then(|d| find_check_constraint(d, constraint));
+        // Naming the table and handing over a query that finds the offending rows is the
+        // difference between "your push failed" and "here is what to fix".
+        let site = checks.iter().find(|c| c.constraint == constraint);
         let (what, find_them) = match site {
-            Some((table, columns, expression)) => (
-                // Quoted per column, so a cross-column rule reads as two identifiers rather than
-                // one identifier containing a comma.
+            Some(c) => (
+                format!("\"{}\".\"{}\"", c.table, c.constraint),
                 format!(
-                    "\"{table}\".{}",
-                    columns
-                        .split(", ")
-                        .map(|c| format!("\"{c}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                format!(
-                    "• Find the rows that breach it:\n    SELECT * FROM \"{table}\" WHERE NOT ({expression});\n"
+                    "• Find the rows that breach it:\n    SELECT * FROM \"{}\" WHERE NOT ({});\n",
+                    c.table, c.expression
                 ),
             ),
             None => (format!("the column behind \"{constraint}\""), String::new()),
@@ -166,23 +171,6 @@ fn parse_check_violation(raw: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
-/// The table, the columns and the expression behind a check constraint the migration was adding.
-fn find_check_constraint<'a>(
-    diff: &'a DiffOutput,
-    constraint: &str,
-) -> Option<(&'a str, String, &'a str)> {
-    diff.operations.iter().find_map(|op| match op {
-        Operation::AddCheckConstraint {
-            table,
-            columns,
-            constraint: name,
-            expression,
-            ..
-        } if name == constraint => Some((table.as_str(), columns.join(", "), expression.as_str())),
-        _ => None,
-    })
-}
-
 fn parse_null_violation(raw: &str) -> Option<(&str, &str)> {
     if let Some((col, tail)) = raw
         .split("column \"")
@@ -208,7 +196,6 @@ fn parse_null_violation(raw: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::differ::Risk;
 
     #[test]
     fn names_the_column_behind_an_impossible_cast() {
@@ -241,7 +228,7 @@ mod tests {
             field_view_plan: Vec::new(),
         };
 
-        let msg = enrich_migration_error("cannot cast type integer to uuid", Some(&diff));
+        let msg = enrich_migration_error("cannot cast type integer to uuid", Some(&diff), &[]);
         assert!(
             msg.contains("\"post\".\"id\""),
             "the column is not named: {msg}"
@@ -273,7 +260,7 @@ mod tests {
     #[test]
     fn falls_back_to_the_raw_error_when_no_operation_matches() {
         // Better a vaguer message than a wrong column.
-        let msg = enrich_migration_error("cannot cast type integer to uuid", None);
+        let msg = enrich_migration_error("cannot cast type integer to uuid", None, &[]);
         assert!(msg.contains("a column"), "{msg}");
         assert!(msg.contains("cannot cast type integer to uuid"), "{msg}");
     }
@@ -281,7 +268,7 @@ mod tests {
     #[test]
     fn enriches_postgres_null_violation() {
         let raw = r#"column "someField" of relation "_global_homepage" contains null values"#;
-        let msg = enrich_migration_error(raw, None);
+        let msg = enrich_migration_error(raw, None, &[]);
         assert!(msg.contains("someField"));
         assert!(msg.contains("_global_homepage"));
         assert!(msg.contains("Optional<YourType>"));
@@ -290,37 +277,25 @@ mod tests {
     #[test]
     fn passes_through_unknown_errors() {
         let raw = "permission denied for table foo";
-        assert_eq!(enrich_migration_error(raw, None), raw);
+        assert_eq!(enrich_migration_error(raw, None, &[]), raw);
     }
 
     #[test]
     fn names_the_rows_that_block_a_tightened_bound() {
-        let diff = DiffOutput {
-            operations: vec![Operation::AddCheckConstraint {
-                table: "posts".into(),
-                columns: vec!["excerpt".into()],
-                constraint: "posts_excerpt_bounds".into(),
-                expression: "char_length(\"excerpt\") <= 80".into(),
-                comment: "supatype:managed;kind=check".into(),
-                risk: Risk::Cautious,
-            }],
-            summary: crate::differ::DiffSummary {
-                safe: 0,
-                cautious: 1,
-                destructive: 0,
-                is_destructive: false,
-            },
-            warnings: vec![],
-            unmanaged_model_tables: vec![],
-            field_masking: crate::differ::FieldMaskingTier::None,
-            field_view_plan: Vec::new(),
-        };
+        let checks = [CheckSite {
+            table: "posts",
+            constraint: "posts_excerpt_bounds",
+            expression: "char_length(\"excerpt\") <= 80",
+        }];
         let raw = "ERROR: check constraint \"posts_excerpt_bounds\" of relation \"posts\" is violated by some row";
 
-        let message = enrich_migration_error(raw, Some(&diff));
+        let message = enrich_migration_error(raw, None, &checks);
 
-        // The column, not just the constraint: a generated name means nothing to the author.
-        assert!(message.contains("\"posts\".\"excerpt\""), "{message}");
+        // The table, not just a generated constraint name.
+        assert!(
+            message.contains("\"posts\".\"posts_excerpt_bounds\""),
+            "{message}"
+        );
         // A query they can run, with the actual bound in it.
         assert!(
             message.contains("SELECT * FROM \"posts\" WHERE NOT (char_length(\"excerpt\") <= 80);"),
@@ -333,7 +308,7 @@ mod tests {
     #[test]
     fn falls_back_gracefully_when_the_constraint_is_not_ours() {
         let raw = "ERROR: check constraint \"legacy_manual_check\" of relation \"posts\" is violated by some row";
-        let message = enrich_migration_error(raw, None);
+        let message = enrich_migration_error(raw, None, &[]);
         assert!(message.contains("legacy_manual_check"), "{message}");
         // No fabricated query, because we do not know the expression.
         assert!(!message.contains("SELECT * FROM"), "{message}");

@@ -1,15 +1,24 @@
 //! The reconcile: desired objects against the ledger against the catalog, into actions.
 //!
 //! Plan 3.3 (the table) and section 7 (objects with no ledger row), as one pure function. It takes
-//! what a push wants (`desired`), what the ledger says we own, what the catalog holds now, and two
-//! facts the caller establishes from the database: which live objects carry a `supatype:managed`
-//! stamp, and which same-named unstamped objects the database itself deparses to the definition
-//! we would write. Nothing here touches a connection, so every row of the table has a unit test.
+//! what a push wants (`desired`), what the ledger says we own, what the catalog holds now (each
+//! live fingerprint carrying its comment, so an older engine's stamp is a property of the object),
+//! and the one fact that depends on this push rather than on the objects: which desired objects
+//! another statement of the push already creates. Nothing here touches a connection, so every row
+//! of the table has a unit test.
+//!
+//! A same-named unstamped object whose structure cannot be compared (a check, whose only part is
+//! an expression Postgres rewrites) comes out as a `Conflict`. The caller may then prove some of
+//! those equivalent with the database itself (`super::probe`) and call [`Plan::adopt_equivalent`],
+//! which turns exactly those conflicts into adoptions. The reconcile never compares our text to a
+//! deparse.
 //!
 //! Only the kinds in `kinds` are reconciled. A kind moves onto the reconcile one PR at a time
 //! (plan section 9); until it moves, its old differ stays authoritative and its rows do not exist.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use serde::Serialize;
 
 use crate::desired::{DesiredObject, ObjectKey};
 use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKind};
@@ -20,43 +29,66 @@ pub struct Inputs<'a> {
     pub desired: &'a [DesiredObject],
     pub ledger: &'a [LedgerRow],
     pub live: &'a [ObjectFingerprint],
-    /// Live objects whose comment carries a `supatype:managed` stamp written by an older engine.
-    pub stamped: &'a BTreeSet<ObjectKey>,
-    /// Same-named live objects with no row and no stamp that the database deparses to exactly what
-    /// we would create. The caller proves this with Postgres (a probe in a savepoint), never by
-    /// comparing our text to a deparse. Empty when nothing collided.
-    pub equivalent: &'a BTreeSet<ObjectKey>,
     /// Desired objects this push already creates as part of another statement (a constraint
-    /// declared inline in `CREATE TABLE` or `ADD COLUMN`). Their `Create` carries no SQL.
+    /// declared inline in `CREATE TABLE` or `ADD COLUMN`). Their `Create` runs no SQL of its own.
     pub created_by_parent: &'a BTreeSet<ObjectKey>,
     pub kinds: &'a [ObjectKind],
 }
 
 /// Why an object with no ledger row is taken as ours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AdoptReason {
     /// Stamped `supatype:managed` by an older engine: ours by its own record (section 7.1).
     Stamped,
-    /// Unstamped, but its structure is exactly what we would create (D2, section 7.2).
+    /// Unstamped, but its structural parts are exactly what we would create (D2, section 7.2).
     StructureMatches,
+    /// Unstamped and not structurally comparable, but the database deparses it to what we would
+    /// create (section 7.2, proved by `super::probe`).
+    DeparsesEqual,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What a push does about one object. Every variant that leaves a row carries what the row needs:
+/// the `CREATE` we intend (`create_sql`) and the status the reconcile decided for it. Drops are
+/// rendered from the key (`ObjectKey::drop_sql`), never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
-    /// No row, desired, absent. `sql` is `None` when the parent statement creates it.
-    Create { key: ObjectKey, sql: Option<String> },
-    /// No row, desired, present and recognisably ours. A row is added; nothing is executed.
-    Adopt { key: ObjectKey, reason: AdoptReason },
+    /// No row, desired, absent. `inline` when the parent statement creates it, so no SQL runs.
+    Create {
+        key: ObjectKey,
+        create_sql: String,
+        inline: bool,
+        status: Status,
+    },
+    /// No row, desired, present and recognisably ours. A row is added; for a stamped object the
+    /// stamp is taken out of its comment (section 6), which is the only SQL this runs.
+    Adopt {
+        key: ObjectKey,
+        reason: AdoptReason,
+        create_sql: String,
+        /// The live comment, so the stamp can be removed and any user text kept.
+        comment: Option<String>,
+        status: Status,
+    },
     /// No row, desired, present and not ours. The push refuses; `adopt` or a rename resolves it.
-    Conflict { key: ObjectKey, live_def: String },
+    Conflict {
+        key: ObjectKey,
+        create_sql: String,
+        live_def: String,
+    },
     /// Owned, desired, absent: someone dropped it. Recreated and reported.
-    Recreate { key: ObjectKey, sql: String },
+    Recreate {
+        key: ObjectKey,
+        create_sql: String,
+        status: Status,
+    },
     /// Owned, desired, present, and this push's `CREATE` differs from the one recorded.
     Replace {
         key: ObjectKey,
-        drop_sql: String,
         create_sql: String,
         previous_sql: String,
+        status: Status,
     },
     /// Owned, desired, present, and the catalog no longer matches what was recorded after the last
     /// apply: changed outside Supatype. Shown as a diff, then re-asserted (O1, subject to 3.5).
@@ -64,19 +96,37 @@ pub enum Action {
         key: ObjectKey,
         recorded_def: String,
         live_def: String,
-        drop_sql: String,
         create_sql: String,
         security_relevant: bool,
+        status: Status,
     },
     /// Owned, desired, present, unchanged. The row is refreshed after apply, nothing is executed.
-    Keep { key: ObjectKey },
-    /// Owned, no longer desired, present. `sql` is `None` when no drop is known for the kind yet,
-    /// which the caller must treat as a refusal rather than a silent skip.
-    Drop { key: ObjectKey, sql: Option<String> },
+    Keep {
+        key: ObjectKey,
+        create_sql: String,
+        status: Status,
+    },
+    /// Owned, no longer desired, present. `recorded_sql` is the `CREATE` the ledger held, which is
+    /// what a rollback re-runs; `None` for a stamped object nothing recorded.
+    Drop {
+        key: ObjectKey,
+        recorded_sql: Option<String>,
+    },
     /// Owned, no longer desired, already gone. The row goes.
     Forget { key: ObjectKey },
     /// `released`: the user took it back. Left alone whatever the schema says.
     Released { key: ObjectKey },
+}
+
+/// What an action leaves in the ledger once applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowAfter<'a> {
+    /// A row with this `CREATE` and status, its live fingerprint read after apply.
+    Write { create_sql: &'a str, status: Status },
+    /// No row.
+    Remove,
+    /// Whatever row there was, untouched.
+    Leave,
 }
 
 impl Action {
@@ -88,31 +138,75 @@ impl Action {
             | Action::Recreate { key, .. }
             | Action::Replace { key, .. }
             | Action::Drift { key, .. }
-            | Action::Keep { key }
+            | Action::Keep { key, .. }
             | Action::Drop { key, .. }
             | Action::Forget { key }
             | Action::Released { key } => key,
         }
     }
 
-    /// The statements this action runs, in order. Empty for the bookkeeping-only actions.
-    pub fn sql(&self) -> Vec<&str> {
+    /// The `CREATE` this action intends, where it intends one.
+    pub fn create_sql(&self) -> Option<&str> {
         match self {
-            Action::Create { sql: Some(sql), .. } | Action::Recreate { sql, .. } => vec![sql],
-            Action::Replace {
-                drop_sql,
+            Action::Create { create_sql, .. }
+            | Action::Adopt { create_sql, .. }
+            | Action::Conflict { create_sql, .. }
+            | Action::Recreate { create_sql, .. }
+            | Action::Replace { create_sql, .. }
+            | Action::Drift { create_sql, .. }
+            | Action::Keep { create_sql, .. } => Some(create_sql),
+            Action::Drop { .. } | Action::Forget { .. } | Action::Released { .. } => None,
+        }
+    }
+
+    /// The statements this action runs, in order. Empty for the bookkeeping-only actions.
+    pub fn sql(&self) -> Vec<String> {
+        match self {
+            Action::Create {
                 create_sql,
+                inline: false,
                 ..
             }
+            | Action::Recreate { create_sql, .. } => vec![create_sql.clone()],
+            Action::Replace {
+                key, create_sql, ..
+            }
             | Action::Drift {
-                drop_sql,
-                create_sql,
+                key, create_sql, ..
+            } => vec![drop_for(key), create_sql.clone()],
+            Action::Drop { key, .. } => vec![drop_for(key)],
+            Action::Adopt {
+                key,
+                reason: AdoptReason::Stamped,
+                comment,
                 ..
-            } => vec![drop_sql, create_sql],
-            Action::Drop { sql: Some(sql), .. } => vec![sql],
-            Action::Create { sql: None, .. }
-            | Action::Drop { sql: None, .. }
+            } => key
+                .comment_sql(crate::managed::comment_without_stamp(comment.as_deref()).as_deref())
+                .into_iter()
+                .collect(),
+            Action::Create { inline: true, .. }
             | Action::Adopt { .. }
+            | Action::Conflict { .. }
+            | Action::Keep { .. }
+            | Action::Forget { .. }
+            | Action::Released { .. } => Vec::new(),
+        }
+    }
+
+    /// The statements that undo this action, in order, for the migration's `sql_down`.
+    pub fn rollback_sql(&self) -> Vec<String> {
+        match self {
+            Action::Create { key, .. } | Action::Recreate { key, .. } => vec![drop_for(key)],
+            Action::Replace {
+                key, previous_sql, ..
+            } => vec![drop_for(key), previous_sql.clone()],
+            // Rolling back a drift replacement restores Supatype's previous definition, which is
+            // this same `CREATE`; the hand edit is not recoverable (plan 3.5).
+            Action::Drift {
+                key, create_sql, ..
+            } => vec![drop_for(key), create_sql.clone()],
+            Action::Drop { recorded_sql, .. } => recorded_sql.iter().cloned().collect(),
+            Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Keep { .. }
             | Action::Forget { .. }
@@ -124,9 +218,37 @@ impl Action {
     pub fn is_change(&self) -> bool {
         !matches!(self, Action::Keep { .. } | Action::Released { .. })
     }
+
+    pub fn row_after(&self) -> RowAfter<'_> {
+        match self {
+            Action::Create {
+                create_sql, status, ..
+            }
+            | Action::Adopt {
+                create_sql, status, ..
+            }
+            | Action::Recreate {
+                create_sql, status, ..
+            }
+            | Action::Replace {
+                create_sql, status, ..
+            }
+            | Action::Drift {
+                create_sql, status, ..
+            }
+            | Action::Keep {
+                create_sql, status, ..
+            } => RowAfter::Write {
+                create_sql,
+                status: *status,
+            },
+            Action::Drop { .. } | Action::Forget { .. } => RowAfter::Remove,
+            Action::Conflict { .. } | Action::Released { .. } => RowAfter::Leave,
+        }
+    }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct Plan {
     /// Forgets and drops first, then replacements, re-creations and creations, each group in key
     /// order. Dependency ordering across kinds arrives with the kinds that need it.
@@ -142,6 +264,28 @@ impl Plan {
 
     pub fn has_changes(&self) -> bool {
         self.actions.iter().any(Action::is_change)
+    }
+
+    /// The second pass of section 7.2 for expression kinds: the caller has proved, with the
+    /// database, that the live objects under `proven` deparse to what we would create. Those
+    /// conflicts become adoptions; every other conflict stands.
+    pub fn adopt_equivalent(&mut self, proven: &BTreeSet<ObjectKey>) {
+        for action in &mut self.actions {
+            if let Action::Conflict {
+                key, create_sql, ..
+            } = action
+            {
+                if proven.contains(key) {
+                    *action = Action::Adopt {
+                        key: key.clone(),
+                        reason: AdoptReason::DeparsesEqual,
+                        create_sql: std::mem::take(create_sql),
+                        comment: None,
+                        status: Status::Adopted,
+                    };
+                }
+            }
+        }
     }
 }
 
@@ -163,6 +307,11 @@ fn structure_matches(desired: &DesiredObject, live: &ObjectFingerprint) -> bool 
         .structure
         .iter()
         .all(|(label, want)| parts.get(*label) == Some(&want.as_str()))
+}
+
+fn drop_for(key: &ObjectKey) -> String {
+    key.drop_sql()
+        .unwrap_or_else(|| panic!("{key} is on the reconcile with no drop statement"))
 }
 
 pub fn reconcile(inputs: Inputs<'_>) -> Plan {
@@ -195,36 +344,42 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             changes.push(Action::Released { key });
             continue;
         }
+        let status = row.status;
         match (desired.get(&key), live.get(&key)) {
             (Some(d), None) => changes.push(Action::Recreate {
                 key,
-                sql: d.create_sql.clone(),
+                create_sql: d.create_sql.clone(),
+                status,
             }),
             (Some(d), Some(l)) => {
                 if desired_fingerprint(key.kind, &d.create_sql) != row.desired_fp {
                     changes.push(Action::Replace {
                         key,
-                        drop_sql: d.drop_sql.clone(),
                         create_sql: d.create_sql.clone(),
                         previous_sql: row.desired_sql.clone(),
+                        status,
                     });
                 } else if l.fingerprint != row.live_fp {
                     changes.push(Action::Drift {
                         key,
                         recorded_def: row.live_def.clone(),
                         live_def: l.definition.clone(),
-                        drop_sql: d.drop_sql.clone(),
                         create_sql: d.create_sql.clone(),
                         security_relevant: d.security_relevant,
+                        status,
                     });
                 } else {
-                    changes.push(Action::Keep { key });
+                    changes.push(Action::Keep {
+                        key,
+                        create_sql: d.create_sql.clone(),
+                        status,
+                    });
                 }
             }
-            (None, Some(_)) => {
-                let sql = key.drop_sql();
-                removals.push(Action::Drop { key, sql });
-            }
+            (None, Some(_)) => removals.push(Action::Drop {
+                key,
+                recorded_sql: Some(row.desired_sql.clone()),
+            }),
             (None, None) => removals.push(Action::Forget { key }),
         }
     }
@@ -236,21 +391,33 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         let key = key.clone();
         match live.get(&key) {
             None => {
-                let sql = (!inputs.created_by_parent.contains(&key)).then(|| d.create_sql.clone());
-                changes.push(Action::Create { key, sql });
+                let inline = inputs.created_by_parent.contains(&key);
+                changes.push(Action::Create {
+                    key,
+                    create_sql: d.create_sql.clone(),
+                    inline,
+                    status: Status::Managed,
+                });
             }
             Some(l) => {
-                let reason = if inputs.stamped.contains(&key) {
-                    Some(AdoptReason::Stamped)
-                } else if structure_matches(d, l) || inputs.equivalent.contains(&key) {
-                    Some(AdoptReason::StructureMatches)
+                let claim = if l.stamped() {
+                    Some((AdoptReason::Stamped, Status::Managed))
+                } else if structure_matches(d, l) {
+                    Some((AdoptReason::StructureMatches, Status::Adopted))
                 } else {
                     None
                 };
-                match reason {
-                    Some(reason) => changes.push(Action::Adopt { key, reason }),
+                match claim {
+                    Some((reason, status)) => changes.push(Action::Adopt {
+                        key,
+                        reason,
+                        create_sql: d.create_sql.clone(),
+                        comment: l.comment.clone(),
+                        status,
+                    }),
                     None => changes.push(Action::Conflict {
                         key,
+                        create_sql: d.create_sql.clone(),
                         live_def: l.definition.clone(),
                     }),
                 }
@@ -260,16 +427,14 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
 
     // Stamped objects of a moved kind that nothing declares any more (section 7, last paragraph):
     // ours by their own record, so they are dropped, as the stamp-reading differ dropped them.
-    for key in inputs.stamped {
-        if !kinds.contains(&key.kind) || ledger.contains_key(key) || desired.contains_key(key) {
+    for (key, l) in &live {
+        if !l.stamped() || ledger.contains_key(key) || desired.contains_key(key) {
             continue;
         }
-        if live.contains_key(key) {
-            removals.push(Action::Drop {
-                key: key.clone(),
-                sql: key.drop_sql(),
-            });
-        }
+        removals.push(Action::Drop {
+            key: key.clone(),
+            recorded_sql: None,
+        });
     }
 
     removals.sort_by(|a, b| a.key().cmp(b.key()));
@@ -299,9 +464,7 @@ mod tests {
             create_sql: format!(
                 "ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"{name}\" CHECK ({expr});"
             ),
-            drop_sql: format!(
-                "ALTER TABLE \"public\".\"posts\" DROP CONSTRAINT IF EXISTS \"{name}\";"
-            ),
+            drop_sql: key(name).drop_sql().unwrap(),
             depends_on: Vec::new(),
             security_relevant: false,
         }
@@ -316,7 +479,13 @@ mod tests {
             name: name.into(),
             fingerprint: hash(ObjectKind::Check, &[&format!("CHECK (({expr}))")]),
             definition: def,
+            comment: None,
         }
+    }
+
+    fn stamped(mut l: ObjectFingerprint) -> ObjectFingerprint {
+        l.comment = Some("supatype:managed;kind=check;table=posts;fields=title;v=1".into());
+        l
     }
 
     fn row(d: &DesiredObject, l: &ObjectFingerprint, status: Status) -> LedgerRow {
@@ -335,48 +504,54 @@ mod tests {
         desired: &[DesiredObject],
         ledger: &[LedgerRow],
         live: &[ObjectFingerprint],
-        stamped: &[ObjectKey],
-        equivalent: &[ObjectKey],
         created_by_parent: &[ObjectKey],
     ) -> Vec<Action> {
         reconcile(Inputs {
             desired,
             ledger,
             live,
-            stamped: &stamped.iter().cloned().collect(),
-            equivalent: &equivalent.iter().cloned().collect(),
             created_by_parent: &created_by_parent.iter().cloned().collect(),
             kinds: &[ObjectKind::Check],
         })
         .actions
     }
 
+    fn drop(name: &str) -> String {
+        key(name).drop_sql().unwrap()
+    }
+
     #[test]
     fn no_row_desired_absent_is_a_create_with_sql_unless_the_parent_creates_it() {
         let d = desired("posts_title_check", "length(title) > 0");
-        let actions = run(std::slice::from_ref(&d), &[], &[], &[], &[], &[]);
-        assert_eq!(
-            actions,
-            [Action::Create {
-                key: d.key.clone(),
-                sql: Some(d.create_sql.clone())
-            }]
+        let actions = run(std::slice::from_ref(&d), &[], &[], &[]);
+        assert!(
+            matches!(&actions[..], [Action::Create { inline: false, create_sql, .. }] if *create_sql == d.create_sql),
+            "{actions:?}"
         );
+        assert_eq!(actions[0].sql(), std::slice::from_ref(&d.create_sql));
+        assert_eq!(
+            actions[0].row_after(),
+            RowAfter::Write {
+                create_sql: &d.create_sql,
+                status: Status::Managed
+            }
+        );
+
         let inline = run(
             std::slice::from_ref(&d),
             &[],
             &[],
-            &[],
-            &[],
             std::slice::from_ref(&d.key),
         );
-        assert_eq!(
-            inline,
-            [Action::Create {
-                key: d.key.clone(),
-                sql: None
-            }]
+        assert!(
+            matches!(&inline[..], [Action::Create { inline: true, .. }]),
+            "{inline:?}"
         );
+        assert!(
+            inline[0].sql().is_empty(),
+            "the parent statement creates it"
+        );
+        assert_eq!(inline[0].rollback_sql(), [drop("posts_title_check")]);
     }
 
     #[test]
@@ -384,50 +559,47 @@ mod tests {
         let d = desired("posts_title_check", "length(title) > 0");
         let l = live("posts_title_check", "length(title) > 0");
 
-        let unproven = run(
-            std::slice::from_ref(&d),
-            &[],
-            std::slice::from_ref(&l),
-            &[],
-            &[],
-            &[],
-        );
+        let unproven = run(std::slice::from_ref(&d), &[], std::slice::from_ref(&l), &[]);
         assert!(
-            matches!(&unproven[..], [Action::Conflict { key, live_def }] if *key == d.key && live_def == &l.definition),
+            matches!(&unproven[..], [Action::Conflict { key, live_def, .. }] if *key == d.key && *live_def == l.definition),
             "{unproven:?}"
         );
+        assert_eq!(unproven[0].row_after(), RowAfter::Leave);
 
-        let stamped = run(
-            std::slice::from_ref(&d),
-            &[],
-            std::slice::from_ref(&l),
-            std::slice::from_ref(&d.key),
-            &[],
-            &[],
-        );
-        assert_eq!(
-            stamped,
+        let with_stamp = run(std::slice::from_ref(&d), &[], &[stamped(l.clone())], &[]);
+        match &with_stamp[..] {
             [Action::Adopt {
-                key: d.key.clone(),
-                reason: AdoptReason::Stamped
-            }]
-        );
+                reason: AdoptReason::Stamped,
+                comment,
+                status,
+                ..
+            }] => {
+                assert!(comment.is_some());
+                assert_eq!(*status, Status::Managed, "stamped means ours by record");
+                // Adopting a stamped object takes the stamp out of its comment, in the same push.
+                assert_eq!(
+                    with_stamp[0].sql(),
+                    ["COMMENT ON CONSTRAINT \"posts_title_check\" ON \"public\".\"posts\" IS NULL;"]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
 
-        let equivalent = run(
-            std::slice::from_ref(&d),
-            &[],
-            std::slice::from_ref(&l),
-            &[],
-            std::slice::from_ref(&d.key),
-            &[],
-        );
-        assert_eq!(
-            equivalent,
+        let mut plan = Plan { actions: unproven };
+        plan.adopt_equivalent(&[d.key.clone()].into_iter().collect());
+        match &plan.actions[..] {
             [Action::Adopt {
-                key: d.key.clone(),
-                reason: AdoptReason::StructureMatches
-            }]
-        );
+                reason: AdoptReason::DeparsesEqual,
+                create_sql,
+                status,
+                ..
+            }] => {
+                assert_eq!(*create_sql, d.create_sql);
+                assert_eq!(*status, Status::Adopted);
+                assert!(plan.actions[0].sql().is_empty());
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
@@ -439,13 +611,12 @@ mod tests {
         l.kind = ObjectKind::Unique;
         l.definition = "columns=slug".into();
         let kinds = [ObjectKind::Unique];
+        let none = BTreeSet::new();
         let plan = reconcile(Inputs {
             desired: std::slice::from_ref(&d),
             ledger: &[],
             live: std::slice::from_ref(&l),
-            stamped: &BTreeSet::new(),
-            equivalent: &BTreeSet::new(),
-            created_by_parent: &BTreeSet::new(),
+            created_by_parent: &none,
             kinds: &kinds,
         });
         assert!(
@@ -453,6 +624,7 @@ mod tests {
                 &plan.actions[..],
                 [Action::Adopt {
                     reason: AdoptReason::StructureMatches,
+                    status: Status::Adopted,
                     ..
                 }]
             ),
@@ -464,9 +636,7 @@ mod tests {
             desired: std::slice::from_ref(&d),
             ledger: &[],
             live: std::slice::from_ref(&l),
-            stamped: &BTreeSet::new(),
-            equivalent: &BTreeSet::new(),
-            created_by_parent: &BTreeSet::new(),
+            created_by_parent: &none,
             kinds: &kinds,
         });
         assert!(
@@ -479,17 +649,24 @@ mod tests {
     fn an_owned_object_is_kept_replaced_drifted_or_recreated() {
         let d = desired("posts_title_check", "length(title) > 0");
         let l = live("posts_title_check", "length(title) > 0");
-        let r = row(&d, &l, Status::Managed);
+        let r = row(&d, &l, Status::Adopted);
 
         let kept = run(
             std::slice::from_ref(&d),
             std::slice::from_ref(&r),
             std::slice::from_ref(&l),
             &[],
-            &[],
-            &[],
         );
-        assert_eq!(kept, [Action::Keep { key: d.key.clone() }]);
+        assert!(
+            matches!(
+                &kept[..],
+                [Action::Keep {
+                    status: Status::Adopted,
+                    ..
+                }]
+            ),
+            "{kept:?}"
+        );
         assert!(!Plan { actions: kept }.has_changes());
 
         let tightened = desired("posts_title_check", "length(title) > 3");
@@ -498,14 +675,32 @@ mod tests {
             std::slice::from_ref(&r),
             std::slice::from_ref(&l),
             &[],
-            &[],
-            &[],
         );
-        assert!(
-            matches!(&replaced[..], [Action::Replace { previous_sql, create_sql, .. }]
-                if previous_sql == &d.create_sql && create_sql == &tightened.create_sql),
-            "{replaced:?}"
-        );
+        match &replaced[..] {
+            [Action::Replace {
+                previous_sql,
+                create_sql,
+                status,
+                ..
+            }] => {
+                assert_eq!(*previous_sql, d.create_sql);
+                assert_eq!(*create_sql, tightened.create_sql);
+                assert_eq!(
+                    *status,
+                    Status::Adopted,
+                    "a replacement keeps the row's status"
+                );
+                assert_eq!(
+                    replaced[0].sql(),
+                    [drop("posts_title_check"), tightened.create_sql.clone()]
+                );
+                assert_eq!(
+                    replaced[0].rollback_sql(),
+                    [drop("posts_title_check"), d.create_sql.clone()]
+                );
+            }
+            other => panic!("{other:?}"),
+        }
 
         let edited = live("posts_title_check", "length(title) > 1");
         let drifted = run(
@@ -513,29 +708,17 @@ mod tests {
             std::slice::from_ref(&r),
             std::slice::from_ref(&edited),
             &[],
-            &[],
-            &[],
         );
         assert!(
             matches!(&drifted[..], [Action::Drift { recorded_def, live_def, .. }]
-                if recorded_def == &l.definition && live_def == &edited.definition),
+                if *recorded_def == l.definition && *live_def == edited.definition),
             "{drifted:?}"
         );
 
-        let recreated = run(
-            std::slice::from_ref(&d),
-            std::slice::from_ref(&r),
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-        assert_eq!(
-            recreated,
-            [Action::Recreate {
-                key: d.key.clone(),
-                sql: d.create_sql.clone()
-            }]
+        let recreated = run(std::slice::from_ref(&d), std::slice::from_ref(&r), &[], &[]);
+        assert!(
+            matches!(&recreated[..], [Action::Recreate { create_sql, .. }] if *create_sql == d.create_sql),
+            "{recreated:?}"
         );
     }
 
@@ -545,24 +728,21 @@ mod tests {
         let l = live("posts_title_check", "length(title) > 0");
         let r = row(&d, &l, Status::Managed);
 
-        let dropped = run(
-            &[],
-            std::slice::from_ref(&r),
-            std::slice::from_ref(&l),
-            &[],
-            &[],
-            &[],
-        );
-        assert_eq!(
-            dropped,
-            [Action::Drop {
-                key: d.key.clone(),
-                sql: d.key.drop_sql()
-            }]
-        );
-        assert!(dropped[0].sql()[0].contains("DROP CONSTRAINT IF EXISTS \"posts_title_check\""));
+        let dropped = run(&[], std::slice::from_ref(&r), std::slice::from_ref(&l), &[]);
+        match &dropped[..] {
+            [Action::Drop { recorded_sql, .. }] => {
+                assert_eq!(dropped[0].sql(), [drop("posts_title_check")]);
+                assert_eq!(recorded_sql.as_deref(), Some(d.create_sql.as_str()));
+                assert_eq!(
+                    dropped[0].rollback_sql(),
+                    std::slice::from_ref(&d.create_sql)
+                );
+                assert_eq!(dropped[0].row_after(), RowAfter::Remove);
+            }
+            other => panic!("{other:?}"),
+        }
 
-        let forgotten = run(&[], std::slice::from_ref(&r), &[], &[], &[], &[]);
+        let forgotten = run(&[], std::slice::from_ref(&r), &[], &[]);
         assert_eq!(forgotten, [Action::Forget { key: d.key.clone() }]);
 
         let released = row(&d, &l, Status::Released);
@@ -572,19 +752,28 @@ mod tests {
             std::slice::from_ref(&released),
             std::slice::from_ref(&l),
             &[],
-            &[],
-            &[],
         );
         assert_eq!(left, [Action::Released { key: d.key.clone() }]);
+        assert_eq!(left[0].row_after(), RowAfter::Leave);
     }
 
     #[test]
     fn a_stamped_object_nothing_declares_is_dropped_and_a_user_object_is_never_touched() {
         let l = live("posts_old_check", "true");
-        let stamped = run(&[], &[], std::slice::from_ref(&l), &[l.key()], &[], &[]);
-        assert!(matches!(&stamped[..], [Action::Drop { .. }]), "{stamped:?}");
+        let with_stamp = run(&[], &[], &[stamped(l.clone())], &[]);
+        assert!(
+            matches!(
+                &with_stamp[..],
+                [Action::Drop {
+                    recorded_sql: None,
+                    ..
+                }]
+            ),
+            "{with_stamp:?}"
+        );
+        assert!(with_stamp[0].rollback_sql().is_empty());
 
-        let user = run(&[], &[], std::slice::from_ref(&l), &[], &[], &[]);
+        let user = run(&[], &[], std::slice::from_ref(&l), &[]);
         assert!(user.is_empty(), "{user:?}");
     }
 
@@ -607,8 +796,6 @@ mod tests {
             &[d.clone(), other],
             std::slice::from_ref(&stale_row),
             std::slice::from_ref(&stale),
-            &[],
-            &[],
             &[],
         );
         assert!(

@@ -37,6 +37,17 @@ pub enum Attribution {
     Unknown,
 }
 
+impl Attribution {
+    /// The objects the statement belongs to: one, several, or none.
+    pub fn keys(&self) -> &[ObjectKey] {
+        match self {
+            Attribution::Object(key) => std::slice::from_ref(key),
+            Attribution::Shared(keys) => keys,
+            Attribution::Ignored(_) | Attribution::Unknown => &[],
+        }
+    }
+}
+
 /// Split `sql` into statements. Concatenating the results reproduces `sql` exactly.
 pub fn split_statements(sql: &str) -> Vec<String> {
     let bytes = sql.as_bytes();
@@ -210,6 +221,26 @@ fn created_index(schema: &str, h: &str) -> Option<(String, String, String)> {
     Some((s, t, name))
 }
 
+/// Every `CONSTRAINT "name" <kind>` declared inline in a `CREATE TABLE` body or an `ADD COLUMN`
+/// clause, as keys on table `t`, recorded in `ctx` so a later `COMMENT ON CONSTRAINT` finds the
+/// kind.
+fn inline_constraints(s: &str, t: &str, body: &str, ctx: &mut Context) -> Vec<ObjectKey> {
+    let mut keys = Vec::new();
+    for (i, m) in body.match_indices("CONSTRAINT \"") {
+        let Some((name_parts, rest)) = qualified_name(&body[i + m.len() - 1..]) else {
+            continue;
+        };
+        let name = name_parts.into_iter().next().unwrap_or_default();
+        let Some(kind) = constraint_kind(rest) else {
+            continue;
+        };
+        ctx.constraint_kind
+            .insert((t.to_string(), name.clone()), kind);
+        keys.push(key(kind, s, t, &name));
+    }
+    keys
+}
+
 /// The kind of constraint whose body starts `s` (what follows `CONSTRAINT "name"`).
 fn constraint_kind(s: &str) -> Option<ObjectKind> {
     let u = s.trim_start().to_ascii_uppercase();
@@ -273,20 +304,31 @@ fn roles_after(s: &str, word: &str) -> Vec<String> {
 fn function_key_name(after_name: &str, name: &str) -> String {
     let args = after_name
         .strip_prefix('(')
-        .and_then(|a| {
-            let mut depth = 0usize;
-            for (i, c) in a.char_indices() {
-                match c {
-                    '(' => depth += 1,
-                    ')' if depth == 0 => return Some(&a[..i]),
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-            }
-            None
-        })
+        .and_then(parenthesised)
         .unwrap_or("");
     super::identity::function_key(name, args)
+}
+
+/// The expression of an `ADD CONSTRAINT ... CHECK (...)` statement the desired set wrote: the
+/// text between `CHECK (` and its closing parenthesis.
+pub fn check_expression(create_sql: &str) -> Option<&str> {
+    let start = create_sql.find("CHECK (")? + "CHECK (".len();
+    parenthesised(&create_sql[start..])
+}
+
+/// The text up to the parenthesis that closes one already opened before `after_open`, with nested
+/// parentheses balanced. `None` when it never closes.
+pub(crate) fn parenthesised(after_open: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    for (i, c) in after_open.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' if depth == 0 => return Some(&after_open[..i]),
+            ')' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
@@ -331,17 +373,7 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
         let (s, t) = split_schema(parts, schema);
         // The constraints declared inline are created by this statement too.
         let mut keys = vec![key(ObjectKind::Table, &s, "", &t)];
-        for (i, m) in body.match_indices("CONSTRAINT \"") {
-            let Some((name_parts, rest)) = qualified_name(&body[i + m.len() - 1..]) else {
-                continue;
-            };
-            let name = name_parts.into_iter().next().unwrap_or_default();
-            let Some(kind) = constraint_kind(rest) else {
-                continue;
-            };
-            ctx.constraint_kind.insert((t.clone(), name.clone()), kind);
-            keys.push(key(kind, &s, &t, &name));
-        }
+        keys.extend(inline_constraints(&s, &t, body, ctx));
         return one_or_shared(keys);
     }
     if starts("COMMENT ON TABLE ") {
@@ -414,6 +446,22 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
             };
             ctx.constraint_kind.insert((t.clone(), name.clone()), kind);
             return Attribution::Object(key(kind, &s, &t, &name));
+        }
+        // `ADD COLUMN [IF NOT EXISTS] "c" type ... [CONSTRAINT "x" CHECK (...)]`: the column, and
+        // any constraint declared inline with it.
+        let add_column = rest
+            .trim_start()
+            .strip_prefix("ADD COLUMN IF NOT EXISTS ")
+            .or_else(|| rest.trim_start().strip_prefix("ADD COLUMN "));
+        if let Some(c) = add_column {
+            let (column_parts, body) = match qualified_name(c) {
+                Some(x) => x,
+                None => return Attribution::Unknown,
+            };
+            let column = column_parts.into_iter().next().unwrap_or_default();
+            let mut keys = vec![key(ObjectKind::Column, &s, &t, &column)];
+            keys.extend(inline_constraints(&s, &t, body, ctx));
+            return one_or_shared(keys);
         }
         return Attribution::Unknown;
     }

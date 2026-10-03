@@ -1555,7 +1555,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(\"displayName\") <= 80))",
         "onDelete": null,
-        "comment": "supatype:managed;kind=check;table=attendee;fields=displayName;v=1;bounds=6626eb29bcdd3164"
+        "comment": null
       },
       {
         "table": "attendee",
@@ -1597,7 +1597,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(body) <= 500))",
         "onDelete": null,
-        "comment": "supatype:managed;kind=check;table=chat_message;fields=body;v=1;bounds=f673add49cedc30f"
+        "comment": null
       },
       {
         "table": "chat_message",
@@ -1609,7 +1609,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(body) >= 2))",
         "onDelete": null,
-        "comment": "supatype:managed;kind=check;table=chat_message;fields=body;v=1;bounds=f3a60a89afcd22bb"
+        "comment": null
       },
       {
         "table": "chat_message",
@@ -1635,7 +1635,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK (((jsonb_typeof(body) = 'array'::text) AND (jsonb_array_length(body) <= 20)))",
         "onDelete": null,
-        "comment": "supatype:managed;kind=check;table=page;fields=body;v=1;bounds=8867b90b357fc427"
+        "comment": null
       },
       {
         "table": "page",
@@ -1675,7 +1675,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(summary) <= 200))",
         "onDelete": null,
-        "comment": "supatype:managed;kind=check;table=page;fields=summary;v=1;bounds=8d6775ae9759124d"
+        "comment": null
       },
       {
         "table": "page_versions",
@@ -1744,7 +1744,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK (((capacity >= 10) AND (capacity <= 2000)))",
         "onDelete": null,
-        "comment": "supatype:managed;kind=check;table=room;fields=capacity;v=1;bounds=3cc86cef79bee327"
+        "comment": null
       },
       {
         "table": "room",
@@ -1945,7 +1945,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((starts_at <= ends_at))",
         "onDelete": null,
-        "comment": "supatype:managed;kind=check;table=talk;fields=starts_at,ends_at;v=1;bounds=6c5aa357a67eaba5"
+        "comment": null
       },
       {
         "table": "talk",

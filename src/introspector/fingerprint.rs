@@ -116,6 +116,18 @@ pub struct ObjectKey {
     pub name: String,
 }
 
+impl std::fmt::Display for ObjectKey {
+    /// `check public.posts.posts_title_check`: the kind, then the dotted path, with an empty
+    /// parent folded away.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.kind.as_str(), self.schema)?;
+        if !self.parent.is_empty() {
+            write!(f, ".{}", self.parent)?;
+        }
+        write!(f, ".{}", self.name)
+    }
+}
+
 /// One object's identity and the hash of what it does.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -129,9 +141,24 @@ pub struct ObjectFingerprint {
     /// What was hashed, one `label=value` line per part, so a ledger can show a drifted object's
     /// recorded definition against its live one without a renderer per kind.
     pub definition: String,
+    /// The object's `COMMENT`, for the kinds that carry one. Never hashed: comments are the
+    /// user's (D1). Read so an older engine's `supatype:managed` stamp can be recognised and
+    /// moved into the ledger (plan section 7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
 }
 
 impl ObjectFingerprint {
+    fn commented(mut self, comment: Option<&str>) -> Self {
+        self.comment = comment.map(str::to_string);
+        self
+    }
+
+    /// Whether an older engine stamped this object as managed.
+    pub fn stamped(&self) -> bool {
+        crate::managed::is_managed_comment(self.comment.as_deref())
+    }
+
     pub fn key(&self) -> ObjectKey {
         ObjectKey {
             kind: self.kind,
@@ -251,6 +278,7 @@ fn entry(
         name: name.to_string(),
         fingerprint: hash(kind, parts),
         definition: render_definition(kind, parts),
+        comment: None,
     }
 }
 
@@ -260,7 +288,9 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
     let mut out = Vec::new();
 
     for s in &catalog.schemas {
-        out.push(entry(ObjectKind::Schema, &s.name, "", &s.name, &[]));
+        out.push(
+            entry(ObjectKind::Schema, &s.name, "", &s.name, &[]).commented(s.comment.as_deref()),
+        );
     }
 
     // Columnar indexes from the differ's state, expression-only ones from the catalog: the same
@@ -325,39 +355,36 @@ fn relation_entries<'a>(
         // table, so it must not read as a change.
         column_parts.sort();
         let refs: Vec<&str> = column_parts.iter().map(String::as_str).collect();
-        out.push(entry(
-            ObjectKind::Table,
-            &table.schema,
-            "",
-            &table.name,
-            &refs,
-        ));
+        out.push(
+            entry(ObjectKind::Table, &table.schema, "", &table.name, &refs)
+                .commented(table.comment.as_deref()),
+        );
     }
 
     for c in constraints {
         let columns = c.columns.join(",");
-        match c.constraint_type {
-            DbConstraintType::PrimaryKey => out.push(entry(
+        let fingerprint = match c.constraint_type {
+            DbConstraintType::PrimaryKey => entry(
                 ObjectKind::PrimaryKey,
                 schema,
                 &c.table,
                 &c.name,
                 &[columns.as_str()],
-            )),
-            DbConstraintType::Unique => out.push(entry(
+            ),
+            DbConstraintType::Unique => entry(
                 ObjectKind::Unique,
                 schema,
                 &c.table,
                 &c.name,
                 &[columns.as_str()],
-            )),
+            ),
             DbConstraintType::ForeignKey => {
                 let foreign_columns = c
                     .foreign_columns
                     .as_ref()
                     .map(|v| v.join(","))
                     .unwrap_or_default();
-                out.push(entry(
+                entry(
                     ObjectKind::ForeignKey,
                     schema,
                     &c.table,
@@ -368,7 +395,7 @@ fn relation_entries<'a>(
                         foreign_columns.as_str(),
                         c.on_delete.as_deref().unwrap_or(""),
                     ],
-                ))
+                )
             }
             DbConstraintType::Check => {
                 let expression = c
@@ -376,15 +403,16 @@ fn relation_entries<'a>(
                     .as_deref()
                     .map(normalise_sql)
                     .unwrap_or_default();
-                out.push(entry(
+                entry(
                     ObjectKind::Check,
                     schema,
                     &c.table,
                     &c.name,
                     &[expression.as_str()],
-                ))
+                )
             }
-        }
+        };
+        out.push(fingerprint.commented(c.comment.as_deref()));
     }
 
     for i in indexes {
@@ -399,20 +427,23 @@ fn relation_entries<'a>(
             .as_deref()
             .map(normalise_sql)
             .unwrap_or_default();
-        out.push(entry(
-            ObjectKind::Index,
-            schema,
-            &i.table,
-            &i.name,
-            &[
-                columns.as_str(),
-                expressions.as_str(),
-                predicate.as_str(),
-                i.method.as_str(),
-                flag(i.unique),
-                flag(i.is_primary),
-            ],
-        ));
+        out.push(
+            entry(
+                ObjectKind::Index,
+                schema,
+                &i.table,
+                &i.name,
+                &[
+                    columns.as_str(),
+                    expressions.as_str(),
+                    predicate.as_str(),
+                    i.method.as_str(),
+                    flag(i.unique),
+                    flag(i.is_primary),
+                ],
+            )
+            .commented(i.comment.as_deref()),
+        );
     }
 }
 
@@ -642,10 +673,12 @@ mod tests {
         let catalog = CatalogState::default();
         let mut with = check("CHECK ((x > 1))");
         with.constraints[0].comment = Some("supatype:managed;kind=check".into());
-        assert_eq!(
-            fingerprints(&with, &catalog),
-            fingerprints(&check("CHECK ((x > 1))"), &catalog)
-        );
+        let stamped = fingerprints(&with, &catalog);
+        let bare = fingerprints(&check("CHECK ((x > 1))"), &catalog);
+        assert_eq!(stamped[0].fingerprint, bare[0].fingerprint);
+        assert_eq!(stamped[0].definition, bare[0].definition);
+        // The comment travels beside the fingerprint, where the reconcile reads the stamp.
+        assert!(stamped[0].stamped() && !bare[0].stamped());
     }
 
     #[test]

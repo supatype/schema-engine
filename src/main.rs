@@ -253,9 +253,10 @@ async fn main() -> Result<()> {
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            let diff = supatype_engine::differ::diff(&ast, &db_state)?;
-            println!("{}", serde_json::to_string_pretty(&diff)?);
+            // The plan a push would apply: the differ's operations and, under `reconcile`, what
+            // the ledger would do about the kinds it owns.
+            let plan = supatype_engine::push::plan(&pool, &ast, &schema).await?;
+            println!("{}", serde_json::to_string_pretty(&plan.to_json()?)?);
         }
         Command::Migrate {
             database_url,
@@ -527,7 +528,9 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
             let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            let report = supatype_engine::differ::doctor::report(&ast, &db_state);
+            let ledger =
+                supatype_engine::ledger::load_if_present(&mut *pool.acquire().await?).await?;
+            let report = supatype_engine::differ::doctor::report(&ast, &db_state, &ledger);
             println!("{}", serde_json::to_string_pretty(&report)?);
             if strict && supatype_engine::differ::doctor::has_strict_issues(&report) {
                 std::process::exit(1);
@@ -559,7 +562,9 @@ async fn main() -> Result<()> {
 
             let stamp_sql =
                 supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db_state, &schema);
-            let doctor_report = supatype_engine::differ::doctor::report(&ast, &db_state);
+            let ledger =
+                supatype_engine::ledger::load_if_present(&mut *pool.acquire().await?).await?;
+            let doctor_report = supatype_engine::differ::doctor::report(&ast, &db_state, &ledger);
 
             if !yes {
                 println!(

@@ -9,6 +9,18 @@ pub fn is_managed_comment(comment: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// `comment` with the stamp line taken out: `None` when the comment was only the stamp, the
+/// remaining lines otherwise. Once an object is in the ledger its comment is the user's (plan
+/// section 6), so whatever they wrote beside the stamp stays.
+pub fn comment_without_stamp(comment: Option<&str>) -> Option<String> {
+    let rest: Vec<&str> = comment?
+        .lines()
+        .filter(|line| !line.starts_with(MANAGED_PREFIX))
+        .collect();
+    let rest = rest.join("\n");
+    (!rest.trim().is_empty()).then_some(rest)
+}
+
 /// Build a `COMMENT ON` value for a managed constraint or index.
 pub fn managed_comment(kind: &str, table: &str, fields: &[&str]) -> String {
     format!(
@@ -63,41 +75,6 @@ pub fn expected_check_constraint_name(table: &str, column: &str) -> String {
     truncate_identifier(&format!("{table}_{column}"), "_bounds")
 }
 
-/// `COMMENT ON` value for a check constraint: which columns it covers, and a fingerprint of it.
-///
-/// `columns` is the columns the rule reads, matching what `fields=` means on an index or a unique
-/// constraint. A model-level rule can name several, and one that named none would be a rule about
-/// nothing.
-///
-/// The fingerprint is the whole point. Postgres rewrites a check expression on read-back
-/// (`pg_get_constraintdef` re-quotes identifiers, re-parenthesises, moves casts), so comparing the
-/// SQL text to decide whether a bound changed produces a spurious difference on every push. The
-/// access-rule work needed three separate normaliser fixes for exactly that. A hash of what *we*
-/// generated is not rewritten by anyone, so equality means equality.
-pub fn managed_check_comment(table: &str, columns: &[&str], expression: &str) -> String {
-    format!(
-        "{};bounds={}",
-        managed_comment("check", table, columns),
-        check_fingerprint(expression)
-    )
-}
-
-/// Short, stable digest of a check expression.
-pub fn check_fingerprint(expression: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(expression.as_bytes());
-    // 16 hex characters: collision-free at any schema size a person will write, and short enough
-    // that the comment stays readable when someone runs `\d+` on the table.
-    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
-}
-
-/// The fingerprint recorded in a managed check comment, if it carries one.
-pub fn fingerprint_of(comment: Option<&str>) -> Option<&str> {
-    comment?
-        .split(';')
-        .find_map(|part| part.strip_prefix("bounds="))
-}
-
 /// Name for a model-level constraint, by its position in the declared list.
 ///
 /// Positional because the rule itself has no name: the author writes an expression, not an
@@ -118,29 +95,64 @@ pub fn expected_model_index_name(table: &str, fields: &[String]) -> String {
     truncate_identifier(&format!("{table}_{}", fields.join("_")), "_idx")
 }
 
-/// SQL to stamp a constraint comment (escaped single quotes in comment).
+/// The value side of a `COMMENT ON ... IS`: a quoted literal, or `NULL` to clear it. The one place
+/// the quoting lives, for the stamp writers here and the ledger's stamp remover alike.
+pub fn comment_value(text: Option<&str>) -> String {
+    match text {
+        Some(t) => format!("'{}'", t.replace('\'', "''")),
+        None => "NULL".to_string(),
+    }
+}
+
+/// `COMMENT ON CONSTRAINT`, with `None` clearing the comment.
+pub fn comment_on_constraint(
+    schema: &str,
+    table: &str,
+    constraint: &str,
+    text: Option<&str>,
+) -> String {
+    format!(
+        "COMMENT ON CONSTRAINT \"{constraint}\" ON \"{schema}\".\"{table}\" IS {};",
+        comment_value(text)
+    )
+}
+
+/// `COMMENT ON TABLE`, with `None` clearing the comment.
+pub fn comment_on_table(schema: &str, table: &str, text: Option<&str>) -> String {
+    format!(
+        "COMMENT ON TABLE \"{schema}\".\"{table}\" IS {};",
+        comment_value(text)
+    )
+}
+
+/// `COMMENT ON INDEX`, with `None` clearing the comment.
+pub fn comment_on_index(schema: &str, index: &str, text: Option<&str>) -> String {
+    format!(
+        "COMMENT ON INDEX \"{schema}\".\"{index}\" IS {};",
+        comment_value(text)
+    )
+}
+
+/// SQL to stamp a constraint comment.
 pub fn comment_on_constraint_sql(
     table: &str,
     constraint: &str,
     comment: &str,
     schema: &str,
 ) -> String {
-    let escaped = comment.replace('\'', "''");
-    format!("COMMENT ON CONSTRAINT \"{constraint}\" ON \"{schema}\".\"{table}\" IS '{escaped}';")
+    comment_on_constraint(schema, table, constraint, Some(comment))
 }
 
 /// SQL to stamp a table comment.
 ///
 /// The stamp is what the ownership gate reads, so adoption and creation must produce the same
-/// marker — `migration.rs` writes exactly this on `CREATE TABLE`. A table adopted with a different
+/// marker: `migration.rs` writes exactly this on `CREATE TABLE`. A table adopted with a different
 /// shape would stay undroppable forever, and the differ could never converge.
 pub fn comment_on_table_sql(table: &str, comment: &str, schema: &str) -> String {
-    let escaped = comment.replace('\'', "''");
-    format!("COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{escaped}';")
+    comment_on_table(schema, table, Some(comment))
 }
 
 /// SQL to stamp an index comment.
 pub fn comment_on_index_sql(index_name: &str, comment: &str, schema: &str) -> String {
-    let escaped = comment.replace('\'', "''");
-    format!("COMMENT ON INDEX \"{schema}\".\"{index_name}\" IS '{escaped}';")
+    comment_on_index(schema, index_name, Some(comment))
 }

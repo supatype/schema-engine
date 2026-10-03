@@ -44,13 +44,25 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    let db_state = crate::introspector::introspect(&pool, &req.schema)
+    // The plan a push would apply: the differ's operations and, under `reconcile`, what the
+    // ledger would do about the kinds it owns.
+    let plan = crate::push::plan(&pool, &ast, &req.schema)
         .await
-        .map_err(engine_error)?;
-    let previous_ast = crate::state::migration_history::load_latest_schema_ast(&pool).await;
-    let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
-        .map_err(engine_error)?;
-    Ok(Json(serde_json::to_value(&diff).unwrap()))
+        .map_err(refusal_error)?;
+    Ok(Json(plan.to_json().map_err(engine_error)?))
+}
+
+/// The ledger rows for a route with a pool and no plan.
+async fn ledger_rows(
+    pool: &PgPool,
+) -> Result<Vec<crate::ledger::LedgerRow>, (StatusCode, Json<ErrorResponse>)> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .map_err(|e| engine_error(anyhow::Error::from(e)))?;
+    crate::ledger::load_if_present(&mut conn)
+        .await
+        .map_err(engine_error)
 }
 
 // ── Migrate (DB: generate SQL only, does not apply) ────────────────────────
@@ -328,7 +340,8 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
-    let report = crate::differ::doctor::report(&ast, &db_state);
+    let ledger = ledger_rows(&pool).await?;
+    let report = crate::differ::doctor::report(&ast, &db_state, &ledger);
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
 
@@ -358,7 +371,8 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
         .map_err(engine_error)?;
 
     let stamp_sql = crate::differ::doctor::adopt_stamp_sql(&ast, &db_state, &req.schema);
-    let doctor_report = crate::differ::doctor::report(&ast, &db_state);
+    let ledger = ledger_rows(&pool).await?;
+    let doctor_report = crate::differ::doctor::report(&ast, &db_state, &ledger);
 
     if !req.yes {
         return Ok(Json(serde_json::json!({
