@@ -50,7 +50,36 @@ pub enum ObjectKind {
 }
 
 impl ObjectKind {
-    fn tag(self) -> &'static str {
+    /// Every kind, in declaration order.
+    pub const ALL: [ObjectKind; 19] = [
+        ObjectKind::Schema,
+        ObjectKind::Table,
+        ObjectKind::Column,
+        ObjectKind::PrimaryKey,
+        ObjectKind::ForeignKey,
+        ObjectKind::Unique,
+        ObjectKind::Check,
+        ObjectKind::Index,
+        ObjectKind::Trigger,
+        ObjectKind::Function,
+        ObjectKind::View,
+        ObjectKind::Policy,
+        ObjectKind::RlsAttributes,
+        ObjectKind::EnumType,
+        ObjectKind::Sequence,
+        ObjectKind::TableGrant,
+        ObjectKind::ColumnGrant,
+        ObjectKind::SecurityLabel,
+        ObjectKind::CronJob,
+    ];
+
+    /// The kind written as `snake_case` text: the serde form, the ledger's `kind` column and the
+    /// first bytes of every hash.
+    pub fn parse(text: &str) -> Option<ObjectKind> {
+        Self::ALL.into_iter().find(|k| k.as_str() == text)
+    }
+
+    pub fn as_str(self) -> &'static str {
         match self {
             ObjectKind::Schema => "schema",
             ObjectKind::Table => "table",
@@ -125,7 +154,7 @@ pub fn normalise_sql(sql: &str) -> String {
 pub fn hash(kind: ObjectKind, parts: &[&str]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(kind.tag().as_bytes());
+    hasher.update(kind.as_str().as_bytes());
     for part in parts {
         hasher.update([0x1f]);
         hasher.update(part.as_bytes());

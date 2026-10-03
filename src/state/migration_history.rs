@@ -1040,6 +1040,10 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     for sql in ensure_all_migration_columns_sql() {
         sqlx::raw_sql(&sql).execute(pool).await?;
     }
+    // After `migrations`, which it references.
+    sqlx::raw_sql(&crate::ledger::create_table_sql())
+        .execute(pool)
+        .await?;
 
     // Helper functions are cosmetic to a migration's success, so a failure here
     // must not abort the push.
