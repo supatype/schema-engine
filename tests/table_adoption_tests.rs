@@ -6,7 +6,7 @@
 //! * **Silence.** `doctor` reported unmanaged indexes and constraints but never tables, so the gate
 //!   could decline to drop a table and nothing said so. An operator reading a clean report and
 //!   watching push leave a table behind concludes push is broken.
-//! * **No way in.** Without adoption there was no supported way to say "this table is mine now" — a
+//! * **No way in.** Without adoption there was no supported way to say "this table is mine now", a
 //!   table that arrived by hand could never be managed, and its columns were permanently exempt from
 //!   the diff.
 //!
@@ -99,7 +99,7 @@ async fn doctor_reports_an_unmanaged_table_absent_from_the_schema() {
 #[tokio::test]
 async fn doctor_explains_why_columns_survive_on_an_unstamped_model_table() {
     common::with_integration_pool(|pool| async move {
-        // The table the schema declares, but created by hand — so the column gate declines to drop
+        // The table the schema declares, but created by hand, so the column gate declines to drop
         // `their_column`. Without this row in the report, that refusal has no explanation anywhere.
         sqlx::raw_sql(
             "CREATE TABLE public.widget (id int primary key, name text, their_column text)",
@@ -187,7 +187,7 @@ async fn adopting_a_table_makes_push_manage_it_thereafter() {
              behave like a created one"
         );
 
-        // After adoption, removing the model drops the table — the round trip that makes adoption
+        // After adoption, removing the model drops the table: the round trip that makes adoption
         // meaningful rather than a comment nobody reads.
         let after = introspector::introspect(&pool, "public")
             .await

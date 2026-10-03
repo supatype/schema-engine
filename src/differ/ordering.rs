@@ -4,7 +4,7 @@ use anyhow::Result;
 /// Topologically sort operations so dependencies are satisfied:
 /// CREATE TABLE before FKs, DROP FK before DROP TABLE, etc.
 pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
-    // TODO: Phase 1 — build dependency graph using petgraph and sort.
+    // TODO: Phase 1: build dependency graph using petgraph and sort.
     // For Phase 0, return operations in a reasonable default order.
     let mut _ordered: Vec<Operation> = Vec::new();
 

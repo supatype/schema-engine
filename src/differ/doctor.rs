@@ -68,7 +68,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState, ledger: &[LedgerRow]) -> Doct
                 name: exp.constraint_name.clone(),
                 fields: vec![exp.column.clone()],
                 message: format!(
-                    "AST expects unique on {}.{} — run `supatype push`",
+                    "AST expects unique on {}.{}: run `supatype push`",
                     exp.table, exp.column
                 ),
             });
@@ -91,7 +91,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState, ledger: &[LedgerRow]) -> Doct
                 name: exp.index_name.clone(),
                 fields: exp.fields.clone(),
                 message: format!(
-                    "AST expects index {} on {} — run `supatype push`",
+                    "AST expects index {} on {}: run `supatype push`",
                     exp.index_name, exp.table
                 ),
             });
@@ -198,12 +198,12 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState, ledger: &[LedgerRow]) -> Doct
             fields: idx.columns.clone(),
             message: if is_managed_comment(idx.comment.as_deref()) {
                 format!(
-                    "Managed index {} on {} is not in AST — review before push",
+                    "Managed index {} on {} is not in AST; review before push",
                     idx.name, idx.table
                 )
             } else {
                 format!(
-                    "Unmanaged index {} on {} — push will not drop; manual decision required",
+                    "Unmanaged index {} on {}: push will not drop; manual decision required",
                     idx.name, idx.table
                 )
             },
@@ -220,7 +220,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState, ledger: &[LedgerRow]) -> Doct
     // Indexes and constraints have been reported this way for a long time; tables were not, so the
     // ownership gate could silently decline to drop a table and `doctor` would say nothing. An
     // operator seeing a clean report and a push that leaves a table behind concludes push is broken.
-    // Wording matches the constraint and index cases deliberately — the mechanism is the same one.
+    // Wording matches the constraint and index cases deliberately: the mechanism is the same one.
     let schema_owned: HashSet<&str> = ast
         .models
         .iter()
@@ -241,7 +241,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState, ledger: &[LedgerRow]) -> Doct
                 name: table.name.clone(),
                 fields: Vec::new(),
                 message: format!(
-                    "Table {} matches a model but is not managed — push will not drop its columns; \
+                    "Table {} matches a model but is not managed: push will not drop its columns; \
                      run `supatype adopt` to bring it under management",
                     table.name
                 ),
@@ -261,12 +261,12 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState, ledger: &[LedgerRow]) -> Doct
             fields: Vec::new(),
             message: if managed {
                 format!(
-                    "Managed table {} is not in AST — review before push",
+                    "Managed table {} is not in AST; review before push",
                     table.name
                 )
             } else {
                 format!(
-                    "Unmanaged table {} — push will not drop; manual decision required",
+                    "Unmanaged table {}: push will not drop; manual decision required",
                     table.name
                 )
             },
@@ -372,12 +372,12 @@ fn doctor_constraint_item(constraint: &DbConstraint) -> DoctorItem {
         fields: fields.clone(),
         message: if is_managed_comment(constraint.comment.as_deref()) {
             format!(
-                "Managed constraint {} on {} is not in AST — review before push",
+                "Managed constraint {} on {} is not in AST; review before push",
                 constraint.name, constraint.table
             )
         } else {
             format!(
-                "Unmanaged constraint {} on {} — push will not drop; manual decision required",
+                "Unmanaged constraint {} on {}: push will not drop; manual decision required",
                 constraint.name, constraint.table
             )
         },
@@ -392,7 +392,7 @@ fn doctor_constraint_item(constraint: &DbConstraint) -> DoctorItem {
 /// will not otherwise touch.
 ///
 /// Only tables the schema actually declares are stamped. Adoption is an opt-in ceremony for objects
-/// the operator has decided belong to Supatype — stamping anything found in the schema would make the
+/// the operator has decided belong to Supatype; stamping anything found in the schema would make the
 /// gate meaningless on its first run, which is the one case it exists for.
 pub fn adopt_stamp_sql(ast: &SchemaAst, db: &DatabaseState, schema: &str) -> Vec<String> {
     let expected_uniques = expected_column_uniques(ast);

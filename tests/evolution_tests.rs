@@ -1,4 +1,4 @@
-//! Evolution scenario tests — Phase 1 requirement.
+//! Evolution scenario tests, a Phase 1 requirement.
 //!
 //! Each test follows the pattern:
 //!   1. Base DB state (simulates already-applied schema)
@@ -6,7 +6,7 @@
 //!   3. Compute the diff
 //!   4. Assert expected operations
 //!
-//! These are pure unit tests — no DB required.
+//! These are pure unit tests; no DB required.
 
 use supatype_engine::{
     differ::{self, doctor, Operation, Risk},
@@ -432,7 +432,7 @@ fn test_add_fk_on_existing_table() {
     );
 }
 
-// ─── Scenario 5: FK already exists — no-op ───────────────────────────────────
+// ─── Scenario 5: FK already exists, a no-op ───────────────────────────────────
 
 #[test]
 fn test_fk_already_exists_no_op() {
@@ -520,7 +520,7 @@ fn test_fk_already_exists_no_op() {
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
         tables: vec![
-            // Use col_nn for PK — a real DB would never have a nullable PK
+            // Use col_nn for PK: a real DB would never have a nullable PK
             DbTable {
                 schema: "public".into(),
                 name: "users".into(),
@@ -549,7 +549,7 @@ fn test_fk_already_exists_no_op() {
         .collect();
     assert!(
         fk_ops.is_empty(),
-        "FK already exists — must not emit AddForeignKey (idempotency)"
+        "FK already exists: must not emit AddForeignKey (idempotency)"
     );
     assert_eq!(
         diff.operations.len(),
@@ -942,7 +942,7 @@ fn test_junction_table_not_recreated() {
         .collect();
     assert!(
         jt_ops.is_empty(),
-        "junction table already exists — must not recreate"
+        "junction table already exists: must not recreate"
     );
 }
 
@@ -1113,7 +1113,7 @@ fn test_timestamps_option_idempotency() {
         .collect();
     assert!(
         ts_ops.is_empty(),
-        "timestamps already exist — must not add them again"
+        "timestamps already exist: must not add them again"
     );
 }
 
@@ -1181,7 +1181,7 @@ fn test_soft_delete_option_idempotency() {
         .collect();
     assert!(
         ops.is_empty(),
-        "deleted_at already exists — must not add again"
+        "deleted_at already exists: must not add again"
     );
 }
 
@@ -1442,7 +1442,7 @@ fn test_rollback_reverses_add_fk() {
 
 #[test]
 fn test_add_column_not_null_with_default() {
-    // Adding a NOT NULL column with a DEFAULT is safe — Postgres fills existing rows.
+    // Adding a NOT NULL column with a DEFAULT is safe: Postgres fills existing rows.
     let ast_json = r#"{
   "astVersion": 2,
   "models": [
@@ -1910,7 +1910,7 @@ fn test_change_column_type_lossy() {
             schema: "public".into(),
             name: "counters".into(),
             comment: Some("supatype:managed;kind=table".into()),
-            // DB has value as BIGINT (int8) — narrowing to int4; id is PK so NOT NULL
+            // DB has value as BIGINT (int8), narrowing to int4; id is PK so NOT NULL
             columns: vec![col_nn("id", "uuid"), col("value", "int8")],
         }],
         ..DatabaseState::default()
@@ -2463,7 +2463,7 @@ fn test_rls_changed_expression_triggers_recreate() {
     );
     assert!(
         !drop_policy,
-        "must not emit separate DropRlsPolicy — CreateRlsPolicy SQL is idempotent"
+        "must not emit separate DropRlsPolicy: CreateRlsPolicy SQL is idempotent"
     );
 
     let create_policy = diff.operations.iter().any(
@@ -2559,7 +2559,7 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
     );
 }
 
-// ─── Scenario 26: RLS generator output — FORCE RLS + correct naming ───────────
+// ─── Scenario 26: RLS generator output, FORCE RLS + correct naming ───────────
 
 #[test]
 fn test_rls_generator_output_force_rls_and_policy_naming() {
@@ -7004,7 +7004,7 @@ fn test_drop_managed_model_index_removed_from_ast() {
 }
 
 /// `Code<"sql">` and `Currency<"USD">` reach the engine as `kind: "json"` carrying an extra
-/// `tsType` — a fact only the TypeScript generator needs. The engine must ignore it and still emit
+/// `tsType`, a fact only the TypeScript generator needs. The engine must ignore it and still emit
 /// `JSONB`; if serde ever rejected the unknown field instead, every schema using either type would
 /// fail to parse rather than to compile, which is a much worse error to debug.
 #[test]
@@ -7065,7 +7065,7 @@ fn test_json_field_with_ts_type_annotation_is_parsed_as_jsonb() {
 /// `HasOne` is the *inverse* side: the column (and its UNIQUE) belongs to whichever model declares
 /// the `RelatedTo`, and `generator/sql/migration.rs` emits nothing for `hasOne`. The spec generator
 /// used to emit an `<name>_id` property for it anyway, so a client generated from the document sent
-/// a column PostgREST rejects — and the document described a table that does not exist.
+/// a column PostgREST rejects, and the document described a table that does not exist.
 #[test]
 fn test_openapi_omits_column_for_inverse_relations() {
     use supatype_engine::generator::openapi;
@@ -7213,7 +7213,7 @@ fn test_admin_config_honours_declared_editor_widget() {
 /// A schema that says which columns are searchable is obeyed.
 ///
 /// Studio's list view filters on the **first** entry of `searchFields`, and that list used to be
-/// every text-like column in field order — so a model whose first text column was a slug searched
+/// every text-like column in field order, so a model whose first text column was a slug searched
 /// slugs, and `Searchable<string>` on the column the author meant did nothing at all. The CLI
 /// merges both spellings into `annotations.platform.searchFields`; this asserts the engine stops
 /// guessing when it finds one.
@@ -7273,7 +7273,7 @@ fn test_admin_config_honours_declared_search_fields() {
             .collect()
     };
 
-    // Declared: exactly those columns, in that order — `title` first, though `slug` comes first in
+    // Declared: exactly those columns, in that order: `title` first, though `slug` comes first in
     // the field list.
     assert_eq!(
         search_fields_of(model(r#", "searchFields": ["title", "slug"]"#)),

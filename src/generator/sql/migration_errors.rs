@@ -36,7 +36,7 @@ pub fn enrich_migration_error(
         };
         return format!(
             "Cannot convert {what} from {from} to {to}: Postgres has no cast between these types.\n\n\
-             Nothing was applied — the migration runs in one transaction and rolled back.\n\n\
+             Nothing was applied: the migration runs in one transaction and rolled back.\n\n\
              What you can do:\n\
              {field_hint}\
              • Or migrate the data by hand: add a new column of the target type, backfill it, drop the \
@@ -103,7 +103,7 @@ fn parse_impossible_cast(raw: &str) -> Option<(&str, &str)> {
 ///
 /// Matched on the type pair rather than by parsing SQL: the migration is applied as one batch, so
 /// there is no statement-level error to attribute. Two columns converting between the same pair in
-/// one push are indistinguishable — the first is named, which is still incomparably better than
+/// one push are indistinguishable; the first is named, which is still incomparably better than
 /// naming none.
 fn find_type_change<'a>(diff: &'a DiffOutput, from: &str, to: &str) -> Option<(&'a str, &'a str)> {
     diff.operations.iter().find_map(|op| {
@@ -137,7 +137,7 @@ fn find_type_change<'a>(diff: &'a DiffOutput, from: &str, to: &str) -> Option<(&
 fn same_type(a: &str, b: &str) -> bool {
     let norm = |t: &str| {
         let t = t.trim().to_ascii_lowercase();
-        // Strip any modifier — `character varying(255)` and `varchar` are the same type here.
+        // Strip any modifier: `character varying(255)` and `varchar` are the same type here.
         let base = t.split('(').next().unwrap_or(&t).trim().to_string();
         match base.as_str() {
             "int4" | "integer" | "int" => "int4".to_string(),

@@ -222,7 +222,7 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
         Operation::CreateVersionsTable { versions_table, .. } => {
             format!("DROP TABLE IF EXISTS \"{schema}\".\"{versions_table}\" CASCADE;")
         }
-        // EnableExtension → DROP EXTENSION (risky — only emit a warning)
+        // EnableExtension → DROP EXTENSION (risky, so only emit a warning)
         Operation::EnableExtension { name, .. } => {
             format!(
                 "-- WARNING: Rollback of CREATE EXTENSION \"{name}\" would DROP it. \
@@ -285,7 +285,7 @@ fn rollback_alter_column(
                 "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
             ));
         } else {
-            // Was nullable — restore by dropping not null
+            // Was nullable: restore by dropping not null
             stmts.push(format!(
                 "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
             ));
