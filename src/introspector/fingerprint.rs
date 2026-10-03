@@ -75,6 +75,18 @@ impl ObjectKind {
     }
 }
 
+/// What identifies an object: the four things both the desired set and the live fingerprints are
+/// keyed by, and the ledger's primary key.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectKey {
+    pub kind: ObjectKind,
+    pub schema: String,
+    /// The table for table-scoped kinds, `table.column` for column-scoped ones, empty otherwise.
+    pub parent: String,
+    pub name: String,
+}
+
 /// One object's identity and the hash of what it does.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +100,17 @@ pub struct ObjectFingerprint {
     /// What was hashed, one `label=value` line per part, so a ledger can show a drifted object's
     /// recorded definition against its live one without a renderer per kind.
     pub definition: String,
+}
+
+impl ObjectFingerprint {
+    pub fn key(&self) -> ObjectKey {
+        ObjectKey {
+            kind: self.kind,
+            schema: self.schema.clone(),
+            parent: self.parent.clone(),
+            name: self.name.clone(),
+        }
+    }
 }
 
 /// Whitespace collapsed to single spaces, trimmed, no trailing semicolon. Case is kept: deparsed
@@ -213,21 +236,15 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
 
     // Columnar indexes from the differ's state, expression-only ones from the catalog: the same
     // type, kept in two lists only until the ledger owns indexes.
-    let project_indexes: Vec<&DbIndex> = db
-        .indexes
-        .iter()
-        .chain(catalog.expression_indexes.iter())
-        .collect();
     relation_entries(
         schema,
         &db.tables,
         &db.constraints,
-        &project_indexes,
+        db.indexes.iter().chain(&catalog.expression_indexes),
         &mut out,
     );
     for e in &catalog.engine_tables {
-        let indexes: Vec<&DbIndex> = e.indexes.iter().collect();
-        relation_entries(&e.schema, &e.tables, &e.constraints, &indexes, &mut out);
+        relation_entries(&e.schema, &e.tables, &e.constraints, &e.indexes, &mut out);
     }
 
     policy_and_catalog_entries(db, catalog, &mut out);
@@ -238,11 +255,11 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
 
 /// Tables with their columns, constraints and indexes, for the project schema and for each engine
 /// schema alike.
-fn relation_entries(
+fn relation_entries<'a>(
     schema: &str,
     tables: &[DbTable],
     constraints: &[DbConstraint],
-    indexes: &[&DbIndex],
+    indexes: impl IntoIterator<Item = &'a DbIndex>,
     out: &mut Vec<ObjectFingerprint>,
 ) {
     for table in tables {

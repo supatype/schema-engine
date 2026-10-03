@@ -237,12 +237,7 @@ async fn after_a_push_every_created_object_exists_under_its_key() {
             let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
             let live: BTreeSet<ObjectKey> = fingerprints(&db, &catalog)
                 .into_iter()
-                .map(|f| ObjectKey {
-                    kind: f.kind,
-                    schema: f.schema,
-                    parent: f.parent,
-                    name: f.name,
-                })
+                .map(|f| f.key())
                 .collect();
 
             let statements =

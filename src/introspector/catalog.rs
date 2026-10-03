@@ -69,9 +69,9 @@ pub struct EngineSchemaTables {
     pub constraints: Vec<super::constraints::DbConstraint>,
 }
 
-/// The engine schemas whose tables are the engine's. `auth` and `storage` are swept for the
-/// functions and policies the engine adds to them; their tables belong to the server and the image.
-const ENGINE_TABLE_SCHEMAS: &[&str] = &["_supatype", "_platform", "draft", "api", "supatype"];
+/// The engine schemas swept for the functions and policies the engine adds to them but never for
+/// tables: those belong to the server and the image. Every other engine schema's tables are ours.
+const HELPER_ONLY_SCHEMAS: &[&str] = &["auth", "storage"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -249,9 +249,9 @@ async fn read_engine_tables(
     project_schema: &str,
 ) -> Result<Vec<EngineSchemaTables>> {
     let mut out = Vec::new();
-    for s in ENGINE_TABLE_SCHEMAS
+    for s in ENGINE_SCHEMAS
         .iter()
-        .filter(|s| **s != project_schema)
+        .filter(|s| **s != project_schema && !HELPER_ONLY_SCHEMAS.contains(s))
     {
         let tables = super::tables::read(conn, s).await?;
         if tables.is_empty() {

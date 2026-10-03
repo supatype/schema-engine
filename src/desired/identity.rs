@@ -1,77 +1,53 @@
 //! A function's key, built from its declared signature the way the catalog builds it live.
 //!
-//! The live side (`DbFunction::identity_types`) writes each input argument's type with built-ins
-//! as `format_type` writes them and everything else schema-qualified, no argument names, no
-//! defaults: `text, timestamp with time zone, public.posts`. This produces the same string from
-//! the argument list the generator wrote, so a desired function and a live one meet on one key
-//! with no database in between. `tests/statement_attribution_tests.rs` proves it for every
-//! function every pushable fixture creates; a type this module spells differently from Postgres
-//! fails there by name.
+//! The live side (`DbFunction::identity_types`) writes each input argument's type with
+//! `pg_catalog` types as `format_type` writes them and everything else schema-qualified, no
+//! argument names, no defaults: `text, timestamp with time zone, public.posts`. This produces the
+//! same string from the argument list the generator wrote, so a desired function and a live one
+//! meet on one key with no database in between.
+//!
+//! The rule is closed, not an enumeration of types. The generator writes `pg_catalog` types bare
+//! and qualifies every other type it passes (a model's row type is `"public"."posts"`), so a bare
+//! name is a built-in and passes through unchanged except for the few spellings `format_type`
+//! rewrites (`int` to `integer`, `timestamptz` to `timestamp with time zone`), and a qualified name
+//! is kept qualified. `tests/statement_attribution_tests.rs` proves the result against the catalog
+//! for every function every pushable fixture creates.
 
 /// `name(type, type)` for a function declared as `name(declared_args)`.
-///
-/// `default_schema` qualifies a user type written bare. The generator always qualifies the row
-/// types it passes, so this is a safety net rather than a path it takes.
-pub fn function_key(default_schema: &str, name: &str, declared_args: &str) -> String {
-    let types: Vec<String> = split_top_level(declared_args)
+pub fn function_key(name: &str, declared_args: &str) -> String {
+    let types: Vec<String> = split_outside_quotes(declared_args, |c, depth| c == ',' && depth == 0)
         .iter()
-        .filter_map(|arg| argument_type(default_schema, arg))
+        .filter_map(|arg| argument_type(arg))
         .collect();
     format!("{name}({})", types.join(", "))
 }
 
-/// Split on commas outside parentheses and double quotes.
-fn split_top_level(s: &str) -> Vec<String> {
+/// Split `s` wherever `is_separator(char, paren_depth)` holds outside double quotes, dropping
+/// empty pieces. Serves both the comma between arguments and the whitespace between tokens.
+fn split_outside_quotes(s: &str, is_separator: impl Fn(char, usize) -> bool) -> Vec<String> {
     let mut out = Vec::new();
+    let mut current = String::new();
     let mut depth = 0usize;
     let mut quoted = false;
-    let mut current = String::new();
     for c in s.chars() {
-        match c {
-            '"' => {
-                quoted = !quoted;
-                current.push(c);
+        if c == '"' {
+            quoted = !quoted;
+        } else if !quoted {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                _ if is_separator(c, depth) => {
+                    if !current.trim().is_empty() {
+                        out.push(std::mem::take(&mut current));
+                    }
+                    continue;
+                }
+                _ => {}
             }
-            '(' if !quoted => {
-                depth += 1;
-                current.push(c);
-            }
-            ')' if !quoted => {
-                depth = depth.saturating_sub(1);
-                current.push(c);
-            }
-            ',' if !quoted && depth == 0 => {
-                out.push(std::mem::take(&mut current));
-            }
-            _ => current.push(c),
         }
+        current.push(c);
     }
     if !current.trim().is_empty() {
-        out.push(current);
-    }
-    out
-}
-
-/// Whitespace-separated tokens, where a double-quoted identifier is one token.
-fn tokens(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut quoted = false;
-    for c in s.chars() {
-        match c {
-            '"' => {
-                quoted = !quoted;
-                current.push(c);
-            }
-            c if c.is_whitespace() && !quoted => {
-                if !current.is_empty() {
-                    out.push(std::mem::take(&mut current));
-                }
-            }
-            _ => current.push(c),
-        }
-    }
-    if !current.is_empty() {
         out.push(current);
     }
     out
@@ -83,8 +59,8 @@ const MULTI_WORD_TYPE_HEADS: &[&str] = &["timestamp", "time", "double", "charact
 
 /// The canonical type of one declared argument, or `None` for an `OUT` argument, which is not
 /// part of the identity.
-fn argument_type(default_schema: &str, arg: &str) -> Option<String> {
-    let mut toks = tokens(arg);
+fn argument_type(arg: &str) -> Option<String> {
+    let mut toks = split_outside_quotes(arg, |c, _| c.is_whitespace());
     // Everything from `DEFAULT` or `=` on is the default value, which the identity leaves out.
     if let Some(i) = toks
         .iter()
@@ -108,11 +84,11 @@ fn argument_type(default_schema: &str, arg: &str) -> Option<String> {
     if toks.is_empty() {
         return None;
     }
-    Some(canonical_type(default_schema, &toks.join(" ")))
+    Some(canonical_type(&toks.join(" ")))
 }
 
-/// `format_type`'s spelling of a type the generator may write.
-fn canonical_type(default_schema: &str, declared: &str) -> String {
+/// `format_type`'s spelling of a declared type.
+fn canonical_type(declared: &str) -> String {
     let mut text = declared.trim().to_string();
     let mut dims = 0usize;
     while let Some(stripped) = text.strip_suffix("[]") {
@@ -124,18 +100,11 @@ fn canonical_type(default_schema: &str, declared: &str) -> String {
         text.truncate(i);
         text = text.trim_end().to_string();
     }
-    let parts: Vec<String> = split_identifier(&text);
+    let parts = split_identifier(&text);
     let base = match parts.as_slice() {
-        [one] => {
-            let lower = one.to_ascii_lowercase();
-            match builtin(&lower) {
-                Some(canonical) => canonical.to_string(),
-                None => format!(
-                    "{}.{}",
-                    quote_if_needed(default_schema),
-                    quote_if_needed(one)
-                ),
-            }
+        [bare] => {
+            let lower = bare.to_ascii_lowercase();
+            format_type_spelling(&lower).unwrap_or(&lower).to_string()
         }
         [schema, name] => format!("{}.{}", quote_if_needed(schema), quote_if_needed(name)),
         _ => text,
@@ -160,6 +129,7 @@ fn split_identifier(s: &str) -> Vec<String> {
     parts
 }
 
+/// `quote_ident`'s rule: bare when the name is a plain lowercase identifier, quoted otherwise.
 fn quote_if_needed(ident: &str) -> String {
     let simple = !ident.is_empty()
         && ident
@@ -173,42 +143,23 @@ fn quote_if_needed(ident: &str) -> String {
     }
 }
 
-/// The `pg_catalog` types by every spelling the generator uses, to `format_type`'s spelling.
-/// A name not listed here is a user type.
-fn builtin(lower: &str) -> Option<&'static str> {
+/// The spellings `format_type` rewrites: the SQL-standard names and their aliases. Every other
+/// `pg_catalog` type name is already its own `format_type` spelling.
+fn format_type_spelling(lower: &str) -> Option<&'static str> {
     Some(match lower {
-        "text" => "text",
-        "jsonb" => "jsonb",
-        "json" => "json",
-        "uuid" => "uuid",
-        "boolean" | "bool" => "boolean",
-        "integer" | "int" | "int4" => "integer",
-        "bigint" | "int8" => "bigint",
-        "smallint" | "int2" => "smallint",
-        "numeric" | "decimal" => "numeric",
-        "real" | "float4" => "real",
-        "double precision" | "float8" => "double precision",
-        "timestamptz" | "timestamp with time zone" => "timestamp with time zone",
-        "timestamp" | "timestamp without time zone" => "timestamp without time zone",
-        "timetz" | "time with time zone" => "time with time zone",
-        "time" | "time without time zone" => "time without time zone",
-        "date" => "date",
-        "interval" => "interval",
-        "bytea" => "bytea",
-        "inet" => "inet",
-        "character varying" | "varchar" => "character varying",
-        "character" | "char" | "bpchar" => "character",
-        "name" => "name",
-        "oid" => "oid",
-        "regclass" => "regclass",
-        "regprocedure" => "regprocedure",
-        "tsvector" => "tsvector",
-        "tsquery" => "tsquery",
-        "anyelement" => "anyelement",
-        "anyarray" => "anyarray",
-        "record" => "record",
-        "void" => "void",
-        "trigger" => "trigger",
+        "bool" => "boolean",
+        "int" | "int4" => "integer",
+        "int8" => "bigint",
+        "int2" => "smallint",
+        "decimal" => "numeric",
+        "float4" => "real",
+        "float8" => "double precision",
+        "timestamptz" => "timestamp with time zone",
+        "timestamp" => "timestamp without time zone",
+        "timetz" => "time with time zone",
+        "time" => "time without time zone",
+        "varchar" => "character varying",
+        "char" | "bpchar" => "character",
         _ => return None,
     })
 }
@@ -221,23 +172,18 @@ mod tests {
     fn named_arguments_lose_their_names_and_aliases_become_format_type_spellings() {
         assert_eq!(
             function_key(
-                "public",
                 "schedule_publish",
                 "text, text, timestamptz, integer, text[]"
             ),
             "schedule_publish(text, text, timestamp with time zone, integer, text[])"
         );
         assert_eq!(
-            function_key("public", "localized_length_max", "v jsonb, n integer"),
+            function_key("localized_length_max", "v jsonb, n integer"),
             "localized_length_max(jsonb, integer)"
         );
-        assert_eq!(
-            function_key("public", "preview_epoch", ""),
-            "preview_epoch()"
-        );
+        assert_eq!(function_key("preview_epoch", ""), "preview_epoch()");
         assert_eq!(
             function_key(
-                "public",
                 "h",
                 "n int, tags VARCHAR(32)[], at timestamp with time zone DEFAULT now()"
             ),
@@ -246,17 +192,22 @@ mod tests {
     }
 
     #[test]
-    fn row_types_are_schema_qualified_and_out_arguments_are_not_identity() {
+    fn a_bare_name_passes_through_as_a_built_in_and_a_qualified_one_stays_qualified() {
+        // Not in any alias table, and must not be: `format_type` writes these as they are.
         assert_eq!(
-            function_key("public", "can_read_page", "\"page\" \"public\".\"page\""),
+            function_key("f", "r int4range, w tstzrange, p point"),
+            "f(int4range, tstzrange, point)"
+        );
+        assert_eq!(
+            function_key("can_read_page", "\"page\" \"public\".\"page\""),
             "can_read_page(public.page)"
         );
         assert_eq!(
-            function_key("public", "f", "p things, OUT total integer, INOUT n bigint"),
+            function_key("f", "p public.things, OUT total integer, INOUT n bigint"),
             "f(public.things, bigint)"
         );
         assert_eq!(
-            function_key("public", "g", "x \"Mixed\".\"Case\""),
+            function_key("g", "x \"Mixed\".\"Case\""),
             "g(\"Mixed\".\"Case\")"
         );
     }

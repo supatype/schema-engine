@@ -270,7 +270,7 @@ fn roles_after(s: &str, word: &str) -> Vec<String> {
 
 /// A function's key name: `name(types)`, the declared argument list canonicalised by
 /// [`super::identity::function_key`] to what the catalog reports as `identity_types`.
-fn function_key_name(schema: &str, after_name: &str, name: &str) -> String {
+fn function_key_name(after_name: &str, name: &str) -> String {
     let args = after_name
         .strip_prefix('(')
         .and_then(|a| {
@@ -286,7 +286,7 @@ fn function_key_name(schema: &str, after_name: &str, name: &str) -> String {
             None
         })
         .unwrap_or("");
-    super::identity::function_key(schema, name, args)
+    super::identity::function_key(name, args)
 }
 
 fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
@@ -458,7 +458,7 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
             ObjectKind::Function,
             &s,
             "",
-            &function_key_name(schema, rest.trim_start(), &f),
+            &function_key_name(rest.trim_start(), &f),
         ));
     }
     if starts("GRANT EXECUTE ON FUNCTION ") || starts("REVOKE ALL ON FUNCTION ") {
@@ -476,7 +476,7 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
             ObjectKind::Function,
             &s,
             "",
-            &function_key_name(schema, rest.trim_start(), &f),
+            &function_key_name(rest.trim_start(), &f),
         ));
     }
     for p in [

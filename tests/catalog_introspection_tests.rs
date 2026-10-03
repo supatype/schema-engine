@@ -111,7 +111,6 @@ async fn functions_carry_their_identity_body_and_properties() {
         );
         assert_eq!(
             supatype_engine::desired::identity::function_key(
-                "public",
                 "describe",
                 "t public.things, at timestamptz, tags text[]"
             ),
