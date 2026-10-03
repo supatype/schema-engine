@@ -479,6 +479,14 @@ fn snapshot_hash(schema_snapshot: &serde_json::Value) -> String {
     format!("sha256:{}", hex::encode(h.finalize()))
 }
 
+/// The schema as it was at the last push, decoded. History, not a cache of the database: what
+/// tells a rename apart from a drop and an add.
+pub async fn load_latest_schema_ast(pool: &PgPool) -> Option<crate::parser::ast::SchemaAst> {
+    load_latest_schema_snapshot(pool)
+        .await
+        .and_then(|v| serde_json::from_value(v).ok())
+}
+
 /// Latest applied schema AST snapshot (for kind-aware diffs when PG types are unchanged).
 pub async fn load_latest_schema_snapshot(pool: &PgPool) -> Option<serde_json::Value> {
     let sql = format!(

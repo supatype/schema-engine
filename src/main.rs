@@ -3,7 +3,6 @@ mod seed_command;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
-use sqlx::Executor;
 use std::io::{self, Read};
 use tracing::info;
 
@@ -282,26 +281,22 @@ async fn main() -> Result<()> {
             schema_sources_gz,
             schema_sources_manifest,
         } => {
-            use supatype_engine::state::{migration_history, studio_state};
+            use supatype_engine::generator::sql::migration::{
+                UnmanagedModelTables, UNMANAGED_MODEL_TABLES,
+            };
+            use supatype_engine::push;
+
             let ast = supatype_engine::parser::parse(&input)?;
-            let storage_sql = supatype_engine::generator::sql::storage::generate(&ast)?;
             let pool = sqlx::PgPool::connect(&database_url)
                 .await
                 .context("Failed to connect to database")?;
 
-            // Ensure _supatype schema and internal tables exist
-            // Internal bookkeeping + auth helpers (shared with the server push path).
-            migration_history::bootstrap_internal_state(&pool)
-                .await
-                .context("Failed to bootstrap _supatype internal state")?;
-            migration_history::assert_project_schema(&pool, &schema).await?;
-
-            let schema_sources_bytes = schema_sources_gz
+            let schema_sources = schema_sources_gz
                 .as_deref()
                 .map(std::fs::read)
                 .transpose()
                 .with_context(|| "Failed to read schema_sources_gz")?;
-            let schema_sources_manifest_json = schema_sources_manifest
+            let schema_sources_manifest = schema_sources_manifest
                 .as_deref()
                 .map(std::fs::read_to_string)
                 .transpose()
@@ -310,350 +305,47 @@ async fn main() -> Result<()> {
                 .transpose()
                 .context("Failed to parse schema_sources_manifest JSON")?;
 
-            // Ensure supatype schema and studio tables exist
-            sqlx::raw_sql(studio_state::create_studio_schema_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create supatype schema")?;
-            sqlx::raw_sql(studio_state::grant_studio_schema_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to grant supatype schema usage")?;
-            sqlx::raw_sql(&studio_state::create_dashboard_views_table_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create supatype.dashboard_views table")?;
-            sqlx::raw_sql(&studio_state::create_storage_stats_function_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create supatype.storage_stats function")?;
-            sqlx::raw_sql(&studio_state::create_db_stats_function_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create supatype.db_stats function")?;
-            sqlx::raw_sql(&studio_state::create_daily_signups_function_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create supatype.daily_signups function")?;
-            sqlx::raw_sql(&studio_state::create_daily_content_creates_function_sql())
-                .execute(&pool)
-                .await
-                .context("Failed to create supatype.daily_content_creates function")?;
-
             if no_cache {
-                eprintln!("{}", migration_history::NO_CACHE_NOTICE);
+                eprintln!(
+                    "{}",
+                    supatype_engine::state::migration_history::NO_CACHE_NOTICE
+                );
             }
-            // Always the live catalog. A snapshot from the last push cannot see what changed
-            // outside Supatype since, so `diff` showed one plan and push applied another.
-            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
 
-            // History, not a cache of the database: what the schema looked like at the last push,
-            // which is how a rename is told apart from a drop and an add.
-            let previous_ast = migration_history::load_latest_schema_snapshot(&pool)
-                .await
-                .and_then(|v| serde_json::from_value(v).ok());
-
-            let mut diff = supatype_engine::differ::diff_with_previous(
-                &ast,
-                &db_state,
-                previous_ast.as_ref(),
-            )?;
+            // A refusal goes on stdout too, where the CLI reads the push result, so it can name
+            // the tables and offer to adopt them. The message still reaches stderr via the error.
+            let mut plan = match push::prepare(&pool, &ast, &schema).await {
+                Ok(plan) => plan,
+                Err(e) => {
+                    if let Some(refusal) = e.downcast_ref::<UnmanagedModelTables>() {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "status": "refused",
+                                "reason": UNMANAGED_MODEL_TABLES,
+                                "tables": refusal.tables,
+                            })
+                        );
+                    }
+                    return Err(e);
+                }
+            };
 
             // Interactive rename confirmation (skipped in CI with --non-interactive)
             if !non_interactive {
-                diff = confirm_renames(diff)?;
-                confirm_risky_changes(&diff)?;
+                plan.diff = confirm_renames(plan.diff)?;
+                confirm_risky_changes(&plan.diff)?;
             }
 
-            // Before either branch: an unchanged schema produces an empty diff, so the renderer's
-            // own check would never run and the push would report success while a declared table sat
-            // in the API with none of its rules applied.
-            if let Err(e) =
-                supatype_engine::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
-            {
-                // On stdout, where the CLI reads the push result, so it can name the tables and
-                // offer to adopt them. The message still goes to stderr through the error.
-                if let Some(refusal) = e.downcast_ref::<supatype_engine::generator::sql::migration::UnmanagedModelTables>() {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "status": "refused",
-                            "reason": supatype_engine::generator::sql::migration::UNMANAGED_MODEL_TABLES,
-                            "tables": refusal.tables,
-                        })
-                    );
-                }
-                return Err(e);
-            }
-
-            if diff.operations.is_empty() {
-                // Rendered before anything is applied, so a schema whose versioned models have no
-                // stated visibility fails the push rather than half-applying it.
-                //
-                // Applied on this path at all because the publishing layer is exactly the kind of
-                // change that produces no DDL: widening `draft_visibility` in the config alters no
-                // table, so a steady-state push is the only push that will ever carry it. Skipping
-                // it here would mean a security setting that reads as applied and is not.
-                let versions_sql =
-                    supatype_engine::generator::sql::versions::render_versions_layer(
-                        &ast, &schema,
-                    )?;
-
-                // Storage materialization is not part of the model diff; apply it before the
-                // admin-only migration refresh path.
-                sqlx::raw_sql(&storage_sql)
-                    .execute(&pool)
-                    .await
-                    .context("Failed to apply storage schema/policies")?;
-
-                // Trigger functions (slug / updated_at) are idempotent and not part of
-                // the model diff, so ensure they exist on every push so an up-to-date
-                // schema still gets its slug/updated_at triggers installed.
-                let triggers_sql =
-                    supatype_engine::generator::sql::triggers::generate(&ast, &schema)?;
-                sqlx::raw_sql(&triggers_sql)
-                    .execute(&pool)
-                    .await
-                    .context("Failed to apply trigger functions")?;
-
-                if !versions_sql.trim().is_empty() {
-                    sqlx::raw_sql(&versions_sql)
-                        .execute(&pool)
-                        .await
-                        .context("Failed to apply drafts and publishing layer")?;
-                }
-
-                // AST-only changes (widgets, labels, etc.) still need admin_config / snapshot
-                // so Studio and tooling see the latest schema without a DDL migration.
-                info!("Schema is up to date, refreshing Studio metadata.");
-                let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast)?;
-                let schema_snap = serde_json::to_value(&ast)?;
-                migration_history::refresh_metadata_on_up_to_date_push(
-                    &pool,
-                    &admin_cfg,
-                    &schema_snap,
-                )
-                .await
-                .context("Failed to refresh Studio metadata on up-to-date push")?;
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "status": "up_to_date",
-                        "operations": 0,
-                        "admin_refreshed": true,
-                        "warnings": diff.warnings,
-                    })
-                );
-                return Ok(());
-            }
-
-            let migration_sql =
-                supatype_engine::generator::sql::migration::generate(&diff, force, &schema, &ast)?;
-            // Use millisecond precision so rapid retries don't collide on name.
-            let migration_name = name.unwrap_or_else(|| {
-                format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f"))
-            });
-
-            // Pre-compute hash so it's available for the failure record too.
-            let hash = format!("sha256:{}", {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(migration_sql.as_bytes());
-                hex::encode(h.finalize())
-            });
-
-            let apply_body =
-                supatype_engine::generator::sql::migration::push_storage_and_model_apply_body(
-                    &storage_sql,
-                    &diff,
-                    force,
-                    &schema,
-                    &ast,
-                )?;
-            let apply_batch =
-                supatype_engine::generator::sql::migration::push_storage_and_model_batch_sql(
-                    &storage_sql,
-                    &diff,
-                    force,
-                    &schema,
-                    &ast,
-                )?;
-            let sql_down = supatype_engine::generator::sql::rollback::generate(&diff, &schema).ok();
-
-            let mut tx = pool.begin().await.context("begin migration transaction")?;
-
-            // Coordinate with realtime: skip WAL polls while this xact lock is held.
-            // Keys must match packages/cli + packages/realtime schema-push-lock constants.
-            // If the CLI already holds a session lock on the same keys, skip to avoid deadlock.
-            {
-                let lock_held: bool = sqlx::query_scalar(
-                    r#"
-                    SELECT EXISTS (
-                      SELECT 1 FROM pg_locks
-                      WHERE locktype = 'advisory'
-                        AND classid = 872014
-                        AND objid = 1
-                        AND granted
-                    )
-                    "#,
-                )
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap_or(false);
-                if !lock_held {
-                    sqlx::query("SELECT pg_advisory_xact_lock(872014, 1)")
-                        .execute(&mut *tx)
-                        .await
-                        .context("acquire schema-push advisory lock")?;
-                }
-            }
-
-            if let Err(e) = (&mut *tx)
-                .execute(sqlx::raw_sql(&apply_body))
-                .await
-                .map_err(anyhow::Error::from)
-            {
-                migration_history::rollback_push_tx(
-                    tx,
-                    &pool,
-                    &migration_name,
-                    &hash,
-                    &apply_batch,
-                    &e.to_string(),
-                )
-                .await;
-                let msg = supatype_engine::generator::sql::migration_errors::enrich_migration_error(
-                    &e.to_string(),
-                    Some(&diff),
-                );
-                return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
-            }
-
-            let new_db_state = match supatype_engine::introspector::introspect_connection(
-                &mut tx, &schema,
-            )
-            .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    migration_history::rollback_push_tx(
-                        tx,
-                        &pool,
-                        &migration_name,
-                        &hash,
-                        &apply_batch,
-                        &e.to_string(),
-                    )
-                    .await;
-                    return Err(e.context("Failed to introspect after migration"));
-                }
+            let options = push::ApplyOptions {
+                force,
+                strict,
+                name,
+                schema_sources,
+                schema_sources_manifest,
             };
-
-            let drift_warnings =
-                supatype_engine::differ::integrity::post_push_warnings(&ast, &new_db_state);
-            if strict
-                && !supatype_engine::differ::integrity::post_push_ok(&ast, &new_db_state, true)
-            {
-                let msg = drift_warnings.join("; ");
-                migration_history::rollback_push_tx(
-                    tx,
-                    &pool,
-                    &migration_name,
-                    &hash,
-                    &apply_batch,
-                    &msg,
-                )
-                .await;
-                return Err(anyhow::anyhow!(
-                    "Push rolled back: post-apply schema drift in strict mode ({msg})"
-                ));
-            }
-
-            if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
-                migration_history::rollback_push_tx(
-                    tx,
-                    &pool,
-                    &migration_name,
-                    &hash,
-                    &apply_batch,
-                    &e.to_string(),
-                )
-                .await;
-                return Err(e.context("Failed to save schema state cache"));
-            }
-
-            // Which mechanism is enforcing the field rules, probed rather than assumed.
-            // A failure here is a missing diagnostic, not a broken push: the enforcement
-            // itself is the labels, which are already applied in this transaction.
-            if let Err(e) = migration_history::record_field_enforcement(
-                &mut tx,
-                migration_history::labelled_column_count(&ast),
-            )
-            .await
-            {
-                eprintln!("Warning: failed to record field-enforcement capability: {e}");
-            }
-
-            let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
-            // Kept for the schema_state refresh after commit: Studio reads its schema
-            // from `_supatype.schema_state`, which was only written on the up-to-date
-            // branch, so any project whose last push applied a migration had none.
-            let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
-            let migration_sources = migration_history::AppliedMigrationSources {
-                sql_down,
-                schema_sources: schema_sources_bytes,
-                schema_sources_manifest: schema_sources_manifest_json,
-            };
-            if let Err(e) = migration_history::insert_applied_migration(
-                &mut *tx,
-                &migration_name,
-                &hash,
-                serde_json::to_value(&ast).ok(),
-                admin_cfg,
-                &apply_batch,
-                &migration_sources,
-            )
-            .await
-            {
-                migration_history::rollback_push_tx(
-                    tx,
-                    &pool,
-                    &migration_name,
-                    &hash,
-                    &apply_batch,
-                    &e.to_string(),
-                )
-                .await;
-                return Err(e.context("Failed to record migration in history"));
-            }
-
-            tx.commit().await.context("commit migration transaction")?;
-
-            if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
-                if let Err(e) = migration_history::save_studio_metadata_if_present(
-                    &pool,
-                    admin_cfg,
-                    schema_snap,
-                )
-                .await
-                {
-                    eprintln!("Warning: failed to refresh Studio metadata: {e}");
-                }
-            }
-
-            info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
-            // The schema's own warnings, then what the database looked like once applied. See the
-            // same output in `server::routes::push`.
-            let warnings: Vec<&String> = diff.warnings.iter().chain(&drift_warnings).collect();
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "applied",
-                    "name": migration_name,
-                    "operations": diff.operations.len(),
-                    "warnings": warnings,
-                })
-            );
+            let outcome = push::apply(&pool, plan, options).await?;
+            println!("{}", outcome.to_json());
         }
         Command::Generate { lang, artifact } => {
             let ast = supatype_engine::parser::parse(&input)?;

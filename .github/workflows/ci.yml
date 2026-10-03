@@ -188,4 +188,5 @@ jobs:
             --test golden_tests \
             --test desired_objects_tests \
             --test statement_attribution_tests \
-            --test ledger_tests
+            --test ledger_tests \
+            --test push_orchestrator_tests

@@ -139,10 +139,15 @@ pub fn push_storage_and_model_batch_sql(
     ast: &SchemaAst,
 ) -> Result<String> {
     let inner = push_storage_and_model_apply_body(storage_sql, diff, force, schema, ast)?;
-    Ok(format!(
+    Ok(batch_sql(&inner))
+}
+
+/// `body` as the single `BEGIN`…`COMMIT` script the migration history stores.
+pub fn batch_sql(body: &str) -> String {
+    format!(
         "-- supatype-engine: storage + model migration (single transaction)\nBEGIN;\n{}\nCOMMIT;",
-        inner.trim_end()
-    ))
+        body.trim_end()
+    )
 }
 
 /// Returns the full migration file (forward + rollback) for saving to disk.
@@ -2061,7 +2066,8 @@ fn to_snake_case(s: &str) -> String {
     out
 }
 
-fn migration_hash(sql: &str) -> String {
+/// `sha256:<hex>` over a migration file, the form `_supatype.migrations.hash` holds.
+pub fn migration_hash(sql: &str) -> String {
     let mut h = Sha256::new();
     h.update(sql.as_bytes());
     format!("sha256:{}", hex::encode(h.finalize()))
