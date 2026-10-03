@@ -139,12 +139,12 @@ $fn$;
 
 -- [safe] Create table: customers
 CREATE TABLE IF NOT EXISTS "public"."customers" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "email" TEXT NOT NULL UNIQUE CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "id" UUID CONSTRAINT "customers_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "email" TEXT NOT NULL CONSTRAINT "customers_email_key" UNIQUE CONSTRAINT "customers_email_check" CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "name" TEXT NOT NULL,
     "phone" TEXT,
     "address" JSONB,
-    "stripeId" TEXT UNIQUE,
+    "stripeId" TEXT CONSTRAINT "customers_stripeId_key" UNIQUE,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "deleted_at" TIMESTAMPTZ
@@ -162,13 +162,13 @@ COMMENT ON TABLE "public"."customers" IS 'supatype:managed;kind=table;table=cust
 
 -- [safe] Create table: products
 CREATE TABLE IF NOT EXISTS "public"."products" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "products_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" TEXT NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "products_slug_key" UNIQUE,
     "description" JSONB,
     "price" NUMERIC(10, 2) NOT NULL,
     "stock" INTEGER NOT NULL DEFAULT 0,
-    "status" TEXT NOT NULL CHECK ("status" IN ('active', 'archived', 'draft')) DEFAULT 'draft',
+    "status" TEXT NOT NULL CONSTRAINT "products_status_check" CHECK ("status" IN ('active', 'archived', 'draft')) DEFAULT 'draft',
     "images" JSONB,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -184,9 +184,9 @@ COMMENT ON TABLE "public"."products" IS 'supatype:managed;kind=table;table=produ
 
 -- [safe] Create table: orders
 CREATE TABLE IF NOT EXISTS "public"."orders" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "orders_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "customer_id" UUID,
-    "status" TEXT NOT NULL CHECK ("status" IN ('pending', 'paid', 'shipped', 'delivered', 'cancelled')) DEFAULT 'pending',
+    "status" TEXT NOT NULL CONSTRAINT "orders_status_check" CHECK ("status" IN ('pending', 'paid', 'shipped', 'delivered', 'cancelled')) DEFAULT 'pending',
     "total" NUMERIC(10, 2) NOT NULL,
     "notes" TEXT,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -201,7 +201,7 @@ COMMENT ON TABLE "public"."orders" IS 'supatype:managed;kind=table;table=orders;
 
 -- [safe] Create table: order_items
 CREATE TABLE IF NOT EXISTS "public"."order_items" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "order_items_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "order_id" UUID,
     "product_id" UUID,
     "quantity" INTEGER NOT NULL,

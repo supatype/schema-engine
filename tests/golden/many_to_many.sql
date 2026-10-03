@@ -139,9 +139,9 @@ $fn$;
 
 -- [safe] Create table: students
 CREATE TABLE IF NOT EXISTS "public"."students" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "students_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" TEXT NOT NULL,
-    "email" TEXT NOT NULL UNIQUE CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email" TEXT NOT NULL CONSTRAINT "students_email_key" UNIQUE CONSTRAINT "students_email_check" CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -152,9 +152,9 @@ COMMENT ON TABLE "public"."students" IS 'supatype:managed;kind=table;table=stude
 
 -- [safe] Create table: courses
 CREATE TABLE IF NOT EXISTS "public"."courses" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "courses_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" TEXT NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "courses_slug_key" UNIQUE,
     "credits" SMALLINT NOT NULL DEFAULT 3,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -166,8 +166,8 @@ COMMENT ON TABLE "public"."courses" IS 'supatype:managed;kind=table;table=course
 
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "name" TEXT NOT NULL UNIQUE
+    "id" UUID CONSTRAINT "tags_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "name" TEXT NOT NULL CONSTRAINT "tags_name_key" UNIQUE
 );
 
 COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1';
@@ -176,18 +176,18 @@ COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fiel
 
 -- [safe] Create junction table: enrollments
 CREATE TABLE IF NOT EXISTS "public"."enrollments" (
-    "student_id" UUID NOT NULL REFERENCES "public"."students" ("id") ON DELETE CASCADE,
-    "course_id" UUID NOT NULL REFERENCES "public"."courses" ("id") ON DELETE CASCADE,
-    PRIMARY KEY ("student_id", "course_id")
+    "student_id" UUID NOT NULL CONSTRAINT "enrollments_student_id_fkey" REFERENCES "public"."students" ("id") ON DELETE CASCADE,
+    "course_id" UUID NOT NULL CONSTRAINT "enrollments_course_id_fkey" REFERENCES "public"."courses" ("id") ON DELETE CASCADE,
+    CONSTRAINT "enrollments_pkey" PRIMARY KEY ("student_id", "course_id")
 );
 
 COMMENT ON TABLE "public"."enrollments" IS 'supatype:managed;kind=table;table=enrollments;fields=;v=1';
 
 -- [safe] Create junction table: course_tags
 CREATE TABLE IF NOT EXISTS "public"."course_tags" (
-    "tag_id" UUID NOT NULL REFERENCES "public"."tags" ("id") ON DELETE CASCADE,
-    "course_id" UUID NOT NULL REFERENCES "public"."courses" ("id") ON DELETE CASCADE,
-    PRIMARY KEY ("tag_id", "course_id")
+    "tag_id" UUID NOT NULL CONSTRAINT "course_tags_tag_id_fkey" REFERENCES "public"."tags" ("id") ON DELETE CASCADE,
+    "course_id" UUID NOT NULL CONSTRAINT "course_tags_course_id_fkey" REFERENCES "public"."courses" ("id") ON DELETE CASCADE,
+    CONSTRAINT "course_tags_pkey" PRIMARY KEY ("tag_id", "course_id")
 );
 
 COMMENT ON TABLE "public"."course_tags" IS 'supatype:managed;kind=table;table=course_tags;fields=;v=1';

@@ -141,7 +141,7 @@ $fn$;
 
 -- [safe] Create table: documents
 CREATE TABLE IF NOT EXISTS "public"."documents" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "documents_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" TEXT NOT NULL,
     "content" TEXT NOT NULL,
     "embedding" vector(1536),

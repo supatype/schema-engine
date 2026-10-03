@@ -141,9 +141,9 @@ $fn$;
 
 -- [safe] Create table: kitchen_sink
 CREATE TABLE IF NOT EXISTS "public"."kitchen_sink" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "kitchen_sink_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "textField" TEXT NOT NULL,
-    "emailField" TEXT UNIQUE CHECK ("emailField" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "emailField" TEXT CONSTRAINT "kitchen_sink_emailField_key" UNIQUE CONSTRAINT "kitchen_sink_emailField_check" CHECK ("emailField" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "intField" INTEGER NOT NULL DEFAULT 0,
     "floatField" DOUBLE PRECISION,
     "boolField" BOOLEAN NOT NULL DEFAULT false,
@@ -153,11 +153,11 @@ CREATE TABLE IF NOT EXISTS "public"."kitchen_sink" (
     "smallintField" SMALLINT,
     "decimalField" NUMERIC(18, 4),
     "jsonbField" JSONB,
-    "enumField" TEXT NOT NULL CHECK ("enumField" IN ('a', 'b', 'c')) DEFAULT 'a',
-    "slugField" TEXT UNIQUE,
+    "enumField" TEXT NOT NULL CONSTRAINT "kitchen_sink_enumField_check" CHECK ("enumField" IN ('a', 'b', 'c')) DEFAULT 'a',
+    "slugField" TEXT CONSTRAINT "kitchen_sink_slugField_key" UNIQUE,
     "richTextField" JSONB,
     "bytesField" BYTEA,
-    "urlField" TEXT CHECK ("urlField" ~* '^https?://'),
+    "urlField" TEXT CONSTRAINT "kitchen_sink_urlField_check" CHECK ("urlField" ~* '^https?://'),
     "ipField" INET,
     "intervalField" INTERVAL,
     "arrayField" TEXT[],

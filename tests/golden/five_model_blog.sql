@@ -139,8 +139,8 @@ $fn$;
 
 -- [safe] Create table: users
 CREATE TABLE IF NOT EXISTS "public"."users" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "email" TEXT NOT NULL UNIQUE CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "id" UUID CONSTRAINT "users_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "email" TEXT NOT NULL CONSTRAINT "users_email_key" UNIQUE CONSTRAINT "users_email_check" CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "name" TEXT NOT NULL,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -152,9 +152,9 @@ COMMENT ON TABLE "public"."users" IS 'supatype:managed;kind=table;table=users;fi
 
 -- [safe] Create table: categories
 CREATE TABLE IF NOT EXISTS "public"."categories" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "name" TEXT NOT NULL UNIQUE,
-    "slug" TEXT NOT NULL UNIQUE,
+    "id" UUID CONSTRAINT "categories_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "name" TEXT NOT NULL CONSTRAINT "categories_name_key" UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "categories_slug_key" UNIQUE,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -167,9 +167,9 @@ COMMENT ON TABLE "public"."categories" IS 'supatype:managed;kind=table;table=cat
 
 -- [safe] Create table: posts
 CREATE TABLE IF NOT EXISTS "public"."posts" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "posts_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" TEXT NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "posts_slug_key" UNIQUE,
     "content" JSONB NOT NULL,
     "author_id" UUID,
     "category_id" UUID,
@@ -187,7 +187,7 @@ COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fi
 
 -- [safe] Create table: comments
 CREATE TABLE IF NOT EXISTS "public"."comments" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "comments_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "body" TEXT NOT NULL,
     "post_id" UUID,
     "author_id" UUID,
@@ -199,8 +199,8 @@ COMMENT ON TABLE "public"."comments" IS 'supatype:managed;kind=table;table=comme
 
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "name" TEXT NOT NULL UNIQUE
+    "id" UUID CONSTRAINT "tags_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "name" TEXT NOT NULL CONSTRAINT "tags_name_key" UNIQUE
 );
 
 COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1';

@@ -143,7 +143,7 @@ $fn$;
 
 -- [safe] Create table: every
 CREATE TABLE IF NOT EXISTS "public"."every" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "every_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "text_plain" TEXT,
     "richText_plain" JSONB,
     "integer_plain" INTEGER,
@@ -151,14 +151,14 @@ CREATE TABLE IF NOT EXISTS "public"."every" (
     "boolean_plain" BOOLEAN,
     "datetime_plain" TIMESTAMPTZ,
     "uuid_plain" UUID,
-    "email_plain" TEXT CHECK ("email_plain" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email_plain" TEXT CONSTRAINT "every_email_plain_check" CHECK ("email_plain" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "bigInt_plain" BIGINT,
     "bytes_plain" BYTEA,
     "smallInt_plain" SMALLINT,
     "date_plain" DATE,
     "timestamp_plain" TIMESTAMP,
     "money_plain" NUMERIC(19,4),
-    "url_plain" TEXT CHECK ("url_plain" ~* '^https?://'),
+    "url_plain" TEXT CONSTRAINT "every_url_plain_check" CHECK ("url_plain" ~* '^https?://'),
     "ip_plain" INET,
     "cidr_plain" CIDR,
     "macaddr_plain" MACADDR,
@@ -167,8 +167,8 @@ CREATE TABLE IF NOT EXISTS "public"."every" (
     "tsVector_plain" TSVECTOR,
     "xml_plain" XML,
     "color_plain" TEXT,
-    "slug_plain" TEXT UNIQUE,
-    "enum_plain" TEXT CHECK ("enum_plain" IN ('a', 'b', 'c')),
+    "slug_plain" TEXT CONSTRAINT "every_slug_plain_key" UNIQUE,
+    "enum_plain" TEXT CONSTRAINT "every_enum_plain_check" CHECK ("enum_plain" IN ('a', 'b', 'c')),
     "json_plain" JSONB,
     "button_plain" JSONB,
     "decimal_plain" NUMERIC(18, 4),
@@ -192,7 +192,7 @@ COMMENT ON TABLE "public"."every" IS 'supatype:managed;kind=table;table=every;fi
 
 -- [safe] Create table: every_localised
 CREATE TABLE IF NOT EXISTS "public"."every_localised" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "every_localised_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "text_plain" TEXT,
     "text_loc" JSONB,
     "richText_loc" JSONB,
@@ -201,14 +201,14 @@ CREATE TABLE IF NOT EXISTS "public"."every_localised" (
     "boolean_loc" JSONB,
     "datetime_loc" JSONB,
     "uuid_loc" JSONB,
-    "email_loc" JSONB CHECK ("email_loc" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email_loc" JSONB CONSTRAINT "every_localised_email_loc_check" CHECK ("email_loc" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "bigInt_loc" JSONB,
     "bytes_loc" JSONB,
     "smallInt_loc" JSONB,
     "date_loc" JSONB,
     "timestamp_loc" JSONB,
     "money_loc" JSONB,
-    "url_loc" JSONB CHECK ("url_loc" ~* '^https?://'),
+    "url_loc" JSONB CONSTRAINT "every_localised_url_loc_check" CHECK ("url_loc" ~* '^https?://'),
     "ip_loc" JSONB,
     "cidr_loc" JSONB,
     "macaddr_loc" JSONB,
@@ -217,8 +217,8 @@ CREATE TABLE IF NOT EXISTS "public"."every_localised" (
     "tsVector_loc" TSVECTOR,
     "xml_loc" JSONB,
     "color_loc" JSONB,
-    "slug_loc" TEXT UNIQUE,
-    "enum_loc" TEXT CHECK ("enum_loc" IN ('a', 'b', 'c')),
+    "slug_loc" TEXT CONSTRAINT "every_localised_slug_loc_key" UNIQUE,
+    "enum_loc" TEXT CONSTRAINT "every_localised_enum_loc_check" CHECK ("enum_loc" IN ('a', 'b', 'c')),
     "json_loc" JSONB,
     "button_loc" JSONB,
     "decimal_loc" NUMERIC(18, 4),
@@ -237,7 +237,7 @@ COMMENT ON TABLE "public"."every_localised" IS 'supatype:managed;kind=table;tabl
 
 -- [safe] Create table: every_required
 CREATE TABLE IF NOT EXISTS "public"."every_required" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "every_required_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "text_plain" TEXT,
     "text_req" TEXT NOT NULL,
     "richText_req" JSONB NOT NULL,
@@ -246,14 +246,14 @@ CREATE TABLE IF NOT EXISTS "public"."every_required" (
     "boolean_req" BOOLEAN NOT NULL,
     "datetime_req" TIMESTAMPTZ NOT NULL,
     "uuid_req" UUID NOT NULL,
-    "email_req" TEXT NOT NULL CHECK ("email_req" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email_req" TEXT NOT NULL CONSTRAINT "every_required_email_req_check" CHECK ("email_req" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "bigInt_req" BIGINT NOT NULL,
     "bytes_req" BYTEA NOT NULL,
     "smallInt_req" SMALLINT NOT NULL,
     "date_req" DATE NOT NULL,
     "timestamp_req" TIMESTAMP NOT NULL,
     "money_req" NUMERIC(19,4) NOT NULL,
-    "url_req" TEXT NOT NULL CHECK ("url_req" ~* '^https?://'),
+    "url_req" TEXT NOT NULL CONSTRAINT "every_required_url_req_check" CHECK ("url_req" ~* '^https?://'),
     "ip_req" INET NOT NULL,
     "cidr_req" CIDR NOT NULL,
     "macaddr_req" MACADDR NOT NULL,
@@ -262,8 +262,8 @@ CREATE TABLE IF NOT EXISTS "public"."every_required" (
     "tsVector_req" TSVECTOR NOT NULL,
     "xml_req" XML NOT NULL,
     "color_req" TEXT NOT NULL,
-    "slug_req" TEXT NOT NULL UNIQUE,
-    "enum_req" TEXT NOT NULL CHECK ("enum_req" IN ('a', 'b', 'c')),
+    "slug_req" TEXT NOT NULL CONSTRAINT "every_required_slug_req_key" UNIQUE,
+    "enum_req" TEXT NOT NULL CONSTRAINT "every_required_enum_req_check" CHECK ("enum_req" IN ('a', 'b', 'c')),
     "json_req" JSONB NOT NULL,
     "button_req" JSONB NOT NULL,
     "decimal_req" NUMERIC(18, 4) NOT NULL,
@@ -287,7 +287,7 @@ COMMENT ON TABLE "public"."every_required" IS 'supatype:managed;kind=table;table
 
 -- [safe] Create table: every_defaulted
 CREATE TABLE IF NOT EXISTS "public"."every_defaulted" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "every_defaulted_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "text_plain" TEXT,
     "text_def" TEXT DEFAULT 'x',
     "richText_def" JSONB DEFAULT jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', 'x'::text)))))),
@@ -296,14 +296,14 @@ CREATE TABLE IF NOT EXISTS "public"."every_defaulted" (
     "boolean_def" BOOLEAN DEFAULT true,
     "datetime_def" TIMESTAMPTZ DEFAULT 'x',
     "uuid_def" UUID DEFAULT 'x',
-    "email_def" TEXT DEFAULT 'x' CHECK ("email_def" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email_def" TEXT DEFAULT 'x' CONSTRAINT "every_defaulted_email_def_check" CHECK ("email_def" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "bigInt_def" BIGINT DEFAULT 1,
     "bytes_def" BYTEA DEFAULT 'x',
     "smallInt_def" SMALLINT DEFAULT 1,
     "date_def" DATE DEFAULT 'x',
     "timestamp_def" TIMESTAMP DEFAULT 'x',
     "money_def" NUMERIC(19,4) DEFAULT 1,
-    "url_def" TEXT DEFAULT 'x' CHECK ("url_def" ~* '^https?://'),
+    "url_def" TEXT DEFAULT 'x' CONSTRAINT "every_defaulted_url_def_check" CHECK ("url_def" ~* '^https?://'),
     "ip_def" INET DEFAULT 'x',
     "cidr_def" CIDR DEFAULT 'x',
     "macaddr_def" MACADDR DEFAULT 'x',
@@ -312,8 +312,8 @@ CREATE TABLE IF NOT EXISTS "public"."every_defaulted" (
     "tsVector_def" TSVECTOR,
     "xml_def" XML DEFAULT 'x',
     "color_def" TEXT DEFAULT 'x',
-    "slug_def" TEXT UNIQUE,
-    "enum_def" TEXT CHECK ("enum_def" IN ('a', 'b', 'c')) DEFAULT 'x',
+    "slug_def" TEXT CONSTRAINT "every_defaulted_slug_def_key" UNIQUE,
+    "enum_def" TEXT CONSTRAINT "every_defaulted_enum_def_check" CHECK ("enum_def" IN ('a', 'b', 'c')) DEFAULT 'x',
     "json_def" JSONB,
     "button_def" JSONB,
     "decimal_def" NUMERIC(18, 4),
@@ -337,7 +337,7 @@ COMMENT ON TABLE "public"."every_defaulted" IS 'supatype:managed;kind=table;tabl
 
 -- [safe] Create table: every_read_only
 CREATE TABLE IF NOT EXISTS "public"."every_read_only" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "every_read_only_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "text_plain" TEXT,
     "text_ro" TEXT,
     "richText_ro" JSONB,
@@ -346,14 +346,14 @@ CREATE TABLE IF NOT EXISTS "public"."every_read_only" (
     "boolean_ro" BOOLEAN,
     "datetime_ro" TIMESTAMPTZ,
     "uuid_ro" UUID,
-    "email_ro" TEXT CHECK ("email_ro" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email_ro" TEXT CONSTRAINT "every_read_only_email_ro_check" CHECK ("email_ro" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "bigInt_ro" BIGINT,
     "bytes_ro" BYTEA,
     "smallInt_ro" SMALLINT,
     "date_ro" DATE,
     "timestamp_ro" TIMESTAMP,
     "money_ro" NUMERIC(19,4),
-    "url_ro" TEXT CHECK ("url_ro" ~* '^https?://'),
+    "url_ro" TEXT CONSTRAINT "every_read_only_url_ro_check" CHECK ("url_ro" ~* '^https?://'),
     "ip_ro" INET,
     "cidr_ro" CIDR,
     "macaddr_ro" MACADDR,
@@ -362,8 +362,8 @@ CREATE TABLE IF NOT EXISTS "public"."every_read_only" (
     "tsVector_ro" TSVECTOR,
     "xml_ro" XML,
     "color_ro" TEXT,
-    "slug_ro" TEXT UNIQUE,
-    "enum_ro" TEXT CHECK ("enum_ro" IN ('a', 'b', 'c')),
+    "slug_ro" TEXT CONSTRAINT "every_read_only_slug_ro_key" UNIQUE,
+    "enum_ro" TEXT CONSTRAINT "every_read_only_enum_ro_check" CHECK ("enum_ro" IN ('a', 'b', 'c')),
     "json_ro" JSONB,
     "button_ro" JSONB,
     "decimal_ro" NUMERIC(18, 4),
@@ -387,7 +387,7 @@ COMMENT ON TABLE "public"."every_read_only" IS 'supatype:managed;kind=table;tabl
 
 -- [safe] Create table: relations
 CREATE TABLE IF NOT EXISTS "public"."relations" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "relations_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "owner_id" UUID
 );
 
@@ -395,10 +395,10 @@ COMMENT ON TABLE "public"."relations" IS 'supatype:managed;kind=table;table=rela
 
 -- [safe] Create table: composites
 CREATE TABLE IF NOT EXISTS "public"."composites" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "composites_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    "status" TEXT NOT NULL DEFAULT 'draft' CHECK ("status" IN ('draft', 'published', 'scheduled', 'archived')),
+    "status" TEXT NOT NULL DEFAULT 'draft' CONSTRAINT "composites_status_check" CHECK ("status" IN ('draft', 'published', 'scheduled', 'archived')),
     "published_at" TIMESTAMPTZ,
     "scheduled_at" TIMESTAMPTZ,
     "deleted_at" TIMESTAMPTZ
@@ -412,9 +412,9 @@ COMMENT ON TABLE "public"."composites" IS 'supatype:managed;kind=table;table=com
 
 -- [safe] Create junction table: relations_every
 CREATE TABLE IF NOT EXISTS "public"."relations_every" (
-    "relations_id" UUID NOT NULL REFERENCES "public"."relations" ("id") ON DELETE CASCADE,
-    "every_id" UUID NOT NULL REFERENCES "public"."every" ("id") ON DELETE CASCADE,
-    PRIMARY KEY ("relations_id", "every_id")
+    "relations_id" UUID NOT NULL CONSTRAINT "relations_every_relations_id_fkey" REFERENCES "public"."relations" ("id") ON DELETE CASCADE,
+    "every_id" UUID NOT NULL CONSTRAINT "relations_every_every_id_fkey" REFERENCES "public"."every" ("id") ON DELETE CASCADE,
+    CONSTRAINT "relations_every_pkey" PRIMARY KEY ("relations_id", "every_id")
 );
 
 COMMENT ON TABLE "public"."relations_every" IS 'supatype:managed;kind=table;table=relations_every;fields=;v=1';

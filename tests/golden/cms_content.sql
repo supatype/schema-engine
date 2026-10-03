@@ -139,9 +139,9 @@ $fn$;
 
 -- [safe] Create table: authors
 CREATE TABLE IF NOT EXISTS "public"."authors" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "authors_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" TEXT NOT NULL,
-    "email" TEXT NOT NULL UNIQUE CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email" TEXT NOT NULL CONSTRAINT "authors_email_key" UNIQUE CONSTRAINT "authors_email_check" CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "bio" TEXT,
     "avatar" JSONB,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -154,9 +154,9 @@ COMMENT ON TABLE "public"."authors" IS 'supatype:managed;kind=table;table=author
 
 -- [safe] Create table: articles
 CREATE TABLE IF NOT EXISTS "public"."articles" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "articles_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" TEXT NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "articles_slug_key" UNIQUE,
     "body" JSONB NOT NULL,
     "excerpt" TEXT,
     "author_id" UUID,
@@ -184,9 +184,9 @@ COMMENT ON TABLE "public"."articles" IS 'supatype:managed;kind=table;table=artic
 
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "name" TEXT NOT NULL UNIQUE,
-    "slug" TEXT NOT NULL UNIQUE
+    "id" UUID CONSTRAINT "tags_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "name" TEXT NOT NULL CONSTRAINT "tags_name_key" UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "tags_slug_key" UNIQUE
 );
 
 COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1';
@@ -197,16 +197,16 @@ COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fiel
 
 -- [safe] Create table: articles
 CREATE TABLE IF NOT EXISTS "public"."articles" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid()
+    "id" UUID CONSTRAINT "articles_pkey" PRIMARY KEY DEFAULT gen_random_uuid()
 );
 
 COMMENT ON TABLE "public"."articles" IS 'supatype:managed;kind=table;table=articles;fields=;v=1';
 
 -- [safe] Create junction table: article_tags
 CREATE TABLE IF NOT EXISTS "public"."article_tags" (
-    "article_tag_id" UUID NOT NULL REFERENCES "public"."articles" ("id") ON DELETE CASCADE,
-    "tag_id" UUID NOT NULL REFERENCES "public"."tags" ("id") ON DELETE CASCADE,
-    PRIMARY KEY ("article_tag_id", "tag_id")
+    "article_tag_id" UUID NOT NULL CONSTRAINT "article_tags_article_tag_id_fkey" REFERENCES "public"."articles" ("id") ON DELETE CASCADE,
+    "tag_id" UUID NOT NULL CONSTRAINT "article_tags_tag_id_fkey" REFERENCES "public"."tags" ("id") ON DELETE CASCADE,
+    CONSTRAINT "article_tags_pkey" PRIMARY KEY ("article_tag_id", "tag_id")
 );
 
 COMMENT ON TABLE "public"."article_tags" IS 'supatype:managed;kind=table;table=article_tags;fields=;v=1';

@@ -147,7 +147,7 @@ END $$;
 
 -- [safe] Create table: posts
 CREATE TABLE IF NOT EXISTS "public"."posts" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "posts_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" TEXT NOT NULL,
     "body" JSONB,
     "published_at" TIMESTAMP,
@@ -159,7 +159,7 @@ COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fi
 
 -- [safe] Create table: ledger
 CREATE TABLE IF NOT EXISTS "public"."ledger" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "ledger_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "note" TEXT NOT NULL
 );
 
@@ -167,7 +167,7 @@ COMMENT ON TABLE "public"."ledger" IS 'supatype:managed;kind=table;table=ledger;
 
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "tags_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "label" TEXT NOT NULL
 );
 
@@ -175,10 +175,10 @@ COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fiel
 
 -- [safe] Create versions table: posts_versions
 CREATE TABLE IF NOT EXISTS "public"."posts_versions" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "record_id" UUID NOT NULL REFERENCES "public"."posts" ("id") ON DELETE CASCADE,
+    "id" UUID CONSTRAINT "posts_versions_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "record_id" UUID NOT NULL CONSTRAINT "posts_versions_record_id_fkey" REFERENCES "public"."posts" ("id") ON DELETE CASCADE,
     "version" INTEGER NOT NULL,
-    "status" TEXT NOT NULL CHECK ("status" IN ('draft', 'published')),
+    "status" TEXT NOT NULL CONSTRAINT "posts_versions_status_check" CHECK ("status" IN ('draft', 'published')),
     "data" JSONB NOT NULL,
     -- When each locale is due to go live, if it has been scheduled.
     -- Per locale rather than one `publish_at` for the row, because publishing is per locale:
@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS "public"."posts_versions" (
     -- column differ drops columns the schema does not declare, and rather than in a table of
     -- its own because this row already carries the policies and the guard that protect it.
     "published_locales" JSONB NOT NULL DEFAULT '{}',
-    UNIQUE ("record_id", "version")
+    CONSTRAINT "posts_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
 
 COMMENT ON TABLE "public"."posts_versions" IS 'supatype:managed;kind=table;table=posts_versions;fields=;v=1';
@@ -201,10 +201,10 @@ CREATE INDEX IF NOT EXISTS "posts_versions_record_idx" ON "public"."posts_versio
 
 -- [safe] Create versions table: ledger_versions
 CREATE TABLE IF NOT EXISTS "public"."ledger_versions" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "record_id" UUID NOT NULL REFERENCES "public"."ledger" ("id") ON DELETE CASCADE,
+    "id" UUID CONSTRAINT "ledger_versions_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "record_id" UUID NOT NULL CONSTRAINT "ledger_versions_record_id_fkey" REFERENCES "public"."ledger" ("id") ON DELETE CASCADE,
     "version" INTEGER NOT NULL,
-    "status" TEXT NOT NULL CHECK ("status" IN ('draft', 'published')),
+    "status" TEXT NOT NULL CONSTRAINT "ledger_versions_status_check" CHECK ("status" IN ('draft', 'published')),
     "data" JSONB NOT NULL,
     -- When each locale is due to go live, if it has been scheduled.
     -- Per locale rather than one `publish_at` for the row, because publishing is per locale:
@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS "public"."ledger_versions" (
     -- column differ drops columns the schema does not declare, and rather than in a table of
     -- its own because this row already carries the policies and the guard that protect it.
     "published_locales" JSONB NOT NULL DEFAULT '{}',
-    UNIQUE ("record_id", "version")
+    CONSTRAINT "ledger_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
 
 COMMENT ON TABLE "public"."ledger_versions" IS 'supatype:managed;kind=table;table=ledger_versions;fields=;v=1';

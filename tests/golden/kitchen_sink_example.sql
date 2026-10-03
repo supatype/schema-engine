@@ -153,9 +153,9 @@ END $$;
 
 -- [safe] Create table: page
 CREATE TABLE IF NOT EXISTS "public"."page" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "page_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" JSONB NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "page_slug_key" UNIQUE,
     "summary" TEXT CONSTRAINT "page_summary_bounds" CHECK (char_length("summary") <= 200),
     "body" JSONB NOT NULL CONSTRAINT "page_body_bounds" CHECK (jsonb_typeof("body") = 'array' AND jsonb_array_length("body") <= 20),
     "published_at" TIMESTAMPTZ,
@@ -177,13 +177,13 @@ COMMENT ON TABLE "public"."page" IS 'supatype:managed;kind=table;table=page;fiel
 
 -- [safe] Create table: speaker
 CREATE TABLE IF NOT EXISTS "public"."speaker" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "speaker_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" TEXT NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "speaker_slug_key" UNIQUE,
     "bio" JSONB,
     "headshot" JSONB,
     "links" JSONB,
-    "email" TEXT CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email" TEXT CONSTRAINT "speaker_email_check" CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "published_at" TIMESTAMPTZ,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -195,7 +195,7 @@ COMMENT ON TABLE "public"."speaker" IS 'supatype:managed;kind=table;table=speake
 
 -- [safe] Create table: room
 CREATE TABLE IF NOT EXISTS "public"."room" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "room_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" TEXT NOT NULL,
     "capacity" INTEGER NOT NULL CONSTRAINT "room_capacity_bounds" CHECK (("capacity" >= 10) AND ("capacity" <= 2000)),
     "location" GEOGRAPHY(POINT, 4326),
@@ -209,9 +209,9 @@ COMMENT ON TABLE "public"."room" IS 'supatype:managed;kind=table;table=room;fiel
 
 -- [safe] Create table: talk
 CREATE TABLE IF NOT EXISTS "public"."talk" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "talk_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "title" TEXT NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "talk_slug_key" UNIQUE,
     "abstract" JSONB,
     "speaker_id" UUID,
     "room_id" UUID,
@@ -243,12 +243,12 @@ COMMENT ON TABLE "public"."talk" IS 'supatype:managed;kind=table;table=talk;fiel
 
 -- [safe] Create table: sponsor
 CREATE TABLE IF NOT EXISTS "public"."sponsor" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "name" TEXT NOT NULL UNIQUE,
-    "tier" TEXT NOT NULL CHECK ("tier" IN ('platinum', 'gold', 'community')),
+    "id" UUID CONSTRAINT "sponsor_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "name" TEXT NOT NULL CONSTRAINT "sponsor_name_key" UNIQUE,
+    "tier" TEXT NOT NULL CONSTRAINT "sponsor_tier_check" CHECK ("tier" IN ('platinum', 'gold', 'community')),
     "brandColor" TEXT,
     "logo" JSONB,
-    "website" TEXT CHECK ("website" ~* '^https?://'),
+    "website" TEXT CONSTRAINT "sponsor_website_check" CHECK ("website" ~* '^https?://'),
     "blurb" JSONB,
     "contactPhone" TEXT,
     "published_at" TIMESTAMPTZ,
@@ -262,7 +262,7 @@ COMMENT ON TABLE "public"."sponsor" IS 'supatype:managed;kind=table;table=sponso
 
 -- [safe] Create table: attendee
 CREATE TABLE IF NOT EXISTS "public"."attendee" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "attendee_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "displayName" TEXT NOT NULL CONSTRAINT "attendee_displayName_bounds" CHECK (char_length("displayName") <= 80),
     "avatar" JSONB,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -275,10 +275,10 @@ COMMENT ON TABLE "public"."attendee" IS 'supatype:managed;kind=table;table=atten
 
 -- [safe] Create table: ticket
 CREATE TABLE IF NOT EXISTS "public"."ticket" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "ticket_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "auth_user_id" UUID,
     "attendee_id" UUID,
-    "reference" TEXT NOT NULL UNIQUE,
+    "reference" TEXT NOT NULL CONSTRAINT "ticket_reference_key" UNIQUE,
     "price" JSONB NOT NULL,
     "vatRate" NUMERIC(5, 2) NOT NULL,
     "pdf" JSONB,
@@ -292,7 +292,7 @@ COMMENT ON TABLE "public"."ticket" IS 'supatype:managed;kind=table;table=ticket;
 
 -- [safe] Create table: chat_message
 CREATE TABLE IF NOT EXISTS "public"."chat_message" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "chat_message_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "room" TEXT NOT NULL,
     "body" TEXT NOT NULL CONSTRAINT "chat_message_body_bounds" CHECK (char_length("body") <= 500),
     "auth_user_id" UUID,
@@ -314,11 +314,11 @@ COMMENT ON TABLE "public"."chat_message" IS 'supatype:managed;kind=table;table=c
 
 -- [safe] Create table: _global_site_settings
 CREATE TABLE IF NOT EXISTS "public"."_global_site_settings" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    "id" UUID CONSTRAINT "_global_site_settings_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "conferenceName" TEXT NOT NULL,
     "tagline" JSONB,
     "venue" GEOGRAPHY(POINT, 4326),
-    "supportEmail" TEXT NOT NULL CHECK ("supportEmail" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "supportEmail" TEXT NOT NULL CONSTRAINT "_global_site_settings_supportEmail_check" CHECK ("supportEmail" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -331,10 +331,10 @@ COMMENT ON TABLE "public"."_global_site_settings" IS 'supatype:managed;kind=tabl
 
 -- [safe] Create versions table: page_versions
 CREATE TABLE IF NOT EXISTS "public"."page_versions" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "record_id" UUID NOT NULL REFERENCES "public"."page" ("id") ON DELETE CASCADE,
+    "id" UUID CONSTRAINT "page_versions_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "record_id" UUID NOT NULL CONSTRAINT "page_versions_record_id_fkey" REFERENCES "public"."page" ("id") ON DELETE CASCADE,
     "version" INTEGER NOT NULL,
-    "status" TEXT NOT NULL CHECK ("status" IN ('draft', 'published')),
+    "status" TEXT NOT NULL CONSTRAINT "page_versions_status_check" CHECK ("status" IN ('draft', 'published')),
     "data" JSONB NOT NULL,
     -- When each locale is due to go live, if it has been scheduled.
     -- Per locale rather than one `publish_at` for the row, because publishing is per locale:
@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS "public"."page_versions" (
     -- column differ drops columns the schema does not declare, and rather than in a table of
     -- its own because this row already carries the policies and the guard that protect it.
     "published_locales" JSONB NOT NULL DEFAULT '{}',
-    UNIQUE ("record_id", "version")
+    CONSTRAINT "page_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
 
 COMMENT ON TABLE "public"."page_versions" IS 'supatype:managed;kind=table;table=page_versions;fields=;v=1';
@@ -357,10 +357,10 @@ CREATE INDEX IF NOT EXISTS "page_versions_record_idx" ON "public"."page_versions
 
 -- [safe] Create versions table: speaker_versions
 CREATE TABLE IF NOT EXISTS "public"."speaker_versions" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "record_id" UUID NOT NULL REFERENCES "public"."speaker" ("id") ON DELETE CASCADE,
+    "id" UUID CONSTRAINT "speaker_versions_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "record_id" UUID NOT NULL CONSTRAINT "speaker_versions_record_id_fkey" REFERENCES "public"."speaker" ("id") ON DELETE CASCADE,
     "version" INTEGER NOT NULL,
-    "status" TEXT NOT NULL CHECK ("status" IN ('draft', 'published')),
+    "status" TEXT NOT NULL CONSTRAINT "speaker_versions_status_check" CHECK ("status" IN ('draft', 'published')),
     "data" JSONB NOT NULL,
     -- When each locale is due to go live, if it has been scheduled.
     -- Per locale rather than one `publish_at` for the row, because publishing is per locale:
@@ -374,7 +374,7 @@ CREATE TABLE IF NOT EXISTS "public"."speaker_versions" (
     -- column differ drops columns the schema does not declare, and rather than in a table of
     -- its own because this row already carries the policies and the guard that protect it.
     "published_locales" JSONB NOT NULL DEFAULT '{}',
-    UNIQUE ("record_id", "version")
+    CONSTRAINT "speaker_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
 
 COMMENT ON TABLE "public"."speaker_versions" IS 'supatype:managed;kind=table;table=speaker_versions;fields=;v=1';
@@ -383,10 +383,10 @@ CREATE INDEX IF NOT EXISTS "speaker_versions_record_idx" ON "public"."speaker_ve
 
 -- [safe] Create versions table: talk_versions
 CREATE TABLE IF NOT EXISTS "public"."talk_versions" (
-    "id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    "record_id" UUID NOT NULL REFERENCES "public"."talk" ("id") ON DELETE CASCADE,
+    "id" UUID CONSTRAINT "talk_versions_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
+    "record_id" UUID NOT NULL CONSTRAINT "talk_versions_record_id_fkey" REFERENCES "public"."talk" ("id") ON DELETE CASCADE,
     "version" INTEGER NOT NULL,
-    "status" TEXT NOT NULL CHECK ("status" IN ('draft', 'published')),
+    "status" TEXT NOT NULL CONSTRAINT "talk_versions_status_check" CHECK ("status" IN ('draft', 'published')),
     "data" JSONB NOT NULL,
     -- When each locale is due to go live, if it has been scheduled.
     -- Per locale rather than one `publish_at` for the row, because publishing is per locale:
@@ -400,7 +400,7 @@ CREATE TABLE IF NOT EXISTS "public"."talk_versions" (
     -- column differ drops columns the schema does not declare, and rather than in a table of
     -- its own because this row already carries the policies and the guard that protect it.
     "published_locales" JSONB NOT NULL DEFAULT '{}',
-    UNIQUE ("record_id", "version")
+    CONSTRAINT "talk_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
 
 COMMENT ON TABLE "public"."talk_versions" IS 'supatype:managed;kind=table;table=talk_versions;fields=;v=1';

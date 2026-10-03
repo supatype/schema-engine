@@ -140,7 +140,7 @@ $fn$;
 -- [safe] Create table: users
 CREATE TABLE IF NOT EXISTS "public"."users" (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
-    "email" TEXT NOT NULL UNIQUE CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
+    "email" TEXT NOT NULL CONSTRAINT "users_email_key" UNIQUE CONSTRAINT "users_email_check" CHECK ("email" ~* '^[^@]+@[^@]+\.[^@]+$'),
     "name" TEXT NOT NULL,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -154,7 +154,7 @@ COMMENT ON TABLE "public"."users" IS 'supatype:managed;kind=table;table=users;fi
 CREATE TABLE IF NOT EXISTS "public"."posts" (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "title" TEXT NOT NULL,
-    "slug" TEXT NOT NULL UNIQUE,
+    "slug" TEXT NOT NULL CONSTRAINT "posts_slug_key" UNIQUE,
     "content" JSONB NOT NULL,
     "author_id" UUID,
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
