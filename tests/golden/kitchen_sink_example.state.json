@@ -2127,11 +2127,128 @@
     ],
     "rlsPolicies": [
       {
-        "table": "page",
-        "name": "page_select",
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "managed": true
+      },
+      {
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(published_at <= ( SELECT now() AS now))",
+        "usingExpr": "true",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "managed": true
+      },
+      {
+        "table": "attendee",
+        "name": "attendee_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "attendee",
+        "name": "attendee_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "managed": true
+      },
+      {
+        "table": "attendee",
+        "name": "attendee_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "attendee",
+        "name": "attendee_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "managed": true
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "managed": true
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "managed": true
+      },
+      {
+        "table": "page",
+        "name": "page_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "page",
+        "name": "page_draft_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "_supatype.sees_draft_page((id)::text)",
         "checkExpr": null,
         "managed": true
       },
@@ -2146,6 +2263,15 @@
       },
       {
         "table": "page",
+        "name": "page_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(published_at <= ( SELECT now() AS now))",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "page",
         "name": "page_update",
         "command": "w",
         "permissive": true,
@@ -2154,8 +2280,35 @@
         "managed": true
       },
       {
-        "table": "page",
-        "name": "page_delete",
+        "table": "page_versions",
+        "name": "page_versions_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "_supatype.can_edit_page(record_id)",
+        "managed": true
+      },
+      {
+        "table": "page_versions",
+        "name": "page_versions_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "page_versions",
+        "name": "page_versions_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "_supatype.can_edit_page(record_id)",
+        "checkExpr": "_supatype.can_edit_page(record_id)",
+        "managed": true
+      },
+      {
+        "table": "room",
+        "name": "room_delete",
         "command": "d",
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
@@ -2163,17 +2316,8 @@
         "managed": true
       },
       {
-        "table": "speaker",
-        "name": "speaker_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(published_at <= ( SELECT now() AS now))",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "speaker",
-        "name": "speaker_insert",
+        "table": "room",
+        "name": "room_insert",
         "command": "a",
         "permissive": true,
         "usingExpr": null,
@@ -2181,8 +2325,17 @@
         "managed": true
       },
       {
-        "table": "speaker",
-        "name": "speaker_update",
+        "table": "room",
+        "name": "room_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "true",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "room",
+        "name": "room_update",
         "command": "w",
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
@@ -2199,17 +2352,17 @@
         "managed": true
       },
       {
-        "table": "room",
-        "name": "room_select",
+        "table": "speaker",
+        "name": "speaker_draft_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "true",
+        "usingExpr": "_supatype.sees_draft_speaker((id)::text)",
         "checkExpr": null,
         "managed": true
       },
       {
-        "table": "room",
-        "name": "room_insert",
+        "table": "speaker",
+        "name": "speaker_insert",
         "command": "a",
         "permissive": true,
         "usingExpr": null,
@@ -2217,35 +2370,8 @@
         "managed": true
       },
       {
-        "table": "ticket",
-        "name": "ticket_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
-      },
-      {
-        "table": "room",
-        "name": "room_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
-      },
-      {
-        "table": "room",
-        "name": "room_delete",
-        "command": "d",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "talk",
-        "name": "talk_select",
+        "table": "speaker",
+        "name": "speaker_select",
         "command": "r",
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
@@ -2253,8 +2379,53 @@
         "managed": true
       },
       {
-        "table": "talk",
-        "name": "talk_insert",
+        "table": "speaker",
+        "name": "speaker_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "managed": true
+      },
+      {
+        "table": "speaker_versions",
+        "name": "speaker_versions_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "_supatype.can_edit_speaker(record_id)",
+        "managed": true
+      },
+      {
+        "table": "speaker_versions",
+        "name": "speaker_versions_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "speaker_versions",
+        "name": "speaker_versions_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "_supatype.can_edit_speaker(record_id)",
+        "checkExpr": "_supatype.can_edit_speaker(record_id)",
+        "managed": true
+      },
+      {
+        "table": "sponsor",
+        "name": "sponsor_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "sponsor",
+        "name": "sponsor_insert",
         "command": "a",
         "permissive": true,
         "usingExpr": null,
@@ -2262,17 +2433,17 @@
         "managed": true
       },
       {
-        "table": "attendee",
-        "name": "attendee_delete",
-        "command": "d",
+        "table": "sponsor",
+        "name": "sponsor_select",
+        "command": "r",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
         "managed": true
       },
       {
-        "table": "talk",
-        "name": "talk_update",
+        "table": "sponsor",
+        "name": "sponsor_update",
         "command": "w",
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
@@ -2289,8 +2460,26 @@
         "managed": true
       },
       {
-        "table": "sponsor",
-        "name": "sponsor_select",
+        "table": "talk",
+        "name": "talk_draft_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "_supatype.sees_draft_talk((id)::text)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "talk",
+        "name": "talk_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "managed": true
+      },
+      {
+        "table": "talk",
+        "name": "talk_select",
         "command": "r",
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
@@ -2298,246 +2487,12 @@
         "managed": true
       },
       {
-        "table": "sponsor",
-        "name": "sponsor_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
-      },
-      {
-        "table": "ticket",
-        "name": "ticket_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "sponsor",
-        "name": "sponsor_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
-      },
-      {
-        "table": "sponsor",
-        "name": "sponsor_delete",
-        "command": "d",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "attendee",
-        "name": "attendee_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "attendee",
-        "name": "attendee_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
-      },
-      {
-        "table": "attendee",
-        "name": "attendee_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
-      },
-      {
-        "table": "ticket",
-        "name": "ticket_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "managed": true
-      },
-      {
-        "table": "ticket",
-        "name": "ticket_delete",
-        "command": "d",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "chat_message",
-        "name": "chat_message_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "chat_message",
-        "name": "chat_message_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
-      },
-      {
-        "table": "chat_message",
-        "name": "chat_message_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "managed": true
-      },
-      {
-        "table": "chat_message",
-        "name": "chat_message_delete",
-        "command": "d",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "_global_site_settings",
-        "name": "_global_site_settings_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "true",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "_global_site_settings",
-        "name": "_global_site_settings_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
-      },
-      {
-        "table": "_global_site_settings",
-        "name": "_global_site_settings_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
-      },
-      {
-        "table": "_global_site_settings",
-        "name": "_global_site_settings_delete",
-        "command": "d",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "page_versions",
-        "name": "page_versions_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "page",
-        "name": "page_draft_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "_supatype.sees_draft_page((id)::text)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "page_versions",
-        "name": "page_versions_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "_supatype.can_edit_page(record_id)",
-        "managed": true
-      },
-      {
-        "table": "page_versions",
-        "name": "page_versions_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "_supatype.can_edit_page(record_id)",
-        "checkExpr": "_supatype.can_edit_page(record_id)",
-        "managed": true
-      },
-      {
-        "table": "speaker_versions",
-        "name": "speaker_versions_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "speaker",
-        "name": "speaker_draft_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "_supatype.sees_draft_speaker((id)::text)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "speaker_versions",
-        "name": "speaker_versions_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "_supatype.can_edit_speaker(record_id)",
-        "managed": true
-      },
-      {
-        "table": "speaker_versions",
-        "name": "speaker_versions_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "_supatype.can_edit_speaker(record_id)",
-        "checkExpr": "_supatype.can_edit_speaker(record_id)",
-        "managed": true
-      },
-      {
-        "table": "talk_versions",
-        "name": "talk_versions_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
         "table": "talk",
-        "name": "talk_draft_select",
-        "command": "r",
+        "name": "talk_update",
+        "command": "w",
         "permissive": true,
-        "usingExpr": "_supatype.sees_draft_talk((id)::text)",
-        "checkExpr": null,
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "managed": true
       },
       {
@@ -2551,11 +2506,56 @@
       },
       {
         "table": "talk_versions",
+        "name": "talk_versions_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "talk_versions",
         "name": "talk_versions_update",
         "command": "w",
         "permissive": true,
         "usingExpr": "_supatype.can_edit_talk(record_id)",
         "checkExpr": "_supatype.can_edit_talk(record_id)",
+        "managed": true
+      },
+      {
+        "table": "ticket",
+        "name": "ticket_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "ticket",
+        "name": "ticket_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "managed": true
+      },
+      {
+        "table": "ticket",
+        "name": "ticket_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "ticket",
+        "name": "ticket_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
         "managed": true
       }
     ],
@@ -2598,14 +2598,14 @@
       {
         "table": "page_versions",
         "name": "page_versions_guard",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _supatype.page_versions_guard()"
       },
       {
         "table": "page_versions",
         "name": "page_versions_guard",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _supatype.page_versions_guard()"
       },
@@ -2619,28 +2619,28 @@
       {
         "table": "speaker",
         "name": "speaker_rich_text_trigger",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.normalise_speaker_rich_text()"
       },
       {
         "table": "speaker",
         "name": "speaker_rich_text_trigger",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.normalise_speaker_rich_text()"
       },
       {
         "table": "speaker",
         "name": "speaker_slug_trigger",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_speaker_slug()"
       },
       {
         "table": "speaker",
         "name": "speaker_slug_trigger",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_speaker_slug()"
       },
@@ -2654,14 +2654,14 @@
       {
         "table": "speaker_versions",
         "name": "speaker_versions_guard",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _supatype.speaker_versions_guard()"
       },
       {
         "table": "speaker_versions",
         "name": "speaker_versions_guard",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _supatype.speaker_versions_guard()"
       },
@@ -2710,14 +2710,14 @@
       {
         "table": "talk_versions",
         "name": "talk_versions_guard",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _supatype.talk_versions_guard()"
       },
       {
         "table": "talk_versions",
         "name": "talk_versions_guard",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _supatype.talk_versions_guard()"
       },
@@ -2738,18 +2738,18 @@
     ],
     "enums": [],
     "rlsEnabledTables": [
-      "page",
-      "speaker",
-      "room",
-      "sponsor",
       "_global_site_settings",
-      "talk",
       "attendee",
-      "ticket",
       "chat_message",
+      "page",
       "page_versions",
+      "room",
+      "speaker",
       "speaker_versions",
-      "talk_versions"
+      "sponsor",
+      "talk",
+      "talk_versions",
+      "ticket"
     ]
   },
   "catalog": {

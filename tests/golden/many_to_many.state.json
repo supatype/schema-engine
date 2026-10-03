@@ -554,10 +554,10 @@
     ],
     "enums": [],
     "rlsEnabledTables": [
-      "enrollments",
       "course_tags",
-      "students",
       "courses",
+      "enrollments",
+      "students",
       "tags"
     ]
   },

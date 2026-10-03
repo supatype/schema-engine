@@ -677,14 +677,14 @@
       {
         "table": "categories",
         "name": "categories_slug_trigger",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
       },
       {
         "table": "categories",
         "name": "categories_slug_trigger",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
       },
@@ -719,14 +719,14 @@
       {
         "table": "posts",
         "name": "posts_slug_trigger",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_posts_slug()"
       },
       {
         "table": "posts",
         "name": "posts_slug_trigger",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_posts_slug()"
       },
@@ -752,11 +752,11 @@
     ],
     "enums": [],
     "rlsEnabledTables": [
-      "users",
       "categories",
-      "posts",
       "comments",
-      "tags"
+      "posts",
+      "tags",
+      "users"
     ]
   },
   "catalog": {

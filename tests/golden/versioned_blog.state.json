@@ -610,21 +610,30 @@
     ],
     "rlsPolicies": [
       {
+        "table": "ledger",
+        "name": "ledger_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "ledger_versions",
+        "name": "ledger_versions_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('ledger'::text, (record_id)::text))",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
         "table": "posts",
         "name": "posts_draft_select",
         "command": "r",
         "permissive": true,
         "usingExpr": "_supatype.sees_draft_posts((id)::text)",
         "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "posts",
-        "name": "posts_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "managed": true
       },
       {
@@ -637,30 +646,12 @@
         "managed": true
       },
       {
-        "table": "ledger",
-        "name": "ledger_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "tags",
-        "name": "tags_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "true",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "posts_versions",
-        "name": "posts_versions_update",
+        "table": "posts",
+        "name": "posts_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "_supatype.can_edit_posts(record_id)",
-        "checkExpr": "_supatype.can_edit_posts(record_id)",
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "managed": true
       },
       {
@@ -682,11 +673,20 @@
         "managed": true
       },
       {
-        "table": "ledger_versions",
-        "name": "ledger_versions_select",
+        "table": "posts_versions",
+        "name": "posts_versions_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "_supatype.can_edit_posts(record_id)",
+        "checkExpr": "_supatype.can_edit_posts(record_id)",
+        "managed": true
+      },
+      {
+        "table": "tags",
+        "name": "tags_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('ledger'::text, (record_id)::text))",
+        "usingExpr": "true",
         "checkExpr": null,
         "managed": true
       }
@@ -695,28 +695,28 @@
       {
         "table": "ledger",
         "name": "ledger_versions_audit",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "AFTER",
         "functionName": "EXECUTE FUNCTION _supatype.ledger_versions_audit()"
       },
       {
         "table": "ledger",
         "name": "ledger_versions_audit",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "AFTER",
         "functionName": "EXECUTE FUNCTION _supatype.ledger_versions_audit()"
       },
       {
         "table": "posts",
         "name": "posts_rich_text_trigger",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.normalise_posts_rich_text()"
       },
       {
         "table": "posts",
         "name": "posts_rich_text_trigger",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.normalise_posts_rich_text()"
       },
@@ -749,11 +749,11 @@
     ],
     "enums": [],
     "rlsEnabledTables": [
-      "posts",
       "ledger",
-      "tags",
+      "ledger_versions",
+      "posts",
       "posts_versions",
-      "ledger_versions"
+      "tags"
     ]
   },
   "catalog": {

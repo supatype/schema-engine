@@ -688,33 +688,6 @@
     ],
     "rlsPolicies": [
       {
-        "table": "users",
-        "name": "users_delete",
-        "command": "d",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "users",
-        "name": "users_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
-      },
-      {
-        "table": "users",
-        "name": "users_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "(true OR (created_at >= ( SELECT date_trunc('year'::text, now()) AS date_trunc)) OR (updated_at <= ( SELECT (date_trunc('day'::text, now()) + '30 days 09:00:00'::interval))))",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
         "table": "categories",
         "name": "categories_insert",
         "command": "a",
@@ -733,57 +706,12 @@
         "managed": true
       },
       {
-        "table": "posts",
-        "name": "posts_delete",
-        "command": "d",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "posts",
-        "name": "posts_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
-        "checkExpr": "(title <> ''::text)",
-        "managed": true
-      },
-      {
-        "table": "posts",
-        "name": "posts_insert",
-        "command": "a",
-        "permissive": true,
-        "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
-      },
-      {
-        "table": "posts",
-        "name": "posts_select",
-        "command": "r",
-        "permissive": true,
-        "usingExpr": "((( SELECT role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '210 days'::interval))) AND (updated_at <= ( SELECT (now() + '07:00:00'::interval)))))",
-        "checkExpr": null,
-        "managed": true
-      },
-      {
         "table": "comments",
         "name": "comments_delete",
         "command": "d",
         "permissive": true,
         "usingExpr": "false",
         "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "comments",
-        "name": "comments_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = author_id)",
         "managed": true
       },
       {
@@ -805,6 +733,51 @@
         "managed": true
       },
       {
+        "table": "comments",
+        "name": "comments_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = author_id)",
+        "managed": true
+      },
+      {
+        "table": "posts",
+        "name": "posts_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "posts",
+        "name": "posts_insert",
+        "command": "a",
+        "permissive": true,
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "managed": true
+      },
+      {
+        "table": "posts",
+        "name": "posts_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '210 days'::interval))) AND (updated_at <= ( SELECT (now() + '07:00:00'::interval)))))",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "posts",
+        "name": "posts_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
+        "checkExpr": "(title <> ''::text)",
+        "managed": true
+      },
+      {
         "table": "tags",
         "name": "tags_insert",
         "command": "a",
@@ -821,20 +794,47 @@
         "usingExpr": "(name IS NOT NULL)",
         "checkExpr": null,
         "managed": true
+      },
+      {
+        "table": "users",
+        "name": "users_delete",
+        "command": "d",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "users",
+        "name": "users_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "(true OR (created_at >= ( SELECT date_trunc('year'::text, now()) AS date_trunc)) OR (updated_at <= ( SELECT (date_trunc('day'::text, now()) + '30 days 09:00:00'::interval))))",
+        "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "users",
+        "name": "users_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "managed": true
       }
     ],
     "triggers": [
       {
         "table": "categories",
         "name": "categories_slug_trigger",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
       },
       {
         "table": "categories",
         "name": "categories_slug_trigger",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
       },
@@ -869,14 +869,14 @@
       {
         "table": "posts",
         "name": "posts_slug_trigger",
-        "event": "UPDATE",
+        "event": "INSERT",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_posts_slug()"
       },
       {
         "table": "posts",
         "name": "posts_slug_trigger",
-        "event": "INSERT",
+        "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_posts_slug()"
       },
@@ -902,11 +902,11 @@
     ],
     "enums": [],
     "rlsEnabledTables": [
-      "users",
       "categories",
-      "posts",
       "comments",
-      "tags"
+      "posts",
+      "tags",
+      "users"
     ]
   },
   "catalog": {

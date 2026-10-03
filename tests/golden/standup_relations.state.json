@@ -213,15 +213,6 @@
       },
       {
         "table": "profile",
-        "name": "profile_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
-      },
-      {
-        "table": "profile",
         "name": "profile_insert",
         "command": "a",
         "permissive": true,
@@ -239,21 +230,21 @@
         "managed": true
       },
       {
+        "table": "profile",
+        "name": "profile_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "managed": true
+      },
+      {
         "table": "team",
         "name": "team_delete",
         "command": "d",
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
         "checkExpr": null,
-        "managed": true
-      },
-      {
-        "table": "team",
-        "name": "team_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = owner_id)",
         "managed": true
       },
       {
@@ -272,6 +263,15 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "team",
+        "name": "team_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = owner_id)",
         "managed": true
       }
     ],

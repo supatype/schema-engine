@@ -357,15 +357,6 @@
       },
       {
         "table": "categories",
-        "name": "categories_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
-        "managed": true
-      },
-      {
-        "table": "categories",
         "name": "categories_insert",
         "command": "a",
         "permissive": true,
@@ -380,6 +371,15 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "categories",
+        "name": "categories_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "managed": true
       }
     ],

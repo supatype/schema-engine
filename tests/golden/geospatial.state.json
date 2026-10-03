@@ -238,15 +238,6 @@
       },
       {
         "table": "locations",
-        "name": "locations_update",
-        "command": "w",
-        "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'contributor'::text]))",
-        "checkExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'contributor'::text]))",
-        "managed": true
-      },
-      {
-        "table": "locations",
         "name": "locations_insert",
         "command": "a",
         "permissive": true,
@@ -261,6 +252,15 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
+        "managed": true
+      },
+      {
+        "table": "locations",
+        "name": "locations_update",
+        "command": "w",
+        "permissive": true,
+        "usingExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'contributor'::text]))",
+        "checkExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'contributor'::text]))",
         "managed": true
       }
     ],
