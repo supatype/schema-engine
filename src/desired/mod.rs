@@ -15,6 +15,7 @@
 //! (defaults, check expressions, policy quals) are not in `structure`: Postgres rewrites them on
 //! the way in, so the ledger compares them live against recorded-live, never against our text.
 
+pub mod identity;
 pub mod statements;
 
 use std::collections::BTreeMap;
