@@ -64,6 +64,9 @@ fn managed_gin() -> DbIndex {
         unique: false,
         method: "gin".into(),
         is_primary: false,
+        expressions: None,
+        predicate: None,
+        definition: None,
         comment: Some("supatype:managed;kind=index".into()),
     }
 }
@@ -97,6 +100,9 @@ fn a_managed_index_nothing_declares_is_still_dropped() {
         unique: false,
         method: "btree".into(),
         is_primary: false,
+        expressions: None,
+        predicate: None,
+        definition: None,
         comment: Some("supatype:managed;kind=index".into()),
     };
     let ast = parser::parse(schema()).expect("schema parses");

@@ -2,11 +2,12 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbIndex {
     pub table: String,
     pub name: String,
+    /// The column keys, in key order. Empty for an index made only of expressions.
     pub columns: Vec<String>,
     pub unique: bool,
     pub method: String,
@@ -14,35 +15,28 @@ pub struct DbIndex {
     /// Postgres `COMMENT ON INDEX` text, when set.
     #[serde(default)]
     pub comment: Option<String>,
-}
-
-/// An index with no column keys at all, such as the `((TRUE))` a singleton model gets.
-///
-/// Kept apart from [`DbIndex`] rather than folded into `indexes` with an empty column list,
-/// because of what the differ does with a managed index it cannot account for: it drops it. The
-/// `pg_attribute` inner join in the old query hid these entirely, and that invisibility is what has
-/// kept the singleton index alive. So they are read, with everything a later fingerprint needs,
-/// into a list nothing diffs against until the ledger owns indexes and expects them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DbExpressionIndex {
-    pub table: String,
-    pub name: String,
-    pub unique: bool,
-    pub method: String,
-    /// The expression keys, as `pg_get_expr` renders them.
-    pub expressions: String,
+    /// The expression keys, as `pg_get_expr` renders them, when the index has any.
+    #[serde(default)]
+    pub expressions: Option<String>,
     /// The `WHERE` clause of a partial index, as `pg_get_expr` renders it.
+    #[serde(default)]
     pub predicate: Option<String>,
     /// The whole `CREATE INDEX` statement, from `pg_get_indexdef`.
-    pub definition: String,
-    pub comment: Option<String>,
+    #[serde(default)]
+    pub definition: Option<String>,
 }
 
 /// Every index in `schema`, split by whether it has a column key.
+///
+/// The split exists because of what the differ does with a managed index it cannot account for:
+/// it drops it. An index made only of expressions, such as the `((TRUE))` a singleton model gets,
+/// carries a managed comment and sits in no expected set, and the `pg_attribute` inner join in the
+/// old query is what hid it and so kept it alive. So `DatabaseState::indexes` keeps receiving only
+/// the columnar ones, and the expression-only ones are read into a list nothing diffs against
+/// until the ledger owns indexes and expects them.
 pub struct DbIndexes {
     pub columnar: Vec<DbIndex>,
-    pub expression_only: Vec<DbExpressionIndex>,
+    pub expression_only: Vec<DbIndex>,
 }
 
 type IndexRow = (
@@ -97,26 +91,22 @@ pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes
         definition,
     ) in rows
     {
-        match columns {
-            Some(columns) if !columns.is_empty() => columnar.push(DbIndex {
-                table,
-                name,
-                columns,
-                unique,
-                method,
-                is_primary,
-                comment,
-            }),
-            _ => expression_only.push(DbExpressionIndex {
-                table,
-                name,
-                unique,
-                method,
-                expressions: expressions.unwrap_or_default(),
-                predicate,
-                definition,
-                comment,
-            }),
+        let index = DbIndex {
+            table,
+            name,
+            columns: columns.unwrap_or_default(),
+            unique,
+            method,
+            is_primary,
+            comment,
+            expressions,
+            predicate,
+            definition: Some(definition),
+        };
+        if index.columns.is_empty() {
+            expression_only.push(index);
+        } else {
+            columnar.push(index);
         }
     }
     Ok(DbIndexes {

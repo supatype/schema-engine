@@ -158,11 +158,20 @@ async fn an_expression_only_index_is_read_apart_from_column_indexes() {
         assert!(singleton.unique);
         assert_eq!(singleton.table, "settings");
         assert!(
-            singleton.expressions.to_lowercase().contains("true"),
+            singleton
+                .expressions
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("true"),
             "{:?}",
             singleton.expressions
         );
-        assert!(singleton.definition.contains("CREATE UNIQUE INDEX"));
+        assert!(singleton
+            .definition
+            .as_deref()
+            .unwrap_or("")
+            .contains("CREATE UNIQUE INDEX"));
         assert_eq!(
             catalog.expression_indexes.len(),
             1,

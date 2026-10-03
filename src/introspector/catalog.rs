@@ -10,13 +10,14 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 
-use super::indexes::{self, DbExpressionIndex};
+use super::indexes::{self, DbIndex};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogState {
-    /// Indexes made only of expressions, which `DatabaseState::indexes` cannot see.
-    pub expression_indexes: Vec<DbExpressionIndex>,
+    /// Indexes made only of expressions, which `DatabaseState::indexes` leaves out: see
+    /// [`indexes::DbIndexes`] for why they are kept apart.
+    pub expression_indexes: Vec<DbIndex>,
 }
 
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<CatalogState> {
