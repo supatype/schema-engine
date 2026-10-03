@@ -120,7 +120,7 @@ fn flag(b: bool) -> &'static str {
 impl ObjectKind {
     /// The label of each hashed part, in the order the part lists below supply them. Empty for the
     /// kinds whose parts are a dynamic list (a table's columns) or nothing at all (a schema).
-    fn labels(self) -> &'static [&'static str] {
+    pub(crate) fn labels(self) -> &'static [&'static str] {
         match self {
             ObjectKind::Schema | ObjectKind::Table => &[],
             ObjectKind::Column => &["type", "udt", "nullable", "default", "precision", "scale"],

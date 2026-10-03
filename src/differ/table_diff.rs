@@ -250,7 +250,7 @@ pub fn diff(
 /// Falls back to `id UUID`, which is what every scaffolded model has, rather than failing: a model
 /// with no primary key at all cannot be versioned meaningfully and will have failed earlier for
 /// reasons that name the real problem.
-fn versions_record_id(model: &crate::parser::ast::ModelAst) -> (String, String) {
+pub(crate) fn versions_record_id(model: &crate::parser::ast::ModelAst) -> (String, String) {
     model
         .fields
         .iter()

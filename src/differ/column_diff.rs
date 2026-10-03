@@ -180,7 +180,7 @@ fn array_element_udt(element_type: &str) -> &'static str {
     }
 }
 
-fn expected_udt(field: &FieldAst) -> Option<String> {
+pub(crate) fn expected_udt(field: &FieldAst) -> Option<String> {
     if is_localized(field) {
         return Some("jsonb".into());
     }

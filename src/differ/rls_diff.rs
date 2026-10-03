@@ -6,7 +6,7 @@ use anyhow::Result;
 
 /// Policy naming convention — must match generator/sql/rls.rs.
 /// `polcmd` column from pg_policy: r=SELECT, a=INSERT, w=UPDATE, d=DELETE, *=ALL.
-fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
+pub(crate) fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
     vec![
         ("select".to_string(), access.read.as_ref()),
         ("insert".to_string(), access.create.as_ref()),

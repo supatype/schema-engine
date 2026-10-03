@@ -148,7 +148,7 @@ pub fn create_versions_table_sql(
          \"id\" UUID CONSTRAINT {pk_name_q} PRIMARY KEY DEFAULT gen_random_uuid(),\n    \
          \"record_id\" {record_id_type} NOT NULL CONSTRAINT {fk_name_q} REFERENCES {schema_q}.{table_q} ({pk_q}) ON DELETE CASCADE,\n    \
          \"version\" INTEGER NOT NULL,\n    \
-         \"status\" TEXT NOT NULL CONSTRAINT {status_check_q} CHECK (\"status\" IN ('draft', 'published')),\n    \
+         \"status\" TEXT NOT NULL CONSTRAINT {status_check_q} CHECK ({status_check_expr}),\n    \
          \"data\" JSONB NOT NULL,\n    \
          -- When each locale is due to go live, if it has been scheduled.\n    \
          -- Per locale rather than one `publish_at` for the row, because publishing is per locale:\n    \
@@ -174,6 +174,7 @@ pub fn create_versions_table_sql(
         pk_name_q = quoted(&pk_name),
         fk_name_q = quoted(&fk_name),
         status_check_q = quoted(&status_check),
+        status_check_expr = super::type_checks::versions_status_check_expr(),
         record_version_key_q = quoted(&record_version_key),
     )
 }
@@ -184,6 +185,16 @@ pub fn create_versions_table_sql(
 /// join orders by `version DESC` and takes one row.
 pub fn versions_record_index_name(versions_table: &str) -> String {
     format!("{versions_table}_record_idx")
+}
+
+/// The statement [`create_versions_table_sql`] ends with, on its own, for the desired object set.
+pub fn versions_record_index_sql(schema: &str, versions_table: &str) -> String {
+    format!(
+        "CREATE INDEX IF NOT EXISTS {} ON {}.{} (\"record_id\", \"version\" DESC);",
+        quoted(&versions_record_index_name(versions_table)),
+        quoted(schema),
+        quoted(versions_table),
+    )
 }
 
 // ─── Settings and helpers ─────────────────────────────────────────────────────

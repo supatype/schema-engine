@@ -8,13 +8,13 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ExpectedUnique {
-    table: String,
-    column: String,
-    constraint_name: String,
+pub(crate) struct ExpectedUnique {
+    pub(crate) table: String,
+    pub(crate) column: String,
+    pub(crate) constraint_name: String,
 }
 
-fn expected_column_uniques(ast: &SchemaAst) -> Vec<ExpectedUnique> {
+pub(crate) fn expected_column_uniques(ast: &SchemaAst) -> Vec<ExpectedUnique> {
     let mut out = Vec::new();
     for model in &ast.models {
         let table = model.table_name().to_string();
