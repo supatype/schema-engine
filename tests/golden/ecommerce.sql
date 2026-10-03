@@ -472,32 +472,79 @@ BEGIN
     EXECUTE 'GRANT INSERT ON "public"."customers" TO anon';
     EXECUTE 'REVOKE UPDATE ON "public"."customers" FROM anon';
     EXECUTE 'REVOKE DELETE ON "public"."customers" FROM anon';
-    EXECUTE 'GRANT SELECT ON "public"."products" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."products" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."products" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."products" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."orders" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."orders" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."orders" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."orders" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."order_items" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."order_items" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."order_items" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."order_items" FROM anon';
   END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."customers" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."customers" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."customers" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."customers" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT SELECT ON "public"."products" TO anon';
+    EXECUTE 'REVOKE INSERT ON "public"."products" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."products" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."products" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."products" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."products" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."products" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."products" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."orders" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."orders" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."orders" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."orders" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."orders" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."orders" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."orders" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."orders" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."order_items" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."order_items" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."order_items" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."order_items" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."order_items" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."order_items" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."order_items" FROM authenticated';

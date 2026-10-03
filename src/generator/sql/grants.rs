@@ -96,18 +96,21 @@ fn operand_reachable_by_anon(operand: &Operand) -> bool {
 /// mask that lives in a view is only as strong as the roles' inability to read the table behind it.
 /// The base-table privileges are revoked from `anon` and `authenticated` in the same breath.
 ///
-/// `service_role` keeps its base-table access, per this module's standing policy — it is the escape
+/// `service_role` keeps its base-table access, per this module's standing policy: it is the escape
 /// hatch that has to keep working. One consequence to know: tier 1 masks a `service_role` caller like
 /// any other (the read predicate simply fails for it), while under tier 2 that caller reads the table
 /// directly and sees everything. Deliberate, and recorded rather than quietly true.
+///
+/// One `DO` block per role and table, so each block is one object's worth of privileges: the
+/// ledger (`crate::desired::statements`) attributes a statement to the object it touches, and a
+/// block that named every table would belong to all of them.
 pub fn generate_table_grants(
     ast: &SchemaAst,
     schema: &str,
     skip: &[String],
     serve_from: Option<&str>,
 ) -> String {
-    let mut anon_stmts: Vec<String> = Vec::new();
-    let mut authed_stmts: Vec<String> = Vec::new();
+    let mut blocks: Vec<String> = Vec::new();
 
     for model in &ast.models {
         let access = platform_access(model);
@@ -121,77 +124,49 @@ pub fn generate_table_grants(
             Some(view_schema) => format!("\"{view_schema}\".\"{escaped}\""),
             None => base.clone(),
         };
-        // Tier 2 only: take the API roles off the table the view reads, so `Accept-Profile` cannot be
-        // used to go round the mask and neither can a stray credential.
-        if serve_from.is_some() {
-            anon_stmts.push(format!("REVOKE ALL PRIVILEGES ON {base} FROM anon"));
-            authed_stmts.push(format!(
-                "REVOKE ALL PRIVILEGES ON {base} FROM authenticated"
-            ));
-        }
-
-        let read_anon = access.read.as_ref().is_some_and(reachable_by_anon);
-        anon_stmts.push(privilege_stmt("SELECT", &qualified, "anon", read_anon));
-        authed_stmts.push(privilege_stmt(
-            "SELECT",
-            &qualified,
-            "authenticated",
-            access.read.is_some(),
-        ));
-
-        // `authenticated` keeps a write privilege whenever the operation is declared
-        // at all; which *rows* it may touch is the policy's business, and revoking
-        // here would stop the policy ever being consulted.
-        for (op, rule) in [
-            ("INSERT", access.create.as_ref()),
-            ("UPDATE", access.update.as_ref()),
-            ("DELETE", access.delete.as_ref()),
-        ] {
-            anon_stmts.push(privilege_stmt(
-                op,
-                &qualified,
-                "anon",
-                rule.is_some_and(reachable_by_anon),
-            ));
-            authed_stmts.push(privilege_stmt(
-                op,
-                &qualified,
-                "authenticated",
-                rule.is_some(),
-            ));
+        for role in ["anon", "authenticated"] {
+            let mut stmts: Vec<String> = Vec::new();
+            // Tier 2 only: take the API roles off the table the view reads, so `Accept-Profile`
+            // cannot be used to go round the mask and neither can a stray credential.
+            if serve_from.is_some() {
+                stmts.push(format!("REVOKE ALL PRIVILEGES ON {base} FROM {role}"));
+            }
+            // `authenticated` keeps a privilege whenever the operation is declared at all; which
+            // *rows* it may touch is the policy's business, and revoking here would stop the
+            // policy ever being consulted. `anon` holds it only where the rule can reach it.
+            for (op, rule) in [
+                ("SELECT", access.read.as_ref()),
+                ("INSERT", access.create.as_ref()),
+                ("UPDATE", access.update.as_ref()),
+                ("DELETE", access.delete.as_ref()),
+            ] {
+                let allowed = match role {
+                    "anon" => rule.is_some_and(reachable_by_anon),
+                    _ => rule.is_some(),
+                };
+                stmts.push(privilege_stmt(op, &qualified, role, allowed));
+            }
+            blocks.push(guarded_block(role, &stmts));
         }
     }
 
-    if anon_stmts.is_empty() && authed_stmts.is_empty() {
-        return String::new();
-    }
-
-    let mut out = String::from(
-        "DO $grants$
-BEGIN
-",
-    );
-    out.push_str(&guarded_block("anon", &anon_stmts));
-    out.push_str(&guarded_block("authenticated", &authed_stmts));
-    out.push_str(
-        "END
-$grants$;
-",
-    );
-    out
+    blocks.join("\n")
 }
 
+/// The privileges for one role on one table, applied only if the role exists: a self-hosted
+/// database may not have the API roles at all.
 fn guarded_block(role: &str, statements: &[String]) -> String {
-    if statements.is_empty() {
-        return String::new();
-    }
     let body = statements
         .iter()
         .map(|s| format!("    EXECUTE '{}';\n", s.replace('\'', "''")))
         .collect::<String>();
     format!(
-        "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+        "DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
 {body}  END IF;
+END
+$grants$;
 "
     )
 }
@@ -268,20 +243,23 @@ pub fn generate_column_grants(ast: &SchemaAst, schema: &str, skip: &[String]) ->
         }
     }
 
-    if blocks.is_empty() {
-        return String::new();
-    }
-
-    format!(
-        "DO $colgrants$
+    // One `DO` block per role, table and operation, for the same reason the table grants are
+    // split: each statement of a push belongs to one object.
+    blocks
+        .iter()
+        .map(|block| {
+            format!(
+                "DO $colgrants$
 DECLARE
   granted text;
 BEGIN
-{}END
+{block}END
 $colgrants$;
-",
-        blocks.join("")
-    )
+"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Whether any caller connecting as `role` could ever satisfy this write rule for `op`.
@@ -302,7 +280,7 @@ fn write_satisfiable(op: &str, role: &str, write: &AccessRule) -> bool {
 
     // On INSERT there is no row yet: the masking extension evaluates the write predicate
     // against `NULL::t`, so a rule that reads the row yields NULL for every caller. Nobody
-    // can write the column on this path, which makes the privilege provably unusable —
+    // can write the column on this path, which makes the privilege provably unusable,
     // whereas on UPDATE the same rule is satisfiable and the privilege must stay.
     if op == "INSERT" && crate::differ::field_access_diff::rule_is_row_dependent(write) {
         return false;
@@ -314,7 +292,7 @@ fn write_satisfiable(op: &str, role: &str, write: &AccessRule) -> bool {
 /// The complement is computed from `information_schema.columns` at apply time, not from the
 /// AST.
 ///
-/// A column this generator never saw — added out of band, or by a plugin — must still be
+/// A column this generator never saw (added out of band, or by a plugin) must still be
 /// granted, or the layer meant to be defence in depth silently becomes the thing that breaks
 /// writes. Reading the live column list also makes the statement converge on every push
 /// without tracking what it granted last time.

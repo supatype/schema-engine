@@ -1057,72 +1057,189 @@ BEGIN
     EXECUTE 'REVOKE INSERT ON "public"."page" FROM anon';
     EXECUTE 'REVOKE UPDATE ON "public"."page" FROM anon';
     EXECUTE 'REVOKE DELETE ON "public"."page" FROM anon';
-    EXECUTE 'GRANT SELECT ON "public"."speaker" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."speaker" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."speaker" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."speaker" FROM anon';
-    EXECUTE 'GRANT SELECT ON "public"."room" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."room" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."room" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."room" FROM anon';
-    EXECUTE 'GRANT SELECT ON "public"."talk" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."talk" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."talk" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."talk" FROM anon';
-    EXECUTE 'GRANT SELECT ON "public"."sponsor" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."sponsor" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."sponsor" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."sponsor" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."attendee" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."attendee" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."attendee" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."attendee" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."ticket" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."ticket" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."ticket" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."ticket" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."chat_message" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."chat_message" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."chat_message" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."chat_message" FROM anon';
-    EXECUTE 'GRANT SELECT ON "public"."_global_site_settings" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."_global_site_settings" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."_global_site_settings" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."_global_site_settings" FROM anon';
   END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."page" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."page" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."page" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."page" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT SELECT ON "public"."speaker" TO anon';
+    EXECUTE 'REVOKE INSERT ON "public"."speaker" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."speaker" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."speaker" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."speaker" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."speaker" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."speaker" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."speaker" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT SELECT ON "public"."room" TO anon';
+    EXECUTE 'REVOKE INSERT ON "public"."room" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."room" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."room" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."room" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."room" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."room" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."room" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT SELECT ON "public"."talk" TO anon';
+    EXECUTE 'REVOKE INSERT ON "public"."talk" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."talk" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."talk" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."talk" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."talk" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."talk" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."talk" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT SELECT ON "public"."sponsor" TO anon';
+    EXECUTE 'REVOKE INSERT ON "public"."sponsor" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."sponsor" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."sponsor" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."sponsor" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."sponsor" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."sponsor" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."sponsor" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."attendee" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."attendee" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."attendee" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."attendee" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."attendee" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."attendee" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."attendee" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."attendee" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."ticket" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."ticket" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."ticket" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."ticket" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."ticket" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."ticket" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."ticket" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."ticket" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."chat_message" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."chat_message" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."chat_message" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."chat_message" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."chat_message" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."chat_message" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."chat_message" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."chat_message" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT SELECT ON "public"."_global_site_settings" TO anon';
+    EXECUTE 'REVOKE INSERT ON "public"."_global_site_settings" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."_global_site_settings" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."_global_site_settings" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."_global_site_settings" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."_global_site_settings" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."_global_site_settings" TO authenticated';
