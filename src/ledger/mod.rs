@@ -47,10 +47,10 @@ impl Status {
         }
     }
 
+    pub const ALL: [Status; 3] = [Status::Managed, Status::Adopted, Status::Released];
+
     pub fn parse(text: &str) -> Option<Status> {
-        [Status::Managed, Status::Adopted, Status::Released]
-            .into_iter()
-            .find(|s| s.as_str() == text)
+        Self::ALL.into_iter().find(|s| s.as_str() == text)
     }
 }
 
@@ -158,18 +158,42 @@ pub async fn load(conn: &mut PgConnection) -> Result<Vec<LedgerRow>> {
         .collect()
 }
 
+/// The four key columns as parallel arrays, the shape every batch statement binds.
+struct KeyColumns<'a> {
+    kinds: Vec<&'static str>,
+    schemas: Vec<&'a str>,
+    parents: Vec<&'a str>,
+    names: Vec<&'a str>,
+}
+
+fn key_columns<'a>(keys: impl Iterator<Item = &'a ObjectKey>) -> KeyColumns<'a> {
+    let mut out = KeyColumns {
+        kinds: Vec::new(),
+        schemas: Vec::new(),
+        parents: Vec::new(),
+        names: Vec::new(),
+    };
+    for k in keys {
+        out.kinds.push(k.kind.as_str());
+        out.schemas.push(&k.schema);
+        out.parents.push(&k.parent);
+        out.names.push(&k.name);
+    }
+    out
+}
+
+/// Joins a row `m` to the unnested key arrays `$1` to `$4`.
+const KEY_MATCH: &str = "UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) \
+     AS k(kind, schema_name, parent, name) \
+     WHERE m.kind = k.kind AND m.schema_name = k.schema_name \
+       AND m.parent = k.parent AND m.name = k.name";
+
 /// Insert or replace rows by key, in one statement.
 pub async fn upsert(conn: &mut PgConnection, rows: &[LedgerRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
-    let kinds: Vec<String> = rows
-        .iter()
-        .map(|r| r.key.kind.as_str().to_string())
-        .collect();
-    let schemas: Vec<&str> = rows.iter().map(|r| r.key.schema.as_str()).collect();
-    let parents: Vec<&str> = rows.iter().map(|r| r.key.parent.as_str()).collect();
-    let names: Vec<&str> = rows.iter().map(|r| r.key.name.as_str()).collect();
+    let keys = key_columns(rows.iter().map(|r| &r.key));
     let desired_fps: Vec<&str> = rows.iter().map(|r| r.desired_fp.as_str()).collect();
     let desired_sqls: Vec<&str> = rows.iter().map(|r| r.desired_sql.as_str()).collect();
     let live_fps: Vec<&str> = rows.iter().map(|r| r.live_fp.as_str()).collect();
@@ -192,10 +216,10 @@ pub async fn upsert(conn: &mut PgConnection, rows: &[LedgerRow]) -> Result<()> {
             migration_id = EXCLUDED.migration_id,
             updated_at = NOW()"
     ))
-    .bind(&kinds)
-    .bind(&schemas)
-    .bind(&parents)
-    .bind(&names)
+    .bind(&keys.kinds)
+    .bind(&keys.schemas)
+    .bind(&keys.parents)
+    .bind(&keys.names)
     .bind(&desired_fps)
     .bind(&desired_sqls)
     .bind(&live_fps)
@@ -213,20 +237,14 @@ pub async fn delete(conn: &mut PgConnection, keys: &[ObjectKey]) -> Result<()> {
     if keys.is_empty() {
         return Ok(());
     }
-    let kinds: Vec<String> = keys.iter().map(|k| k.kind.as_str().to_string()).collect();
-    let schemas: Vec<&str> = keys.iter().map(|k| k.schema.as_str()).collect();
-    let parents: Vec<&str> = keys.iter().map(|k| k.parent.as_str()).collect();
-    let names: Vec<&str> = keys.iter().map(|k| k.name.as_str()).collect();
+    let keys = key_columns(keys.iter());
     sqlx::query(&format!(
-        "DELETE FROM {SCHEMA}.managed_objects m
-         USING UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) AS k(kind, schema_name, parent, name)
-         WHERE m.kind = k.kind AND m.schema_name = k.schema_name
-           AND m.parent = k.parent AND m.name = k.name"
+        "DELETE FROM {SCHEMA}.managed_objects m USING {KEY_MATCH}"
     ))
-    .bind(&kinds)
-    .bind(&schemas)
-    .bind(&parents)
-    .bind(&names)
+    .bind(&keys.kinds)
+    .bind(&keys.schemas)
+    .bind(&keys.parents)
+    .bind(&keys.names)
     .execute(&mut *conn)
     .await
     .context("delete from the managed-object ledger")?;
@@ -242,20 +260,14 @@ pub async fn set_migration(
     if keys.is_empty() {
         return Ok(());
     }
-    let kinds: Vec<String> = keys.iter().map(|k| k.kind.as_str().to_string()).collect();
-    let schemas: Vec<&str> = keys.iter().map(|k| k.schema.as_str()).collect();
-    let parents: Vec<&str> = keys.iter().map(|k| k.parent.as_str()).collect();
-    let names: Vec<&str> = keys.iter().map(|k| k.name.as_str()).collect();
+    let keys = key_columns(keys.iter());
     sqlx::query(&format!(
-        "UPDATE {SCHEMA}.managed_objects m SET migration_id = $5, updated_at = NOW()
-         FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) AS k(kind, schema_name, parent, name)
-         WHERE m.kind = k.kind AND m.schema_name = k.schema_name
-           AND m.parent = k.parent AND m.name = k.name"
+        "UPDATE {SCHEMA}.managed_objects m SET migration_id = $5, updated_at = NOW() FROM {KEY_MATCH}"
     ))
-    .bind(&kinds)
-    .bind(&schemas)
-    .bind(&parents)
-    .bind(&names)
+    .bind(&keys.kinds)
+    .bind(&keys.schemas)
+    .bind(&keys.parents)
+    .bind(&keys.names)
     .bind(migration_id)
     .execute(&mut *conn)
     .await

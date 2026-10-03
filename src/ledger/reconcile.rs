@@ -165,37 +165,6 @@ fn structure_matches(desired: &DesiredObject, live: &ObjectFingerprint) -> bool 
         .all(|(label, want)| parts.get(*label) == Some(&want.as_str()))
 }
 
-/// The drop for a key alone, for an owned object the schema no longer declares when no desired
-/// object exists to supply one. Grows kind by kind as each moves onto the reconcile.
-pub fn drop_sql(key: &ObjectKey) -> Option<String> {
-    match key.kind {
-        ObjectKind::Check
-        | ObjectKind::Unique
-        | ObjectKind::ForeignKey
-        | ObjectKind::PrimaryKey => Some(format!(
-            "ALTER TABLE \"{}\".\"{}\" DROP CONSTRAINT IF EXISTS \"{}\";",
-            key.schema, key.parent, key.name
-        )),
-        ObjectKind::Index => Some(format!(
-            "DROP INDEX IF EXISTS \"{}\".\"{}\";",
-            key.schema, key.name
-        )),
-        ObjectKind::Policy => Some(format!(
-            "DROP POLICY IF EXISTS \"{}\" ON \"{}\".\"{}\";",
-            key.name, key.schema, key.parent
-        )),
-        ObjectKind::Trigger => Some(format!(
-            "DROP TRIGGER IF EXISTS \"{}\" ON \"{}\".\"{}\";",
-            key.name, key.schema, key.parent
-        )),
-        ObjectKind::View => Some(format!(
-            "DROP VIEW IF EXISTS \"{}\".\"{}\";",
-            key.schema, key.name
-        )),
-        _ => None,
-    }
-}
-
 pub fn reconcile(inputs: Inputs<'_>) -> Plan {
     let kinds: BTreeSet<ObjectKind> = inputs.kinds.iter().copied().collect();
     let desired: BTreeMap<&ObjectKey, &DesiredObject> = inputs
@@ -214,46 +183,34 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         .live
         .iter()
         .filter(|f| kinds.contains(&f.kind))
-        .map(|f| {
-            (
-                ObjectKey {
-                    kind: f.kind,
-                    schema: f.schema.clone(),
-                    parent: f.parent.clone(),
-                    name: f.name.clone(),
-                },
-                f,
-            )
-        })
+        .map(|f| (f.key(), f))
         .collect();
 
     let mut removals = Vec::new();
     let mut changes = Vec::new();
 
-    for (key, row) in &ledger {
+    for (&key, row) in &ledger {
+        let key = key.clone();
         if row.status == Status::Released {
-            changes.push(Action::Released {
-                key: (*key).clone(),
-            });
+            changes.push(Action::Released { key });
             continue;
         }
-        let present = live.get(*key);
-        match (desired.get(*key), present) {
+        match (desired.get(&key), live.get(&key)) {
             (Some(d), None) => changes.push(Action::Recreate {
-                key: (*key).clone(),
+                key,
                 sql: d.create_sql.clone(),
             }),
             (Some(d), Some(l)) => {
                 if desired_fingerprint(key.kind, &d.create_sql) != row.desired_fp {
                     changes.push(Action::Replace {
-                        key: (*key).clone(),
+                        key,
                         drop_sql: d.drop_sql.clone(),
                         create_sql: d.create_sql.clone(),
                         previous_sql: row.desired_sql.clone(),
                     });
                 } else if l.fingerprint != row.live_fp {
                     changes.push(Action::Drift {
-                        key: (*key).clone(),
+                        key,
                         recorded_def: row.live_def.clone(),
                         live_def: l.definition.clone(),
                         drop_sql: d.drop_sql.clone(),
@@ -261,45 +218,39 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         security_relevant: d.security_relevant,
                     });
                 } else {
-                    changes.push(Action::Keep {
-                        key: (*key).clone(),
-                    });
+                    changes.push(Action::Keep { key });
                 }
             }
-            (None, Some(_)) => removals.push(Action::Drop {
-                key: (*key).clone(),
-                sql: drop_sql(key),
-            }),
-            (None, None) => removals.push(Action::Forget {
-                key: (*key).clone(),
-            }),
+            (None, Some(_)) => {
+                let sql = key.drop_sql();
+                removals.push(Action::Drop { key, sql });
+            }
+            (None, None) => removals.push(Action::Forget { key }),
         }
     }
 
-    for (key, d) in &desired {
-        if ledger.contains_key(*key) {
+    for (&key, d) in &desired {
+        if ledger.contains_key(key) {
             continue;
         }
-        match live.get(*key) {
-            None => changes.push(Action::Create {
-                key: (*key).clone(),
-                sql: (!inputs.created_by_parent.contains(*key)).then(|| d.create_sql.clone()),
-            }),
+        let key = key.clone();
+        match live.get(&key) {
+            None => {
+                let sql = (!inputs.created_by_parent.contains(&key)).then(|| d.create_sql.clone());
+                changes.push(Action::Create { key, sql });
+            }
             Some(l) => {
-                let reason = if inputs.stamped.contains(*key) {
+                let reason = if inputs.stamped.contains(&key) {
                     Some(AdoptReason::Stamped)
-                } else if structure_matches(d, l) || inputs.equivalent.contains(*key) {
+                } else if structure_matches(d, l) || inputs.equivalent.contains(&key) {
                     Some(AdoptReason::StructureMatches)
                 } else {
                     None
                 };
                 match reason {
-                    Some(reason) => changes.push(Action::Adopt {
-                        key: (*key).clone(),
-                        reason,
-                    }),
+                    Some(reason) => changes.push(Action::Adopt { key, reason }),
                     None => changes.push(Action::Conflict {
-                        key: (*key).clone(),
+                        key,
                         live_def: l.definition.clone(),
                     }),
                 }
@@ -316,7 +267,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         if live.contains_key(key) {
             removals.push(Action::Drop {
                 key: key.clone(),
-                sql: drop_sql(key),
+                sql: key.drop_sql(),
             });
         }
     }
@@ -606,7 +557,7 @@ mod tests {
             dropped,
             [Action::Drop {
                 key: d.key.clone(),
-                sql: drop_sql(&d.key)
+                sql: d.key.drop_sql()
             }]
         );
         assert!(dropped[0].sql()[0].contains("DROP CONSTRAINT IF EXISTS \"posts_title_check\""));
@@ -630,7 +581,7 @@ mod tests {
     #[test]
     fn a_stamped_object_nothing_declares_is_dropped_and_a_user_object_is_never_touched() {
         let l = live("posts_old_check", "true");
-        let stamped = run(&[], &[], std::slice::from_ref(&l), &[l_key(&l)], &[], &[]);
+        let stamped = run(&[], &[], std::slice::from_ref(&l), &[l.key()], &[], &[]);
         assert!(matches!(&stamped[..], [Action::Drop { .. }]), "{stamped:?}");
 
         let user = run(&[], &[], std::slice::from_ref(&l), &[], &[], &[]);
@@ -644,7 +595,7 @@ mod tests {
         other.key.kind = ObjectKind::Unique;
         let stale = live("posts_old_check", "true");
         let stale_row = LedgerRow {
-            key: l_key(&stale),
+            key: stale.key(),
             desired_fp: "x".into(),
             desired_sql: "x".into(),
             live_fp: stale.fingerprint.clone(),
@@ -665,14 +616,5 @@ mod tests {
             "{actions:?}"
         );
         assert!(actions.iter().all(|a| a.key().kind == ObjectKind::Check));
-    }
-
-    fn l_key(l: &ObjectFingerprint) -> ObjectKey {
-        ObjectKey {
-            kind: l.kind,
-            schema: l.schema.clone(),
-            parent: l.parent.clone(),
-            name: l.name.clone(),
-        }
     }
 }

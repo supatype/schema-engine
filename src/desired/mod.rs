@@ -49,6 +49,50 @@ use crate::parser::resolver::resolve_system_ref;
 
 pub use crate::introspector::fingerprint::ObjectKey;
 
+impl ObjectKey {
+    /// The one drop for this object, derived from the key alone, so the desired set and the
+    /// reconcile (which may hold only a ledger row) render the same statement. Never `CASCADE`:
+    /// a user object that depends on one of ours must block the drop and be named, not vanish.
+    /// `None` for a kind nothing drops yet; each kind gains its drop as it moves onto the reconcile.
+    pub fn drop_sql(&self) -> Option<String> {
+        let ObjectKey {
+            kind,
+            schema,
+            parent,
+            name,
+        } = self;
+        Some(match kind {
+            ObjectKind::Table => format!("DROP TABLE IF EXISTS \"{schema}\".\"{name}\";"),
+            ObjectKind::Column => {
+                format!("ALTER TABLE \"{schema}\".\"{parent}\" DROP COLUMN IF EXISTS \"{name}\";")
+            }
+            ObjectKind::PrimaryKey
+            | ObjectKind::ForeignKey
+            | ObjectKind::Unique
+            | ObjectKind::Check => format!(
+                "ALTER TABLE \"{schema}\".\"{parent}\" DROP CONSTRAINT IF EXISTS \"{name}\";"
+            ),
+            ObjectKind::Index => format!("DROP INDEX IF EXISTS \"{schema}\".\"{name}\";"),
+            ObjectKind::Policy => {
+                format!("DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{parent}\";")
+            }
+            ObjectKind::Trigger => {
+                format!("DROP TRIGGER IF EXISTS \"{name}\" ON \"{schema}\".\"{parent}\";")
+            }
+            ObjectKind::View => format!("DROP VIEW IF EXISTS \"{schema}\".\"{name}\";"),
+            ObjectKind::Schema
+            | ObjectKind::Function
+            | ObjectKind::RlsAttributes
+            | ObjectKind::EnumType
+            | ObjectKind::Sequence
+            | ObjectKind::TableGrant
+            | ObjectKind::ColumnGrant
+            | ObjectKind::SecurityLabel
+            | ObjectKind::CronJob => return None,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DesiredObject {
     pub key: ObjectKey,
@@ -120,15 +164,13 @@ impl<'a> Builder<'a> {
         key: ObjectKey,
         structure: BTreeMap<&'static str, String>,
         create_sql: String,
-        drop_sql: String,
         depends_on: Vec<ObjectKey>,
     ) {
         let security_relevant = matches!(key.kind, ObjectKind::Policy);
-        debug_assert!(
-            !drop_sql.contains("CASCADE"),
-            "{}: drop_sql cascades",
-            key.name
-        );
+        // Every kind the builder emits has a drop; `desired_objects_tests` checks it per fixture.
+        let drop_sql = key
+            .drop_sql()
+            .unwrap_or_else(|| panic!("{:?} has no drop statement", key.kind));
         // One object, however many rules or models ask for it: several access rules can read the
         // same join column, and each asks for the same membership index.
         if self.out.iter().any(|o| o.key == key) {
@@ -152,13 +194,6 @@ impl<'a> Builder<'a> {
         format!("ALTER TABLE \"{}\".\"{table}\"", self.schema)
     }
 
-    fn drop_constraint(&self, table: &str, name: &str) -> String {
-        format!(
-            "{} DROP CONSTRAINT IF EXISTS \"{name}\";",
-            self.alter(table)
-        )
-    }
-
     // --- tables and columns -------------------------------------------------------------------
 
     fn model_table(&mut self, model: &ModelAst) -> Result<()> {
@@ -168,14 +203,7 @@ impl<'a> Builder<'a> {
             model: Box::new(model.clone()),
             risk: Risk::Safe,
         })?;
-        let drop = format!("DROP TABLE IF EXISTS \"{}\".\"{table}\";", self.schema);
-        self.push(
-            self.table_key(table),
-            BTreeMap::new(),
-            create,
-            drop,
-            Vec::new(),
-        );
+        self.push(self.table_key(table), BTreeMap::new(), create, Vec::new());
         Ok(())
     }
 
@@ -196,12 +224,10 @@ impl<'a> Builder<'a> {
                     field: Box::new(field.clone()),
                     risk: Risk::Safe,
                 })?;
-                let drop = format!("{} DROP COLUMN IF EXISTS \"{column}\";", self.alter(table));
                 self.push(
                     self.key(ObjectKind::Column, table, &column),
                     structure,
                     create,
-                    drop,
                     vec![self.table_key(table)],
                 );
             }
@@ -228,7 +254,6 @@ impl<'a> Builder<'a> {
             self.key(ObjectKind::PrimaryKey, table, &name),
             structure,
             create,
-            self.drop_constraint(table, &name),
             vec![self.table_key(table)],
         );
     }
@@ -252,7 +277,6 @@ impl<'a> Builder<'a> {
             self.key(ObjectKind::Unique, table, name),
             structure,
             create,
-            self.drop_constraint(table, name),
             vec![self.table_key(table)],
         );
     }
@@ -309,7 +333,6 @@ impl<'a> Builder<'a> {
             self.key(ObjectKind::ForeignKey, table, name),
             structure,
             create,
-            self.drop_constraint(table, name),
             depends_on,
         );
     }
@@ -372,7 +395,6 @@ impl<'a> Builder<'a> {
             self.key(ObjectKind::Check, table, name),
             BTreeMap::new(),
             create,
-            self.drop_constraint(table, name),
             vec![self.table_key(table)],
         );
     }
@@ -448,12 +470,10 @@ impl<'a> Builder<'a> {
         structure.insert("method", method.to_string());
         structure.insert("unique", flag(unique));
         structure.insert("primary", flag(false));
-        let drop = format!("DROP INDEX IF EXISTS \"{}\".\"{name}\";", self.schema);
         self.push(
             self.key(ObjectKind::Index, table, name),
             structure,
             create,
-            drop,
             vec![self.table_key(table)],
         );
     }
@@ -497,12 +517,10 @@ impl<'a> Builder<'a> {
             structure.insert("method", "btree".to_string());
             structure.insert("unique", flag(true));
             structure.insert("primary", flag(false));
-            let drop = format!("DROP INDEX IF EXISTS \"{}\".\"{name}\";", self.schema);
             self.push(
                 self.key(ObjectKind::Index, table, &name),
                 structure,
                 create,
-                drop,
                 vec![self.table_key(table)],
             );
         }
@@ -542,15 +560,10 @@ impl<'a> Builder<'a> {
             structure.insert("command", command.to_string());
             structure.insert("permissive", flag(true));
             structure.insert("roles", "public".to_string());
-            let drop = format!(
-                "DROP POLICY IF EXISTS \"{name}\" ON \"{}\".\"{table}\";",
-                self.schema
-            );
             self.push(
                 self.key(ObjectKind::Policy, table, &name),
                 structure,
                 create,
-                drop,
                 vec![self.table_key(table)],
             );
         }
@@ -574,12 +587,10 @@ impl<'a> Builder<'a> {
             primary_key: primary_key.clone(),
             risk: Risk::Safe,
         })?;
-        let drop = format!("DROP TABLE IF EXISTS \"{}\".\"{vt}\";", self.schema);
         self.push(
             self.table_key(&vt),
             BTreeMap::new(),
             create,
-            drop,
             vec![self.table_key(table)],
         );
 
@@ -643,14 +654,7 @@ impl<'a> Builder<'a> {
             table_b: jt.model_b.clone(),
             risk: Risk::Safe,
         })?;
-        let drop = format!("DROP TABLE IF EXISTS \"{}\".\"{table}\";", self.schema);
-        self.push(
-            self.table_key(table),
-            BTreeMap::new(),
-            create,
-            drop,
-            Vec::new(),
-        );
+        self.push(self.table_key(table), BTreeMap::new(), create, Vec::new());
 
         self.primary_key(table, &[jt.fk_a.clone(), jt.fk_b.clone()]);
 
