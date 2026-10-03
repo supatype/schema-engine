@@ -22,7 +22,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
 use crate::desired::{desired_objects, statements, ObjectKey};
-use crate::differ::{self, DiffOutput, Operation};
+use crate::differ::{self, DiffOutput};
 use crate::generator::sql::migration_errors::{self, CheckSite};
 use crate::generator::sql::{migration, rollback, storage, triggers, versions};
 use crate::generator::typescript::admin;
@@ -171,12 +171,8 @@ fn created_by_parent(
 ) -> Result<BTreeSet<ObjectKey>> {
     let mut keys = BTreeSet::new();
     for op in &diff.operations {
-        if !matches!(
-            op,
-            Operation::CreateTable { .. } | Operation::AddColumn { .. }
-        ) {
-            continue;
-        }
+        // Every operation, not only the obvious parents: a versions table is created by its own
+        // operation with its status check inline, and the attribution is what knows that.
         let sql = migration::render_operation(op, schema, ast)?;
         for statement in statements::attribute_all(schema, statements::split_statements(&sql)) {
             keys.extend(

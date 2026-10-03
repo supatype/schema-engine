@@ -366,3 +366,38 @@ async fn a_same_named_check_is_adopted_when_the_database_deparses_it_to_ours_and
     })
     .await;
 }
+
+#[tokio::test]
+async fn an_owned_check_edited_by_hand_is_drift_and_is_put_back() {
+    common::with_integration_pool(|pool| async move {
+        let ast = schema(Some(10), None);
+        assert!(applied(&push(&pool, &ast).await.unwrap()));
+        exec(
+            &pool,
+            "ALTER TABLE public.products DROP CONSTRAINT products_name_bounds;
+             ALTER TABLE public.products ADD CONSTRAINT products_name_bounds CHECK (char_length(name) <= 99);",
+        )
+        .await
+        .unwrap();
+
+        // The diff shows it as drift: the recorded definition against the live one.
+        let plan = push::plan(&pool, &ast, "public").await.unwrap();
+        let drift: Vec<_> = plan
+            .reconcile
+            .actions
+            .iter()
+            .filter(|a| matches!(a, supatype_engine::ledger::reconcile::Action::Drift { .. }))
+            .collect();
+        assert_eq!(drift.len(), 1, "{:?}", plan.reconcile.actions);
+
+        // And the push puts the declared bound back (O1: shown, then updated).
+        let outcome = push(&pool, &ast).await.unwrap();
+        assert!(applied(&outcome), "{outcome:?}");
+        assert!(live_checks(&pool).await[0].1.contains("<= 10"));
+        exec(&pool, "INSERT INTO public.products VALUES (1, 'far too long a name', 1)")
+            .await
+            .expect_err("the declared bound is enforced again");
+        assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
+    })
+    .await;
+}
