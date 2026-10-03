@@ -294,6 +294,7 @@ async fn main() -> Result<()> {
             migration_history::bootstrap_internal_state(&pool)
                 .await
                 .context("Failed to bootstrap _supatype internal state")?;
+            migration_history::assert_project_schema(&pool, &schema).await?;
 
             let schema_sources_bytes = schema_sources_gz
                 .as_deref()
@@ -854,6 +855,7 @@ async fn main() -> Result<()> {
             migration_history::bootstrap_internal_state(&pool)
                 .await
                 .context("Failed to bootstrap _supatype internal state")?;
+            migration_history::assert_project_schema(&pool, &schema).await?;
 
             if no_cache {
                 eprintln!("{}", migration_history::NO_CACHE_NOTICE);
