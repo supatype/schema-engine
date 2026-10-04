@@ -3,8 +3,8 @@
 //! `schema.pg_schema` was honoured by the table DDL and by nothing else. Policies, table and column
 //! grants, `can_*` affordance functions, security labels, membership subqueries and the
 //! `updated_at`/slug triggers were all generated against a literal `"public"`. On a database
-//! Supatype created that was merely wrong-looking; on a database it did not create — the whole point
-//! of bring-your-own-Postgres — `public` holds someone else's tables, so:
+//! Supatype created that was merely wrong-looking; on a database it did not create (the whole point
+//! of bring-your-own-Postgres) `public` holds someone else's tables, so:
 //!
 //! * a policy's `EXISTS (SELECT 1 FROM "public"."team_member" ...)` reads *their* table and decides
 //!   access from it,
@@ -28,7 +28,7 @@ use supatype_engine::{
 const MANAGED: &str = "app";
 
 /// Two models with a membership rule between them, so the generated policy contains a subquery
-/// against a second table — the case that silently reads the wrong object.
+/// against a second table, the case that silently reads the wrong object.
 const SCHEMA: &str = r#"{
   "astVersion": 2,
   "models": [
@@ -81,7 +81,7 @@ const SCHEMA: &str = r#"{
 /// The same schema without the field rule.
 ///
 /// A schema declaring `fields` refuses to apply without `supatype_mask`, which the published
-/// `supatype/postgres` image does not yet carry — gating the database test on the extension made it
+/// `supatype/postgres` image does not yet carry; gating the database test on the extension made it
 /// skip silently, which is indistinguishable from passing. Label placement is asserted against the
 /// generator instead, where no database is involved.
 const SCHEMA_WITHOUT_FIELD_RULES: &str = r#"{
@@ -186,7 +186,7 @@ fn a_full_migration_script_never_mentions_public() {
     // the pieces individually would miss one that was wired up with the wrong argument.
     let ast = ast();
     let diff = differ::diff(&ast, &DatabaseState::default()).expect("diff against empty db");
-    // The batch path, because it is the one a push runs — `forward_sql` emits only a comment where
+    // The batch path, because it is the one a push runs: `forward_sql` emits only a comment where
     // the trigger SQL goes, so a trigger qualified with `public` would slip past this check.
     let storage_sql =
         supatype_engine::generator::sql::storage::generate(&ast).expect("storage sql renders");
@@ -231,7 +231,7 @@ async fn a_push_into_a_non_public_schema_leaves_public_untouched() {
 
         // `supatype/postgres` sets default privileges on `public` for the API roles, so their tables
         // already carry grants that have nothing to do with this push. Compare the delta, not the
-        // total — an absolute assertion here measures the image, not the migration.
+        // total, since an absolute assertion here measures the image, not the migration.
         let grants_before = public_api_grants(&pool).await;
 
         let ast = ast_without_field_rules();
@@ -291,7 +291,7 @@ async fn a_push_into_a_non_public_schema_leaves_public_untouched() {
         );
 
         // Privileges are the other half: the generated GRANT/REVOKE pairs name a table, and pointed
-        // at `public` they hand the API roles access to someone else's — or take it away.
+        // at `public` they hand the API roles access to someone else's, or take it away.
         assert_eq!(
             public_api_grants(&pool).await,
             grants_before,
@@ -309,7 +309,7 @@ async fn a_push_into_a_non_public_schema_leaves_public_untouched() {
             "no privileges were granted on app tables, so the assertion above is vacuous"
         );
 
-        // RLS was not switched on over their table — that alone would break their application.
+        // RLS was not switched on over their table; that alone would break their application.
         let their_rls: bool = sqlx::query_scalar(
             "SELECT relrowsecurity FROM pg_class c \
              JOIN pg_namespace n ON n.oid = c.relnamespace \
