@@ -54,7 +54,7 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
             DesiredObject {
                 structure: structure(&key, &create_sql),
                 drop_sql: key.drop_sql().unwrap_or_default(),
-                security_relevant: key.kind == ObjectKind::Policy,
+                security_relevant: super::security_relevant(key.kind),
                 depends_on: Vec::new(),
                 key,
                 create_sql,

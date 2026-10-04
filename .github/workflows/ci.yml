@@ -195,4 +195,5 @@ jobs:
             --test trigger_ledger_tests \
             --test index_ledger_tests \
             --test versions_ledger_tests \
-            --test view_ledger_tests
+            --test view_ledger_tests \
+            --test label_ledger_tests

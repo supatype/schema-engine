@@ -39,7 +39,23 @@ pub struct Inputs<'a> {
     /// The engine's own schemas (plan 3.4). A desired object found there with no row is ours by
     /// location, whatever an older engine made of it: brought up to date rather than refused.
     pub owned_schemas: &'a [&'a str],
+    /// Security label providers the engine owns outright (plan section 5). A label under one is
+    /// ours wherever it is: claimed when desired, and taken off when nothing desires it, as a
+    /// stamped object is, since no one else writes under our provider.
+    pub owned_label_providers: &'a [&'a str],
     pub kinds: &'a [ObjectKind],
+}
+
+impl Inputs<'_> {
+    /// Ours by where it lives: one of the engine's schemas, or a label under our provider.
+    fn ours_by_location(&self, key: &ObjectKey) -> bool {
+        self.owned_schemas.contains(&key.schema.as_str()) || self.under_owned_provider(key)
+    }
+
+    fn under_owned_provider(&self, key: &ObjectKey) -> bool {
+        key.kind == ObjectKind::SecurityLabel
+            && self.owned_label_providers.contains(&key.name.as_str())
+    }
 }
 
 /// The kinds Postgres replaces with `CREATE OR REPLACE`, so a new definition needs no drop first.
@@ -87,8 +103,8 @@ pub enum AdoptReason {
     /// Unstamped and not structurally comparable, but the database deparses it to what we would
     /// create (section 7.2, proved by `super::probe`).
     DeparsesEqual,
-    /// In one of the engine's own schemas (plan 3.4), which nothing else writes to: ours by
-    /// location, so `managed` rather than `adopted`.
+    /// In one of the engine's own schemas (plan 3.4), or a label under its own provider (section 5),
+    /// where nothing else writes: ours by location, so `managed` rather than `adopted`.
     OwnedSchema,
 }
 
@@ -157,7 +173,8 @@ pub enum Action {
         status: Status,
     },
     /// Owned, no longer desired, present. `recorded_sql` is the `CREATE` the ledger held, which is
-    /// what a rollback re-runs; `None` for a stamped object nothing recorded.
+    /// what a rollback re-runs, or for an object with no row the live definition the catalog renders;
+    /// `None` when neither has one (a stamped check).
     Drop {
         key: ObjectKey,
         recorded_sql: Option<String>,
@@ -325,7 +342,7 @@ impl Action {
 
     /// Undoes the removal: re-creates what this action dropped. Rolling back a drift replacement
     /// restores Supatype's previous definition, which is this same `CREATE`; the hand edit is not
-    /// recoverable (plan 3.5). `None` for a stamped drop nothing recorded.
+    /// recoverable (plan 3.5). `None` for a drop with no definition to restore.
     pub fn undo_removal(&self) -> Option<String> {
         match self {
             Action::Replace { previous_sql, .. } => Some(previous_sql.clone()),
@@ -548,11 +565,11 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 });
             }
             Some(l) => {
-                // Ours by location (plan 3.4): an object in one of the engine's own schemas is
-                // ours whoever wrote it, since nothing else writes there. Taken as `managed`
-                // when it is what we would create; replaced, with its live definition kept for
-                // the rollback, when an older engine made it differently.
-                let ours_by_location = inputs.owned_schemas.contains(&key.schema.as_str());
+                // Ours by location (plan 3.4 and section 5): an object in one of the engine's own
+                // schemas, or a label under our provider, is ours whoever wrote it, since nothing
+                // else writes there. Taken as `managed` when it is what we would create; replaced,
+                // with its live definition kept for the rollback, when it was made differently.
+                let ours_by_location = inputs.ours_by_location(&key);
                 let claim = if l.stamped() {
                     Some((AdoptReason::Stamped, Status::Managed))
                 } else if ours_by_location && structure_matches(d, l) {
@@ -587,10 +604,12 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         }
     }
 
-    // Stamped objects of a moved kind that nothing declares any more (section 7, last paragraph):
-    // ours by their own record, so they are dropped, as the stamp-reading differ dropped them.
+    // Objects of a moved kind that nothing declares any more and that are ours by their own record
+    // (an older engine's stamp, section 7, last paragraph) or by their provider (section 5): they
+    // are dropped, as the stamp-reading differ and the stale-label sweep dropped them. The live
+    // definition, where the catalog renders one, is what a rollback restores.
     for (key, l) in &live {
-        if !l.stamped()
+        if !(l.stamped() || inputs.under_owned_provider(key))
             || ledger.contains_key(key)
             || desired.contains_key(key)
             || goes_with_its_table(key)
@@ -599,7 +618,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         }
         removals.push(Action::Drop {
             key: key.clone(),
-            recorded_sql: None,
+            recorded_sql: l.create_sql.clone(),
         });
     }
 
@@ -681,6 +700,7 @@ mod tests {
             created_by_parent: &created_by_parent.iter().cloned().collect(),
             dropped_tables: &BTreeSet::new(),
             owned_schemas: &[],
+            owned_label_providers: &[],
             kinds: &[ObjectKind::Check],
         })
         .actions
@@ -789,6 +809,7 @@ mod tests {
             created_by_parent: &none,
             dropped_tables: &none,
             owned_schemas: &[],
+            owned_label_providers: &[],
             kinds: &kinds,
         });
         assert!(
@@ -811,6 +832,7 @@ mod tests {
             created_by_parent: &none,
             dropped_tables: &none,
             owned_schemas: &[],
+            owned_label_providers: &[],
             kinds: &kinds,
         });
         assert!(
@@ -999,6 +1021,7 @@ mod tests {
             created_by_parent: &none,
             dropped_tables: &dropped,
             owned_schemas: &[],
+            owned_label_providers: &[],
             kinds: &[ObjectKind::Check],
         });
         // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.

@@ -675,8 +675,13 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
                 .collect(),
         );
     }
-    if h.starts_with("DO $mask_clear$") {
-        return Attribution::Ignored("stale security label sweep");
+    if h.starts_with("DO $mask_label$") {
+        // The guarded removal of one label: the statement it executes names it.
+        let Some(at) = h.find("SECURITY LABEL ") else {
+            return Attribution::Unknown;
+        };
+        let executed = h[at..].replace("''", "'");
+        return attribute(schema, &executed, &mut Context::default());
     }
     if h.starts_with("DO $auth_schema_usage$") {
         return Attribution::Object(key(ObjectKind::Schema, "auth", "", "auth"));

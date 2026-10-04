@@ -38,7 +38,7 @@ use crate::generator::sql::{
     migration::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, render_operation,
     },
-    rls::membership_index_targets,
+    rls::{drop_field_label_sql, field_labels, membership_index_targets, MASK_PROVIDER},
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql},
 };
@@ -140,13 +140,17 @@ impl ObjectKey {
             ObjectKind::CronJob => format!(
                 "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}';\n  END IF;\nEND;\n$cron$;"
             ),
+            // The parent is `table.column`; only our own provider's labels are ever desired.
+            ObjectKind::SecurityLabel => {
+                let (table, column) = parent.split_once('.')?;
+                drop_field_label_sql(schema, table, column)
+            }
             ObjectKind::Schema
             | ObjectKind::RlsAttributes
             | ObjectKind::EnumType
             | ObjectKind::Sequence
             | ObjectKind::TableGrant
-            | ObjectKind::ColumnGrant
-            | ObjectKind::SecurityLabel => return None,
+            | ObjectKind::ColumnGrant => return None,
         })
     }
 
@@ -206,27 +210,54 @@ pub struct DesiredObject {
     pub security_relevant: bool,
 }
 
-/// Every object a push of `ast` creates in `schema` that the schema alone decides, sorted by key.
-/// A push knows one thing more, the `api` field views the database's masking tier asks for:
-/// [`desired_objects_for`].
-pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObject>> {
-    desired_objects_for(ast, schema, &[])
+/// The kinds whose drift fails a non-interactive push (plan 3.5): what decides who may read or
+/// write what.
+pub fn security_relevant(kind: ObjectKind) -> bool {
+    matches!(
+        kind,
+        ObjectKind::Policy
+            | ObjectKind::SecurityLabel
+            | ObjectKind::TableGrant
+            | ObjectKind::ColumnGrant
+            | ObjectKind::RlsAttributes
+    )
 }
 
-/// Every object a push of `ast` creates in `schema`, with the `api` field views and write triggers
-/// for `field_views` (the plan a push computed for a database without the masking extension; empty
-/// otherwise), sorted by key.
+/// How a database enforces the schema's field rules, which is the database's masking tier and not
+/// the schema's: labels the masking extension reads, or `api` views for the tables in the plan a
+/// push computed where the extension cannot load.
+#[derive(Debug, Clone, Copy)]
+pub enum FieldEnforcement<'a> {
+    Labels,
+    Views(&'a [FieldViewTable]),
+}
+
+/// Every object a push of `ast` creates in `schema` that the schema alone decides, sorted by key,
+/// for a database that can load the masking extension. A push knows the database's actual tier:
+/// [`desired_objects_for`].
+pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObject>> {
+    desired_objects_for(ast, schema, FieldEnforcement::Labels)
+}
+
+/// Every object a push of `ast` creates in `schema`, with the field rules enforced as `fields`
+/// says, sorted by key.
 pub fn desired_objects_for(
     ast: &SchemaAst,
     schema: &str,
-    field_views: &[FieldViewTable],
+    fields: FieldEnforcement<'_>,
 ) -> Result<Vec<DesiredObject>> {
     let mut b = Builder {
         ast,
         schema,
-        field_views,
+        field_views: match fields {
+            FieldEnforcement::Labels => &[],
+            FieldEnforcement::Views(plan) => plan,
+        },
         out: Vec::new(),
     };
+    if matches!(fields, FieldEnforcement::Labels) {
+        b.field_labels();
+    }
     b.constraint_helpers();
     b.platform_functions();
     for model in &ast.models {
@@ -286,7 +317,7 @@ impl<'a> Builder<'a> {
         create_sql: String,
         depends_on: Vec<ObjectKey>,
     ) {
-        let security_relevant = matches!(key.kind, ObjectKind::Policy);
+        let security_relevant = security_relevant(key.kind);
         // Every kind the builder emits has a drop; `desired_objects_tests` checks it per fixture.
         let drop_sql = key
             .drop_sql()
@@ -713,6 +744,21 @@ impl<'a> Builder<'a> {
     fn api_views(&mut self) {
         let sql = render_field_views(self.ast, self.field_views, self.schema);
         self.attributed_script(&sql);
+    }
+
+    /// The security labels the masking extension reads (Phase 4.7), one per column with a field
+    /// rule. Each depends on its column and on the predicates its text names.
+    fn field_labels(&mut self) {
+        for label in field_labels(self.ast, self.schema) {
+            let key = self.key(
+                ObjectKind::SecurityLabel,
+                &format!("{}.{}", label.table, label.column),
+                MASK_PROVIDER,
+            );
+            let structure = BTreeMap::from([("label", label.label.clone())]);
+            let column = self.key(ObjectKind::Column, &label.table, &label.column);
+            self.push(key, structure, label.create_sql(self.schema), vec![column]);
+        }
     }
 
     /// The `_supatype` constraint helper functions (Phase 4.6), which the migration asserts before
