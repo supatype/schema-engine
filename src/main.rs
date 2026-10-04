@@ -842,10 +842,6 @@ fn destructive_op_summary(op: &supatype_engine::differ::Operation) -> String {
         Operation::DropColumn { table, column, .. } => {
             format!("Drop column '{}.{}'", table, column)
         }
-        Operation::DropEnum { name, .. } => format!("Drop enum type '{}'", name),
-        Operation::RemoveEnumValue {
-            enum_name, value, ..
-        } => format!("Remove enum value '{}' from '{}'", value, enum_name),
         Operation::RecreateColumn { table, column, .. } => {
             format!("Recreate column (data loss): '{table}.{column}'")
         }
