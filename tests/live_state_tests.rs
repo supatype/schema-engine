@@ -75,11 +75,18 @@ async fn sql(url: &str, statement: &str) {
 }
 
 #[tokio::test]
-async fn push_refuses_a_table_that_lost_its_ownership_marker_with_nothing_to_apply() {
+async fn push_refuses_a_table_it_has_no_record_of_with_nothing_to_apply() {
     common::with_integration_url(|url| async move {
         let first = push(&url);
         assert!(first.ok, "first push: {}", first.stderr);
-        sql(&url, "COMMENT ON TABLE public.widget IS NULL").await;
+        // Neither a ledger row nor an older engine's stamp: not ours (Phase 4.11). A comment alone
+        // no longer decides it, so both go.
+        sql(
+            &url,
+            "DELETE FROM _supatype.managed_objects WHERE kind = 'table' AND name = 'widget';
+             COMMENT ON TABLE public.widget IS NULL",
+        )
+        .await;
 
         let again = push(&url);
         assert!(

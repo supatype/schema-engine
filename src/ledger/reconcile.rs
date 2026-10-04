@@ -60,6 +60,25 @@ pub fn no_location(_: &ObjectKey) -> Location {
     Location::Neutral
 }
 
+/// The kinds the table and column differs create, alter and drop, because a table or column holds
+/// data that a drop and re-create would lose: renames, type conversions and nullability are the
+/// differ's, gated on the ledger (D4, Phase 4.11). A serial column's sequence is made and kept by its
+/// column. The reconcile records them and runs no SQL of its own for them.
+pub fn altered_by_the_differ(kind: ObjectKind) -> bool {
+    matches!(
+        kind,
+        ObjectKind::Table | ObjectKind::Column | ObjectKind::Sequence
+    )
+}
+
+/// The differ-altered kinds that declaring takes over (D4): a column the schema declares on a table
+/// that is ours, and its sequence. Not a table: one that exists and is not ours makes the push
+/// refuse until `supatype adopt` hands it over, since attaching access rules to it changes what an
+/// existing application can read.
+fn adopted_by_declaring(kind: ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Column | ObjectKind::Sequence)
+}
+
 /// Kinds whose name says what they govern, so a same-named live object with no row is ours and
 /// is replaced, whatever its comment or structure.
 ///
@@ -71,14 +90,6 @@ pub fn no_location(_: &ObjectKey) -> Location {
 /// and leaves them holding exactly what the rules allow. Row-level security is named by its table,
 /// and only tables the schema owns ask for it. A schema is named by itself, and only the engine's
 /// own schemas are desired.
-/// The kinds the column differ creates, alters and drops, because a column holds data that a drop
-/// and re-create would lose: type conversions, renames and nullability are the differ's, gated on the
-/// ledger (D4). A serial column's sequence is made and kept by its column. The reconcile records
-/// them and runs no SQL of its own for them.
-pub fn altered_by_the_differ(kind: ObjectKind) -> bool {
-    matches!(kind, ObjectKind::Column | ObjectKind::Sequence)
-}
-
 fn claimed_by_name(kind: ObjectKind) -> bool {
     matches!(
         kind,
@@ -526,18 +537,6 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         previous_sql: previous_sql.to_string(),
         status: Status::Managed,
     };
-    if altered_by_the_differ(key.kind) {
-        return Action::Adopt {
-            key: key.clone(),
-            reason: AdoptReason::Declared,
-            create_sql: d.create_sql.clone(),
-            comment: l.comment.clone(),
-            status: Status::Managed,
-        };
-    }
-    if claimed_by_name(key.kind) {
-        return replace(l.create_sql.as_deref().unwrap_or_default());
-    }
     let adopt = |reason, status| Action::Adopt {
         key: key.clone(),
         reason,
@@ -545,8 +544,26 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         comment: l.comment.clone(),
         status,
     };
+    if adopted_by_declaring(key.kind) {
+        return adopt(AdoptReason::Declared, Status::Managed);
+    }
+    if claimed_by_name(key.kind) {
+        return replace(l.create_sql.as_deref().unwrap_or_default());
+    }
     if l.stamped() {
         return adopt(AdoptReason::Stamped, Status::Managed);
+    }
+    // A table is never replaced: only its differ touches it, and only once it is ours.
+    if altered_by_the_differ(key.kind) {
+        return if ours_by_location {
+            adopt(AdoptReason::OwnedSchema, Status::Managed)
+        } else {
+            Action::Conflict {
+                key: key.clone(),
+                create_sql: d.create_sql.clone(),
+                live_def: l.definition.clone(),
+            }
+        };
     }
     if structure_matches(d, l) {
         return if ours_by_location {
@@ -684,6 +701,8 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             || ledger.contains_key(key)
             || desired.contains_key(key)
             || goes_with_its_table(key)
+            // A stamped table nothing declares is the table differ's to drop, behind its gate.
+            || altered_by_the_differ(key.kind)
         {
             continue;
         }

@@ -36,7 +36,7 @@ impl std::fmt::Display for UnmanagedModelTables {
         write!(
             f,
             "Your schema declares model(s) for table(s) Supatype does not manage: {tables}.\n\n\
-             Nothing was applied. These tables already exist without Supatype's ownership marker, so \
+             Nothing was applied. These tables already exist and Supatype did not create them, so \
              a push may neither alter them nor attach access rules to them, and leaving them in the \
              API without those rules would serve them under whatever privileges they already \
              have.\n\n\
@@ -310,7 +310,6 @@ fn render_forward_operation_lines(
             | Operation::AddIndex { risk, .. }
             | Operation::AddForeignKey { risk, .. }
             | Operation::AddUniqueConstraint { risk, .. }
-            | Operation::DropUniqueConstraint { risk, .. }
             | Operation::CreateRlsPolicy { risk, .. }
             | Operation::CreateJunctionTable { risk, .. }
             | Operation::CreateVersionsTable { risk, .. }
@@ -552,9 +551,6 @@ fn op_description(op: &Operation) -> String {
         Operation::AddUniqueConstraint { table, column, .. } => {
             format!("Add unique constraint: {table}.{column}")
         }
-        Operation::DropUniqueConstraint {
-            table, constraint, ..
-        } => format!("Drop unique constraint: {table}.{constraint}"),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("Create RLS policy: {table}.{policy}")
         }
@@ -780,11 +776,6 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             constraint,
             ..
         } => add_unique_constraint_sql(table, column, constraint, schema),
-        Operation::DropUniqueConstraint {
-            table, constraint, ..
-        } => Ok(format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
-        )),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             render_create_rls_policy_sql(table, policy, schema, ast)
         }

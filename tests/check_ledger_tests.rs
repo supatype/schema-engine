@@ -347,9 +347,11 @@ async fn a_same_named_check_is_adopted_when_the_database_deparses_it_to_ours_and
         assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
 
         // The same name meaning something else is refused, by name, before anything is written.
+        // Only the check's row goes: the table is the ledger's since the first push took it over by
+        // its stamp and removed the stamp (Phase 4.11, section 6).
         exec(
             &pool,
-            "DELETE FROM _supatype.managed_objects WHERE true;
+            "DELETE FROM _supatype.managed_objects WHERE kind = 'check';
              ALTER TABLE public.products DROP CONSTRAINT products_name_bounds;
              ALTER TABLE public.products ADD CONSTRAINT products_name_bounds CHECK (char_length(name) <= 99);",
         )

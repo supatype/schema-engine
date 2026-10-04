@@ -27,7 +27,6 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         // Drop RLS policies BEFORE creating them, so a drop+recreate of the same
         // policy ends with the policy present (creates are idempotent DROP+CREATE).
         Operation::CreateRlsPolicy { .. } => 12,
-        Operation::DropUniqueConstraint { .. } => 15,
         Operation::DropColumn { .. } => 17,
         Operation::DropTable { .. } => 18,
     };
