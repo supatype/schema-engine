@@ -177,9 +177,7 @@ async fn a_label_taken_off_by_hand_is_put_back() {
             matches!(labels[..], [Action::Recreate { .. }]),
             "{labels:?}"
         );
-        push::apply(&pool, plan, push::ApplyOptions::default())
-            .await
-            .unwrap();
+        common::apply_with_consent(&pool, plan, &read).await;
         assert_eq!(
             live_label(&pool, "salary").await.as_deref(),
             Some(READ_LABEL)

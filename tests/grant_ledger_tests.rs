@@ -146,9 +146,7 @@ async fn a_privilege_granted_by_hand_is_taken_back() {
             ),
             "{actions:?}"
         );
-        push::apply(&pool, plan, push::ApplyOptions::default())
-            .await
-            .unwrap();
+        common::apply_with_consent(&pool, plan, &ast).await;
         assert_eq!(held(&pool, "anon").await, ["SELECT"]);
     })
     .await;

@@ -109,10 +109,11 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         name: req.name.clone(),
         schema_sources,
         schema_sources_manifest: req.schema_sources_manifest.clone(),
+        overwrite_drift: req.overwrite_drift,
     };
     let outcome = push::apply(&pool, plan, options)
         .await
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
     Ok(Json(outcome.to_json()))
 }
 
@@ -428,9 +429,25 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// A refused push, as 409 with the reason and tables when it is one a caller can act on.
+/// A refused push, as 409 with the reason and what it is about when it is one a caller can act on.
 fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
     use crate::generator::sql::migration::{UnmanagedModelTables, UNMANAGED_MODEL_TABLES};
+    use crate::ledger::drift::{SecurityDrift, SECURITY_DRIFT};
+    if let Some(drift) = e.downcast_ref::<SecurityDrift>() {
+        error!(
+            objects = drift.objects.len(),
+            "push refused: security drift"
+        );
+        return (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: drift.to_string(),
+                reason: Some(SECURITY_DRIFT),
+                objects: Some(drift.objects.clone()),
+                ..Default::default()
+            }),
+        );
+    }
     let Some(refusal) = e.downcast_ref::<UnmanagedModelTables>() else {
         return engine_error(e);
     };
@@ -441,6 +458,7 @@ fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
             error: refusal.to_string(),
             reason: Some(UNMANAGED_MODEL_TABLES),
             tables: Some(refusal.tables.clone()),
+            ..Default::default()
         }),
     )
 }

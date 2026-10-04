@@ -31,7 +31,7 @@ use crate::introspector::fingerprint::{
     fingerprints, holding_nothing, ObjectFingerprint, ObjectKind,
 };
 use crate::introspector::{self, catalog, catalog::CatalogState};
-use crate::ledger::{self, probe, reconcile, LedgerRow};
+use crate::ledger::{self, drift, probe, reconcile, LedgerRow};
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use crate::state::{migration_history, studio_state};
@@ -105,6 +105,9 @@ pub struct ApplyOptions {
     pub name: Option<String>,
     pub schema_sources: Option<Vec<u8>>,
     pub schema_sources_manifest: Option<serde_json::Value>,
+    /// Put back a policy, grant, label or RLS attribute changed or removed outside Supatype (plan
+    /// 3.5). Without it the push refuses with [`drift::SecurityDrift`].
+    pub overwrite_drift: bool,
 }
 
 #[derive(Debug)]
@@ -379,6 +382,14 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
             conflicts.len(),
             conflicts.join(", ")
         );
+    }
+
+    // Plan 3.5: access changed outside Supatype is put back only with consent.
+    if !opts.overwrite_drift {
+        let objects = drift::security_drift(&plan.reconcile);
+        if !objects.is_empty() {
+            return Err(drift::SecurityDrift { objects }.into());
+        }
     }
 
     let outcome = if plan.diff.operations.is_empty() && !plan.reconcile.has_changes() {

@@ -86,9 +86,7 @@ async fn rls_is_on_recorded_and_put_back_when_turned_off() {
         let plan = push::prepare(&pool, &ast, "public").await.unwrap();
         let actions = rls_actions(&plan);
         assert!(matches!(actions[..], [Action::Drift { .. }]), "{actions:?}");
-        push::apply(&pool, plan, push::ApplyOptions::default())
-            .await
-            .unwrap();
+        common::apply_with_consent(&pool, plan, &ast).await;
         assert_eq!(rls(&pool).await, (true, false));
     })
     .await;
