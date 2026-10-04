@@ -1,8 +1,8 @@
-/// Integration tests — Postgres round-trip and batch transaction semantics.
+/// Integration tests: the Postgres round trip and batch transaction semantics.
 ///
 /// **Backends:**
 /// - **`DATABASE_URL`** (CI / local): ephemeral database on that server, then `DROP DATABASE`.
-/// - Otherwise **testcontainers** with **`supatype/postgres`** (PostGIS, pgvector — production parity).
+/// - Otherwise **testcontainers** with **`supatype/postgres`** (PostGIS and pgvector, as in production).
 mod common;
 
 use common::with_integration_pool;
@@ -162,7 +162,7 @@ async fn test_geospatial_schema_idempotent_after_push() {
 // ─── Phase 4: Idempotency + transaction batch semantics ─────────────────────
 
 /// When `sqlx::raw_sql` sends a **BEGIN … COMMIT** script as one batch, PostgreSQL rolls back
-/// the whole transaction if any statement fails — same mechanism used by `migration::forward_sql`.
+/// the whole transaction if any statement fails. A push applies its migration the same way.
 #[tokio::test]
 async fn test_pg_batch_transaction_rollbacks_on_error() {
     with_integration_pool(|pool| async move {
