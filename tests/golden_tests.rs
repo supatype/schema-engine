@@ -18,7 +18,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use supatype_engine::{
-    generator::sql::triggers,
     introspector, parser, push,
     state::{migration_history, studio_state},
 };
@@ -261,15 +260,13 @@ async fn run_fixture(pool: &sqlx::PgPool, name: &str) {
     let migration = plan
         .migration(false)
         .unwrap_or_else(|e| panic!("{name} renders: {e}"));
-    let trigger_sql = triggers::generate(&ast, "public").unwrap();
 
     // A fixture that cannot be applied still asserts what it generates.
     let not_pushable = NOT_PUSHABLE.iter().find(|(n, _)| *n == name);
     if SQL_GOLDEN_FIXTURES.contains(&name) || not_pushable.is_some() {
-        let full = format!("{}\n\n-- triggers\n{trigger_sql}", migration.up_script());
         check_golden(
             &golden_dir().join(format!("{name}.sql")),
-            &full,
+            &migration.up_script(),
             &format!("{name} SQL"),
         );
     }

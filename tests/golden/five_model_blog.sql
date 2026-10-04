@@ -4,6 +4,13 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+CREATE EXTENSION IF NOT EXISTS "unaccent";
+
+CREATE SCHEMA IF NOT EXISTS _platform;
+GRANT USAGE ON SCHEMA _platform TO PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+
 -- Auth helper functions for project: 
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -489,47 +496,13 @@ ALTER TABLE "public"."comments" ADD CONSTRAINT "comments_author_id_fkey" FOREIGN
 ALTER TABLE "public"."comments" ADD CONSTRAINT "comments_post_id_fkey" FOREIGN KEY ("post_id") REFERENCES "public"."posts" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_category_id_fkey" FOREIGN KEY ("category_id") REFERENCES "public"."categories" ("id") ON DELETE SET NULL ON UPDATE CASCADE;
-
-COMMIT;
-
--- triggers
-CREATE SCHEMA IF NOT EXISTS _platform;
-GRANT USAGE ON SCHEMA _platform TO PUBLIC;
-
-
-CREATE OR REPLACE FUNCTION _platform.set_updated_at()
+CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.updated_at = NOW();
+  NEW."content" := CASE WHEN NEW."content" IS NULL THEN NULL WHEN NEW."content" ? 'root' THEN NEW."content" WHEN jsonb_typeof(NEW."content") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."content" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."content") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."content") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."content"::text::text)))))) END;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
-
-CREATE EXTENSION IF NOT EXISTS "unaccent";
-
-CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
-RETURNS TEXT AS $$
-BEGIN
-  RETURN lower(
-    regexp_replace(
-      regexp_replace(
-        unaccent(trim(val)),
-        '[^a-zA-Z0-9\s-]', '', 'g'
-      ),
-      '[\s-]+', '-', 'g'
-    )
-  );
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
-
-CREATE OR REPLACE TRIGGER "users_updated_at_trigger"
-BEFORE UPDATE ON "public"."users"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
-CREATE OR REPLACE TRIGGER "categories_updated_at_trigger"
-BEFORE UPDATE ON "public"."categories"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 CREATE OR REPLACE FUNCTION _platform.set_categories_slug()
 RETURNS TRIGGER AS $$
@@ -549,14 +522,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER "categories_slug_trigger"
-BEFORE INSERT OR UPDATE ON "public"."categories"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_categories_slug();
-
-CREATE OR REPLACE TRIGGER "posts_updated_at_trigger"
-BEFORE UPDATE ON "public"."posts"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
 CREATE OR REPLACE FUNCTION _platform.set_posts_slug()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -575,24 +540,56 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER "posts_slug_trigger"
-BEFORE INSERT OR UPDATE ON "public"."posts"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_posts_slug();
-
-CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()
+CREATE OR REPLACE FUNCTION _platform.set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW."content" := CASE WHEN NEW."content" IS NULL THEN NULL WHEN NEW."content" ? 'root' THEN NEW."content" WHEN jsonb_typeof(NEW."content") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."content" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."content") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."content") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."content"::text::text)))))) END;
+  NEW.updated_at = NOW();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER "posts_rich_text_trigger"
-BEFORE INSERT OR UPDATE ON "public"."posts"
-FOR EACH ROW EXECUTE FUNCTION _platform.normalise_posts_rich_text();
+CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
+RETURNS TEXT AS $$
+BEGIN
+  RETURN lower(
+    regexp_replace(
+      regexp_replace(
+        unaccent(trim(val)),
+        '[^a-zA-Z0-9\s-]', '', 'g'
+      ),
+      '[\s-]+', '-', 'g'
+    )
+  );
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+CREATE OR REPLACE TRIGGER "categories_slug_trigger"
+BEFORE INSERT OR UPDATE ON "public"."categories"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_categories_slug();
+
+CREATE OR REPLACE TRIGGER "categories_updated_at_trigger"
+BEFORE UPDATE ON "public"."categories"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 CREATE OR REPLACE TRIGGER "comments_updated_at_trigger"
 BEFORE UPDATE ON "public"."comments"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+CREATE OR REPLACE TRIGGER "posts_rich_text_trigger"
+BEFORE INSERT OR UPDATE ON "public"."posts"
+FOR EACH ROW EXECUTE FUNCTION _platform.normalise_posts_rich_text();
+
+CREATE OR REPLACE TRIGGER "posts_slug_trigger"
+BEFORE INSERT OR UPDATE ON "public"."posts"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_posts_slug();
+
+CREATE OR REPLACE TRIGGER "posts_updated_at_trigger"
+BEFORE UPDATE ON "public"."posts"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+CREATE OR REPLACE TRIGGER "users_updated_at_trigger"
+BEFORE UPDATE ON "public"."users"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+
+COMMIT;

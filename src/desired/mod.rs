@@ -29,6 +29,7 @@ use crate::differ::{
     table_diff::versions_record_id,
     Operation, Risk,
 };
+use crate::generator::sql::triggers::{self, PLATFORM_SCHEMA};
 use crate::generator::sql::{
     constraints::constraint_to_expr,
     migration::{
@@ -38,7 +39,7 @@ use crate::generator::sql::{
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql},
 };
-use crate::introspector::fingerprint::ObjectKind;
+use crate::introspector::fingerprint::{normalise_sql, ObjectKind};
 use crate::managed::{
     comment_on_constraint, comment_on_index, comment_on_table, comment_value,
     expected_check_constraint_name, expected_model_constraint_name, expected_model_index_name,
@@ -127,8 +128,12 @@ impl ObjectKey {
                 format!("DROP TRIGGER IF EXISTS \"{name}\" ON \"{schema}\".\"{parent}\";")
             }
             ObjectKind::View => format!("DROP VIEW IF EXISTS \"{schema}\".\"{name}\";"),
+            // The name is `ident(types)`, the identity the ledger keys a function by.
+            ObjectKind::Function => {
+                let (ident, args) = name.split_once('(').unwrap_or((name, ")"));
+                format!("DROP FUNCTION IF EXISTS \"{schema}\".\"{ident}\"({args};")
+            }
             ObjectKind::Schema
-            | ObjectKind::Function
             | ObjectKind::RlsAttributes
             | ObjectKind::EnumType
             | ObjectKind::Sequence
@@ -202,6 +207,7 @@ pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObjec
         schema,
         out: Vec::new(),
     };
+    b.platform_functions();
     for model in &ast.models {
         b.model_table(model)?;
         b.model_columns(model)?;
@@ -211,6 +217,7 @@ pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObjec
         b.model_checks(model);
         b.model_indexes(model)?;
         b.model_policies(model)?;
+        b.model_triggers(model);
         if versions_of(model).is_some() {
             b.versions_table(model)?;
         }
@@ -649,6 +656,68 @@ impl<'a> Builder<'a> {
             );
         }
         Ok(())
+    }
+
+    /// The `_platform` functions every push has (Phase 4.2).
+    fn platform_functions(&mut self) {
+        for function in triggers::shared_functions() {
+            self.platform_function(&function);
+        }
+    }
+
+    /// One `_platform` function, with the parts the catalog reports (`DbFunction`): the return
+    /// type as `pg_get_function_result` spells it, the language, the volatility code, whether it
+    /// is security definer, and the body between the dollar quotes, whitespace-normalised as the
+    /// fingerprint normalises it.
+    fn platform_function(&mut self, function: &triggers::TriggerFunction) {
+        let mut structure = BTreeMap::new();
+        structure.insert("returns", function.returns.to_string());
+        structure.insert("language", "plpgsql".to_string());
+        structure.insert("volatility", function.volatility.to_string());
+        structure.insert("security_definer", flag(false));
+        structure.insert("body", normalise_sql(&function.body));
+        self.push(
+            Self::platform_function_key(&function.key_name()),
+            structure,
+            function.create_sql(),
+            Vec::new(),
+        );
+    }
+
+    fn platform_function_key(key_name: &str) -> ObjectKey {
+        ObjectKey {
+            kind: ObjectKind::Function,
+            schema: PLATFORM_SCHEMA.to_string(),
+            parent: String::new(),
+            name: key_name.to_string(),
+        }
+    }
+
+    /// A model's triggers and the `_platform` functions of its own they run. The trigger's parts
+    /// are the catalog's structural ones (`pg_trigger`), not its deparsed definition.
+    fn model_triggers(&mut self, model: &ModelAst) {
+        for function in triggers::model_functions(model) {
+            self.platform_function(&function);
+        }
+        for trigger in triggers::model_triggers(model) {
+            let mut structure = BTreeMap::new();
+            structure.insert("timing", "BEFORE".to_string());
+            structure.insert("events", trigger.events.join(","));
+            structure.insert("columns", String::new());
+            structure.insert("for_each_row", flag(true));
+            structure.insert("function", trigger.qualified_function());
+            structure.insert("enabled", flag(true));
+            let depends_on = vec![
+                self.table_key(&trigger.table),
+                Self::platform_function_key(&format!("{}()", trigger.function)),
+            ];
+            self.push(
+                self.key(ObjectKind::Trigger, &trigger.table, &trigger.name),
+                structure,
+                trigger.create_sql(self.schema),
+                depends_on,
+            );
+        }
     }
 
     fn model_policies(&mut self, model: &ModelAst) -> Result<()> {

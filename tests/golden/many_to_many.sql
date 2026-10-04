@@ -4,6 +4,13 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+CREATE EXTENSION IF NOT EXISTS "unaccent";
+
+CREATE SCHEMA IF NOT EXISTS _platform;
+GRANT USAGE ON SCHEMA _platform TO PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+
 -- Auth helper functions for project: 
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -372,47 +379,7 @@ BEGIN
 END
 $mask_clear$;
 
-COMMIT;
-
--- triggers
-CREATE SCHEMA IF NOT EXISTS _platform;
-GRANT USAGE ON SCHEMA _platform TO PUBLIC;
-
-
-CREATE OR REPLACE FUNCTION _platform.set_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-
-CREATE EXTENSION IF NOT EXISTS "unaccent";
-
-CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
-RETURNS TEXT AS $$
-BEGIN
-  RETURN lower(
-    regexp_replace(
-      regexp_replace(
-        unaccent(trim(val)),
-        '[^a-zA-Z0-9\s-]', '', 'g'
-      ),
-      '[\s-]+', '-', 'g'
-    )
-  );
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
-
-CREATE OR REPLACE TRIGGER "students_updated_at_trigger"
-BEFORE UPDATE ON "public"."students"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
-CREATE OR REPLACE TRIGGER "courses_updated_at_trigger"
-BEFORE UPDATE ON "public"."courses"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
+-- reconciled objects
 CREATE OR REPLACE FUNCTION _platform.set_courses_slug()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -431,8 +398,40 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION _platform.set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
+RETURNS TEXT AS $$
+BEGIN
+  RETURN lower(
+    regexp_replace(
+      regexp_replace(
+        unaccent(trim(val)),
+        '[^a-zA-Z0-9\s-]', '', 'g'
+      ),
+      '[\s-]+', '-', 'g'
+    )
+  );
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
 CREATE OR REPLACE TRIGGER "courses_slug_trigger"
 BEFORE INSERT OR UPDATE ON "public"."courses"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_courses_slug();
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+CREATE OR REPLACE TRIGGER "courses_updated_at_trigger"
+BEFORE UPDATE ON "public"."courses"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+CREATE OR REPLACE TRIGGER "students_updated_at_trigger"
+BEFORE UPDATE ON "public"."students"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+
+COMMIT;

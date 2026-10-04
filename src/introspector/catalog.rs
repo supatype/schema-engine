@@ -30,6 +30,11 @@ pub const ENGINE_SCHEMAS: &[&str] = &[
     "storage",
 ];
 
+/// The schemas the engine creates for itself and nothing else writes to. An object the schema
+/// wants that already exists in one of these with no ledger row is ours by location, whatever an
+/// older engine made of it (plan 3.4): taken over and brought up to date, never refused.
+pub const OWNED_SCHEMAS: &[&str] = &["_supatype", "_platform", "draft", "api", "supatype"];
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogState {

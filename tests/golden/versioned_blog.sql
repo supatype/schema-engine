@@ -4,6 +4,13 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+CREATE EXTENSION IF NOT EXISTS "unaccent";
+
+CREATE SCHEMA IF NOT EXISTS _platform;
+GRANT USAGE ON SCHEMA _platform TO PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+
 -- Auth helper functions for project: 
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -1307,12 +1314,14 @@ BEGIN
 END;
 $cron$;
 
-COMMIT;
-
--- triggers
-CREATE SCHEMA IF NOT EXISTS _platform;
-GRANT USAGE ON SCHEMA _platform TO PUBLIC;
-
+-- reconciled objects
+CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW."body" := CASE WHEN NEW."body" IS NULL THEN NULL WHEN NEW."body" ? 'root' THEN NEW."body" WHEN jsonb_typeof(NEW."body") <> 'object' THEN CASE WHEN NEW."body" IS NULL THEN NULL WHEN NEW."body" ? 'root' THEN NEW."body" WHEN jsonb_typeof(NEW."body") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."body" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."body") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."body") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."body"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW."body") AS locale), NEW."body") END;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION _platform.set_updated_at()
 RETURNS TRIGGER AS $$
@@ -1321,9 +1330,6 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
-
-CREATE EXTENSION IF NOT EXISTS "unaccent";
 
 CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
 RETURNS TEXT AS $$
@@ -1340,20 +1346,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 
-CREATE OR REPLACE TRIGGER "posts_updated_at_trigger"
-BEFORE UPDATE ON "public"."posts"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
-CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW."body" := CASE WHEN NEW."body" IS NULL THEN NULL WHEN NEW."body" ? 'root' THEN NEW."body" WHEN jsonb_typeof(NEW."body") <> 'object' THEN CASE WHEN NEW."body" IS NULL THEN NULL WHEN NEW."body" ? 'root' THEN NEW."body" WHEN jsonb_typeof(NEW."body") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."body" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."body") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."body") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."body"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW."body") AS locale), NEW."body") END;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
 CREATE OR REPLACE TRIGGER "posts_rich_text_trigger"
 BEFORE INSERT OR UPDATE ON "public"."posts"
 FOR EACH ROW EXECUTE FUNCTION _platform.normalise_posts_rich_text();
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+CREATE OR REPLACE TRIGGER "posts_updated_at_trigger"
+BEFORE UPDATE ON "public"."posts"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+
+COMMIT;

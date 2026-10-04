@@ -16,6 +16,7 @@
 //! Only the kinds in `kinds` are reconciled. A kind moves onto the reconcile one PR at a time
 //! (plan section 9); until it moves, its old differ stays authoritative and its rows do not exist.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
@@ -35,7 +36,45 @@ pub struct Inputs<'a> {
     /// Tables this push drops. An owned object on one goes with it (plan 3.3): its row is removed
     /// and no drop of its own is emitted, since the table will not be there to alter.
     pub dropped_tables: &'a BTreeSet<ObjectKey>,
+    /// The engine's own schemas (plan 3.4). A desired object found there with no row is ours by
+    /// location, whatever an older engine made of it: brought up to date rather than refused.
+    pub owned_schemas: &'a [&'a str],
     pub kinds: &'a [ObjectKind],
+}
+
+/// The kinds Postgres replaces with `CREATE OR REPLACE`, so a new definition needs no drop first.
+/// Dropping first would fail anyway: a trigger depends on its function.
+fn replaced_in_place(kind: ObjectKind) -> bool {
+    matches!(
+        kind,
+        ObjectKind::Function | ObjectKind::Trigger | ObjectKind::View
+    )
+}
+
+/// The order kinds are created in, dependencies first; drops run in reverse. A trigger needs its
+/// function and its table, a foreign key its two tables, a column its type.
+fn creation_rank(kind: ObjectKind) -> u8 {
+    match kind {
+        ObjectKind::Schema => 0,
+        ObjectKind::EnumType => 1,
+        ObjectKind::Sequence => 2,
+        ObjectKind::Table => 3,
+        ObjectKind::Column => 4,
+        ObjectKind::PrimaryKey => 5,
+        ObjectKind::Unique => 6,
+        ObjectKind::ForeignKey => 7,
+        ObjectKind::Check => 8,
+        ObjectKind::Index => 9,
+        ObjectKind::Function => 10,
+        ObjectKind::Trigger => 11,
+        ObjectKind::View => 12,
+        ObjectKind::Policy => 13,
+        ObjectKind::RlsAttributes => 14,
+        ObjectKind::TableGrant => 15,
+        ObjectKind::ColumnGrant => 16,
+        ObjectKind::SecurityLabel => 17,
+        ObjectKind::CronJob => 18,
+    }
 }
 
 /// Why an object with no ledger row is taken as ours.
@@ -49,6 +88,9 @@ pub enum AdoptReason {
     /// Unstamped and not structurally comparable, but the database deparses it to what we would
     /// create (section 7.2, proved by `super::probe`).
     DeparsesEqual,
+    /// In one of the engine's own schemas (plan 3.4), which nothing else writes to: ours by
+    /// location, so `managed` rather than `adopted`.
+    OwnedSchema,
 }
 
 /// What a push does about one object. Every variant that leaves a row carries what the row needs:
@@ -167,6 +209,11 @@ impl Action {
     /// own operations, so a drop they depend on has happened (plan 3.3: nothing cascades).
     pub fn removal_sql(&self) -> Option<String> {
         match self {
+            Action::Replace { key, .. } | Action::Drift { key, .. }
+                if replaced_in_place(key.kind) =>
+            {
+                None
+            }
             Action::Replace { key, .. } | Action::Drift { key, .. } | Action::Drop { key, .. } => {
                 Some(drop_for(key))
             }
@@ -219,10 +266,23 @@ impl Action {
         statements
     }
 
+    /// Whether the removal runs after the migration's operations rather than before: a function's
+    /// does, because the trigger that depends on it may sit on a table the operations drop, and
+    /// goes with the table.
+    pub fn removal_is_late(&self) -> bool {
+        self.key().kind == ObjectKind::Function
+    }
+
     /// Undoes the addition: drops what this action created. An inline `Create` has one too; its
-    /// parent's rollback covers it, and the explicit drop is `IF EXISTS`.
+    /// parent's rollback covers it, and the explicit drop is `IF EXISTS`. A replacement in place
+    /// is undone by the previous definition alone ([`Action::undo_removal`]).
     pub fn undo_addition(&self) -> Option<String> {
         match self {
+            Action::Replace { key, .. } | Action::Drift { key, .. }
+                if replaced_in_place(key.kind) =>
+            {
+                None
+            }
             Action::Create { key, .. }
             | Action::Recreate { key, .. }
             | Action::Replace { key, .. }
@@ -298,8 +358,8 @@ impl Action {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
 pub struct Plan {
-    /// Forgets and drops first, then replacements, re-creations and creations, each group in key
-    /// order. Dependency ordering across kinds arrives with the kinds that need it.
+    /// Forgets and drops first (dependents before what they depend on), then replacements,
+    /// re-creations and creations (dependencies first), each group in key order within a kind.
     pub actions: Vec<Action>,
 }
 
@@ -457,22 +517,35 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 });
             }
             Some(l) => {
+                // Ours by location (plan 3.4): an object in one of the engine's own schemas is
+                // ours whoever wrote it, since nothing else writes there. Taken as `managed`
+                // when it is what we would create; replaced, with its live definition kept for
+                // the rollback, when an older engine made it differently.
+                let ours_by_location = inputs.owned_schemas.contains(&key.schema.as_str());
                 let claim = if l.stamped() {
                     Some((AdoptReason::Stamped, Status::Managed))
+                } else if ours_by_location && structure_matches(d, l) {
+                    Some((AdoptReason::OwnedSchema, Status::Managed))
                 } else if structure_matches(d, l) {
                     Some((AdoptReason::StructureMatches, Status::Adopted))
                 } else {
                     None
                 };
-                match claim {
-                    Some((reason, status)) => changes.push(Action::Adopt {
+                match (claim, l.create_sql.as_ref().filter(|_| ours_by_location)) {
+                    (Some((reason, status)), _) => changes.push(Action::Adopt {
                         key,
                         reason,
                         create_sql: d.create_sql.clone(),
                         comment: l.comment.clone(),
                         status,
                     }),
-                    None => changes.push(Action::Conflict {
+                    (None, Some(previous_sql)) => changes.push(Action::Replace {
+                        key,
+                        create_sql: d.create_sql.clone(),
+                        previous_sql: previous_sql.clone(),
+                        status: Status::Managed,
+                    }),
+                    (None, None) => changes.push(Action::Conflict {
                         key,
                         create_sql: d.create_sql.clone(),
                         live_def: l.definition.clone(),
@@ -498,8 +571,9 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         });
     }
 
-    removals.sort_by(|a, b| a.key().cmp(b.key()));
-    changes.sort_by(|a, b| a.key().cmp(b.key()));
+    // Dependencies first for the changes, dependents first for the removals, then key order.
+    removals.sort_by_key(|a| (Reverse(creation_rank(a.key().kind)), a.key().clone()));
+    changes.sort_by_key(|a| (creation_rank(a.key().kind), a.key().clone()));
     removals.extend(changes);
     Plan { actions: removals }
 }
@@ -541,6 +615,7 @@ mod tests {
             fingerprint: hash(ObjectKind::Check, &[&format!("CHECK (({expr}))")]),
             definition: def,
             comment: None,
+            create_sql: None,
         }
     }
 
@@ -573,6 +648,7 @@ mod tests {
             live,
             created_by_parent: &created_by_parent.iter().cloned().collect(),
             dropped_tables: &BTreeSet::new(),
+            owned_schemas: &[],
             kinds: &[ObjectKind::Check],
         })
         .actions
@@ -680,6 +756,7 @@ mod tests {
             live: std::slice::from_ref(&l),
             created_by_parent: &none,
             dropped_tables: &none,
+            owned_schemas: &[],
             kinds: &kinds,
         });
         assert!(
@@ -701,6 +778,7 @@ mod tests {
             live: std::slice::from_ref(&l),
             created_by_parent: &none,
             dropped_tables: &none,
+            owned_schemas: &[],
             kinds: &kinds,
         });
         assert!(
@@ -888,6 +966,7 @@ mod tests {
             live: &[stamped(l.clone())],
             created_by_parent: &none,
             dropped_tables: &dropped,
+            owned_schemas: &[],
             kinds: &[ObjectKind::Check],
         });
         // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.

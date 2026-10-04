@@ -9,7 +9,6 @@ pub mod ordering;
 pub mod risk_analyser;
 pub mod rls_diff;
 pub mod table_diff;
-pub mod trigger_diff;
 
 use crate::parser::ast::{FieldAst, IndexAst, ModelAst, RelationFieldAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
@@ -197,16 +196,6 @@ pub enum Operation {
         policy: String,
         risk: Risk,
     },
-    CreateTrigger {
-        table: String,
-        trigger: String,
-        risk: Risk,
-    },
-    DropTrigger {
-        table: String,
-        trigger: String,
-        risk: Risk,
-    },
     CreateJunctionTable {
         table: String,
         fk_a: String,
@@ -294,7 +283,6 @@ pub fn diff_with_previous(
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
     field_access_diff::validate(ast, db, &mut warnings)?;
     warnings.extend(crate::generator::sql::storage::rule_warnings(ast));
-    trigger_diff::diff(ast, db, &mut ops)?;
 
     let ordered_ops = ordering::topological_sort(ops)?;
 
@@ -383,8 +371,6 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::EnableRls { risk, .. }
         | Operation::CreateRlsPolicy { risk, .. }
         | Operation::DropRlsPolicy { risk, .. }
-        | Operation::CreateTrigger { risk, .. }
-        | Operation::DropTrigger { risk, .. }
         | Operation::CreateJunctionTable { risk, .. }
         | Operation::CreateVersionsTable { risk, .. }
         | Operation::EnableExtension { risk, .. } => risk,

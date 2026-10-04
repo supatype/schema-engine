@@ -20,7 +20,6 @@ use supatype_engine::{
         statements::{attribute_all, head, split_statements, Attribution, Statement},
         ObjectKey,
     },
-    generator::sql::triggers,
     introspector::{
         self,
         fingerprint::{fingerprints, ObjectKind},
@@ -70,14 +69,12 @@ fn fixture(name: &str) -> SchemaAst {
     parser::parse(&std::fs::read_to_string(&path).unwrap()).unwrap()
 }
 
-/// The whole push against an empty database, assembled as the golden harness assembles it: the
-/// migration (the differ's operations and the reconcile's creations), then the trigger functions.
+/// The whole push against an empty database: the migration, which since Phase 4.2 carries the
+/// trigger functions and triggers as the reconcile's creations.
 fn push_sql(ast: &SchemaAst) -> String {
-    let sql = push::fresh_migration(ast, "public", false)
+    push::fresh_migration(ast, "public", false)
         .unwrap()
-        .up_script();
-    let trigger_sql = triggers::generate(ast, "public").unwrap();
-    format!("{sql}\n\n-- triggers\n{trigger_sql}")
+        .up_script()
 }
 
 fn attributed(ast: &SchemaAst) -> Vec<Statement> {
@@ -228,7 +225,6 @@ async fn after_a_push_every_created_object_exists_under_its_key() {
             // The push a user gets, and the statements it ran.
             let plan = push::prepare(&pool, &ast, "public").await.unwrap();
             let sql = plan.migration(false).unwrap().up_script();
-            let trigger_sql = triggers::generate(&ast, "public").unwrap();
             push::apply(&pool, plan, push::ApplyOptions::default())
                 .await
                 .unwrap_or_else(|e| panic!("{name}: applies: {e}"));
@@ -240,8 +236,7 @@ async fn after_a_push_every_created_object_exists_under_its_key() {
                 .map(|f| f.key())
                 .collect();
 
-            let statements =
-                attribute_all("public", split_statements(&format!("{sql}\n\n-- triggers\n{trigger_sql}")));
+            let statements = attribute_all("public", split_statements(&sql));
             // A table grant that a later statement of the same push revokes (the field views grant
             // the API roles everything, then the per-table block takes back what the rules do not
             // allow) legitimately leaves no row.

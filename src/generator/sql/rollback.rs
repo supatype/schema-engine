@@ -208,14 +208,6 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
                 "-- WARNING: Cannot automatically roll back DROP POLICY \"{table}\".\"{policy}\"."
             )
         }
-        // CreateTrigger → DROP TRIGGER
-        Operation::CreateTrigger { table, trigger, .. } => {
-            format!("DROP TRIGGER IF EXISTS \"{trigger}\" ON \"{schema}\".\"{table}\";")
-        }
-        // DropTrigger → cannot restore
-        Operation::DropTrigger { table, trigger, .. } => {
-            format!("-- WARNING: Cannot automatically roll back DROP TRIGGER \"{trigger}\" on \"{table}\".")
-        }
         // CreateJunctionTable → DROP TABLE
         Operation::CreateJunctionTable { table, .. } => {
             format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;")
@@ -376,10 +368,6 @@ fn forward_description(op: &Operation) -> String {
             format!("create policy {table}.{policy}")
         }
         Operation::DropRlsPolicy { table, policy, .. } => format!("drop policy {table}.{policy}"),
-        Operation::CreateTrigger { table, trigger, .. } => {
-            format!("create trigger {table}.{trigger}")
-        }
-        Operation::DropTrigger { table, trigger, .. } => format!("drop trigger {table}.{trigger}"),
         Operation::CreateJunctionTable { table, .. } => format!("create junction table {table}"),
         Operation::CreateVersionsTable { versions_table, .. } => {
             format!("create versions table {versions_table}")

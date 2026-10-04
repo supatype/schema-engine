@@ -236,7 +236,7 @@ pub async fn upsert(conn: &mut PgConnection, rows: &[LedgerRow]) -> Result<()> {
             live_fp = EXCLUDED.live_fp,
             live_def = EXCLUDED.live_def,
             status = EXCLUDED.status,
-            migration_id = EXCLUDED.migration_id,
+            migration_id = COALESCE(EXCLUDED.migration_id, {SCHEMA}.managed_objects.migration_id),
             updated_at = NOW()"
     ))
     .bind(&keys.kinds)

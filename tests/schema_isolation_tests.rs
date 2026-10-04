@@ -21,7 +21,7 @@ use sqlx::Row;
 use supatype_engine::{
     differ,
     generator::sql::{grants, migration, rls, triggers},
-    introspector, parser,
+    parser,
     state::database_state::DatabaseState,
 };
 
@@ -235,15 +235,17 @@ async fn a_push_into_a_non_public_schema_leaves_public_untouched() {
         let grants_before = public_api_grants(&pool).await;
 
         let ast = ast_without_field_rules();
-        let db = introspector::introspect(&pool, MANAGED).await.expect("introspect app");
-        let diff = differ::diff(&ast, &db).expect("diff");
-        // The real push path, not `forward_sql`: only this one appends the trigger SQL, and triggers
-        // are one of the things that used to attach to `public`.
+        // The migration a push applies, triggers included (the reconcile's since Phase 4.2):
+        // triggers are one of the things that used to attach to `public`.
         let storage_sql = supatype_engine::generator::sql::storage::generate(&ast)
             .expect("storage sql renders");
-        let sql = migration::push_storage_and_model_batch_sql(&storage_sql, &diff, false, MANAGED, &ast)
-            .expect("script renders");
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        let body = supatype_engine::push::fresh_migration(&ast, MANAGED, false)
+            .expect("script renders")
+            .apply_body(&storage_sql);
+        sqlx::raw_sql(&migration::batch_sql(&body))
+            .execute(&pool)
+            .await
+            .expect("migration applies");
 
         // Policies on the managed table, none on theirs.
         let managed_policies: i64 = sqlx::query_scalar(
