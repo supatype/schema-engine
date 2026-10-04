@@ -561,8 +561,7 @@ async fn main() -> Result<()> {
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let report =
-                supatype_engine::differ::doctor::run(&pool, &ast, &schema, rebaseline).await?;
+            let report = supatype_engine::inspect::doctor(&pool, &ast, &schema, rebaseline).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             if strict && supatype_engine::differ::doctor::has_strict_issues(&report) {
                 std::process::exit(1);

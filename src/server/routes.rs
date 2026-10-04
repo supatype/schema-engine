@@ -322,7 +322,7 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    let report = crate::differ::doctor::run(&pool, &ast, &req.schema, req.rebaseline)
+    let report = crate::inspect::doctor(&pool, &ast, &req.schema, req.rebaseline)
         .await
         .map_err(engine_error)?;
     Ok(Json(serde_json::to_value(&report).map_err(engine_error)?))

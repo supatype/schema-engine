@@ -169,6 +169,47 @@ async fn live(conn: &mut PgConnection, schema: &str) -> Result<Live> {
     })
 }
 
+/// What a push reads before it decides, read once: the live state, its catalog and fingerprints,
+/// and the ledger (empty where no push has made one), with the ledger's word on which tables are
+/// ours already in the state (Phase 4.11). `doctor`, `adopt` and `--rebaseline` read through this
+/// too, so they see exactly what a push would.
+pub struct State {
+    pub db: DatabaseState,
+    pub catalog: CatalogState,
+    pub fingerprints: Vec<ObjectFingerprint>,
+    pub ledger: Vec<LedgerRow>,
+}
+
+impl State {
+    /// A state from parts already read, for a caller with no connection (a test, a report).
+    pub fn of(mut db: DatabaseState, catalog: CatalogState, ledger: Vec<LedgerRow>) -> State {
+        db.set_table_ownership(&ledger);
+        let fingerprints = fingerprints(&db, &catalog);
+        State {
+            db,
+            catalog,
+            fingerprints,
+            ledger,
+        }
+    }
+}
+
+pub async fn read_state(conn: &mut PgConnection, schema: &str) -> Result<State> {
+    let Live {
+        mut db,
+        catalog,
+        fingerprints,
+    } = live(conn, schema).await?;
+    let ledger = ledger::load_if_present(conn).await?;
+    db.set_table_ownership(&ledger);
+    Ok(State {
+        db,
+        catalog,
+        fingerprints,
+        ledger,
+    })
+}
+
 /// The tables the migration drops, as keys, so the reconcile lets their owned objects go with
 /// them instead of altering a table that will be gone.
 fn dropped_tables(diff: &DiffOutput, schema: &str) -> BTreeSet<ObjectKey> {
@@ -193,13 +234,16 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     let mut conn = pool.acquire().await?;
     // Always the live catalog. A snapshot from the last push cannot see what changed outside
     // Supatype since, so `diff` showed one plan and push applied another.
-    let mut live = live(&mut conn, schema).await?;
-    let ledger = ledger::load_if_present(&mut conn).await?;
     // Which tables are ours is the ledger's to say (Phase 4.11), so the table and column differs
-    // drop, rename and attach rules only where it does.
-    live.db.set_table_ownership(&ledger);
+    // drop, rename and attach rules only where it does: `read_state` puts that in the state.
+    let State {
+        db,
+        catalog,
+        fingerprints,
+        ledger,
+    } = read_state(&mut conn, schema).await?;
     let previous_ast = migration_history::load_latest_schema_ast(pool).await;
-    let mut diff = differ::diff_with_previous(ast, &live.db, previous_ast.as_ref())?;
+    let mut diff = differ::diff_with_previous(ast, &db, previous_ast.as_ref())?;
 
     // An unchanged schema produces an empty diff, so the renderer's own check would never run and
     // the push would report success while a declared table sat in the API with none of its rules
@@ -214,14 +258,7 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
         .map(|r| (r.key.parent.as_str(), r.key.name.as_str()))
         .collect();
     diff.keep_columns_not_ours(|table, column| owned_columns.contains(&(table, column)));
-    let mut reconcile = reconcile_with(
-        &diff,
-        &ledger,
-        &live.fingerprints,
-        &live.catalog,
-        schema,
-        ast,
-    )?;
+    let mut reconcile = reconcile_with(&diff, &ledger, &fingerprints, &catalog, schema, ast)?;
     let proven = probe::equivalent(&mut conn, &reconcile).await?;
     reconcile.adopt_equivalent(&proven);
 
@@ -275,29 +312,29 @@ fn desired_here(
 /// what `doctor` reports (plan section 8). Unlike [`plan`] it does not refuse a declared table the
 /// engine does not own (doctor reports it), and it cannot prove an unstamped check equivalent with
 /// the database, so a check a push would adopt is reported as conflicting. A desired grant of
-/// nothing reads as present whether or not a row records it: after a push it is.
+/// nothing reads as present whether or not a row records it: after a push it is. Returns the
+/// desired set beside the plan, for a caller that reports on it too.
 pub fn reconcile_for_report(
     ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-    ledger: &[LedgerRow],
-) -> Result<reconcile::Plan> {
-    let schema = if db.schema.is_empty() {
+    state: &State,
+) -> Result<(reconcile::Plan, Vec<crate::desired::DesiredObject>)> {
+    let schema = if state.db.schema.is_empty() {
         "public"
     } else {
-        db.schema.as_str()
+        state.db.schema.as_str()
     };
-    let diff = differ::diff(ast, db)?;
-    let desired = desired_here(&diff, catalog, schema, ast)?;
+    let diff = differ::diff(ast, &state.db)?;
+    let desired = desired_here(&diff, &state.catalog, schema, ast)?;
     let nothing_held = desired
         .iter()
         .filter(|d| d.structure.get("privileges").is_some_and(String::is_empty))
         .map(|d| &d.key);
     let live = with_grants_of_nothing(
-        &fingerprints(db, catalog),
-        ledger.iter().map(|r| &r.key).chain(nothing_held),
+        &state.fingerprints,
+        state.ledger.iter().map(|r| &r.key).chain(nothing_held),
     );
-    reconcile_desired(&diff, ledger, &live, &desired, schema, ast)
+    let plan = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;
+    Ok((plan, desired))
 }
 
 fn reconcile_desired(

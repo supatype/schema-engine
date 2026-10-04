@@ -9,7 +9,7 @@ mod common;
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use supatype_engine::{differ::doctor, parser, parser::ast::SchemaAst, push};
+use supatype_engine::{differ::doctor, inspect, parser, parser::ast::SchemaAst, push};
 
 use common::{exec, push};
 
@@ -59,7 +59,7 @@ async fn rebaselining_accepts_the_drift_and_changes_nothing() {
             .await
             .unwrap();
 
-        let report = doctor::run(&pool, &ast, "public", true).await.unwrap();
+        let report = inspect::doctor(&pool, &ast, "public", true).await.unwrap();
         assert_eq!(names(&report.rebaselined), ["rls_attributes posts.rls"]);
         let item = &report.rebaselined[0];
         assert_eq!(item.recorded.as_deref(), Some("enabled=t"));
@@ -68,7 +68,7 @@ async fn rebaselining_accepts_the_drift_and_changes_nothing() {
         assert!(!rls_enabled(&pool).await, "rebaselining changed the object");
 
         // Accepted: doctor is clean, and a push without a terminal neither refuses nor puts it back.
-        let after = doctor::run(&pool, &ast, "public", false).await.unwrap();
+        let after = inspect::doctor(&pool, &ast, "public", false).await.unwrap();
         assert!(!doctor::has_strict_issues(&after), "{after:#?}");
         let outcome = common::push_with(&pool, &ast, non_interactive())
             .await
@@ -92,12 +92,12 @@ async fn a_grant_revoked_to_nothing_is_rebaselined_too() {
             .await
             .unwrap();
 
-        let report = doctor::run(&pool, &ast, "public", true).await.unwrap();
+        let report = inspect::doctor(&pool, &ast, "public", true).await.unwrap();
         assert!(
             names(&report.rebaselined).contains(&"table_grant posts.anon".to_string()),
             "{report:#?}"
         );
-        let after = doctor::run(&pool, &ast, "public", false).await.unwrap();
+        let after = inspect::doctor(&pool, &ast, "public", false).await.unwrap();
         assert!(after.drifted.is_empty(), "{:#?}", after.drifted);
     })
     .await;
@@ -113,7 +113,7 @@ async fn a_missing_object_is_left_to_a_push() {
             .await
             .unwrap();
 
-        let report = doctor::run(&pool, &ast, "public", true).await.unwrap();
+        let report = inspect::doctor(&pool, &ast, "public", true).await.unwrap();
         assert!(report.rebaselined.is_empty(), "{:#?}", report.rebaselined);
         assert_eq!(names(&report.missing), ["index posts.posts_title_idx"]);
     })

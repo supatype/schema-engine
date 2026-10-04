@@ -201,6 +201,20 @@ fn flag(b: bool) -> &'static str {
 }
 
 impl ObjectKind {
+    /// The kinds named by themselves rather than by their table: their key's parent is empty.
+    pub fn table_level(self) -> bool {
+        matches!(
+            self,
+            ObjectKind::Schema
+                | ObjectKind::Table
+                | ObjectKind::Function
+                | ObjectKind::View
+                | ObjectKind::EnumType
+                | ObjectKind::Sequence
+                | ObjectKind::CronJob
+        )
+    }
+
     /// The label of each hashed part, in the order the part lists below supply them. Empty for the
     /// kinds that are hashed on existence alone: a schema and a table.
     pub(crate) fn labels(self) -> &'static [&'static str] {
