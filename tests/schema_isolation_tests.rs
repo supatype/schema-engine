@@ -145,8 +145,17 @@ fn policies_grants_labels_and_triggers_all_name_the_managed_schema() {
     let policies = rls::generate(&ast, MANAGED).expect("policies render");
     let can = rls::generate_can_functions(&ast, MANAGED);
     let labels = rls::generate_security_labels(&ast, MANAGED);
-    let table_grants = grants::generate_table_grants(&ast, MANAGED, &[], None);
-    let column_grants = grants::generate_column_grants(&ast, MANAGED, &[]);
+    let role_grants = grants::table_grants(&ast, false);
+    let grant_sql = |narrowed_only: bool| {
+        role_grants
+            .iter()
+            .filter(|g| !narrowed_only || !g.narrowed.is_empty())
+            .map(|g| g.create_sql(MANAGED))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let table_grants = grant_sql(false);
+    let column_grants = grant_sql(true);
     let trigger_sql = triggers::generate(&ast, MANAGED).expect("triggers render");
 
     for (what, sql) in [

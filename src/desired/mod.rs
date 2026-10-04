@@ -35,6 +35,7 @@ use crate::generator::sql::{
     constraint_helpers,
     constraints::constraint_to_expr,
     field_views::{render_field_views, FieldViewTable},
+    grants::{revoke_all_sql, table_grants},
     migration::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, render_operation,
     },
@@ -145,12 +146,12 @@ impl ObjectKey {
                 let (table, column) = parent.split_once('.')?;
                 drop_field_label_sql(schema, table, column)
             }
+            // The parent is the table and the name the role: everything it holds there goes.
+            ObjectKind::TableGrant => revoke_all_sql(schema, parent, name),
             ObjectKind::Schema
             | ObjectKind::RlsAttributes
             | ObjectKind::EnumType
-            | ObjectKind::Sequence
-            | ObjectKind::TableGrant
-            | ObjectKind::ColumnGrant => return None,
+            | ObjectKind::Sequence => return None,
         })
     }
 
@@ -189,7 +190,6 @@ impl ObjectKey {
             | ObjectKind::EnumType
             | ObjectKind::Sequence
             | ObjectKind::TableGrant
-            | ObjectKind::ColumnGrant
             | ObjectKind::SecurityLabel
             | ObjectKind::CronJob => return None,
         })
@@ -218,7 +218,6 @@ pub fn security_relevant(kind: ObjectKind) -> bool {
         ObjectKind::Policy
             | ObjectKind::SecurityLabel
             | ObjectKind::TableGrant
-            | ObjectKind::ColumnGrant
             | ObjectKind::RlsAttributes
     )
 }
@@ -258,6 +257,7 @@ pub fn desired_objects_for(
     if matches!(fields, FieldEnforcement::Labels) {
         b.field_labels();
     }
+    b.table_grants(matches!(fields, FieldEnforcement::Views(_)));
     b.constraint_helpers();
     b.platform_functions();
     for model in &ast.models {
@@ -753,6 +753,18 @@ impl<'a> Builder<'a> {
     fn api_views(&mut self) {
         let sql = render_field_views(self.ast, self.field_views, self.schema);
         self.attributed_script(&sql);
+    }
+
+    /// What each API role may do on each model table (Phase 4.7c, D7): the exact privilege set,
+    /// table and column privileges together. Under tier 2 masking (`views`) the base tables hold
+    /// nothing for these roles; the `api` views' privileges are re-asserted with the views.
+    fn table_grants(&mut self, views: bool) {
+        for grant in table_grants(self.ast, views) {
+            let key = self.key(ObjectKind::TableGrant, &grant.table, grant.role);
+            let structure = BTreeMap::from([("privileges", grant.privilege_set())]);
+            let table = self.table_key(&grant.table);
+            self.push(key, structure, grant.create_sql(self.schema), vec![table]);
+        }
     }
 
     /// The security labels the masking extension reads (Phase 4.7), one per column with a field

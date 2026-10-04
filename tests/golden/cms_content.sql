@@ -335,95 +335,6 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_articles"("articles" "public"."a
       FROM (SELECT ($1).*) AS "articles";
   $can$;
 
--- Table privileges derived from access rules (defence in depth)
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."authors" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."authors" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."authors" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."authors" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."authors" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."authors" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."authors" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."authors" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'GRANT SELECT ON "public"."articles" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."articles" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."articles" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."articles" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'GRANT SELECT ON "public"."articles" TO authenticated';
-    EXECUTE 'GRANT INSERT ON "public"."articles" TO authenticated';
-    EXECUTE 'GRANT UPDATE ON "public"."articles" TO authenticated';
-    EXECUTE 'GRANT DELETE ON "public"."articles" TO authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."articles" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."articles" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."articles" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."articles" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."articles" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."articles" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."articles" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."articles" FROM authenticated';
-  END IF;
-END
-$grants$;
-
 -- reconciled objects
 ALTER TABLE "public"."articles" ADD CONSTRAINT "articles_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."authors" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 CREATE OR REPLACE FUNCTION _platform.normalise_articles_rich_text()
@@ -531,5 +442,49 @@ FOR UPDATE USING (
   ) WITH CHECK (
     (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
   );
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."articles" FROM anon';
+    EXECUTE 'GRANT SELECT ON "public"."articles" TO anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."articles" FROM authenticated';
+    EXECUTE 'GRANT DELETE, INSERT, SELECT, UPDATE ON "public"."articles" TO authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."authors" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."authors" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM authenticated';
+  END IF;
+END
+$grants$;
 
 COMMIT;

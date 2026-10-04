@@ -297,73 +297,6 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
       FROM (SELECT ($1).*) AS "tags";
   $can$;
 
--- Table privileges derived from access rules (defence in depth)
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."students" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."students" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."students" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."students" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."students" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."students" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."students" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."students" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."courses" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."courses" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."courses" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."courses" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."courses" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."courses" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."courses" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."courses" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM authenticated';
-  END IF;
-END
-$grants$;
-
 -- reconciled objects
 CREATE OR REPLACE FUNCTION _platform.set_courses_slug()
 RETURNS TRIGGER AS $$
@@ -418,5 +351,47 @@ CREATE OR REPLACE TRIGGER "students_updated_at_trigger"
 BEFORE UPDATE ON "public"."students"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."courses" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."courses" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."students" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."students" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM authenticated';
+  END IF;
+END
+$grants$;
 
 COMMIT;

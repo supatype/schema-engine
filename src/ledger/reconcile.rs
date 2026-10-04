@@ -61,20 +61,28 @@ pub fn no_location(_: &ObjectKey) -> Location {
 }
 
 /// Kinds whose name says what they govern, so a same-named live object with no row is ours and
-/// is replaced, whatever its comment or structure. A policy is named by its table and the
-/// operation it covers; the policy differ rewrote any policy on a name it owned, which is how an
-/// older engine's policies, stamped or not, are brought up to date. Its expression is what a
-/// takeover would have to compare, and replacing it costs one statement.
+/// is replaced, whatever its comment or structure.
+///
+/// A policy is named by its table and the operation it covers; the policy differ rewrote any
+/// policy on a name it owned, which is how an older engine's policies, stamped or not, are brought
+/// up to date. Its expression is what a takeover would have to compare, and replacing it costs one
+/// statement. A grant is named by its table and role, and only the API roles on model tables are
+/// ever desired, whose privileges the engine always re-asserted (D7): an upgrade takes them over
+/// and leaves them holding exactly what the rules allow.
 fn claimed_by_name(kind: ObjectKind) -> bool {
-    kind == ObjectKind::Policy
+    matches!(kind, ObjectKind::Policy | ObjectKind::TableGrant)
 }
 
-/// The kinds Postgres replaces with `CREATE OR REPLACE`, so a new definition needs no drop first.
-/// Dropping first would fail anyway: a trigger depends on its function. Not views: `CREATE OR
-/// REPLACE VIEW` refuses anything but appending columns, so a changed view is dropped and made
-/// again.
+/// The kinds whose `CREATE` replaces what is there, so a new definition needs no drop first:
+/// functions and triggers (`CREATE OR REPLACE`; dropping first would fail anyway, as a trigger
+/// depends on its function), and grants, whose statement revokes everything before it grants the
+/// exact set. Not views: `CREATE OR REPLACE VIEW` refuses anything but appending columns, so a
+/// changed view is dropped and made again.
 fn replaced_in_place(kind: ObjectKind) -> bool {
-    matches!(kind, ObjectKind::Function | ObjectKind::Trigger)
+    matches!(
+        kind,
+        ObjectKind::Function | ObjectKind::Trigger | ObjectKind::TableGrant
+    )
 }
 
 /// The order kinds are created in, dependencies first; drops run in reverse. A trigger needs its
@@ -97,9 +105,8 @@ fn creation_rank(kind: ObjectKind) -> u8 {
         ObjectKind::Policy => 13,
         ObjectKind::RlsAttributes => 14,
         ObjectKind::TableGrant => 15,
-        ObjectKind::ColumnGrant => 16,
-        ObjectKind::SecurityLabel => 17,
-        ObjectKind::CronJob => 18,
+        ObjectKind::SecurityLabel => 16,
+        ObjectKind::CronJob => 17,
     }
 }
 

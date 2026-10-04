@@ -687,8 +687,8 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
         return Attribution::Object(key(ObjectKind::Schema, "auth", "", "auth"));
     }
     if h.starts_with("DO $grants$") {
-        // One block per role and table. Under tier 2 masking the block also revokes the base
-        // table the view reads, so it can name two tables: both are its objects.
+        // One block per role and table: the privileges a role holds on a model table (a ledger
+        // object since Phase 4.7c), or on a tier 2 view (re-asserted with the view).
         let Some(role) = guarded_role(h) else {
             return Attribution::Unknown;
         };
@@ -696,21 +696,6 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
             execute_targets(schema, h)
                 .iter()
                 .map(|(s, t)| key(ObjectKind::TableGrant, s, t, &role))
-                .collect(),
-        );
-    }
-    if h.starts_with("DO $colgrants$") {
-        // One block per role, table and operation. The columns it grants are read from the
-        // catalog when it runs, so the per-column live rows cannot be named here: the block is
-        // keyed by its table and role, and Phase 4 maps it onto the column rows when column
-        // grants move onto the reconcile.
-        let Some(role) = guarded_role(h) else {
-            return Attribution::Unknown;
-        };
-        return one_or_shared(
-            execute_targets(schema, h)
-                .iter()
-                .map(|(s, t)| key(ObjectKind::ColumnGrant, s, t, &role))
                 .collect(),
         );
     }

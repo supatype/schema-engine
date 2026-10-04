@@ -360,117 +360,6 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
       FROM (SELECT ($1).*) AS "tags";
   $can$;
 
--- Table privileges derived from access rules (defence in depth)
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."users" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."users" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."users" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."users" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."users" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."users" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."users" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."users" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."categories" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."categories" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."categories" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."categories" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."categories" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."categories" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."categories" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."categories" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."posts" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."comments" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."comments" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."comments" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."comments" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."comments" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."comments" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."comments" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."comments" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM authenticated';
-  END IF;
-END
-$grants$;
-
 -- reconciled objects
 ALTER TABLE "public"."comments" ADD CONSTRAINT "comments_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."comments" ADD CONSTRAINT "comments_post_id_fkey" FOREIGN KEY ("post_id") REFERENCES "public"."posts" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -571,5 +460,75 @@ CREATE OR REPLACE TRIGGER "users_updated_at_trigger"
 BEFORE UPDATE ON "public"."users"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."categories" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."categories" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."comments" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."comments" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."posts" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."posts" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."users" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."users" FROM authenticated';
+  END IF;
+END
+$grants$;
 
 COMMIT;

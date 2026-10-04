@@ -316,73 +316,6 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
       FROM (SELECT ($1).*) AS "tags";
   $can$;
 
--- Table privileges derived from access rules (defence in depth)
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'GRANT SELECT ON "public"."posts" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'GRANT SELECT ON "public"."posts" TO authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM authenticated';
-    EXECUTE 'GRANT UPDATE ON "public"."posts" TO authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."ledger" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."ledger" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."ledger" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."ledger" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'GRANT SELECT ON "public"."ledger" TO authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."ledger" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."ledger" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."ledger" FROM authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'GRANT SELECT ON "public"."tags" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'GRANT SELECT ON "public"."tags" TO authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM authenticated';
-  END IF;
-END
-$grants$;
-
 -- Drafts, version history and publishing
 CREATE SCHEMA IF NOT EXISTS "draft";
 
@@ -1304,5 +1237,52 @@ CREATE POLICY "tags_select" ON "public"."tags"
 FOR SELECT USING (
     TRUE
   );
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."ledger" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."ledger" FROM authenticated';
+    EXECUTE 'GRANT SELECT ON "public"."ledger" TO authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."posts" FROM anon';
+    EXECUTE 'GRANT SELECT ON "public"."posts" TO anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."posts" FROM authenticated';
+    EXECUTE 'GRANT SELECT, UPDATE ON "public"."posts" TO authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM anon';
+    EXECUTE 'GRANT SELECT ON "public"."tags" TO anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."tags" FROM authenticated';
+    EXECUTE 'GRANT SELECT ON "public"."tags" TO authenticated';
+  END IF;
+END
+$grants$;
 
 COMMIT;

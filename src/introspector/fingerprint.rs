@@ -17,7 +17,7 @@
 //! Pure over state already read, so it is testable without a database and runs once per push.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::catalog::{CatalogState, DbFunction, DbPolicy, DbSecurityLabel};
 use super::constraints::{DbConstraint, DbConstraintType};
@@ -44,14 +44,13 @@ pub enum ObjectKind {
     EnumType,
     Sequence,
     TableGrant,
-    ColumnGrant,
     SecurityLabel,
     CronJob,
 }
 
 impl ObjectKind {
     /// Every kind, in declaration order.
-    pub const ALL: [ObjectKind; 19] = [
+    pub const ALL: [ObjectKind; 18] = [
         ObjectKind::Schema,
         ObjectKind::Table,
         ObjectKind::Column,
@@ -68,7 +67,6 @@ impl ObjectKind {
         ObjectKind::EnumType,
         ObjectKind::Sequence,
         ObjectKind::TableGrant,
-        ObjectKind::ColumnGrant,
         ObjectKind::SecurityLabel,
         ObjectKind::CronJob,
     ];
@@ -97,7 +95,6 @@ impl ObjectKind {
             ObjectKind::EnumType => "enum_type",
             ObjectKind::Sequence => "sequence",
             ObjectKind::TableGrant => "table_grant",
-            ObjectKind::ColumnGrant => "column_grant",
             ObjectKind::SecurityLabel => "security_label",
             ObjectKind::CronJob => "cron_job",
         }
@@ -242,7 +239,7 @@ impl ObjectKind {
             ObjectKind::RlsAttributes => &["enabled", "forced"],
             ObjectKind::EnumType => &["values"],
             ObjectKind::Sequence => &["owned_by"],
-            ObjectKind::TableGrant | ObjectKind::ColumnGrant => &["privileges"],
+            ObjectKind::TableGrant => &["privileges", "columns"],
             ObjectKind::SecurityLabel => &["label"],
             ObjectKind::CronJob => &["schedule", "command", "active"],
         }
@@ -379,6 +376,112 @@ fn policy_create_sql(p: &DbPolicy) -> String {
             "RESTRICTIVE"
         },
     )
+}
+
+/// One grantee's privileges on one table: what it holds on the table, and on each column.
+#[derive(Default)]
+struct HeldPrivileges<'a> {
+    table: Vec<&'a str>,
+    columns: BTreeMap<&'a str, Vec<&'a str>>,
+}
+
+/// One fingerprint per grantee and table, carrying its table privileges and its column privileges
+/// together: Postgres revokes a table privilege on every column too, so the two are one object
+/// (Phase 4.7c).
+fn grant_entries(catalog: &CatalogState, out: &mut Vec<ObjectFingerprint>) {
+    let mut held: BTreeMap<(&str, &str, &str), HeldPrivileges<'_>> = BTreeMap::new();
+    for g in &catalog.table_grants {
+        let entry = held
+            .entry((g.schema.as_str(), g.table.as_str(), g.grantee.as_str()))
+            .or_default();
+        entry.table = g.privileges.iter().map(String::as_str).collect();
+    }
+    for g in &catalog.column_grants {
+        held.entry((g.schema.as_str(), g.table.as_str(), g.grantee.as_str()))
+            .or_default()
+            .columns
+            .insert(
+                g.column.as_str(),
+                g.privileges.iter().map(String::as_str).collect(),
+            );
+    }
+    for ((schema, table, grantee), privileges) in held {
+        let mut fingerprint = grant_entry(schema, table, grantee, &privileges);
+        fingerprint.create_sql = Some(grant_create_sql(schema, table, grantee, &privileges));
+        out.push(fingerprint);
+    }
+}
+
+fn grant_entry(
+    schema: &str,
+    table: &str,
+    grantee: &str,
+    privileges: &HeldPrivileges<'_>,
+) -> ObjectFingerprint {
+    let columns = privileges
+        .columns
+        .iter()
+        .map(|(column, privs)| format!("{column}={}", privs.join("|")))
+        .collect::<Vec<_>>()
+        .join(";");
+    entry(
+        ObjectKind::TableGrant,
+        schema,
+        table,
+        grantee,
+        &[privileges.table.join(",").as_str(), columns.as_str()],
+    )
+}
+
+/// A grantee that holds nothing on a table, which the catalog has no row for. The ledger records
+/// it when the rules allow a role nothing, so a push compares "nothing" with "nothing".
+pub fn holding_nothing(key: &ObjectKey) -> ObjectFingerprint {
+    let mut fingerprint = grant_entry(
+        &key.schema,
+        &key.parent,
+        &key.name,
+        &HeldPrivileges::default(),
+    );
+    fingerprint.create_sql = Some(grant_create_sql(
+        &key.schema,
+        &key.parent,
+        &key.name,
+        &HeldPrivileges::default(),
+    ));
+    fingerprint
+}
+
+/// Revoke everything, then grant exactly what the catalog reports: what a rollback runs to
+/// restore a grantee's privileges the push replaced.
+fn grant_create_sql(
+    schema: &str,
+    table: &str,
+    grantee: &str,
+    privileges: &HeldPrivileges<'_>,
+) -> String {
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let target = format!("{}.{}", quote(schema), quote(table));
+    let role = if grantee == "PUBLIC" {
+        "PUBLIC".to_string()
+    } else {
+        quote(grantee)
+    };
+    let mut statements = vec![format!("REVOKE ALL PRIVILEGES ON {target} FROM {role};")];
+    if !privileges.table.is_empty() {
+        statements.push(format!(
+            "GRANT {} ON {target} TO {role};",
+            privileges.table.join(", ")
+        ));
+    }
+    for (column, privs) in &privileges.columns {
+        for privilege in privs {
+            statements.push(format!(
+                "GRANT {privilege} ({}) ON {target} TO {role};",
+                quote(column)
+            ));
+        }
+    }
+    statements.join("\n")
 }
 
 /// Every fingerprint the two states support, sorted by kind, schema, parent and name.
@@ -682,28 +785,7 @@ fn policy_and_catalog_entries(
         ));
     }
 
-    for g in &catalog.table_grants {
-        let privileges = g.privileges.join(",");
-        out.push(entry(
-            ObjectKind::TableGrant,
-            &g.schema,
-            &g.table,
-            &g.grantee,
-            &[privileges.as_str()],
-        ));
-    }
-
-    for g in &catalog.column_grants {
-        let parent = format!("{}.{}", g.table, g.column);
-        let privileges = g.privileges.join(",");
-        out.push(entry(
-            ObjectKind::ColumnGrant,
-            &g.schema,
-            &parent,
-            &g.grantee,
-            &[privileges.as_str()],
-        ));
-    }
+    grant_entries(catalog, out);
 
     for l in &catalog.security_labels {
         let parent = match &l.column {
