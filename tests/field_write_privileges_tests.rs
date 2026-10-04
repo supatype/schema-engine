@@ -1,5 +1,5 @@
-//! Column write privileges derived from `fields.write` — defence in depth under the masking
-//! extension.
+//! Column write privileges derived from `fields.write`. They are defence in depth under the
+//! masking extension.
 //!
 //! The interesting content is what this *refuses* to revoke. A column privilege belongs to a
 //! database role, and every signed-in caller is `authenticated`, so revoking on the strength
@@ -13,7 +13,7 @@ use supatype_engine::{generator::sql::grants, parser};
 ///
 /// Purpose-built rather than the shared access fixture: that one declares no `create` rule and
 /// an ownership `update` rule, so nothing is provably unwritable and it correctly emits
-/// nothing — exercising none of the branches below.
+/// nothing, which exercises none of the branches below.
 const SCHEMA: &str = r#"{
   "astVersion": 2,
   "models": [
@@ -82,7 +82,7 @@ fn has(list: &[String], column: &str) -> bool {
 }
 
 // An anonymous caller has no `auth.uid()` and no app role, so ownership and role rules are
-// both unreachable for `anon` — those columns can never be written as that role.
+// both unreachable for `anon`. Those columns can never be written as that role.
 #[test]
 fn anon_loses_every_column_it_can_never_write() {
     for op in ["INSERT", "UPDATE"] {
@@ -98,7 +98,7 @@ fn anon_loses_every_column_it_can_never_write() {
 }
 
 // The heart of it. `authenticated` is every signed-in caller, so a rule naming an application
-// role is satisfiable by some of them — revoking would lock out the admins the rule exists to
+// role is satisfiable by some of them. Revoking would lock out the admins the rule exists to
 // admit. On the UPDATE path only `Private` is provable.
 #[test]
 fn authenticated_keeps_columns_some_caller_can_write() {
@@ -121,7 +121,7 @@ fn authenticated_keeps_columns_some_caller_can_write() {
 
 // On INSERT there is no row, so the extension evaluates a row-dependent write predicate
 // against `NULL::t` and it yields NULL for every caller. Nobody can write the column on that
-// path, which makes the privilege provably unusable — unlike on UPDATE.
+// path, which makes the privilege provably unusable. On UPDATE it is not.
 #[test]
 fn authenticated_loses_row_dependent_columns_on_insert_only() {
     let insert = excluded_for("INSERT", "authenticated");

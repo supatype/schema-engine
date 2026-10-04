@@ -1241,8 +1241,8 @@ async fn an_anonymous_reader_is_told_nothing_about_a_draft() {
 
             // Both halves of being anonymous. `SET ROLE anon` changes only the Postgres role; the
             // session keeps whatever claims were set, so a test that switched role alone would
-            // still be the editor as far as every policy is concerned — and would pass while
-            // asserting nothing.
+            // still be the editor as far as every policy is concerned. It would pass while asserting
+            // nothing.
             sqlx::query("SELECT set_config('request.jwt.claims', '', false)")
                 .execute(&mut *db)
                 .await
