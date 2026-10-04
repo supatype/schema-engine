@@ -2,12 +2,12 @@
 //!
 //! Indexes, constraints and RLS policies have been gated on an ownership comment for a long time.
 //! Tables were not, so any table in the managed schema that was absent from `schema/index.ts`
-//! became `DropTable` — and on a database Supatype did not create, that is someone else's data.
+//! became `DropTable`, and on a database Supatype did not create, that is someone else's data.
 //! This is the case that matters for bring-your-own-Postgres, where `public` is full of tables the
 //! schema has never heard of.
 //!
-//! The gate covers destructive operations only. An unowned table may gain a column — intrusive but
-//! recoverable — and may not lose one, be renamed into a model, or be dropped.
+//! The gate covers destructive operations only. An unowned table may gain a column (intrusive but
+//! recoverable) and may not lose one, be renamed into a model, or be dropped.
 
 mod common;
 
@@ -78,7 +78,7 @@ async fn an_unmanaged_table_survives_a_push_that_would_drop_it() {
             diff.warnings
         );
 
-        // Applying the migration must leave their data alone — the assertion the rest is for.
+        // Applying the migration must leave their data alone: the assertion the rest is for.
         // Forced, because dropping `ours` is a genuine destructive operation and the point is that
         // even a forced push does not reach `theirs`.
         let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
@@ -131,7 +131,7 @@ async fn an_unmanaged_table_is_not_renamed_into_a_model() {
 #[tokio::test]
 async fn a_column_is_not_dropped_from_an_unmanaged_table() {
     common::with_integration_pool(|pool| async move {
-        // Same table name as the model, so the differ treats it as this model's table — but the
+        // Same table name as the model, so the differ treats it as this model's table, but the
         // table is unstamped, so a column the schema no longer declares must survive.
         sqlx::raw_sql(
             r#"
@@ -208,7 +208,7 @@ async fn a_table_the_engine_creates_is_stamped() {
 async fn a_column_is_not_retyped_on_an_unmanaged_table() {
     common::with_integration_pool(|pool| async move {
         // Their table, under the name a model declares, with an incompatible column type: `id serial`
-        // where the model says UUID. Modifying it is the same class of loss as dropping it —
+        // where the model says UUID. Modifying it is the same class of loss as dropping it:
         // `RecreateColumn` literally drops and re-adds the column, and an `AlterColumn` type change
         // rewrites their data or fails outright. This was found by rehearsing a push against a real
         // external Postgres: the migration aborted with `cannot cast type integer to uuid`, from a
@@ -259,7 +259,7 @@ async fn a_column_is_not_retyped_on_an_unmanaged_table() {
         );
 
         // And the push refuses outright, naming the table. Applying the rest while silently leaving
-        // their column behind would put the schema and the database permanently out of step — and
+        // their column behind would put the schema and the database permanently out of step, and
         // `--force` must not buy its way past this: forcing is for data loss you understand, not for
         // taking ownership of someone else's table.
         let refusal = migration::forward_sql(&diff, true, "public", &ast)
@@ -292,7 +292,7 @@ async fn access_rules_are_not_applied_to_an_unowned_table() {
     common::with_integration_pool(|pool| async move {
         // Declaring a model for a table that already exists is not permission to change it.
         // `ENABLE ROW LEVEL SECURITY` on someone else's table changes what every role except its
-        // owner can read — an existing application can stop seeing its own rows — and revoking or
+        // owner can read (an existing application can stop seeing its own rows) and revoking or
         // granting privileges on it is the same intrusion by another route.
         //
         // Skipping is also fail-closed for Supatype: without the grants, the API has no access to the
@@ -350,7 +350,7 @@ async fn access_rules_are_not_applied_to_an_unowned_table() {
         // The push refuses. Skipping the rules alone is not enough: PostgREST serves any table in
         // an exposed schema that the request role can already read, so a table the operator had
         // granted to PUBLIC would get an endpoint with none of the declared rules applied. Measured
-        // on a rehearsal — `GET /rest/v1/post` returned their rows as `anon`.
+        // on a rehearsal: `GET /rest/v1/post` returned their rows as `anon`.
         let refusal = migration::forward_sql(&diff, true, "public", &ast)
             .expect_err("a push over an unmanaged model table must refuse");
         let message = format!("{refusal:#}");
@@ -376,7 +376,7 @@ async fn access_rules_are_not_applied_to_an_unowned_table() {
         .expect("count policies");
         assert_eq!(policies, 0, "policies were attached to a table Supatype does not own");
 
-        // And after adoption the rules do apply — the gate must be an opt-in, not a dead end.
+        // And after adoption the rules do apply: the gate must be an opt-in, not a dead end.
         for statement in supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db, &supatype_engine::introspector::catalog::CatalogState::default(), "public").unwrap() {
             sqlx::raw_sql(&statement).execute(&pool).await.expect("stamp applies");
         }
