@@ -265,11 +265,9 @@ async fn main() -> Result<()> {
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            let diff = supatype_engine::differ::diff(&ast, &db_state)?;
-            let migration =
-                supatype_engine::generator::sql::migration::generate(&diff, force, &schema, &ast)?;
-            println!("{migration}");
+            // The same plan a push would apply, printed as a file instead.
+            let plan = supatype_engine::push::plan(&pool, &ast, &schema).await?;
+            println!("{}", plan.migration(force)?.file());
         }
         Command::Push {
             database_url,

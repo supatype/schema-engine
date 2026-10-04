@@ -23,8 +23,9 @@ use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
 use crate::desired::{desired_objects, statements, ObjectKey};
 use crate::differ::{self, DiffOutput, Operation};
+use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
-use crate::generator::sql::{migration, rollback, storage, triggers, versions};
+use crate::generator::sql::{storage, triggers, versions};
 use crate::generator::typescript::admin;
 use crate::introspector::fingerprint::{fingerprints, ObjectFingerprint, ObjectKind};
 use crate::introspector::{self, catalog, catalog::CatalogState};
@@ -58,6 +59,18 @@ impl Plan<'_> {
         let mut json = serde_json::to_value(&self.diff)?;
         json["reconcile"] = serde_json::to_value(&self.reconcile.actions)?;
         Ok(json)
+    }
+
+    /// The one migration this plan is: what `supatype migrate` prints, what `apply` runs and what
+    /// the history records.
+    pub fn migration(&self, force: bool) -> Result<Migration> {
+        Migration::render(
+            &self.diff,
+            &self.reconcile.actions,
+            force,
+            &self.schema,
+            self.ast,
+        )
     }
 }
 
@@ -289,77 +302,36 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     })
 }
 
-/// Everything rendered for one migration, kept together because the failure record needs the
-/// same name, hash and batch the success record does.
+/// Everything rendered for one push, kept together because the failure record needs the same
+/// name, hash and statements the success record does.
 struct Rendered {
     name: String,
-    hash: String,
-    /// What runs inside the transaction `apply` owns.
+    migration: Migration,
+    /// What runs inside the transaction `apply` owns: the migration between the re-asserted
+    /// layers.
     apply_body: String,
-    /// The same statements wrapped in `BEGIN`/`COMMIT`, which is what the history stores.
-    apply_batch: String,
-    /// The reconcile's statements, counted as operations in the outcome.
-    reconciled: usize,
     sources: migration_history::AppliedMigrationSources,
 }
 
 fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
-    // The hash covers the migration file as `supatype migrate` would print it, as it always has,
-    // so history rows stay comparable across engine versions.
-    let migration_sql = migration::generate(&plan.diff, opts.force, &plan.schema, plan.ast)?;
+    let migration = plan.migration(opts.force)?;
     // Millisecond precision so rapid retries do not collide on the name.
     let name = opts
         .name
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
-
-    let mut apply_body = migration::push_storage_and_model_apply_body(
+    let apply_body = migration.apply_body(
         &storage::generate(plan.ast)?,
-        &plan.diff,
-        opts.force,
-        &plan.schema,
-        plan.ast,
-    )?;
-    let reconcile_sql: Vec<String> = plan
-        .reconcile
-        .actions
-        .iter()
-        .flat_map(reconcile::Action::sql)
-        .collect();
-    if !reconcile_sql.is_empty() {
-        apply_body.push_str("\n-- reconciled objects\n");
-        apply_body.push_str(&reconcile_sql.join("\n"));
-    }
-
-    // Rolling back undoes the reconcile's statements first, newest effect first, then the
-    // migration's own.
-    let mut sql_down = rollback::generate(&plan.diff, &plan.schema).ok();
-    let reconcile_down: Vec<String> = plan
-        .reconcile
-        .actions
-        .iter()
-        .rev()
-        .flat_map(reconcile::Action::rollback_sql)
-        .collect();
-    if !reconcile_down.is_empty() {
-        let down = sql_down.get_or_insert_with(String::new);
-        let own = std::mem::take(down);
-        *down = format!(
-            "-- reconciled objects\n{}\n{own}",
-            reconcile_down.join("\n")
-        );
-    }
-
+        &triggers::generate(plan.ast, &plan.schema)?,
+    );
     Ok(Rendered {
         name,
-        hash: migration::migration_hash(&migration_sql),
-        apply_batch: migration::batch_sql(&apply_body),
         apply_body,
-        reconciled: reconcile_sql.len(),
         sources: migration_history::AppliedMigrationSources {
-            sql_down,
+            sql_down: Some(migration.down()),
             schema_sources: opts.schema_sources,
             schema_sources_manifest: opts.schema_sources_manifest,
         },
+        migration,
     })
 }
 
@@ -374,8 +346,8 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
                 tx,
                 pool,
                 &rendered.name,
-                &rendered.hash,
-                &rendered.apply_batch,
+                &rendered.migration.hash,
+                &rendered.migration.up(),
                 &e.to_string(),
             )
             .await;
@@ -395,7 +367,7 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
         }
     }
 
-    let operations = plan.diff.operations.len() + rendered.reconciled;
+    let operations = plan.diff.operations.len() + rendered.migration.reconciled;
     let mut warnings = plan.diff.warnings;
     warnings.extend(applied.drift_warnings);
     Ok(Outcome::Applied {
@@ -449,10 +421,10 @@ async fn within_transaction(
     let migration_id = migration_history::insert_applied_migration(
         &mut **tx,
         &rendered.name,
-        &rendered.hash,
+        &rendered.migration.hash,
         schema_snap.clone(),
         admin_cfg.clone(),
-        &rendered.apply_batch,
+        &rendered.migration.up(),
         &rendered.sources,
     )
     .await
