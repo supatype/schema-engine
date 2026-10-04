@@ -187,41 +187,23 @@ fn test_vector_extension_emitted_for_vector_fields() {
 
 /// The auth helpers are re-asserted on every push, not only on pushes that touch RLS.
 ///
-/// They were gated on the diff carrying an `EnableRls` or a policy
-/// operation. A policy calls `auth.uid()`, so a definition that is only refreshed when a policy
-/// happens to change drifts from the policies that call it, and nothing notices until one evaluates
-/// against a stale helper. Grants and security labels already re-assert unconditionally; this makes
-/// the helpers behave the same way.
-///
-/// A steady-state push is the case that matters: same schema, same database, nothing to do.
+/// They were gated on the diff carrying an RLS or policy operation. A policy calls `auth.uid()`, so
+/// a definition that is only refreshed when a policy happens to change drifts from the policies
+/// that call it, and nothing notices until one evaluates against a stale helper. Since Phase 4.8
+/// the differ carries no RLS or policy operation at all (they are the reconcile's), so every diff
+/// is the case this guards.
 #[test]
 fn auth_helpers_are_emitted_on_a_push_that_touches_no_policy() {
     let input = include_str!("fixtures/basic_blog.json");
     let ast = parser::parse(input).unwrap();
 
-    // Apply once, then diff the same schema against the state it produced: no RLS operations left.
-    let first = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let rls_ops = first
-        .operations
-        .iter()
-        .any(|op| matches!(op, differ::Operation::EnableRls { .. }));
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
     assert!(
-        rls_ops,
-        "the fixture must carry RLS ops, or the contrast is empty"
+        !diff.operations.is_empty(),
+        "the diff must still do something, or the preamble is all there is"
     );
 
-    // The same push once its policies are already in place: everything else still to do, no RLS
-    // operation left to hang the helpers off.
-    let mut steady = first.clone();
-    steady
-        .operations
-        .retain(|op| !matches!(op, differ::Operation::EnableRls { .. }));
-    assert!(
-        !steady.operations.is_empty(),
-        "the steady-state diff must still do something, or the preamble is all there is"
-    );
-
-    let forward = migration::forward_sql(&steady, false, "public", &ast).unwrap();
+    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
     assert!(
         forward.contains("CREATE OR REPLACE FUNCTION auth.uid()"),
         "a push with no RLS operation must still assert the helpers its policies call:\n{forward}"

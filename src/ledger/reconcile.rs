@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::desired::{DesiredObject, ObjectKey};
+use crate::desired::{never_removed, DesiredObject, ObjectKey};
 use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKind};
 
 use super::{desired_fingerprint, LedgerRow, Status};
@@ -68,20 +68,27 @@ pub fn no_location(_: &ObjectKey) -> Location {
 /// up to date. Its expression is what a takeover would have to compare, and replacing it costs one
 /// statement. A grant is named by its table and role, and only the API roles on model tables are
 /// ever desired, whose privileges the engine always re-asserted (D7): an upgrade takes them over
-/// and leaves them holding exactly what the rules allow.
+/// and leaves them holding exactly what the rules allow. Row-level security is named by its table,
+/// and only tables the schema owns ask for it.
 fn claimed_by_name(kind: ObjectKind) -> bool {
-    matches!(kind, ObjectKind::Policy | ObjectKind::TableGrant)
+    matches!(
+        kind,
+        ObjectKind::Policy | ObjectKind::TableGrant | ObjectKind::RlsAttributes
+    )
 }
 
 /// The kinds whose `CREATE` replaces what is there, so a new definition needs no drop first:
 /// functions and triggers (`CREATE OR REPLACE`; dropping first would fail anyway, as a trigger
 /// depends on its function), and grants, whose statement revokes everything before it grants the
-/// exact set. Not views: `CREATE OR REPLACE VIEW` refuses anything but appending columns, so a
+/// exact set, and RLS enablement, which `ENABLE` simply asserts. Not views: `CREATE OR REPLACE VIEW` refuses anything but appending columns, so a
 /// changed view is dropped and made again.
 fn replaced_in_place(kind: ObjectKind) -> bool {
     matches!(
         kind,
-        ObjectKind::Function | ObjectKind::Trigger | ObjectKind::TableGrant
+        ObjectKind::Function
+            | ObjectKind::Trigger
+            | ObjectKind::TableGrant
+            | ObjectKind::RlsAttributes
     )
 }
 
@@ -337,9 +344,11 @@ impl Action {
 
     /// Undoes the addition: drops what this action created. An inline `Create` has one too; its
     /// parent's rollback covers it, and the explicit drop is `IF EXISTS`. A replacement in place
-    /// is undone by the previous definition alone ([`Action::undo_removal`]).
+    /// is undone by the previous definition alone ([`Action::undo_removal`]). Row-level security
+    /// is never turned off, by a rollback either (D9).
     pub fn undo_addition(&self) -> Option<String> {
         match self {
+            action if never_removed(action.key().kind) => None,
             Action::Replace { key, .. } | Action::Drift { key, .. }
                 if replaced_in_place(key.kind) =>
             {
@@ -602,10 +611,12 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                     });
                 }
             }
-            (None, Some(_)) if !goes_with_its_table(&key) => removals.push(Action::Drop {
-                key,
-                recorded_sql: Some(row.desired_sql.clone()),
-            }),
+            // Never removed (D9): a row nothing desires any more is forgotten, not undone.
+            (None, Some(_)) if !goes_with_its_table(&key) && !never_removed(key.kind) => removals
+                .push(Action::Drop {
+                    key,
+                    recorded_sql: Some(row.desired_sql.clone()),
+                }),
             (None, _) => removals.push(Action::Forget { key }),
         }
     }
@@ -1047,6 +1058,46 @@ mod tests {
         });
         // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.
         assert_eq!(plan.actions, [Action::Forget { key: d.key.clone() }]);
+        assert!(plan.actions.iter().all(|a| a.sql().is_empty()));
+    }
+
+    #[test]
+    fn rls_enablement_nothing_desires_is_forgotten_never_turned_off() {
+        let key = ObjectKey {
+            kind: ObjectKind::RlsAttributes,
+            schema: "public".into(),
+            parent: "posts".into(),
+            name: "rls".into(),
+        };
+        let live = ObjectFingerprint {
+            kind: key.kind,
+            schema: key.schema.clone(),
+            parent: key.parent.clone(),
+            name: key.name.clone(),
+            fingerprint: hash(ObjectKind::RlsAttributes, &["t"]),
+            definition: "enabled=t".into(),
+            comment: None,
+            create_sql: None,
+        };
+        let row = LedgerRow {
+            key: key.clone(),
+            desired_fp: "fp".into(),
+            desired_sql: "ALTER TABLE \"public\".\"posts\" ENABLE ROW LEVEL SECURITY;".into(),
+            live_fp: live.fingerprint.clone(),
+            live_def: live.definition.clone(),
+            status: Status::Managed,
+            migration_id: None,
+        };
+        let plan = reconcile(Inputs {
+            desired: &[],
+            ledger: &[row],
+            live: &[live],
+            created_by_parent: &BTreeSet::new(),
+            dropped_tables: &BTreeSet::new(),
+            location: no_location,
+            kinds: &[ObjectKind::RlsAttributes],
+        });
+        assert_eq!(plan.actions, [Action::Forget { key }]);
         assert!(plan.actions.iter().all(|a| a.sql().is_empty()));
     }
 }

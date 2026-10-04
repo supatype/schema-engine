@@ -141,10 +141,6 @@ pub enum Operation {
         constraint: String,
         risk: Risk,
     },
-    EnableRls {
-        table: String,
-        risk: Risk,
-    },
     CreateRlsPolicy {
         table: String,
         policy: String,
@@ -232,7 +228,7 @@ pub fn diff_with_previous(
 
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
     constraint_diff::diff(ast, db, &mut ops)?;
-    rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
+    rls_diff::diff(ast, db, &mut warnings)?;
     field_access_diff::validate(ast, db, &mut warnings)?;
     warnings.extend(crate::generator::sql::storage::rule_warnings(ast));
 
@@ -313,7 +309,6 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::AddForeignKey { risk, .. }
         | Operation::AddUniqueConstraint { risk, .. }
         | Operation::DropUniqueConstraint { risk, .. }
-        | Operation::EnableRls { risk, .. }
         | Operation::CreateRlsPolicy { risk, .. }
         | Operation::CreateJunctionTable { risk, .. }
         | Operation::CreateVersionsTable { risk, .. }

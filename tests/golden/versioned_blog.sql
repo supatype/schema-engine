@@ -234,15 +234,6 @@ COMMENT ON TABLE "public"."ledger_versions" IS 'supatype:managed;kind=table;tabl
 
 CREATE INDEX IF NOT EXISTS "ledger_versions_record_idx" ON "public"."ledger_versions" ("record_id", "version" DESC);
 
--- [safe] Enable RLS: posts
-ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: ledger
-ALTER TABLE "public"."ledger" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: tags
-ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_posts"("posts" "public"."posts")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -1237,6 +1228,9 @@ CREATE POLICY "tags_select" ON "public"."tags"
 FOR SELECT USING (
     TRUE
   );
+ALTER TABLE "public"."ledger" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

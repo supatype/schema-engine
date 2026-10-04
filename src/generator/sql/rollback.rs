@@ -128,10 +128,6 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
             format!("-- WARNING: Cannot automatically roll back DROP CONSTRAINT \"{table}\".\"{constraint}\". \
                      Recreate the unique constraint manually.")
         }
-        // EnableRls → DISABLE ROW LEVEL SECURITY
-        Operation::EnableRls { table, .. } => {
-            format!("ALTER TABLE \"{schema}\".\"{table}\" DISABLE ROW LEVEL SECURITY;")
-        }
         // CreateRlsPolicy → DROP POLICY
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";")
@@ -273,7 +269,6 @@ fn forward_description(op: &Operation) -> String {
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("drop unique {table}.{constraint}"),
-        Operation::EnableRls { table, .. } => format!("enable rls {table}"),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("create policy {table}.{policy}")
         }

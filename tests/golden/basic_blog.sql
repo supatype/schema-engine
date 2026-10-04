@@ -181,12 +181,6 @@ COMMENT ON CONSTRAINT "posts_slug_key" ON "public"."posts" IS 'supatype:managed;
 
 COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fields=;v=1';
 
--- [safe] Enable RLS: users
-ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: posts
-ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -339,6 +333,8 @@ FOR UPDATE USING (
   ) WITH CHECK (
     (SELECT auth.uid()) = "id"
   );
+ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

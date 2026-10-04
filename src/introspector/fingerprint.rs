@@ -236,7 +236,7 @@ impl ObjectKind {
             ],
             ObjectKind::View => &["materialized", "definition"],
             ObjectKind::Policy => &["command", "permissive", "roles", "using", "with_check"],
-            ObjectKind::RlsAttributes => &["enabled", "forced"],
+            ObjectKind::RlsAttributes => &["enabled"],
             ObjectKind::EnumType => &["values"],
             ObjectKind::Sequence => &["owned_by"],
             ObjectKind::TableGrant => &["privileges", "columns"],
@@ -484,6 +484,16 @@ fn grant_create_sql(
     statements.join("\n")
 }
 
+/// `ENABLE ROW LEVEL SECURITY` on a table: the one statement an RLS attributes object runs, and
+/// what a rollback runs to restore it. Row-level security is never turned off automatically (D9).
+pub fn rls_enable_sql(schema: &str, table: &str) -> String {
+    format!(
+        "ALTER TABLE \"{}\".\"{}\" ENABLE ROW LEVEL SECURITY;",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\"")
+    )
+}
+
 /// Every fingerprint the two states support, sorted by kind, schema, parent and name.
 pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFingerprint> {
     let schema = db.schema.as_str();
@@ -686,14 +696,17 @@ fn policy_and_catalog_entries(
         out.push(fingerprint);
     }
 
+    // Enablement only (D9): `FORCE` is not the engine's, so a hand-set one is not drift.
     for a in &catalog.rls_attributes {
-        out.push(entry(
+        let mut fingerprint = entry(
             ObjectKind::RlsAttributes,
             &a.schema,
             &a.table,
             "rls",
-            &[flag(a.enabled), flag(a.forced)],
-        ));
+            &[flag(a.enabled)],
+        );
+        fingerprint.create_sql = Some(rls_enable_sql(&a.schema, &a.table));
+        out.push(fingerprint);
     }
 
     for t in &catalog.triggers {

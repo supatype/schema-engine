@@ -428,30 +428,6 @@ CREATE TABLE IF NOT EXISTS "public"."relations_every" (
 
 COMMENT ON TABLE "public"."relations_every" IS 'supatype:managed;kind=table;table=relations_every;fields=;v=1';
 
--- [safe] Enable RLS: every
-ALTER TABLE "public"."every" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: every_localised
-ALTER TABLE "public"."every_localised" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: every_required
-ALTER TABLE "public"."every_required" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: every_defaulted
-ALTER TABLE "public"."every_defaulted" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: every_read_only
-ALTER TABLE "public"."every_read_only" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: relations
-ALTER TABLE "public"."relations" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: composites
-ALTER TABLE "public"."composites" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: relations_every
-ALTER TABLE "public"."relations_every" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_every"("every" "public"."every")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -816,6 +792,14 @@ CREATE OR REPLACE TRIGGER "every_required_slug_req_trigger"
 BEFORE INSERT OR UPDATE ON "public"."every_required"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_every_required_slug_req();
 
+ALTER TABLE "public"."composites" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."every" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."every_defaulted" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."every_localised" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."every_read_only" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."every_required" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."relations" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."relations_every" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

@@ -43,7 +43,7 @@ use crate::generator::sql::{
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql},
 };
-use crate::introspector::fingerprint::{normalise_sql, ObjectKind};
+use crate::introspector::fingerprint::{normalise_sql, rls_enable_sql, ObjectKind};
 use crate::managed::{
     comment_on_constraint, comment_on_index, comment_on_table, comment_value,
     expected_check_constraint_name, expected_model_constraint_name, expected_model_index_name,
@@ -210,6 +210,13 @@ pub struct DesiredObject {
     pub security_relevant: bool,
 }
 
+/// The kinds the engine never removes (D9): row-level security on a table it owns is never turned
+/// off automatically, because a table with RLS on and no policies denies everything and turning it
+/// off is a decision no reconcile should make. A row nothing desires any more is forgotten.
+pub fn never_removed(kind: ObjectKind) -> bool {
+    kind == ObjectKind::RlsAttributes
+}
+
 /// The kinds whose drift fails a non-interactive push (plan 3.5): what decides who may read or
 /// write what.
 pub fn security_relevant(kind: ObjectKind) -> bool {
@@ -269,6 +276,7 @@ pub fn desired_objects_for(
         b.model_checks(model);
         b.model_indexes(model)?;
         b.model_policies(model)?;
+        b.rls_enabled(model.table_name());
         b.model_triggers(model);
         if versions_of(model).is_some() {
             b.versions_table(model)?;
@@ -280,6 +288,7 @@ pub fn desired_objects_for(
     b.bucket_policies();
     for junction in &ast.junction_tables {
         b.junction(junction)?;
+        b.rls_enabled(&junction.name);
     }
     let mut out = b.out;
     out.sort_by(|a, c| a.key.cmp(&c.key));
@@ -319,9 +328,11 @@ impl<'a> Builder<'a> {
         depends_on: Vec<ObjectKey>,
     ) {
         let security_relevant = security_relevant(key.kind);
-        // Every kind the builder emits has a drop; `desired_objects_tests` checks it per fixture.
+        // Every kind the builder emits has a drop, except what is never removed;
+        // `desired_objects_tests` checks it per fixture.
         let drop_sql = key
             .drop_sql()
+            .or_else(|| never_removed(key.kind).then(String::new))
             .unwrap_or_else(|| panic!("{:?} has no drop statement", key.kind));
         // One object, however many rules or models ask for it: several access rules can read the
         // same join column, and each asks for the same membership index.
@@ -753,6 +764,15 @@ impl<'a> Builder<'a> {
     fn api_views(&mut self) {
         let sql = render_field_views(self.ast, self.field_views, self.schema);
         self.attributed_script(&sql);
+    }
+
+    /// Row-level security on for a model or junction table (Phase 4.8, D9): enablement only, never
+    /// `FORCE`, and never turned off.
+    fn rls_enabled(&mut self, table: &str) {
+        let key = self.key(ObjectKind::RlsAttributes, table, "rls");
+        let structure = BTreeMap::from([("enabled", flag(true))]);
+        let create = rls_enable_sql(self.schema, table);
+        self.push(key, structure, create, vec![self.table_key(table)]);
     }
 
     /// What each API role may do on each model table (Phase 4.7c, D7): the exact privilege set,

@@ -171,9 +171,6 @@ CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USI
 
 COMMENT ON TABLE "public"."documents" IS 'supatype:managed;kind=table;table=documents;fields=;v=1';
 
--- [safe] Enable RLS: documents
-ALTER TABLE "public"."documents" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."documents")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -245,6 +242,7 @@ FOR UPDATE USING (
   ) WITH CHECK (
     (SELECT auth.role()) = 'admin'
   );
+ALTER TABLE "public"."documents" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
