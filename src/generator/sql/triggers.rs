@@ -148,12 +148,25 @@ fn rich_text_fields(model: &ModelAst) -> Vec<(&str, bool)> {
         .collect()
 }
 
+/// The function that keeps `slug_field` of `table` filled. Folded to lower case because
+/// [`TriggerFunction::create_sql`] writes the name unquoted, so Postgres stores it folded: a
+/// `probeSlug` field kept as written was keyed `set_probe_all_probeSlug` against the catalog's
+/// `set_probe_all_probeslug`, and the push could not find the function it had just created.
+fn slug_function_name(table: &str, slug_field: &str) -> String {
+    format!("set_{table}_{slug_field}").to_ascii_lowercase()
+}
+
+/// The function that normalises `table`'s rich text columns, folded as [`slug_function_name`].
+fn rich_text_function_name(table: &str) -> String {
+    format!("normalise_{table}_rich_text").to_ascii_lowercase()
+}
+
 /// The functions a model's own triggers run: one per slug field, one for all its rich text.
 pub fn model_functions(model: &ModelAst) -> Vec<TriggerFunction> {
     let table = model.table_name();
     let mut out: Vec<TriggerFunction> = slug_fields(model)
         .map(|(slug_field, source_field)| TriggerFunction {
-            name: format!("set_{table}_{slug_field}"),
+            name: slug_function_name(table, slug_field),
             args: "",
             returns: "trigger",
             volatility: 'v',
@@ -184,7 +197,7 @@ pub fn model_functions(model: &ModelAst) -> Vec<TriggerFunction> {
             })
             .collect();
         out.push(TriggerFunction {
-            name: format!("normalise_{table}_rich_text"),
+            name: rich_text_function_name(table),
             args: "",
             returns: "trigger",
             volatility: 'v',
@@ -211,7 +224,7 @@ pub fn model_triggers(model: &ModelAst) -> Vec<ModelTrigger> {
             table: table.to_string(),
             name: format!("{table}_{slug_field}_trigger"),
             events: &["INSERT", "UPDATE"],
-            function: format!("set_{table}_{slug_field}"),
+            function: slug_function_name(table, slug_field),
         });
     }
     if !rich_text_fields(model).is_empty() {
@@ -219,7 +232,7 @@ pub fn model_triggers(model: &ModelAst) -> Vec<ModelTrigger> {
             table: table.to_string(),
             name: format!("{table}_rich_text_trigger"),
             events: &["INSERT", "UPDATE"],
-            function: format!("normalise_{table}_rich_text"),
+            function: rich_text_function_name(table),
         });
     }
     out
@@ -242,4 +255,23 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
         out.push('\n');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name a model's function is keyed and called by is the one Postgres stores for the
+    /// unquoted `CREATE`, so a camelCase field or table cannot split the two apart.
+    #[test]
+    fn a_model_function_is_named_as_postgres_folds_it() {
+        assert_eq!(
+            slug_function_name("probe_all", "probeSlug"),
+            "set_probe_all_probeslug"
+        );
+        assert_eq!(
+            rich_text_function_name("BlogPosts"),
+            "normalise_blogposts_rich_text"
+        );
+    }
 }

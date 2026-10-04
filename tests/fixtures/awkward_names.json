@@ -130,7 +130,7 @@
             }
           }
         },
-        "slug": {
+        "categorySlug": {
           "kind": "slug",
           "required": true,
           "from": "name",

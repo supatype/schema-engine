@@ -224,7 +224,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE FUNCTION _platform.set_kitchen_sink_slugField()
+CREATE OR REPLACE FUNCTION _platform.set_kitchen_sink_slugfield()
 RETURNS TRIGGER AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
@@ -271,7 +271,7 @@ FOR EACH ROW EXECUTE FUNCTION _platform.normalise_kitchen_sink_rich_text();
 
 CREATE OR REPLACE TRIGGER "kitchen_sink_slugField_trigger"
 BEFORE INSERT OR UPDATE ON "public"."kitchen_sink"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_kitchen_sink_slugField();
+FOR EACH ROW EXECUTE FUNCTION _platform.set_kitchen_sink_slugfield();
 
 CREATE OR REPLACE TRIGGER "kitchen_sink_updated_at_trigger"
 BEFORE UPDATE ON "public"."kitchen_sink"
