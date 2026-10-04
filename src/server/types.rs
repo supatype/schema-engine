@@ -44,11 +44,15 @@ pub struct DbRequest {
     pub no_cache: bool,
     #[serde(default)]
     pub strict: bool,
-    /// Put back access changed outside Supatype (plan 3.5). Without it a push that would refuses.
+    /// Put back access changed outside Supatype (plan 3.5). Without it, a push that would have to
+    /// refuses instead.
     #[serde(default)]
     pub overwrite_drift: bool,
     #[serde(default)]
     pub yes: bool,
+    /// For `adopt`: objects every push should leave alone, as `kind:table.name` (plan section 8).
+    #[serde(default)]
+    pub release: Vec<String>,
     #[serde(default)]
     pub schema_sources_base64: Option<String>,
     #[serde(default)]

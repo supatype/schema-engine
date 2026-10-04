@@ -109,17 +109,36 @@ async fn push_refuses_a_table_it_has_no_record_of_with_nothing_to_apply() {
 }
 
 #[tokio::test]
-async fn adopt_offers_to_stamp_the_table_push_refuses() {
+async fn adopt_offers_to_take_the_table_push_refuses() {
     common::with_integration_url(|url| async move {
         assert!(push(&url).ok);
-        sql(&url, "COMMENT ON TABLE public.widget IS NULL").await;
+        sql(
+            &url,
+            "DELETE FROM _supatype.managed_objects WHERE kind = 'table' AND name = 'widget';
+             COMMENT ON TABLE public.widget IS NULL",
+        )
+        .await;
 
         let preview = engine(&url, &["adopt"]);
         assert!(preview.ok, "{}", preview.stderr);
+        let outcome: serde_json::Value =
+            serde_json::from_str(&preview.stdout).expect("adopt prints its outcome as JSON");
+        assert_eq!(outcome["status"], "preview");
         assert!(
-            preview.stdout.contains("COMMENT ON TABLE") && preview.stdout.contains("widget"),
-            "adopt must offer to stamp the table, got {}",
+            outcome["adopt"].as_array().is_some_and(|items| items
+                .iter()
+                .any(|i| i["kind"] == "table" && i["name"] == "widget")),
+            "adopt must offer to take the table, got {}",
             preview.stdout
+        );
+
+        // And taking it is what the push was waiting for.
+        assert!(engine(&url, &["adopt", "--yes"]).ok);
+        let again = push(&url);
+        assert!(
+            again.ok,
+            "the push still refuses after adopt: {}",
+            again.stderr
         );
     })
     .await;

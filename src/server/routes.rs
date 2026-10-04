@@ -347,84 +347,20 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
 
-// ── Adopt (DB: stamp managed comments) ─────────────────────────────────────
+// ── Adopt (DB: ledger rows only) ───────────────────────────────────────────
 
 pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
-    use crate::state::migration_history;
-
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-
-    // Adopt hand-wrote this sequence and had already fallen behind it (no
-    // `schema_state` studio columns, no migrations-column repairs), the exact
-    // drift `bootstrap_internal_state` exists to prevent.
-    migration_history::bootstrap_internal_state(&pool)
-        .await
-        .map_err(engine_error)?;
-
     if req.no_cache {
-        tracing::warn!("{}", migration_history::NO_CACHE_NOTICE);
+        tracing::warn!("{}", crate::state::migration_history::NO_CACHE_NOTICE);
     }
-    // Live, as push reads it, so adopt stamps exactly what push would refuse.
-    let db_state = crate::introspector::introspect(&pool, &req.schema)
+    let outcome = crate::adopt::run(&pool, &ast, &req.schema, &req.release, req.yes)
         .await
         .map_err(engine_error)?;
-    let catalog = crate::introspector::introspect_catalog(&pool, &req.schema)
-        .await
-        .map_err(engine_error)?;
-
-    let stamp_sql = crate::differ::doctor::adopt_stamp_sql(&ast, &db_state, &catalog, &req.schema)
-        .map_err(engine_error)?;
-    let ledger = ledger_rows(&pool).await?;
-    let doctor_report =
-        crate::differ::doctor::report(&ast, &db_state, &catalog, &ledger).map_err(engine_error)?;
-
-    if !req.yes {
-        return Ok(Json(serde_json::json!({
-            "status": "preview",
-            "stampStatements": stamp_sql,
-            "doctor": doctor_report,
-        })));
-    }
-
-    if stamp_sql.is_empty() {
-        return Ok(Json(serde_json::json!({ "status": "nothing_to_stamp" })));
-    }
-
-    let batch = stamp_sql.join("\n");
-    sqlx::raw_sql(&batch)
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-
-    let fresh = crate::introspector::introspect(&pool, &req.schema)
-        .await
-        .map_err(engine_error)?;
-    migration_history::save_schema_state(&pool, &fresh)
-        .await
-        .map_err(engine_error)?;
-
-    let migration_name = format!("adopt_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
-    let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
-    migration_history::insert_applied_migration(
-        &pool,
-        &migration_name,
-        "adopt",
-        serde_json::to_value(&ast).ok(),
-        admin_cfg,
-        &batch,
-        &migration_history::AppliedMigrationSources::default(),
-    )
-    .await
-    .map_err(engine_error)?;
-
-    Ok(Json(serde_json::json!({
-        "status": "adopted",
-        "stamped": stamp_sql.len(),
-        "name": migration_name
-    })))
+    Ok(Json(serde_json::to_value(&outcome).map_err(engine_error)?))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

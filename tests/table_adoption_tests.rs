@@ -10,17 +10,15 @@
 //!   table that arrived by hand could never be managed, and its columns were permanently exempt from
 //!   the diff.
 //!
-//! The round trip is the assertion that matters: stamp, then confirm push manages it thereafter. A
-//! marker that adoption writes in a different shape from `CREATE TABLE` would leave the table
-//! undroppable forever and the differ unable to converge.
+//! The round trip is the assertion that matters: adopt, then confirm push manages it thereafter.
+//! Adopting writes a ledger row and nothing else (plan section 8): the table's comment is its
+//! owner's, and `--release` hands an object back for good.
 
 mod common;
 
 use supatype_engine::{
-    differ::{self, doctor},
-    generator::sql::migration,
-    introspector, parser,
-    state::database_state::DatabaseState,
+    adopt, differ::doctor, introspector, introspector::fingerprint::ObjectKind, ledger, parser,
+    push,
 };
 
 const ONE_MODEL: &str = r#"{
@@ -134,6 +132,36 @@ async fn doctor_explains_why_columns_survive_on_an_unstamped_model_table() {
     .await;
 }
 
+/// The table's comment, which adopting must never write (plan section 6).
+async fn table_comment(pool: &sqlx::PgPool, table: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT obj_description(to_regclass($1), 'pg_class')")
+        .bind(format!("public.{table}"))
+        .fetch_one(pool)
+        .await
+        .expect("comment reads")
+}
+
+/// The tables the ledger records, with their status.
+async fn recorded_tables(pool: &sqlx::PgPool) -> Vec<String> {
+    let mut conn = pool.acquire().await.unwrap();
+    let mut rows: Vec<String> = ledger::load(&mut conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.key.kind == ObjectKind::Table && r.key.schema == "public")
+        .map(|r| format!("{} {}", r.key.name, r.status.as_str()))
+        .collect();
+    rows.sort();
+    rows
+}
+
+fn forced() -> push::ApplyOptions {
+    push::ApplyOptions {
+        force: true,
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn adopting_a_table_makes_push_manage_it_thereafter() {
     common::with_integration_pool(|pool| async move {
@@ -141,103 +169,67 @@ async fn adopting_a_table_makes_push_manage_it_thereafter() {
             .execute(&pool)
             .await
             .expect("fixture applies");
-
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        let before = introspector::introspect(&pool, "public")
-            .await
-            .expect("introspect");
-
-        // Before adoption the table is not droppable, so removing it from the schema does nothing.
         let empty = parser::parse(NO_MODELS).expect("empty schema parses");
-        let diff = differ::diff(&empty, &before).expect("diff");
-        let ops: Vec<String> = diff.operations.iter().map(|o| format!("{o:?}")).collect();
-        assert!(
-            !ops.iter().any(|o| o.contains("DropTable")),
-            "an unadopted table must not be droppable: {ops:?}"
-        );
 
-        // Adopt it.
-        let stamps = doctor::adopt_stamp_sql(
-            &ast,
-            &before,
-            &supatype_engine::introspector::catalog::CatalogState::default(),
-            "public",
-        )
-        .unwrap();
-        assert!(
-            stamps
-                .iter()
-                .any(|s| s.contains("COMMENT ON TABLE") && s.contains("widget")),
-            "adoption emitted no table stamp: {stamps:?}"
-        );
-        for statement in &stamps {
-            sqlx::raw_sql(statement)
-                .execute(&pool)
-                .await
-                .expect("stamp applies");
-        }
+        // Before adoption a push refuses the table, and removing it from the schema keeps it.
+        assert!(common::push(&pool, &ast).await.is_err());
+        common::push_with(&pool, &empty, forced()).await.unwrap();
+        assert!(table_comment(&pool, "widget").await.is_none());
+        assert!(recorded_tables(&pool).await.is_empty());
 
-        // The marker must match what CREATE TABLE writes, or the differ can never converge.
-        let engine_marker = {
-            let fresh = differ::diff(&ast, &DatabaseState::default()).expect("diff against empty");
-            let sql =
-                migration::forward_sql(&fresh, false, "public", &ast).expect("script renders");
-            let line = sql
-                .lines()
-                .find(|l| l.contains("COMMENT ON TABLE") && l.contains("widget"))
-                .expect("the engine stamps tables it creates")
-                .to_string();
-            line
-        };
-        let adopted_marker = stamps
+        // The preview names it and writes nothing; applying records it and edits nothing.
+        let preview = adopt::run(&pool, &ast, "public", &[], false).await.unwrap();
+        assert_eq!(preview.status, "preview");
+        assert!(preview
+            .adopt
             .iter()
-            .find(|s| s.contains("widget"))
-            .expect("the adoption stamp exists")
-            .clone();
-        assert_eq!(
-            adopted_marker.trim(),
-            engine_marker.trim(),
-            "adoption writes a different marker from CREATE TABLE, so an adopted table would never \
-             behave like a created one"
+            .any(|i| i.kind == "table" && i.name == "widget"));
+        assert!(
+            recorded_tables(&pool).await.is_empty(),
+            "a preview wrote rows"
+        );
+        let applied = adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
+        assert_eq!(applied.status, "adopted");
+        assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
+        assert!(
+            table_comment(&pool, "widget").await.is_none(),
+            "adopt wrote a comment"
         );
 
-        // After adoption, removing the model drops the table: the round trip that makes adoption
-        // meaningful rather than a comment nobody reads.
-        let after = introspector::introspect(&pool, "public")
+        // Push now manages it, and removing the model drops it: the round trip that makes adoption
+        // mean something.
+        common::push(&pool, &ast).await.unwrap();
+        let report = doctor_of(&pool, &ast).await;
+        assert!(!doctor::has_strict_issues(&report), "{report:#?}");
+        common::push_with(&pool, &empty, forced()).await.unwrap();
+        let gone: bool = sqlx::query_scalar("SELECT to_regclass('public.widget') IS NULL")
+            .fetch_one(&pool)
             .await
-            .expect("re-introspect");
-        let diff = differ::diff(&empty, &after).expect("diff after adoption");
-        let ops: Vec<String> = diff.operations.iter().map(|o| format!("{o:?}")).collect();
-        assert!(
-            ops.iter()
-                .any(|o| o.contains("DropTable") && o.contains("widget")),
-            "an adopted table is still not managed: {ops:?}"
-        );
-
-        // And doctor stops complaining about it.
-        let report = doctor::report(
-            &ast,
-            &after,
-            &supatype_engine::introspector::catalog::CatalogState::default(),
-            &[],
-        )
-        .unwrap();
-        assert!(
-            !messages(&report.unmanaged_drift)
-                .iter()
-                .any(|m| m.contains("widget")),
-            "doctor still reports an adopted table as unmanaged: {:?}",
-            report.unmanaged_drift
-        );
+            .unwrap();
+        assert!(gone, "an adopted table is still not managed");
     })
     .await;
 }
 
+async fn doctor_of(
+    pool: &sqlx::PgPool,
+    ast: &supatype_engine::parser::ast::SchemaAst,
+) -> doctor::DoctorReport {
+    let db = introspector::introspect(pool, "public").await.unwrap();
+    let catalog = introspector::introspect_catalog(pool, "public")
+        .await
+        .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let rows = ledger::load(&mut conn).await.unwrap();
+    doctor::report(ast, &db, &catalog, &rows).unwrap()
+}
+
 #[tokio::test]
-async fn adoption_never_stamps_a_table_the_schema_does_not_declare() {
+async fn adoption_never_takes_a_table_the_schema_does_not_declare() {
     common::with_integration_pool(|pool| async move {
-        // The whole point of the gate is the first run on someone else's database. Stamping whatever
-        // happens to be in the schema would hand Supatype every table on that first run.
+        // The whole point of the gate is the first run on someone else's database. Taking whatever
+        // happens to be there would hand Supatype every table on that first run.
         sqlx::raw_sql(
             r#"
             CREATE TABLE public.widget (id int primary key, name text);
@@ -249,37 +241,14 @@ async fn adoption_never_stamps_a_table_the_schema_does_not_declare() {
         .expect("fixture applies");
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        let db = introspector::introspect(&pool, "public")
-            .await
-            .expect("introspect");
-        let stamps = doctor::adopt_stamp_sql(
-            &ast,
-            &db,
-            &supatype_engine::introspector::catalog::CatalogState::default(),
-            "public",
-        )
-        .unwrap();
-
+        let outcome = adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
         assert!(
-            !stamps.iter().any(|s| s.contains("theirs")),
-            "adoption stamped a table the schema never mentions: {stamps:?}"
+            !outcome.adopt.iter().any(|i| i.name == "theirs"),
+            "adoption took a table the schema never mentions: {:?}",
+            outcome.adopt
         );
-
-        for statement in &stamps {
-            sqlx::raw_sql(statement)
-                .execute(&pool)
-                .await
-                .expect("stamp applies");
-        }
-        let comment: Option<String> =
-            sqlx::query_scalar("SELECT obj_description('public.theirs'::regclass, 'pg_class')")
-                .fetch_one(&pool)
-                .await
-                .expect("their table still exists");
-        assert!(
-            comment.is_none(),
-            "their table was marked as Supatype-managed: {comment:?}"
-        );
+        assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
+        assert!(table_comment(&pool, "theirs").await.is_none());
     })
     .await;
 }
@@ -293,39 +262,71 @@ async fn adoption_is_idempotent() {
             .expect("fixture applies");
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        let db = introspector::introspect(&pool, "public")
-            .await
-            .expect("introspect");
-        for statement in doctor::adopt_stamp_sql(
-            &ast,
-            &db,
-            &supatype_engine::introspector::catalog::CatalogState::default(),
-            "public",
-        )
-        .unwrap()
-        {
-            sqlx::raw_sql(&statement)
-                .execute(&pool)
-                .await
-                .expect("stamp applies");
-        }
+        adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
 
-        // Running it again must be a no-op, not a second stamp: `supatype adopt` is a command an
-        // operator will run twice, and an emitted statement reads as "there is still work to do".
-        let after = introspector::introspect(&pool, "public")
+        // Running it again must be a no-op: `supatype adopt` is a command an operator will run
+        // twice, and anything listed reads as "there is still work to do".
+        let second = adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
+        assert_eq!(second.status, "nothing_to_adopt", "{:?}", second.adopt);
+        assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_released_object_is_left_alone_by_every_push() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(ONE_MODEL).expect("fixture parses");
+        common::push(&pool, &ast).await.unwrap();
+
+        // Kept by hand: released, so the push neither puts it back nor drops it (plan 3.5).
+        let release = ["table:widget".to_string()];
+        let preview = adopt::run(&pool, &ast, "public", &release, false)
             .await
-            .expect("re-introspect");
-        let second = doctor::adopt_stamp_sql(
-            &ast,
-            &after,
-            &supatype_engine::introspector::catalog::CatalogState::default(),
-            "public",
-        )
-        .unwrap();
+            .unwrap();
+        assert!(preview.release.iter().any(|i| i.name == "widget"));
+        adopt::run(&pool, &ast, "public", &release, true)
+            .await
+            .unwrap();
+        assert_eq!(recorded_tables(&pool).await, ["widget released"]);
+
+        let empty = parser::parse(NO_MODELS).expect("empty schema parses");
+        common::push_with(&pool, &empty, forced()).await.unwrap();
+        let kept: bool = sqlx::query_scalar("SELECT to_regclass('public.widget') IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(kept, "a released table was dropped");
+        let report = doctor_of(&pool, &ast).await;
         assert!(
-            second.iter().all(|s| !s.contains("COMMENT ON TABLE")),
-            "adoption re-stamps an already-managed table: {second:?}"
+            report.released.iter().any(|i| i.name == "widget"),
+            "{report:#?}"
         );
+
+        // A name that is not an object says so, and writes nothing.
+        let wrong = adopt::run(&pool, &ast, "public", &["table:nope".to_string()], true).await;
+        assert!(format!("{:#}", wrong.unwrap_err()).contains("supatype doctor"));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn releasing_a_conflict_takes_it_back_instead_of_adopting_it() {
+    common::with_integration_pool(|pool| async move {
+        sqlx::raw_sql("CREATE TABLE public.widget (id int primary key, name text)")
+            .execute(&pool)
+            .await
+            .expect("fixture applies");
+        let ast = parser::parse(ONE_MODEL).expect("fixture parses");
+
+        // Named twice, and also a conflict adopt would take: released, once.
+        let release = ["table:widget".to_string(), "table:widget".to_string()];
+        let outcome = adopt::run(&pool, &ast, "public", &release, true)
+            .await
+            .expect("one row per object, whoever names it");
+        assert!(outcome.adopt.is_empty(), "{:?}", outcome.adopt);
+        assert_eq!(outcome.release.len(), 1);
+        assert_eq!(recorded_tables(&pool).await, ["widget released"]);
     })
     .await;
 }
