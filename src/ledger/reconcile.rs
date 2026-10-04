@@ -70,6 +70,13 @@ pub fn no_location(_: &ObjectKey) -> Location {
 /// ever desired, whose privileges the engine always re-asserted (D7): an upgrade takes them over
 /// and leaves them holding exactly what the rules allow. Row-level security is named by its table,
 /// and only tables the schema owns ask for it.
+/// The kinds the column differ creates, alters and drops, because a column holds data that a drop
+/// and re-create would lose: type conversions, renames and nullability are the differ's, gated on the
+/// ledger (D4). The reconcile records them and runs no SQL of its own for them.
+pub fn altered_by_the_differ(kind: ObjectKind) -> bool {
+    kind == ObjectKind::Column
+}
+
 fn claimed_by_name(kind: ObjectKind) -> bool {
     matches!(
         kind,
@@ -131,6 +138,9 @@ pub enum AdoptReason {
     /// In one of the engine's own schemas (plan 3.4), or a label under its own provider (section 5),
     /// where nothing else writes: ours by location, so `managed` rather than `adopted`.
     OwnedSchema,
+    /// A column the schema declares on a table the schema owns (D4): declaring it is what adopts
+    /// it. The column differ brings it to the declared type; the reconcile only records it.
+    Declared,
 }
 
 /// What a push does about one object. Every variant that leaves a row carries what the row needs:
@@ -349,6 +359,8 @@ impl Action {
     pub fn undo_addition(&self) -> Option<String> {
         match self {
             action if never_removed(action.key().kind) => None,
+            // The differ's rollback undoes what the differ did.
+            action if altered_by_the_differ(action.key().kind) => None,
             Action::Replace { key, .. } | Action::Drift { key, .. }
                 if replaced_in_place(key.kind) =>
             {
@@ -372,6 +384,7 @@ impl Action {
     /// recoverable (plan 3.5). `None` for a drop with no definition to restore.
     pub fn undo_removal(&self) -> Option<String> {
         match self {
+            action if altered_by_the_differ(action.key().kind) => None,
             Action::Replace { previous_sql, .. } => Some(previous_sql.clone()),
             Action::Drift { create_sql, .. } => Some(create_sql.clone()),
             Action::Drop { recorded_sql, .. } => recorded_sql.clone(),
@@ -506,6 +519,15 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         previous_sql: previous_sql.to_string(),
         status: Status::Managed,
     };
+    if altered_by_the_differ(key.kind) {
+        return Action::Adopt {
+            key: key.clone(),
+            reason: AdoptReason::Declared,
+            create_sql: d.create_sql.clone(),
+            comment: l.comment.clone(),
+            status: Status::Managed,
+        };
+    }
     if claimed_by_name(key.kind) {
         return replace(l.create_sql.as_deref().unwrap_or_default());
     }
@@ -576,7 +598,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             continue;
         }
         let status = row.status;
-        let inline = inputs.created_by_parent.contains(&key);
+        let inline = inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind);
         match (desired.get(&key), live.get(&key)) {
             (Some(d), None) => changes.push(Action::Recreate {
                 key,
@@ -612,11 +634,16 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 }
             }
             // Never removed (D9): a row nothing desires any more is forgotten, not undone.
-            (None, Some(_)) if !goes_with_its_table(&key) && !never_removed(key.kind) => removals
-                .push(Action::Drop {
+            (None, Some(_))
+                if !goes_with_its_table(&key)
+                    && !never_removed(key.kind)
+                    && !altered_by_the_differ(key.kind) =>
+            {
+                removals.push(Action::Drop {
                     key,
                     recorded_sql: Some(row.desired_sql.clone()),
-                }),
+                })
+            }
             (None, _) => removals.push(Action::Forget { key }),
         }
     }
@@ -628,7 +655,8 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         let key = key.clone();
         match live.get(&key) {
             None => {
-                let inline = inputs.created_by_parent.contains(&key);
+                let inline =
+                    inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind);
                 changes.push(Action::Create {
                     key,
                     create_sql: d.create_sql.clone(),
