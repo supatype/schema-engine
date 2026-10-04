@@ -76,6 +76,8 @@ wasm-bindgen = "0.2"
 # ─── Dev dependencies ─────────────────────────────────────────────────────────
 
 [dev-dependencies]
+# `catch_unwind` on a future, so a failing integration test still drops its database.
+futures-util = "0.3"
 tokio-test = "0.4"
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }
