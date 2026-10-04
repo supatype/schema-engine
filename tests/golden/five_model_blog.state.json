@@ -1524,7 +1524,7 @@
         "forced": false
       }
     ],
-    "policyRoles": [],
+    "policies": [],
     "engineTables": []
   }
 }

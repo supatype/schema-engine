@@ -240,11 +240,11 @@ fn blog_ast_without_access() -> String {
     value.to_string()
 }
 
-// Ownership: only Supatype-marked policies may be dropped. A hand-written policy
-// (SQL editor, psql) must survive a push, or we silently delete access control the
-// operator added.
+// A hand-written policy (SQL editor, psql) on a managed table is reported, because Postgres ORs
+// it with ours. Dropping policies is the reconcile's (Phase 4.7b, `policy_ledger_tests`): the
+// differ emits no policy operation at all, so it cannot drop one.
 #[test]
-fn test_unmanaged_policies_are_not_dropped() {
+fn test_unmanaged_policies_are_reported_and_never_dropped() {
     use supatype_engine::introspector::rls::DbRlsPolicy;
 
     let ast = parser::parse(&blog_ast_without_access()).unwrap();
@@ -276,26 +276,26 @@ fn test_unmanaged_policies_are_not_dropped() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let dropped: Vec<&str> = diff
+    let policy_ops: Vec<_> = diff
         .operations
         .iter()
-        .filter_map(|op| match op {
-            differ::Operation::DropRlsPolicy { policy, .. } => Some(policy.as_str()),
-            _ => None,
-        })
+        .filter(|op| matches!(op, differ::Operation::CreateRlsPolicy { .. }))
         .collect();
+    assert!(policy_ops.is_empty(), "{policy_ops:?}");
 
+    let reported = diff
+        .warnings
+        .iter()
+        .find(|w| w.contains("hand-written"))
+        .unwrap_or_else(|| {
+            panic!(
+                "unmanaged policies must be reported, got {:?}",
+                diff.warnings
+            )
+        });
+    assert!(reported.contains("handwritten_extra"), "{reported}");
     assert!(
-        !dropped.contains(&"handwritten_extra"),
-        "an unmanaged policy must never be dropped, got {dropped:?}",
-    );
-    assert!(
-        dropped.contains(&format!("{table}_select").as_str()),
-        "the managed policy should be dropped for a model with no access rules, got {dropped:?}",
-    );
-    assert!(
-        diff.warnings.iter().any(|w| w.contains("hand-written")),
-        "unmanaged policies must be reported, got {:?}",
-        diff.warnings,
+        !reported.contains(&format!("{table}_select")),
+        "a stamped policy is an older engine's, not hand-written: {reported}"
     );
 }

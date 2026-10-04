@@ -1,32 +1,21 @@
-//! RLS policies must converge: applying a schema, then diffing the same schema
-//! against the database it just produced, has to yield no policy work.
+//! RLS policies must converge: applying a schema, then planning the same schema
+//! against the database it just produced, has to yield no policy work. And what
+//! Postgres stores must be what the rules say.
 //!
-//! Non-convergence is the failure mode this differ has been bitten by repeatedly:
-//! Postgres rewrites an expression when it stores it (parentheses, casts, lowercase
-//! booleans, column qualification, subquery aliases), so any generated shape the
-//! normaliser does not account for makes every policy look changed on every push.
-//! Unit tests on `normalise` prove the string handling; only a real database proves
-//! what Postgres actually stores.
+//! The policy differ compared our text with Postgres's rewrite of it (parentheses, casts,
+//! lowercase booleans, column qualification, subquery aliases) through a normaliser, and
+//! every shape it missed made every policy look changed on every push. Since Phase 4.7b the
+//! ledger compares our text with our text and the catalog with the catalog, so the rewrite
+//! never enters; these tests still read what Postgres stored, because only a real database
+//! proves that.
 
 mod common;
 
-use supatype_engine::{
-    differ, generator::sql::migration, introspector, parser, state::database_state::DatabaseState,
-};
+use supatype_engine::{differ, generator::sql::migration, introspector, parser};
 
 // Five models with access rules covering owner, role and multi-role shapes, and
 // the same fixture the main integration suite applies cleanly.
 const FIXTURE: &str = include_str!("fixtures/rls_access_rules.json");
-
-fn policy_operations(ops: &[differ::Operation]) -> Vec<String> {
-    ops.iter()
-        .filter_map(|op| {
-            let name = format!("{op:?}");
-            let is_policy = name.contains("RlsPolicy") || name.contains("EnableRls");
-            is_policy.then(|| name.chars().take(120).collect())
-        })
-        .collect()
-}
 
 #[tokio::test]
 async fn policies_converge_after_the_first_push() {
@@ -34,24 +23,32 @@ async fn policies_converge_after_the_first_push() {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
 
         // First push: create everything, policies included.
-        let empty = DatabaseState::default();
-        let first = differ::diff(&ast, &empty).unwrap();
-        let sql = migration::forward_sql(&first, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
+        common::push(&pool, &ast)
             .await
             .expect("first migration applies");
 
-        assert!(
-            !policy_operations(&first.operations).is_empty(),
-            "the fixture is supposed to declare access rules"
+        // Second plan against the database that push produced: nothing to enable, and every
+        // policy kept as recorded.
+        let plan = supatype_engine::push::prepare(&pool, &ast, "public")
+            .await
+            .unwrap();
+        let mut churn: Vec<String> = plan
+            .diff
+            .operations
+            .iter()
+            .filter(|op| matches!(op, differ::Operation::EnableRls { .. }))
+            .map(|op| format!("{op:?}"))
+            .collect();
+        churn.extend(
+            plan.reconcile
+                .actions
+                .iter()
+                .filter(|a| {
+                    a.key().kind == supatype_engine::introspector::fingerprint::ObjectKind::Policy
+                        && a.is_change()
+                })
+                .map(|a| format!("{a:?}")),
         );
-
-        // Second diff against the database that push produced.
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let second = differ::diff(&ast, &db).unwrap();
-
-        let churn = policy_operations(&second.operations);
         assert!(
             churn.is_empty(),
             "a no-op push must not touch policies, got: {churn:#?}"
@@ -66,12 +63,7 @@ async fn policies_converge_after_the_first_push() {
 async fn or_composition_reaches_the_database() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
-            .await
-            .expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         // `pg_get_expr` qualifies a name only when it is not visible on the
         // session's search_path, so with `auth` on the path it deparses
@@ -156,9 +148,7 @@ async fn or_composition_reaches_the_database() {
 async fn composition_and_comparisons_reach_the_database() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         let expr: String = sqlx::query_scalar(
             "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'comments_select'",
@@ -191,12 +181,7 @@ async fn composition_and_comparisons_reach_the_database() {
 async fn update_using_and_check_are_separate_clauses() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
-            .await
-            .expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         let (using_expr, check_expr): (Option<String>, Option<String>) = sqlx::query_as(
             "SELECT pg_get_expr(polqual, polrelid), pg_get_expr(polwithcheck, polrelid)
@@ -230,9 +215,7 @@ async fn update_using_and_check_are_separate_clauses() {
 async fn membership_compiles_to_a_correlated_semi_join() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         let expr: String = sqlx::query_scalar(
             "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy WHERE polname = 'categories_select'",
@@ -309,9 +292,7 @@ async fn membership_sources_get_their_index() {
 async fn a_fresh_push_installs_the_canonical_auth_helpers() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         let role_src: String = sqlx::query_scalar(
             "SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -347,12 +328,7 @@ async fn a_fresh_push_installs_the_canonical_auth_helpers() {
 async fn stored_policies_evaluate_auth_once_per_query() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
-            .await
-            .expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         // Same reason as above: force full qualification so `SELECT auth.uid()` is
         // what the catalog hands back, rather than a search_path-dependent `uid()`.
@@ -392,9 +368,7 @@ async fn stored_policies_evaluate_auth_once_per_query() {
 async fn can_functions_answer_per_row_from_the_same_rules() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         // One function per model per operation, including the operations a model
         // does not declare -- a function that always answers false is easier for a

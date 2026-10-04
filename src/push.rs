@@ -37,7 +37,7 @@ use crate::state::{migration_history, studio_state};
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
 /// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
-/// views since 4.6, security labels since 4.7.
+/// views since 4.6, security labels since 4.7a, policies since 4.7b.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -47,6 +47,7 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::CronJob,
     ObjectKind::View,
     ObjectKind::SecurityLabel,
+    ObjectKind::Policy,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
@@ -232,10 +233,30 @@ fn reconcile_with(
         live,
         created_by_parent: &created_by_parent,
         dropped_tables: &dropped_tables,
-        owned_schemas: catalog::OWNED_SCHEMAS,
-        owned_label_providers: &[rls::MASK_PROVIDER],
+        location,
         kinds: MOVED_KINDS,
     }))
+}
+
+/// What a live object's location says about whose it is when the ledger has no row (plan 3.4 and
+/// section 5). Only the engine writes labels under its provider or names bucket policies
+/// `storage_<label>_sel|ins|del`, so those are ours outright; the engine's own schemas hold only
+/// what an engine put there.
+fn location(key: &ObjectKey) -> reconcile::Location {
+    let exclusive = match key.kind {
+        ObjectKind::SecurityLabel => key.name == rls::MASK_PROVIDER,
+        ObjectKind::Policy => {
+            storage::is_unmarked_bucket_policy(&key.schema, &key.parent, &key.name)
+        }
+        _ => false,
+    };
+    if exclusive {
+        reconcile::Location::Exclusive
+    } else if catalog::OWNED_SCHEMAS.contains(&key.schema.as_str()) {
+        reconcile::Location::Owned
+    } else {
+        reconcile::Location::Neutral
+    }
 }
 
 /// The migration a push of `ast` against an empty database would apply, with no database to ask:

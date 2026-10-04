@@ -15,8 +15,11 @@ fn ast_for(buckets: &str, models: &str) -> SchemaAst {
     parser::parse(&src).expect("schema parses")
 }
 
+/// What a push applies for storage: the storage layer, then the policies the reconcile creates
+/// (Phase 4.7b).
 fn sql_for(buckets: &str, models: &str) -> String {
-    storage::generate(&ast_for(buckets, models)).expect("storage sql generates")
+    let ast = ast_for(buckets, models);
+    storage::generate(&ast).expect("storage sql generates") + &storage::bucket_policies_sql(&ast)
 }
 
 fn warnings_for(buckets: &str, models: &str) -> Vec<String> {
@@ -61,23 +64,9 @@ fn a_delete_rule_left_out_creates_no_delete_policy() {
 }
 
 #[test]
-fn a_rule_left_out_still_drops_the_policy_an_earlier_push_created() {
-    // Otherwise the default an older engine wrote for it keeps granting.
-    let sql = sql_for(AVATARS_READ_CREATE, "");
-    for suffix in ["upd", "del"] {
-        assert!(
-            sql.contains(&format!(
-                "DROP POLICY IF EXISTS \"storage_avatars_{suffix}\""
-            )),
-            "expected the {suffix} policy to be dropped, got:\n{sql}"
-        );
-    }
-}
-
-#[test]
 fn an_update_rule_creates_an_update_policy_with_the_rule_on_both_sides() {
     let sql = sql_for(AVATARS_CRUD, "");
-    let expected = "CREATE POLICY \"storage_avatars_upd\" ON storage.objects\n  \
+    let expected = "CREATE POLICY \"storage_avatars_upd\" ON \"storage\".\"objects\"\n  \
                     FOR UPDATE USING (\n    bucket_id = 'avatars' AND (auth.uid() = owner)\n  ) \
                     WITH CHECK (\n    bucket_id = 'avatars' AND (auth.uid() = owner)\n  );";
     assert!(
@@ -97,7 +86,7 @@ fn every_declared_rule_becomes_its_own_policy() {
     ] {
         assert!(
             sql.contains(&format!(
-                "CREATE POLICY \"storage_avatars_{suffix}\" ON storage.objects\n  FOR {command}"
+                "CREATE POLICY \"storage_avatars_{suffix}\" ON \"storage\".\"objects\"\n  FOR {command}"
             )),
             "expected a {command} policy, got:\n{sql}"
         );
@@ -140,17 +129,14 @@ fn a_model_with_no_rules_grants_nothing_on_the_bucket_it_uses() {
 
 #[test]
 fn a_bucket_that_declares_rules_retires_the_policies_a_model_gave_it() {
-    // Permissive policies are ORed, so a leftover model policy would widen the bucket's rules.
+    // Permissive policies are ORed, so a leftover model policy would widen the bucket's rules. Not
+    // created, so not desired: the reconcile drops one an earlier push recorded.
     let declared = r#"{
       "id": "shared", "public": false, "accessMode": "private",
       "access": { "read": { "type": "authenticated" } }
     }"#;
     let sql = sql_for(declared, DOC_MODEL_NO_RULES);
     for suffix in ["sel", "ins", "upd", "del"] {
-        assert!(
-            sql.contains(&format!("DROP POLICY IF EXISTS \"doc_shared_{suffix}\"")),
-            "expected the model's {suffix} policy to be dropped, got:\n{sql}"
-        );
         assert!(
             !sql.contains(&format!("CREATE POLICY \"doc_shared_{suffix}\"")),
             "the model must not grant on a bucket with its own rules, got:\n{sql}"
@@ -211,34 +197,13 @@ fn the_warnings_reach_the_diff_push_reports_from() {
 }
 
 #[test]
-fn every_created_policy_carries_the_managed_marker() {
+fn no_policy_is_stamped_or_swept() {
+    // Which policies are ours is the ledger's record since Phase 4.7b: no comment marks them, and
+    // no sweep retires them, since the reconcile drops what nothing desires
+    // (`storage_policy_sweep_tests`).
     let sql = sql_for(AVATARS_CRUD, "");
-    for suffix in ["sel", "ins", "upd", "del"] {
-        let marker = format!(
-            "COMMENT ON POLICY \"storage_avatars_{suffix}\" ON storage.objects IS \
-             'supatype:managed;kind=storage_policy;table=objects;fields=storage_avatars_{suffix};v=1';"
-        );
-        assert!(sql.contains(&marker), "expected {marker}, got:\n{sql}");
-    }
-}
-
-#[test]
-fn marked_policies_the_schema_no_longer_names_are_retired() {
-    // A removed bucket or renamed model leaves policies no set can spell. The sweep drops every
-    // marked one that is not expected, and only marked ones.
-    let sql = sql_for(AVATARS_READ_CREATE, "");
-    assert!(
-        sql.contains(
-            "obj_description(oid, 'pg_policy') LIKE 'supatype:managed;kind=storage_policy;%'"
-        ),
-        "{sql}"
-    );
-    assert!(
-        sql.contains(
-            "AND polname <> ALL (ARRAY['storage_avatars_sel', 'storage_avatars_ins']::text[])"
-        ),
-        "only the policies this push creates are kept, got:\n{sql}"
-    );
+    assert!(!sql.contains("COMMENT ON POLICY"), "{sql}");
+    assert!(!sql.contains("DROP POLICY"), "{sql}");
 }
 
 #[test]
@@ -253,30 +218,33 @@ fn objects_carry_the_version_their_bytes_are_stored_under() {
 }
 
 #[test]
-fn removing_the_last_bucket_still_sweeps_the_policies_it_had() {
-    // With no buckets the generator used to return early, so nothing dropped what an earlier push
-    // had created and the caller roles kept every grant those policies relied on.
-    let sql = storage::generate(&ast_for("", "")).expect("storage sql generates");
-    assert!(sql.contains("DO $retire_storage_policies$"), "got:\n{sql}");
-    assert!(
-        sql.contains("ARRAY[]::text[]"),
-        "nothing is expected, so everything marked goes:\n{sql}"
-    );
-    assert!(
-        sql.contains("to_regclass('storage.objects') IS NULL"),
-        "a database that never had storage has nothing to sweep:\n{sql}"
-    );
-}
-
-#[test]
-fn the_sweep_also_reaches_bucket_policies_older_engines_left_unmarked() {
+fn only_the_shape_older_engines_gave_bucket_policies_is_ours_by_name() {
     // Older engines wrote `storage_<label>_sel|ins|del` with no marker. Left behind, they now take
-    // effect, because the caller roles hold INSERT, UPDATE and DELETE.
-    let sql = sql_for(AVATARS_READ_CREATE, "");
-    assert!(
-        sql.contains("polname ~ '^storage_[A-Za-z0-9_]+_(sel|ins|del)$'"),
-        "got:\n{sql}"
-    );
+    // effect, because the caller roles hold INSERT, UPDATE and DELETE, so the reconcile takes them
+    // as its own and drops one nothing desires.
+    for name in [
+        "storage_avatars_sel",
+        "storage_user_avatars_ins",
+        "storage_x_del",
+    ] {
+        assert!(
+            storage::is_unmarked_bucket_policy("storage", "objects", name),
+            "{name}"
+        );
+    }
+    for (schema, table, name) in [
+        ("storage", "objects", "team_rule"),
+        ("storage", "objects", "storage__sel"),
+        ("storage", "objects", "storage_avatars_upd"),
+        ("storage", "objects", "storage_a-b_sel"),
+        ("storage", "buckets", "storage_avatars_sel"),
+        ("public", "objects", "storage_avatars_sel"),
+    ] {
+        assert!(
+            !storage::is_unmarked_bucket_policy(schema, table, name),
+            "{schema}.{table}.{name}"
+        );
+    }
 }
 
 #[test]

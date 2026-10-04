@@ -150,11 +150,6 @@ pub enum Operation {
         policy: String,
         risk: Risk,
     },
-    DropRlsPolicy {
-        table: String,
-        policy: String,
-        risk: Risk,
-    },
     CreateJunctionTable {
         table: String,
         fk_a: String,
@@ -320,7 +315,6 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::DropUniqueConstraint { risk, .. }
         | Operation::EnableRls { risk, .. }
         | Operation::CreateRlsPolicy { risk, .. }
-        | Operation::DropRlsPolicy { risk, .. }
         | Operation::CreateJunctionTable { risk, .. }
         | Operation::CreateVersionsTable { risk, .. }
         | Operation::EnableExtension { risk, .. } => risk,

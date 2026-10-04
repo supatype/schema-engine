@@ -423,384 +423,6 @@ ALTER TABLE "public"."chat_message" ENABLE ROW LEVEL SECURITY;
 -- [safe] Enable RLS: _global_site_settings
 ALTER TABLE "public"."_global_site_settings" ENABLE ROW LEVEL SECURITY;
 
--- [safe] Create RLS policy: page.page_select
-DROP POLICY IF EXISTS "page_select" ON "public"."page";
-CREATE POLICY "page_select" ON "public"."page"
-FOR SELECT USING (
-    "published_at" <= (SELECT now())
-  );
-
-COMMENT ON POLICY "page_select" ON "public"."page" IS 'supatype:managed;kind=rls_policy;table=page;fields=select;v=1';
-
-
--- [safe] Create RLS policy: page.page_insert
-DROP POLICY IF EXISTS "page_insert" ON "public"."page";
-CREATE POLICY "page_insert" ON "public"."page"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "page_insert" ON "public"."page" IS 'supatype:managed;kind=rls_policy;table=page;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: page.page_update
-DROP POLICY IF EXISTS "page_update" ON "public"."page";
-CREATE POLICY "page_update" ON "public"."page"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "page_update" ON "public"."page" IS 'supatype:managed;kind=rls_policy;table=page;fields=update;v=1';
-
-
--- [safe] Create RLS policy: page.page_delete
-DROP POLICY IF EXISTS "page_delete" ON "public"."page";
-CREATE POLICY "page_delete" ON "public"."page"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "page_delete" ON "public"."page" IS 'supatype:managed;kind=rls_policy;table=page;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: speaker.speaker_select
-DROP POLICY IF EXISTS "speaker_select" ON "public"."speaker";
-CREATE POLICY "speaker_select" ON "public"."speaker"
-FOR SELECT USING (
-    "published_at" <= (SELECT now())
-  );
-
-COMMENT ON POLICY "speaker_select" ON "public"."speaker" IS 'supatype:managed;kind=rls_policy;table=speaker;fields=select;v=1';
-
-
--- [safe] Create RLS policy: speaker.speaker_insert
-DROP POLICY IF EXISTS "speaker_insert" ON "public"."speaker";
-CREATE POLICY "speaker_insert" ON "public"."speaker"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "speaker_insert" ON "public"."speaker" IS 'supatype:managed;kind=rls_policy;table=speaker;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: speaker.speaker_update
-DROP POLICY IF EXISTS "speaker_update" ON "public"."speaker";
-CREATE POLICY "speaker_update" ON "public"."speaker"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "speaker_update" ON "public"."speaker" IS 'supatype:managed;kind=rls_policy;table=speaker;fields=update;v=1';
-
-
--- [safe] Create RLS policy: speaker.speaker_delete
-DROP POLICY IF EXISTS "speaker_delete" ON "public"."speaker";
-CREATE POLICY "speaker_delete" ON "public"."speaker"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "speaker_delete" ON "public"."speaker" IS 'supatype:managed;kind=rls_policy;table=speaker;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: room.room_select
-DROP POLICY IF EXISTS "room_select" ON "public"."room";
-CREATE POLICY "room_select" ON "public"."room"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "room_select" ON "public"."room" IS 'supatype:managed;kind=rls_policy;table=room;fields=select;v=1';
-
-
--- [safe] Create RLS policy: room.room_insert
-DROP POLICY IF EXISTS "room_insert" ON "public"."room";
-CREATE POLICY "room_insert" ON "public"."room"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "room_insert" ON "public"."room" IS 'supatype:managed;kind=rls_policy;table=room;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: room.room_update
-DROP POLICY IF EXISTS "room_update" ON "public"."room";
-CREATE POLICY "room_update" ON "public"."room"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "room_update" ON "public"."room" IS 'supatype:managed;kind=rls_policy;table=room;fields=update;v=1';
-
-
--- [safe] Create RLS policy: room.room_delete
-DROP POLICY IF EXISTS "room_delete" ON "public"."room";
-CREATE POLICY "room_delete" ON "public"."room"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "room_delete" ON "public"."room" IS 'supatype:managed;kind=rls_policy;table=room;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: talk.talk_select
-DROP POLICY IF EXISTS "talk_select" ON "public"."talk";
-CREATE POLICY "talk_select" ON "public"."talk"
-FOR SELECT USING (
-    "published_at" <= (SELECT now())
-  );
-
-COMMENT ON POLICY "talk_select" ON "public"."talk" IS 'supatype:managed;kind=rls_policy;table=talk;fields=select;v=1';
-
-
--- [safe] Create RLS policy: talk.talk_insert
-DROP POLICY IF EXISTS "talk_insert" ON "public"."talk";
-CREATE POLICY "talk_insert" ON "public"."talk"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "talk_insert" ON "public"."talk" IS 'supatype:managed;kind=rls_policy;table=talk;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: talk.talk_update
-DROP POLICY IF EXISTS "talk_update" ON "public"."talk";
-CREATE POLICY "talk_update" ON "public"."talk"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "talk_update" ON "public"."talk" IS 'supatype:managed;kind=rls_policy;table=talk;fields=update;v=1';
-
-
--- [safe] Create RLS policy: talk.talk_delete
-DROP POLICY IF EXISTS "talk_delete" ON "public"."talk";
-CREATE POLICY "talk_delete" ON "public"."talk"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "talk_delete" ON "public"."talk" IS 'supatype:managed;kind=rls_policy;table=talk;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: sponsor.sponsor_select
-DROP POLICY IF EXISTS "sponsor_select" ON "public"."sponsor";
-CREATE POLICY "sponsor_select" ON "public"."sponsor"
-FOR SELECT USING (
-    "published_at" <= (SELECT now())
-  );
-
-COMMENT ON POLICY "sponsor_select" ON "public"."sponsor" IS 'supatype:managed;kind=rls_policy;table=sponsor;fields=select;v=1';
-
-
--- [safe] Create RLS policy: sponsor.sponsor_insert
-DROP POLICY IF EXISTS "sponsor_insert" ON "public"."sponsor";
-CREATE POLICY "sponsor_insert" ON "public"."sponsor"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "sponsor_insert" ON "public"."sponsor" IS 'supatype:managed;kind=rls_policy;table=sponsor;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: sponsor.sponsor_update
-DROP POLICY IF EXISTS "sponsor_update" ON "public"."sponsor";
-CREATE POLICY "sponsor_update" ON "public"."sponsor"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "sponsor_update" ON "public"."sponsor" IS 'supatype:managed;kind=rls_policy;table=sponsor;fields=update;v=1';
-
-
--- [safe] Create RLS policy: sponsor.sponsor_delete
-DROP POLICY IF EXISTS "sponsor_delete" ON "public"."sponsor";
-CREATE POLICY "sponsor_delete" ON "public"."sponsor"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "sponsor_delete" ON "public"."sponsor" IS 'supatype:managed;kind=rls_policy;table=sponsor;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: attendee.attendee_select
-DROP POLICY IF EXISTS "attendee_select" ON "public"."attendee";
-CREATE POLICY "attendee_select" ON "public"."attendee"
-FOR SELECT USING (
-    (SELECT auth.uid()) IS NOT NULL
-  );
-
-COMMENT ON POLICY "attendee_select" ON "public"."attendee" IS 'supatype:managed;kind=rls_policy;table=attendee;fields=select;v=1';
-
-
--- [safe] Create RLS policy: attendee.attendee_insert
-DROP POLICY IF EXISTS "attendee_insert" ON "public"."attendee";
-CREATE POLICY "attendee_insert" ON "public"."attendee"
-FOR INSERT WITH CHECK (
-    (SELECT auth.uid()) IS NOT NULL
-  );
-
-COMMENT ON POLICY "attendee_insert" ON "public"."attendee" IS 'supatype:managed;kind=rls_policy;table=attendee;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: attendee.attendee_update
-DROP POLICY IF EXISTS "attendee_update" ON "public"."attendee";
-CREATE POLICY "attendee_update" ON "public"."attendee"
-FOR UPDATE USING (
-    (SELECT auth.uid()) = "id"
-  ) WITH CHECK (
-    (SELECT auth.uid()) = "id"
-  );
-
-COMMENT ON POLICY "attendee_update" ON "public"."attendee" IS 'supatype:managed;kind=rls_policy;table=attendee;fields=update;v=1';
-
-
--- [safe] Create RLS policy: attendee.attendee_delete
-DROP POLICY IF EXISTS "attendee_delete" ON "public"."attendee";
-CREATE POLICY "attendee_delete" ON "public"."attendee"
-FOR DELETE USING (
-    (SELECT auth.uid()) = "id"
-  );
-
-COMMENT ON POLICY "attendee_delete" ON "public"."attendee" IS 'supatype:managed;kind=rls_policy;table=attendee;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: ticket.ticket_select
-DROP POLICY IF EXISTS "ticket_select" ON "public"."ticket";
-CREATE POLICY "ticket_select" ON "public"."ticket"
-FOR SELECT USING (
-    (SELECT auth.uid()) = "auth_user_id"
-  );
-
-COMMENT ON POLICY "ticket_select" ON "public"."ticket" IS 'supatype:managed;kind=rls_policy;table=ticket;fields=select;v=1';
-
-
--- [safe] Create RLS policy: ticket.ticket_insert
-DROP POLICY IF EXISTS "ticket_insert" ON "public"."ticket";
-CREATE POLICY "ticket_insert" ON "public"."ticket"
-FOR INSERT WITH CHECK (
-    (SELECT auth.uid()) IS NOT NULL
-  );
-
-COMMENT ON POLICY "ticket_insert" ON "public"."ticket" IS 'supatype:managed;kind=rls_policy;table=ticket;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: ticket.ticket_update
-DROP POLICY IF EXISTS "ticket_update" ON "public"."ticket";
-CREATE POLICY "ticket_update" ON "public"."ticket"
-FOR UPDATE USING (
-    (SELECT auth.uid()) = "auth_user_id"
-  ) WITH CHECK (
-    (SELECT auth.uid()) = "auth_user_id"
-  );
-
-COMMENT ON POLICY "ticket_update" ON "public"."ticket" IS 'supatype:managed;kind=rls_policy;table=ticket;fields=update;v=1';
-
-
--- [safe] Create RLS policy: ticket.ticket_delete
-DROP POLICY IF EXISTS "ticket_delete" ON "public"."ticket";
-CREATE POLICY "ticket_delete" ON "public"."ticket"
-FOR DELETE USING (
-    (SELECT auth.uid()) = "auth_user_id"
-  );
-
-COMMENT ON POLICY "ticket_delete" ON "public"."ticket" IS 'supatype:managed;kind=rls_policy;table=ticket;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: chat_message.chat_message_select
-DROP POLICY IF EXISTS "chat_message_select" ON "public"."chat_message";
-CREATE POLICY "chat_message_select" ON "public"."chat_message"
-FOR SELECT USING (
-    (SELECT auth.uid()) IS NOT NULL
-  );
-
-COMMENT ON POLICY "chat_message_select" ON "public"."chat_message" IS 'supatype:managed;kind=rls_policy;table=chat_message;fields=select;v=1';
-
-
--- [safe] Create RLS policy: chat_message.chat_message_insert
-DROP POLICY IF EXISTS "chat_message_insert" ON "public"."chat_message";
-CREATE POLICY "chat_message_insert" ON "public"."chat_message"
-FOR INSERT WITH CHECK (
-    (SELECT auth.uid()) IS NOT NULL
-  );
-
-COMMENT ON POLICY "chat_message_insert" ON "public"."chat_message" IS 'supatype:managed;kind=rls_policy;table=chat_message;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: chat_message.chat_message_update
-DROP POLICY IF EXISTS "chat_message_update" ON "public"."chat_message";
-CREATE POLICY "chat_message_update" ON "public"."chat_message"
-FOR UPDATE USING (
-    (SELECT auth.uid()) = "auth_user_id"
-  ) WITH CHECK (
-    (SELECT auth.uid()) = "auth_user_id"
-  );
-
-COMMENT ON POLICY "chat_message_update" ON "public"."chat_message" IS 'supatype:managed;kind=rls_policy;table=chat_message;fields=update;v=1';
-
-
--- [safe] Create RLS policy: chat_message.chat_message_delete
-DROP POLICY IF EXISTS "chat_message_delete" ON "public"."chat_message";
-CREATE POLICY "chat_message_delete" ON "public"."chat_message"
-FOR DELETE USING (
-    (SELECT auth.uid()) = "auth_user_id"
-  );
-
-COMMENT ON POLICY "chat_message_delete" ON "public"."chat_message" IS 'supatype:managed;kind=rls_policy;table=chat_message;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: _global_site_settings._global_site_settings_select
-DROP POLICY IF EXISTS "_global_site_settings_select" ON "public"."_global_site_settings";
-CREATE POLICY "_global_site_settings_select" ON "public"."_global_site_settings"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "_global_site_settings_select" ON "public"."_global_site_settings" IS 'supatype:managed;kind=rls_policy;table=_global_site_settings;fields=select;v=1';
-
-
--- [safe] Create RLS policy: _global_site_settings._global_site_settings_insert
-DROP POLICY IF EXISTS "_global_site_settings_insert" ON "public"."_global_site_settings";
-CREATE POLICY "_global_site_settings_insert" ON "public"."_global_site_settings"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "_global_site_settings_insert" ON "public"."_global_site_settings" IS 'supatype:managed;kind=rls_policy;table=_global_site_settings;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: _global_site_settings._global_site_settings_update
-DROP POLICY IF EXISTS "_global_site_settings_update" ON "public"."_global_site_settings";
-CREATE POLICY "_global_site_settings_update" ON "public"."_global_site_settings"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "_global_site_settings_update" ON "public"."_global_site_settings" IS 'supatype:managed;kind=rls_policy;table=_global_site_settings;fields=update;v=1';
-
-
--- [safe] Create RLS policy: _global_site_settings._global_site_settings_delete
-DROP POLICY IF EXISTS "_global_site_settings_delete" ON "public"."_global_site_settings";
-CREATE POLICY "_global_site_settings_delete" ON "public"."_global_site_settings"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "_global_site_settings_delete" ON "public"."_global_site_settings" IS 'supatype:managed;kind=rls_policy;table=_global_site_settings;fields=delete;v=1';
-
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_page"("page" "public"."page")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -1934,7 +1556,6 @@ CREATE POLICY "page_versions_select" ON "public"."page_versions"
     OR (SELECT _supatype.sees_all_drafts())
     OR _supatype.preview_allows('page', "record_id"::text)
   );
-COMMENT ON POLICY "page_versions_select" ON "public"."page_versions" IS 'supatype:managed;kind=rls_policy;table=page_versions;fields=select;v=1';
 
 REVOKE ALL PRIVILEGES ON "public"."page_versions" FROM anon;
 REVOKE ALL PRIVILEGES ON "public"."page_versions" FROM authenticated;
@@ -1967,17 +1588,14 @@ GRANT EXECUTE ON FUNCTION _supatype."sees_draft_page"(text) TO anon, authenticat
 DROP POLICY IF EXISTS "page_draft_select" ON "public"."page";
 CREATE POLICY "page_draft_select" ON "public"."page"
   FOR SELECT USING (_supatype."sees_draft_page"("id"::text));
-COMMENT ON POLICY "page_draft_select" ON "public"."page" IS 'supatype:managed;kind=rls_policy;table=page;fields=draft_select;v=1';
 
 DROP POLICY IF EXISTS "page_versions_insert" ON "public"."page_versions";
 CREATE POLICY "page_versions_insert" ON "public"."page_versions"
   FOR INSERT WITH CHECK (_supatype."can_edit_page"("record_id"));
-COMMENT ON POLICY "page_versions_insert" ON "public"."page_versions" IS 'supatype:managed;kind=rls_policy;table=page_versions;fields=insert;v=1';
 
 DROP POLICY IF EXISTS "page_versions_update" ON "public"."page_versions";
 CREATE POLICY "page_versions_update" ON "public"."page_versions"
   FOR UPDATE USING (_supatype."can_edit_page"("record_id")) WITH CHECK (_supatype."can_edit_page"("record_id"));
-COMMENT ON POLICY "page_versions_update" ON "public"."page_versions" IS 'supatype:managed;kind=rls_policy;table=page_versions;fields=update;v=1';
 
 GRANT INSERT, UPDATE ON "public"."page_versions" TO authenticated;
 
@@ -2033,7 +1651,6 @@ CREATE POLICY "speaker_versions_select" ON "public"."speaker_versions"
     OR (SELECT _supatype.sees_all_drafts())
     OR _supatype.preview_allows('speaker', "record_id"::text)
   );
-COMMENT ON POLICY "speaker_versions_select" ON "public"."speaker_versions" IS 'supatype:managed;kind=rls_policy;table=speaker_versions;fields=select;v=1';
 
 REVOKE ALL PRIVILEGES ON "public"."speaker_versions" FROM anon;
 REVOKE ALL PRIVILEGES ON "public"."speaker_versions" FROM authenticated;
@@ -2066,17 +1683,14 @@ GRANT EXECUTE ON FUNCTION _supatype."sees_draft_speaker"(text) TO anon, authenti
 DROP POLICY IF EXISTS "speaker_draft_select" ON "public"."speaker";
 CREATE POLICY "speaker_draft_select" ON "public"."speaker"
   FOR SELECT USING (_supatype."sees_draft_speaker"("id"::text));
-COMMENT ON POLICY "speaker_draft_select" ON "public"."speaker" IS 'supatype:managed;kind=rls_policy;table=speaker;fields=draft_select;v=1';
 
 DROP POLICY IF EXISTS "speaker_versions_insert" ON "public"."speaker_versions";
 CREATE POLICY "speaker_versions_insert" ON "public"."speaker_versions"
   FOR INSERT WITH CHECK (_supatype."can_edit_speaker"("record_id"));
-COMMENT ON POLICY "speaker_versions_insert" ON "public"."speaker_versions" IS 'supatype:managed;kind=rls_policy;table=speaker_versions;fields=insert;v=1';
 
 DROP POLICY IF EXISTS "speaker_versions_update" ON "public"."speaker_versions";
 CREATE POLICY "speaker_versions_update" ON "public"."speaker_versions"
   FOR UPDATE USING (_supatype."can_edit_speaker"("record_id")) WITH CHECK (_supatype."can_edit_speaker"("record_id"));
-COMMENT ON POLICY "speaker_versions_update" ON "public"."speaker_versions" IS 'supatype:managed;kind=rls_policy;table=speaker_versions;fields=update;v=1';
 
 GRANT INSERT, UPDATE ON "public"."speaker_versions" TO authenticated;
 
@@ -2132,7 +1746,6 @@ CREATE POLICY "talk_versions_select" ON "public"."talk_versions"
     OR (SELECT _supatype.sees_all_drafts())
     OR _supatype.preview_allows('talk', "record_id"::text)
   );
-COMMENT ON POLICY "talk_versions_select" ON "public"."talk_versions" IS 'supatype:managed;kind=rls_policy;table=talk_versions;fields=select;v=1';
 
 REVOKE ALL PRIVILEGES ON "public"."talk_versions" FROM anon;
 REVOKE ALL PRIVILEGES ON "public"."talk_versions" FROM authenticated;
@@ -2165,17 +1778,14 @@ GRANT EXECUTE ON FUNCTION _supatype."sees_draft_talk"(text) TO anon, authenticat
 DROP POLICY IF EXISTS "talk_draft_select" ON "public"."talk";
 CREATE POLICY "talk_draft_select" ON "public"."talk"
   FOR SELECT USING (_supatype."sees_draft_talk"("id"::text));
-COMMENT ON POLICY "talk_draft_select" ON "public"."talk" IS 'supatype:managed;kind=rls_policy;table=talk;fields=draft_select;v=1';
 
 DROP POLICY IF EXISTS "talk_versions_insert" ON "public"."talk_versions";
 CREATE POLICY "talk_versions_insert" ON "public"."talk_versions"
   FOR INSERT WITH CHECK (_supatype."can_edit_talk"("record_id"));
-COMMENT ON POLICY "talk_versions_insert" ON "public"."talk_versions" IS 'supatype:managed;kind=rls_policy;table=talk_versions;fields=insert;v=1';
 
 DROP POLICY IF EXISTS "talk_versions_update" ON "public"."talk_versions";
 CREATE POLICY "talk_versions_update" ON "public"."talk_versions"
   FOR UPDATE USING (_supatype."can_edit_talk"("record_id")) WITH CHECK (_supatype."can_edit_talk"("record_id"));
-COMMENT ON POLICY "talk_versions_update" ON "public"."talk_versions" IS 'supatype:managed;kind=rls_policy;table=talk_versions;fields=update;v=1';
 
 GRANT INSERT, UPDATE ON "public"."talk_versions" TO authenticated;
 
@@ -2400,5 +2010,232 @@ CREATE OR REPLACE TRIGGER "ticket_updated_at_trigger"
 BEFORE UPDATE ON "public"."ticket"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "_global_site_settings_delete" ON "public"."_global_site_settings"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "_global_site_settings_insert" ON "public"."_global_site_settings"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "_global_site_settings_select" ON "public"."_global_site_settings"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "_global_site_settings_update" ON "public"."_global_site_settings"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'editor'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "attendee_delete" ON "public"."attendee"
+FOR DELETE USING (
+    (SELECT auth.uid()) = "id"
+  );
+CREATE POLICY "attendee_insert" ON "public"."attendee"
+FOR INSERT WITH CHECK (
+    (SELECT auth.uid()) IS NOT NULL
+  );
+CREATE POLICY "attendee_select" ON "public"."attendee"
+FOR SELECT USING (
+    (SELECT auth.uid()) IS NOT NULL
+  );
+CREATE POLICY "attendee_update" ON "public"."attendee"
+FOR UPDATE USING (
+    (SELECT auth.uid()) = "id"
+  ) WITH CHECK (
+    (SELECT auth.uid()) = "id"
+  );
+CREATE POLICY "chat_message_delete" ON "public"."chat_message"
+FOR DELETE USING (
+    (SELECT auth.uid()) = "auth_user_id"
+  );
+CREATE POLICY "chat_message_insert" ON "public"."chat_message"
+FOR INSERT WITH CHECK (
+    (SELECT auth.uid()) IS NOT NULL
+  );
+CREATE POLICY "chat_message_select" ON "public"."chat_message"
+FOR SELECT USING (
+    (SELECT auth.uid()) IS NOT NULL
+  );
+CREATE POLICY "chat_message_update" ON "public"."chat_message"
+FOR UPDATE USING (
+    (SELECT auth.uid()) = "auth_user_id"
+  ) WITH CHECK (
+    (SELECT auth.uid()) = "auth_user_id"
+  );
+CREATE POLICY "page_delete" ON "public"."page"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "page_insert" ON "public"."page"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "page_select" ON "public"."page"
+FOR SELECT USING (
+    "published_at" <= (SELECT now())
+  );
+CREATE POLICY "page_update" ON "public"."page"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'editor'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "room_delete" ON "public"."room"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "room_insert" ON "public"."room"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "room_select" ON "public"."room"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "room_update" ON "public"."room"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'editor'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "speaker_delete" ON "public"."speaker"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "speaker_insert" ON "public"."speaker"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "speaker_select" ON "public"."speaker"
+FOR SELECT USING (
+    "published_at" <= (SELECT now())
+  );
+CREATE POLICY "speaker_update" ON "public"."speaker"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'editor'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "sponsor_delete" ON "public"."sponsor"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "sponsor_insert" ON "public"."sponsor"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "sponsor_select" ON "public"."sponsor"
+FOR SELECT USING (
+    "published_at" <= (SELECT now())
+  );
+CREATE POLICY "sponsor_update" ON "public"."sponsor"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'editor'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "talk_delete" ON "public"."talk"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "talk_insert" ON "public"."talk"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "talk_select" ON "public"."talk"
+FOR SELECT USING (
+    "published_at" <= (SELECT now())
+  );
+CREATE POLICY "talk_update" ON "public"."talk"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'editor'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "ticket_delete" ON "public"."ticket"
+FOR DELETE USING (
+    (SELECT auth.uid()) = "auth_user_id"
+  );
+CREATE POLICY "ticket_insert" ON "public"."ticket"
+FOR INSERT WITH CHECK (
+    (SELECT auth.uid()) IS NOT NULL
+  );
+CREATE POLICY "ticket_select" ON "public"."ticket"
+FOR SELECT USING (
+    (SELECT auth.uid()) = "auth_user_id"
+  );
+CREATE POLICY "ticket_update" ON "public"."ticket"
+FOR UPDATE USING (
+    (SELECT auth.uid()) = "auth_user_id"
+  ) WITH CHECK (
+    (SELECT auth.uid()) = "auth_user_id"
+  );
+CREATE POLICY "storage_speaker_headshots_del" ON "storage"."objects"
+  FOR DELETE USING (
+    bucket_id = 'speaker-headshots' AND (auth.uid() = owner)
+  );
+CREATE POLICY "storage_speaker_headshots_ins" ON "storage"."objects"
+  FOR INSERT WITH CHECK (
+    bucket_id = 'speaker-headshots' AND (auth.uid() IS NOT NULL)
+  );
+-- Declarative storage policies for bucket id (sanitized label: speaker_headshots)
+CREATE POLICY "storage_speaker_headshots_sel" ON "storage"."objects"
+  FOR SELECT USING (
+    bucket_id = 'speaker-headshots' AND (TRUE)
+  );
+CREATE POLICY "storage_speaker_headshots_upd" ON "storage"."objects"
+  FOR UPDATE USING (
+    bucket_id = 'speaker-headshots' AND (auth.uid() = owner)
+  ) WITH CHECK (
+    bucket_id = 'speaker-headshots' AND (auth.uid() = owner)
+  );
+CREATE POLICY "storage_sponsor_assets_del" ON "storage"."objects"
+  FOR DELETE USING (
+    bucket_id = 'sponsor-assets' AND (FALSE)
+  );
+CREATE POLICY "storage_sponsor_assets_ins" ON "storage"."objects"
+  FOR INSERT WITH CHECK (
+    bucket_id = 'sponsor-assets' AND (auth.role() = 'sponsor')
+  );
+-- Declarative storage policies for bucket id (sanitized label: sponsor_assets)
+CREATE POLICY "storage_sponsor_assets_sel" ON "storage"."objects"
+  FOR SELECT USING (
+    bucket_id = 'sponsor-assets' AND (auth.role() = 'sponsor')
+  );
+CREATE POLICY "storage_sponsor_assets_upd" ON "storage"."objects"
+  FOR UPDATE USING (
+    bucket_id = 'sponsor-assets' AND (FALSE)
+  ) WITH CHECK (
+    bucket_id = 'sponsor-assets' AND (FALSE)
+  );
+CREATE POLICY "storage_ticket_files_del" ON "storage"."objects"
+  FOR DELETE USING (
+    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+  );
+
+-- Storage policies for model 'speaker', bucket 'speaker-headshots'
+
+-- Storage policies for model 'sponsor', bucket 'sponsor-assets'
+
+-- Storage policies for model 'attendee', bucket 'speaker-headshots'
+
+-- Storage policies for model 'ticket', bucket 'ticket-files'
+CREATE POLICY "storage_ticket_files_ins" ON "storage"."objects"
+  FOR INSERT WITH CHECK (
+    bucket_id = 'ticket-files' AND (auth.uid() IS NOT NULL)
+  );
+-- Declarative storage policies for bucket id (sanitized label: ticket_files)
+CREATE POLICY "storage_ticket_files_sel" ON "storage"."objects"
+  FOR SELECT USING (
+    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+  );
+CREATE POLICY "storage_ticket_files_upd" ON "storage"."objects"
+  FOR UPDATE USING (
+    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+  ) WITH CHECK (
+    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+  );
 
 COMMIT;

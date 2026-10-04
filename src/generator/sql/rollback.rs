@@ -43,9 +43,10 @@ pub fn script(lines: &[String]) -> String {
 
 fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
     let sql = match op {
-        // CreateTable → DROP TABLE
+        // CreateTable → DROP TABLE, never `CASCADE` (plan 3.3): the reconcile's rollback, which runs
+        // first, has already dropped what of ours depends on the table.
         Operation::CreateTable { table, .. } => {
-            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;")
+            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\";")
         }
         // RenameTable → rename back
         Operation::RenameTable { from, to, .. } => {
@@ -135,21 +136,15 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";")
         }
-        // DropRlsPolicy → cannot restore
-        Operation::DropRlsPolicy { table, policy, .. } => {
-            format!(
-                "-- WARNING: Cannot automatically roll back DROP POLICY \"{table}\".\"{policy}\"."
-            )
-        }
         // CreateJunctionTable → DROP TABLE
         Operation::CreateJunctionTable { table, .. } => {
-            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;")
+            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\";")
         }
         // CreateVersionsTable → DROP TABLE. Safe to roll back exactly because the operation only
         // ever *creates*: it runs when the table is absent, so a rollback removes a table this
         // migration made and no history that predates it.
         Operation::CreateVersionsTable { versions_table, .. } => {
-            format!("DROP TABLE IF EXISTS \"{schema}\".\"{versions_table}\" CASCADE;")
+            format!("DROP TABLE IF EXISTS \"{schema}\".\"{versions_table}\";")
         }
         // EnableExtension → DROP EXTENSION (risky, so only emit a warning)
         Operation::EnableExtension { name, .. } => {
@@ -282,7 +277,6 @@ fn forward_description(op: &Operation) -> String {
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("create policy {table}.{policy}")
         }
-        Operation::DropRlsPolicy { table, policy, .. } => format!("drop policy {table}.{policy}"),
         Operation::CreateJunctionTable { table, .. } => format!("create junction table {table}"),
         Operation::CreateVersionsTable { versions_table, .. } => {
             format!("create versions table {versions_table}")

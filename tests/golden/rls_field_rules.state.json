@@ -694,7 +694,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
-        "managed": true
+        "managed": false
       },
       {
         "table": "categories",
@@ -703,7 +703,7 @@
         "permissive": true,
         "usingExpr": "((( SELECT role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM posts\n  WHERE (posts.author_id = ( SELECT uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT uid() AS uid)))))))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "comments",
@@ -712,7 +712,7 @@
         "permissive": true,
         "usingExpr": "false",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "comments",
@@ -721,7 +721,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "comments",
@@ -730,7 +730,7 @@
         "permissive": true,
         "usingExpr": "((author_id = ( SELECT uid() AS uid)) AND (NOT (( SELECT role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = claim_text('app_metadata.tier'::text)))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "comments",
@@ -739,7 +739,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = author_id)",
         "checkExpr": "(( SELECT uid() AS uid) = author_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts",
@@ -748,7 +748,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts",
@@ -757,7 +757,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts",
@@ -766,7 +766,7 @@
         "permissive": true,
         "usingExpr": "((( SELECT role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '30 days'::interval))) AND (updated_at <= ( SELECT (now() + '7 days'::interval)))))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts",
@@ -775,7 +775,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = author_id)",
         "checkExpr": "(title <> ''::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "tags",
@@ -784,7 +784,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(name = ANY (ARRAY['featured'::text, 'archive'::text]))",
-        "managed": true
+        "managed": false
       },
       {
         "table": "tags",
@@ -793,7 +793,7 @@
         "permissive": true,
         "usingExpr": "(name IS NOT NULL)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "users",
@@ -802,7 +802,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "users",
@@ -811,7 +811,7 @@
         "permissive": true,
         "usingExpr": "(true OR (created_at >= ( SELECT date_trunc('year'::text, now()) AS date_trunc)))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "users",
@@ -820,7 +820,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = id)",
         "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
+        "managed": false
       }
     ],
     "triggers": [
@@ -2008,111 +2008,201 @@
         "forced": false
       }
     ],
-    "policyRoles": [
+    "policies": [
       {
+        "schema": "public",
         "table": "categories",
-        "policy": "categories_insert",
+        "name": "categories_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "categories",
-        "policy": "categories_select",
+        "name": "categories_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "((( SELECT role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM posts\n  WHERE (posts.author_id = ( SELECT uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT uid() AS uid)))))))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "comments",
-        "policy": "comments_delete",
+        "name": "comments_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "false",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "comments",
-        "policy": "comments_insert",
+        "name": "comments_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "comments",
-        "policy": "comments_select",
+        "name": "comments_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "((author_id = ( SELECT uid() AS uid)) AND (NOT (( SELECT role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = claim_text('app_metadata.tier'::text)))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "comments",
-        "policy": "comments_update",
+        "name": "comments_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = author_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts",
-        "policy": "posts_delete",
+        "name": "posts_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts",
-        "policy": "posts_insert",
+        "name": "posts_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts",
-        "policy": "posts_select",
+        "name": "posts_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "((( SELECT role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '30 days'::interval))) AND (updated_at <= ( SELECT (now() + '7 days'::interval)))))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts",
-        "policy": "posts_update",
+        "name": "posts_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
+        "checkExpr": "(title <> ''::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "tags",
-        "policy": "tags_insert",
+        "name": "tags_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(name = ANY (ARRAY['featured'::text, 'archive'::text]))",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "tags",
-        "policy": "tags_select",
+        "name": "tags_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(name IS NOT NULL)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "users",
-        "policy": "users_delete",
+        "name": "users_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "users",
-        "policy": "users_select",
+        "name": "users_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(true OR (created_at >= ( SELECT date_trunc('year'::text, now()) AS date_trunc)))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "users",
-        "policy": "users_update",
+        "name": "users_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "comment": null
       }
     ],
     "engineTables": []

@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::catalog::{CatalogState, DbFunction, DbSecurityLabel};
+use super::catalog::{CatalogState, DbFunction, DbPolicy, DbSecurityLabel};
 use super::constraints::{DbConstraint, DbConstraintType};
 use super::indexes::DbIndex;
 use super::tables::DbTable;
@@ -335,6 +335,52 @@ fn security_label_create_sql(l: &DbSecurityLabel) -> String {
     )
 }
 
+/// `CREATE POLICY` for a policy as the catalog reports it: what a rollback runs to restore one
+/// the push dropped or replaced.
+fn policy_create_sql(p: &DbPolicy) -> String {
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let command = match p.command.as_str() {
+        "r" => "SELECT",
+        "a" => "INSERT",
+        "w" => "UPDATE",
+        "d" => "DELETE",
+        _ => "ALL",
+    };
+    let roles = p
+        .roles
+        .iter()
+        .map(|r| {
+            if r == "public" {
+                "PUBLIC".to_string()
+            } else {
+                quote(r)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let using = p
+        .using_expr
+        .as_deref()
+        .map(|e| format!(" USING ({e})"))
+        .unwrap_or_default();
+    let check = p
+        .check_expr
+        .as_deref()
+        .map(|e| format!(" WITH CHECK ({e})"))
+        .unwrap_or_default();
+    format!(
+        "CREATE POLICY {} ON {}.{} AS {} FOR {command} TO {roles}{using}{check};",
+        quote(&p.name),
+        quote(&p.schema),
+        quote(&p.table),
+        if p.permissive {
+            "PERMISSIVE"
+        } else {
+            "RESTRICTIVE"
+        },
+    )
+}
+
 /// Every fingerprint the two states support, sorted by kind, schema, parent and name.
 pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFingerprint> {
     let schema = db.schema.as_str();
@@ -500,19 +546,14 @@ fn relation_entries<'a>(
     }
 }
 
-/// Policies from the differ's state and every kind the catalog sweep reads.
+/// Every kind the catalog sweep reads.
 fn policy_and_catalog_entries(
     db: &DatabaseState,
     catalog: &CatalogState,
     out: &mut Vec<ObjectFingerprint>,
 ) {
     let schema = db.schema.as_str();
-    let roles_of: HashMap<(&str, &str), &Vec<String>> = catalog
-        .policy_roles
-        .iter()
-        .map(|r| ((r.table.as_str(), r.policy.as_str()), &r.roles))
-        .collect();
-    for p in &db.rls_policies {
+    for p in &catalog.policies {
         let using = p
             .using_expr
             .as_deref()
@@ -523,13 +564,10 @@ fn policy_and_catalog_entries(
             .as_deref()
             .map(normalise_sql)
             .unwrap_or_default();
-        let roles = roles_of
-            .get(&(p.table.as_str(), p.name.as_str()))
-            .map(|r| r.join(","))
-            .unwrap_or_default();
-        out.push(entry(
+        let roles = p.roles.join(",");
+        let mut fingerprint = entry(
             ObjectKind::Policy,
-            schema,
+            &p.schema,
             &p.table,
             &p.name,
             &[
@@ -539,7 +577,10 @@ fn policy_and_catalog_entries(
                 using.as_str(),
                 check.as_str(),
             ],
-        ));
+        )
+        .commented(p.comment.as_deref());
+        fingerprint.create_sql = Some(policy_create_sql(p));
+        out.push(fingerprint);
     }
 
     for a in &catalog.rls_attributes {

@@ -1932,13 +1932,16 @@ fn test_rls_fresh_model_authenticated() {
         .any(|op| matches!(op, Operation::EnableRls { table, .. } if table == "posts"));
     assert!(enable_rls, "should emit EnableRls for posts");
 
-    let create_policy = diff.operations.iter().any(|op| {
-        matches!(op, Operation::CreateRlsPolicy { table, policy, .. }
-            if table == "posts" && policy == "posts_select")
+    // The policy itself is a desired object the reconcile creates (Phase 4.7b).
+    let desired = supatype_engine::desired::desired_objects(&ast, "public").unwrap();
+    let select = desired.iter().find(|o| {
+        o.key.kind == supatype_engine::introspector::fingerprint::ObjectKind::Policy
+            && o.key.parent == "posts"
+            && o.key.name == "posts_select"
     });
     assert!(
-        create_policy,
-        "should emit CreateRlsPolicy for posts_select"
+        select.is_some_and(|o| o.create_sql.contains("auth.uid()")),
+        "posts_select must be desired with the authenticated rule"
     );
 
     assert!(!diff.summary.is_destructive, "RLS enable is safe");
@@ -1994,100 +1997,12 @@ fn test_rls_any_rule_generates_or_expression() {
     assert!(expr.contains("admin"), "role clause must include role name");
 }
 
-// ─── Scenario 24: access rule changed → drop + recreate policy ───────────────
+// ─── Scenario 25: model loses access rules → warning ─────────────────────────
 
 #[test]
-fn test_rls_changed_expression_triggers_recreate() {
-    // DB has posts_select with expression for 'public'; schema now says 'authenticated'.
-    // Differ emits CreateRlsPolicy only (idempotent DROP IF EXISTS + CREATE in SQL).
-    let ast_json = r#"{
-  "astVersion": 2,
-  "models": [
-    {
-      "name": "Post",
-      "fields": {
-        "id": {
-          "kind": "uuid",
-          "primaryKey": true,
-          "required": true,
-          "default": {
-            "kind": "genRandomUuid"
-          },
-          "annotations": {
-            "db": {
-              "pgType": "UUID",
-              "unique": false
-            }
-          }
-        }
-      },
-      "options": {
-        "timestamps": false,
-        "softDelete": false
-      },
-      "annotations": {
-        "db": {
-          "tableName": "posts",
-          "indexes": []
-        },
-        "platform": {
-          "access": {
-            "read": {
-              "type": "authenticated"
-            }
-          }
-        }
-      }
-    }
-  ]
-}"#;
-
-    let ast = parser::parse(ast_json).unwrap();
-    let db = DatabaseState {
-        tables: vec![DbTable {
-            schema: "public".into(),
-            name: "posts".into(),
-            comment: Some("supatype:managed;kind=table".into()),
-            columns: vec![col("id", "uuid")],
-        }],
-        rls_policies: vec![DbRlsPolicy {
-            table: "posts".into(),
-            name: "posts_select".into(),
-            command: "r".into(),
-            permissive: true,
-            // Old expression: true (public access)
-            using_expr: Some("true".into()),
-            check_expr: None,
-            managed: true,
-        }],
-        ..DatabaseState::default()
-    };
-
-    let diff = differ::diff(&ast, &db).unwrap();
-
-    let drop_policy = diff.operations.iter().any(
-        |op| matches!(op, Operation::DropRlsPolicy { policy, .. } if policy == "posts_select"),
-    );
-    assert!(
-        !drop_policy,
-        "must not emit separate DropRlsPolicy: CreateRlsPolicy SQL is idempotent"
-    );
-
-    let create_policy = diff.operations.iter().any(
-        |op| matches!(op, Operation::CreateRlsPolicy { policy, .. } if policy == "posts_select"),
-    );
-    assert!(
-        create_policy,
-        "should emit CreateRlsPolicy when expression changed"
-    );
-}
-
-// ─── Scenario 25: model loses access rules → all policies dropped + warning ───
-
-#[test]
-fn test_rls_removed_access_rules_drops_policies_and_warns() {
-    // Schema no longer has access rules; DB has existing policy.
-    // Differ must drop all policies and emit a warning.
+fn test_rls_removed_access_rules_warns() {
+    // Schema no longer has access rules; DB has an existing policy. The differ warns that the
+    // table is deny-all; dropping the policy is the reconcile's (`policy_ledger_tests`).
     let ast_json = r#"{
   "astVersion": 2,
   "models": [
@@ -2147,14 +2062,6 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-
-    let drop_policy = diff.operations.iter().any(
-        |op| matches!(op, Operation::DropRlsPolicy { policy, .. } if policy == "posts_select"),
-    );
-    assert!(
-        drop_policy,
-        "should drop orphaned policy when access rules removed"
-    );
 
     assert!(
         !diff.warnings.is_empty(),
@@ -2512,7 +2419,8 @@ fn test_storage_rls_inherits_model_read_access_rule() {
 }"#;
 
     let ast = parser::parse(ast_json).unwrap();
-    let sql = storage::generate(&ast).unwrap();
+    // Row-level security from the storage layer, the policies from the reconcile (Phase 4.7b).
+    let sql = storage::generate(&ast).unwrap() + &storage::bucket_policies_sql(&ast);
 
     assert!(
         sql.contains("ENABLE ROW LEVEL SECURITY"),
@@ -2523,17 +2431,18 @@ fn test_storage_rls_inherits_model_read_access_rule() {
         "select policy must inherit authenticated rule"
     );
     assert!(
-        sql.contains("posts_avatar_sel"),
-        "select policy must be named table_bucket_sel"
+        sql.contains("CREATE POLICY \"posts_posts_avatar_sel\""),
+        "select policy must be named <table>_<bucket>_sel"
     );
-    assert!(
-        sql.contains("posts_avatar_ins"),
-        "insert policy must be named table_bucket_ins"
-    );
-    assert!(
-        sql.contains("posts_avatar_del"),
-        "delete policy must be named table_bucket_del"
-    );
+    // The model declares only a read rule, so uploads and deletes are refused, as a model's own
+    // table refuses what it does not declare. These names used to appear only in the drops.
+    for name in [
+        "posts_posts_avatar_ins",
+        "posts_posts_avatar_upd",
+        "posts_posts_avatar_del",
+    ] {
+        assert!(!sql.contains(name), "{name} granted without a rule:\n{sql}");
+    }
 }
 
 // ─── Scenario 30: two fields with same bucket name → deduplicated ─────────────

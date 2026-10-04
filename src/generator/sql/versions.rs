@@ -414,7 +414,6 @@ CREATE OR REPLACE FUNCTION {helper}.preview_allows(target_model text, target_rec
 /// without narrowing anything a caller can reach.
 fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &str) -> String {
     let policy = format!("{versions_table}_select");
-    let comment = crate::managed::managed_comment("rls_policy", versions_table, &["select"]);
     format!(
         "ALTER TABLE {schema_q}.{versions_q} ENABLE ROW LEVEL SECURITY;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{versions_q};\n\
@@ -424,8 +423,7 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
          -- Wrapped in a SELECT so it is evaluated once per statement, not once per row.\n    \
          OR (SELECT {helper}.sees_all_drafts())\n    \
          OR {helper}.preview_allows({model_lit}, \"record_id\"::text)\n  \
-         );\n\
-         COMMENT ON POLICY {policy_q} ON {schema_q}.{versions_q} IS '{comment}';\n\n\
+         );\n\n\
          REVOKE ALL PRIVILEGES ON {schema_q}.{versions_q} FROM anon;\n\
          REVOKE ALL PRIVILEGES ON {schema_q}.{versions_q} FROM authenticated;\n\
          GRANT SELECT ON {schema_q}.{versions_q} TO authenticated;\n\
@@ -591,16 +589,11 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
             // leaves a snapshot, so there is no pending version to read, no draft view, and nothing
             // for a caller to compose by hand: the snapshot table stays read-only to the API.
             //
-            // A model that drafted before has the write policies still, and they call the
-            // `can_edit` function the reconcile is about to drop (Phase 4.6); they go first. The
-            // write privilege goes with them. Policies are not on the ledger yet, so this is the
-            // layer's own tidying, as the draft view sweep is.
+            // A model that drafted before has the write policies still. They are the reconcile's
+            // to drop (Phase 4.7b), before the `can_edit` function they call; the write privilege
+            // is the layer's to take back until grants are on the ledger.
             out.push_str(&format!(
-                "DROP POLICY IF EXISTS {insert_q} ON {schema_q}.{versions_q};\n\
-                 DROP POLICY IF EXISTS {update_q} ON {schema_q}.{versions_q};\n\
-                 REVOKE INSERT, UPDATE ON {schema_q}.{versions_q} FROM authenticated;\n\n",
-                insert_q = quoted(&format!("{versions_table}_insert")),
-                update_q = quoted(&format!("{versions_table}_update")),
+                "REVOKE INSERT, UPDATE ON {schema_q}.{versions_q} FROM authenticated;\n\n",
                 schema_q = quoted(schema),
                 versions_q = quoted(&versions_table),
             ));
@@ -826,7 +819,6 @@ fn draft_aware_select_policy_sql(
     primary_key: &str,
 ) -> String {
     let policy = format!("{table}_draft_select");
-    let comment = crate::managed::managed_comment("rls_policy", table, &["draft_select"]);
     let helper_fn = sees_draft_function_name(table);
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record text)\n  \
@@ -844,8 +836,7 @@ fn draft_aware_select_policy_sql(
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}(text) TO anon, authenticated, service_role;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
          CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
-         FOR SELECT USING ({helper}.{fn_q}({pk_q}::text));\n\
-         COMMENT ON POLICY {policy_q} ON {schema_q}.{table_q} IS '{comment}';\n\n",
+         FOR SELECT USING ({helper}.{fn_q}({pk_q}::text));\n\n",
         helper = HELPER_SCHEMA,
         fn_q = quoted(&helper_fn),
         policy_q = quoted(&policy),
@@ -880,19 +871,15 @@ fn versions_write_access_sql(schema: &str, table: &str, versions_table: &str) ->
     let can_edit = format!("{HELPER_SCHEMA}.{}", quoted(&can_edit_function_name(table)));
     let insert_policy = format!("{versions_table}_insert");
     let update_policy = format!("{versions_table}_update");
-    let insert_comment = crate::managed::managed_comment("rls_policy", versions_table, &["insert"]);
-    let update_comment = crate::managed::managed_comment("rls_policy", versions_table, &["update"]);
     let guard = format!("{versions_table}_guard");
 
     format!(
         "DROP POLICY IF EXISTS {insert_q} ON {schema_q}.{versions_q};\n\
          CREATE POLICY {insert_q} ON {schema_q}.{versions_q}\n  \
-         FOR INSERT WITH CHECK ({can_edit}(\"record_id\"));\n\
-         COMMENT ON POLICY {insert_q} ON {schema_q}.{versions_q} IS '{insert_comment}';\n\n\
+         FOR INSERT WITH CHECK ({can_edit}(\"record_id\"));\n\n\
          DROP POLICY IF EXISTS {update_q} ON {schema_q}.{versions_q};\n\
          CREATE POLICY {update_q} ON {schema_q}.{versions_q}\n  \
-         FOR UPDATE USING ({can_edit}(\"record_id\")) WITH CHECK ({can_edit}(\"record_id\"));\n\
-         COMMENT ON POLICY {update_q} ON {schema_q}.{versions_q} IS '{update_comment}';\n\n\
+         FOR UPDATE USING ({can_edit}(\"record_id\")) WITH CHECK ({can_edit}(\"record_id\"));\n\n\
          GRANT INSERT, UPDATE ON {schema_q}.{versions_q} TO authenticated;\n\n\
          {trigger}",
         insert_q = quoted(&insert_policy),

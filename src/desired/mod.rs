@@ -277,6 +277,7 @@ pub fn desired_objects_for(
     b.versions_layer()?;
     b.affordance_functions();
     b.api_views();
+    b.bucket_policies();
     for junction in &ast.junction_tables {
         b.junction(junction)?;
     }
@@ -736,6 +737,14 @@ impl<'a> Builder<'a> {
     fn affordance_functions(&mut self) {
         let sql = crate::generator::sql::rls::generate_can_functions(self.ast, self.schema);
         self.attributed_script(&sql);
+    }
+
+    /// The policies on `storage.objects` the buckets' rules and the models storing into them ask
+    /// for (Phase 4.7b): ours by the ledger, created by the reconcile after the storage layer.
+    fn bucket_policies(&mut self) {
+        self.attributed_script(&crate::generator::sql::storage::bucket_policies_sql(
+            self.ast,
+        ));
     }
 
     /// The `api` field views and their write triggers (Phase 4.6), for the tables the push's plan

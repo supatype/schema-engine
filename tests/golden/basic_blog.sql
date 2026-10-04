@@ -187,90 +187,6 @@ ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 -- [safe] Enable RLS: posts
 ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
 
--- [safe] Create RLS policy: users.users_select
-DROP POLICY IF EXISTS "users_select" ON "public"."users";
-CREATE POLICY "users_select" ON "public"."users"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "users_select" ON "public"."users" IS 'supatype:managed;kind=rls_policy;table=users;fields=select;v=1';
-
-
--- [safe] Create RLS policy: users.users_insert
-DROP POLICY IF EXISTS "users_insert" ON "public"."users";
-CREATE POLICY "users_insert" ON "public"."users"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "users_insert" ON "public"."users" IS 'supatype:managed;kind=rls_policy;table=users;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: users.users_update
-DROP POLICY IF EXISTS "users_update" ON "public"."users";
-CREATE POLICY "users_update" ON "public"."users"
-FOR UPDATE USING (
-    (SELECT auth.uid()) = "id"
-  ) WITH CHECK (
-    (SELECT auth.uid()) = "id"
-  );
-
-COMMENT ON POLICY "users_update" ON "public"."users" IS 'supatype:managed;kind=rls_policy;table=users;fields=update;v=1';
-
-
--- [safe] Create RLS policy: users.users_delete
-DROP POLICY IF EXISTS "users_delete" ON "public"."users";
-CREATE POLICY "users_delete" ON "public"."users"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "users_delete" ON "public"."users" IS 'supatype:managed;kind=rls_policy;table=users;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: posts.posts_select
-DROP POLICY IF EXISTS "posts_select" ON "public"."posts";
-CREATE POLICY "posts_select" ON "public"."posts"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "posts_select" ON "public"."posts" IS 'supatype:managed;kind=rls_policy;table=posts;fields=select;v=1';
-
-
--- [safe] Create RLS policy: posts.posts_insert
-DROP POLICY IF EXISTS "posts_insert" ON "public"."posts";
-CREATE POLICY "posts_insert" ON "public"."posts"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])
-  );
-
-COMMENT ON POLICY "posts_insert" ON "public"."posts" IS 'supatype:managed;kind=rls_policy;table=posts;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: posts.posts_update
-DROP POLICY IF EXISTS "posts_update" ON "public"."posts";
-CREATE POLICY "posts_update" ON "public"."posts"
-FOR UPDATE USING (
-    (SELECT auth.uid()) = "author_id"
-  ) WITH CHECK (
-    (SELECT auth.uid()) = "author_id"
-  );
-
-COMMENT ON POLICY "posts_update" ON "public"."posts" IS 'supatype:managed;kind=rls_policy;table=posts;fields=update;v=1';
-
-
--- [safe] Create RLS policy: posts.posts_delete
-DROP POLICY IF EXISTS "posts_delete" ON "public"."posts";
-CREATE POLICY "posts_delete" ON "public"."posts"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "posts_delete" ON "public"."posts" IS 'supatype:managed;kind=rls_policy;table=posts;fields=delete;v=1';
-
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -432,5 +348,41 @@ CREATE OR REPLACE TRIGGER "users_updated_at_trigger"
 BEFORE UPDATE ON "public"."users"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "posts_delete" ON "public"."posts"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "posts_insert" ON "public"."posts"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])
+  );
+CREATE POLICY "posts_select" ON "public"."posts"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "posts_update" ON "public"."posts"
+FOR UPDATE USING (
+    (SELECT auth.uid()) = "author_id"
+  ) WITH CHECK (
+    (SELECT auth.uid()) = "author_id"
+  );
+CREATE POLICY "users_delete" ON "public"."users"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "users_insert" ON "public"."users"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "users_select" ON "public"."users"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "users_update" ON "public"."users"
+FOR UPDATE USING (
+    (SELECT auth.uid()) = "id"
+  ) WITH CHECK (
+    (SELECT auth.uid()) = "id"
+  );
 
 COMMIT;

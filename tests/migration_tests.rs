@@ -30,20 +30,20 @@ fn test_migration_generated_for_new_schema() {
 }
 
 #[test]
-fn test_forward_sql_emits_create_policy_for_access_rules() {
-    // basic_blog has access rules; five_model_blog uses empty access {} (no RLS ops).
+fn test_migration_creates_a_policy_per_access_rule() {
+    // basic_blog has access rules. Policies are the reconcile's (Phase 4.7b): a first push creates
+    // each one, with nothing to drop first and no stamp, since the ledger records them.
     let input = include_str!("fixtures/basic_blog.json");
     let ast = parser::parse(input).unwrap();
-    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    let forward = supatype_engine::push::fresh_migration(&ast, "public", false)
+        .unwrap()
+        .up_script();
     assert!(
-        forward.contains("CREATE POLICY"),
-        "CreateRlsPolicy ops must render as CREATE POLICY DDL; got:\n{forward}"
+        forward.contains("CREATE POLICY \"posts_select\""),
+        "each access rule must render as CREATE POLICY DDL; got:\n{forward}"
     );
-    assert!(
-        forward.contains("DROP POLICY IF EXISTS"),
-        "expected DROP POLICY IF EXISTS before each CREATE POLICY"
-    );
+    assert!(!forward.contains("DROP POLICY"), "{forward}");
+    assert!(!forward.contains("COMMENT ON POLICY"), "{forward}");
 }
 
 // Fix: "setNull" must render as "SET NULL", not "SETNULL".
@@ -187,7 +187,7 @@ fn test_vector_extension_emitted_for_vector_fields() {
 
 /// The auth helpers are re-asserted on every push, not only on pushes that touch RLS.
 ///
-/// They were gated on the diff carrying an `EnableRls` / `CreateRlsPolicy` / `DropRlsPolicy`
+/// They were gated on the diff carrying an `EnableRls` or a policy
 /// operation. A policy calls `auth.uid()`, so a definition that is only refreshed when a policy
 /// happens to change drifts from the policies that call it, and nothing notices until one evaluates
 /// against a stale helper. Grants and security labels already re-assert unconditionally; this makes
@@ -201,14 +201,10 @@ fn auth_helpers_are_emitted_on_a_push_that_touches_no_policy() {
 
     // Apply once, then diff the same schema against the state it produced: no RLS operations left.
     let first = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let rls_ops = first.operations.iter().any(|op| {
-        matches!(
-            op,
-            differ::Operation::EnableRls { .. }
-                | differ::Operation::CreateRlsPolicy { .. }
-                | differ::Operation::DropRlsPolicy { .. }
-        )
-    });
+    let rls_ops = first
+        .operations
+        .iter()
+        .any(|op| matches!(op, differ::Operation::EnableRls { .. }));
     assert!(
         rls_ops,
         "the fixture must carry RLS ops, or the contrast is empty"
@@ -217,14 +213,9 @@ fn auth_helpers_are_emitted_on_a_push_that_touches_no_policy() {
     // The same push once its policies are already in place: everything else still to do, no RLS
     // operation left to hang the helpers off.
     let mut steady = first.clone();
-    steady.operations.retain(|op| {
-        !matches!(
-            op,
-            differ::Operation::EnableRls { .. }
-                | differ::Operation::CreateRlsPolicy { .. }
-                | differ::Operation::DropRlsPolicy { .. }
-        )
-    });
+    steady
+        .operations
+        .retain(|op| !matches!(op, differ::Operation::EnableRls { .. }));
     assert!(
         !steady.operations.is_empty(),
         "the steady-state diff must still do something, or the preamble is all there is"

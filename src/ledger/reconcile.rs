@@ -36,26 +36,37 @@ pub struct Inputs<'a> {
     /// Tables this push drops. An owned object on one goes with it (plan 3.3): its row is removed
     /// and no drop of its own is emitted, since the table will not be there to alter.
     pub dropped_tables: &'a BTreeSet<ObjectKey>,
-    /// The engine's own schemas (plan 3.4). A desired object found there with no row is ours by
-    /// location, whatever an older engine made of it: brought up to date rather than refused.
-    pub owned_schemas: &'a [&'a str],
-    /// Security label providers the engine owns outright (plan section 5). A label under one is
-    /// ours wherever it is: claimed when desired, and taken off when nothing desires it, as a
-    /// stamped object is, since no one else writes under our provider.
-    pub owned_label_providers: &'a [&'a str],
+    /// What an object's location says about whose it is, for a live object with no row (plan 3.4
+    /// and section 5). The push knows the engine's schemas and names; the reconcile does not.
+    pub location: fn(&ObjectKey) -> Location,
     pub kinds: &'a [ObjectKind],
 }
 
-impl Inputs<'_> {
-    /// Ours by where it lives: one of the engine's schemas, or a label under our provider.
-    fn ours_by_location(&self, key: &ObjectKey) -> bool {
-        self.owned_schemas.contains(&key.schema.as_str()) || self.under_owned_provider(key)
-    }
+/// What a live object's location says about whose it is when the ledger has no row for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Location {
+    /// Nothing: whose it is rests on a stamp or on its structure (section 7).
+    Neutral,
+    /// In one of the engine's own schemas (plan 3.4): ours when the schema asks for it, brought up
+    /// to date rather than refused, and otherwise left alone.
+    Owned,
+    /// Somewhere only the engine writes (a label under our provider, section 5): ours whether or
+    /// not the schema asks for it, so taken off when it does not, as a stamped object is.
+    Exclusive,
+}
 
-    fn under_owned_provider(&self, key: &ObjectKey) -> bool {
-        key.kind == ObjectKind::SecurityLabel
-            && self.owned_label_providers.contains(&key.name.as_str())
-    }
+/// A location rule that knows no location, for callers with no engine schemas to name.
+pub fn no_location(_: &ObjectKey) -> Location {
+    Location::Neutral
+}
+
+/// Kinds whose name says what they govern, so a same-named live object with no row is ours and
+/// is replaced, whatever its comment or structure. A policy is named by its table and the
+/// operation it covers; the policy differ rewrote any policy on a name it owned, which is how an
+/// older engine's policies, stamped or not, are brought up to date. Its expression is what a
+/// takeover would have to compare, and replacing it costs one statement.
+fn claimed_by_name(kind: ObjectKind) -> bool {
+    kind == ObjectKind::Policy
 }
 
 /// The kinds Postgres replaces with `CREATE OR REPLACE`, so a new definition needs no drop first.
@@ -466,6 +477,49 @@ fn drop_for(key: &ObjectKey) -> String {
         .unwrap_or_else(|| panic!("{key} is on the reconcile with no drop statement"))
 }
 
+/// A desired object found live with no ledger row (section 7). Ours when its name says so (a
+/// policy), its stamp says so, or its location says so; adopted when its structure is exactly what
+/// we would create; otherwise a conflict the push refuses. What is ours but made differently is
+/// replaced, with its live definition kept for the rollback.
+fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFingerprint) -> Action {
+    let ours_by_location = (inputs.location)(&key) != Location::Neutral;
+    let replace = |previous_sql: &str| Action::Replace {
+        inline: inputs.created_by_parent.contains(&key),
+        key: key.clone(),
+        create_sql: d.create_sql.clone(),
+        previous_sql: previous_sql.to_string(),
+        status: Status::Managed,
+    };
+    if claimed_by_name(key.kind) {
+        return replace(l.create_sql.as_deref().unwrap_or_default());
+    }
+    let adopt = |reason, status| Action::Adopt {
+        key: key.clone(),
+        reason,
+        create_sql: d.create_sql.clone(),
+        comment: l.comment.clone(),
+        status,
+    };
+    if l.stamped() {
+        return adopt(AdoptReason::Stamped, Status::Managed);
+    }
+    if structure_matches(d, l) {
+        return if ours_by_location {
+            adopt(AdoptReason::OwnedSchema, Status::Managed)
+        } else {
+            adopt(AdoptReason::StructureMatches, Status::Adopted)
+        };
+    }
+    match l.create_sql.as_deref() {
+        Some(previous_sql) if ours_by_location => replace(previous_sql),
+        _ => Action::Conflict {
+            key: key.clone(),
+            create_sql: d.create_sql.clone(),
+            live_def: l.definition.clone(),
+        },
+    }
+}
+
 pub fn reconcile(inputs: Inputs<'_>) -> Plan {
     let kinds: BTreeSet<ObjectKind> = inputs.kinds.iter().copied().collect();
     let desired: BTreeMap<&ObjectKey, &DesiredObject> = inputs
@@ -564,52 +618,16 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                     status: Status::Managed,
                 });
             }
-            Some(l) => {
-                // Ours by location (plan 3.4 and section 5): an object in one of the engine's own
-                // schemas, or a label under our provider, is ours whoever wrote it, since nothing
-                // else writes there. Taken as `managed` when it is what we would create; replaced,
-                // with its live definition kept for the rollback, when it was made differently.
-                let ours_by_location = inputs.ours_by_location(&key);
-                let claim = if l.stamped() {
-                    Some((AdoptReason::Stamped, Status::Managed))
-                } else if ours_by_location && structure_matches(d, l) {
-                    Some((AdoptReason::OwnedSchema, Status::Managed))
-                } else if structure_matches(d, l) {
-                    Some((AdoptReason::StructureMatches, Status::Adopted))
-                } else {
-                    None
-                };
-                match (claim, l.create_sql.as_ref().filter(|_| ours_by_location)) {
-                    (Some((reason, status)), _) => changes.push(Action::Adopt {
-                        key,
-                        reason,
-                        create_sql: d.create_sql.clone(),
-                        comment: l.comment.clone(),
-                        status,
-                    }),
-                    (None, Some(previous_sql)) => changes.push(Action::Replace {
-                        inline: inputs.created_by_parent.contains(&key),
-                        key,
-                        create_sql: d.create_sql.clone(),
-                        previous_sql: previous_sql.clone(),
-                        status: Status::Managed,
-                    }),
-                    (None, None) => changes.push(Action::Conflict {
-                        key,
-                        create_sql: d.create_sql.clone(),
-                        live_def: l.definition.clone(),
-                    }),
-                }
-            }
+            Some(l) => changes.push(claim(&inputs, key, d, l)),
         }
     }
 
     // Objects of a moved kind that nothing declares any more and that are ours by their own record
-    // (an older engine's stamp, section 7, last paragraph) or by their provider (section 5): they
-    // are dropped, as the stamp-reading differ and the stale-label sweep dropped them. The live
-    // definition, where the catalog renders one, is what a rollback restores.
+    // (an older engine's stamp, section 7, last paragraph) or by where they live (section 5): they
+    // are dropped, as the stamp-reading differs and the sweeps dropped them. The live definition,
+    // where the catalog renders one, is what a rollback restores.
     for (key, l) in &live {
-        if !(l.stamped() || inputs.under_owned_provider(key))
+        if !(l.stamped() || (inputs.location)(key) == Location::Exclusive)
             || ledger.contains_key(key)
             || desired.contains_key(key)
             || goes_with_its_table(key)
@@ -699,8 +717,7 @@ mod tests {
             live,
             created_by_parent: &created_by_parent.iter().cloned().collect(),
             dropped_tables: &BTreeSet::new(),
-            owned_schemas: &[],
-            owned_label_providers: &[],
+            location: no_location,
             kinds: &[ObjectKind::Check],
         })
         .actions
@@ -808,8 +825,7 @@ mod tests {
             live: std::slice::from_ref(&l),
             created_by_parent: &none,
             dropped_tables: &none,
-            owned_schemas: &[],
-            owned_label_providers: &[],
+            location: no_location,
             kinds: &kinds,
         });
         assert!(
@@ -831,8 +847,7 @@ mod tests {
             live: std::slice::from_ref(&l),
             created_by_parent: &none,
             dropped_tables: &none,
-            owned_schemas: &[],
-            owned_label_providers: &[],
+            location: no_location,
             kinds: &kinds,
         });
         assert!(
@@ -1020,8 +1035,7 @@ mod tests {
             live: &[stamped(l.clone())],
             created_by_parent: &none,
             dropped_tables: &dropped,
-            owned_schemas: &[],
-            owned_label_providers: &[],
+            location: no_location,
             kinds: &[ObjectKind::Check],
         });
         // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.

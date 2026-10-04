@@ -1,15 +1,15 @@
-//! The storage policy sweep, against Postgres.
+//! The policies on `storage.objects`, against Postgres, since they moved onto the ledger (Phase
+//! 4.7b) and the sweep that used to retire them was deleted.
 //!
-//! A push drops every storage policy it created on an earlier push that the schema no longer
-//! names: a removed bucket, a renamed model, the last bucket gone. It also drops the unmarked
-//! `storage_<label>_*` policies engines before the marker wrote, because the caller roles now hold
-//! INSERT, UPDATE and DELETE and those old policies would take effect. A policy someone wrote by
-//! hand is never touched.
+//! A push drops every storage policy it recorded that the schema no longer names: a removed
+//! bucket, a renamed model, the last bucket gone. It also drops the unmarked `storage_<label>_*`
+//! policies engines before the marker wrote, because the caller roles now hold INSERT, UPDATE and
+//! DELETE and those old policies would take effect. A policy someone wrote by hand is never
+//! touched.
 
 mod common;
 
-use supatype_engine::generator::sql::storage;
-use supatype_engine::parser;
+use supatype_engine::{introspector::fingerprint::ObjectKind, ledger, parser, push::Outcome};
 
 const MEDIA: &str = r#"{
   "astVersion": 2,
@@ -22,8 +22,9 @@ const MEDIA: &str = r#"{
 
 const NO_BUCKETS: &str = r#"{ "astVersion": 2, "models": [], "storageBuckets": [] }"#;
 
-fn storage_sql(ast: &str) -> String {
-    storage::generate(&parser::parse(ast).expect("schema parses")).expect("storage sql generates")
+async fn push(pool: &sqlx::PgPool, schema: &str) -> Outcome {
+    let ast = parser::parse(schema).expect("schema parses");
+    common::push(pool, &ast).await.expect("push applies")
 }
 
 async fn policies(pool: &sqlx::PgPool) -> Vec<String> {
@@ -35,53 +36,51 @@ async fn policies(pool: &sqlx::PgPool) -> Vec<String> {
     .expect("list policies")
 }
 
+/// The storage policies the ledger records, by name.
+async fn recorded(pool: &sqlx::PgPool) -> Vec<String> {
+    let mut conn = pool.acquire().await.unwrap();
+    ledger::load(&mut conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.key.kind == ObjectKind::Policy && r.key.schema == "storage")
+        .map(|r| r.key.name)
+        .collect()
+}
+
 #[tokio::test]
 async fn removing_the_last_bucket_drops_ours_and_keeps_a_hand_written_policy() {
     common::with_integration_pool(|pool| async move {
-        // The policies call `auth.uid()`, which a push installs first. A fresh database (what CI
-        // gives each test) has no `auth` schema until it does.
-        sqlx::raw_sql(&supatype_engine::generator::sql::rls::generate_auth_helpers())
-            .execute(&pool)
-            .await
-            .expect("auth helpers apply");
-        sqlx::raw_sql(&storage_sql(MEDIA))
-            .execute(&pool)
-            .await
-            .expect("first push applies");
-        assert_eq!(
-            policies(&pool).await,
-            vec!["storage_media_ins", "storage_media_sel"]
-        );
+        push(&pool, MEDIA).await;
+        let ours = vec!["storage_media_ins", "storage_media_sel"];
+        assert_eq!(policies(&pool).await, ours);
+        assert_eq!(recorded(&pool).await, ours);
+        let again = push(&pool, MEDIA).await;
+        assert!(matches!(again, Outcome::UpToDate { .. }), "{again:?}");
 
         // What an engine before the marker left behind, and one the developer wrote.
-        sqlx::raw_sql(
+        common::exec(
+            &pool,
             "CREATE POLICY storage_old_del ON storage.objects FOR DELETE USING (TRUE);
              CREATE POLICY team_rule ON storage.objects FOR SELECT USING (FALSE);",
         )
-        .execute(&pool)
         .await
         .expect("fixture policies");
 
-        sqlx::raw_sql(&storage_sql(NO_BUCKETS))
-            .execute(&pool)
-            .await
-            .expect("push with no buckets applies");
+        push(&pool, NO_BUCKETS).await;
         assert_eq!(policies(&pool).await, vec!["team_rule"]);
+        assert!(recorded(&pool).await.is_empty());
     })
     .await;
 }
 
 #[tokio::test]
-async fn the_sweep_does_nothing_on_a_database_that_never_had_storage() {
+async fn a_database_that_never_had_storage_pushes_cleanly() {
     common::with_integration_pool(|pool| async move {
-        sqlx::raw_sql("DROP SCHEMA IF EXISTS storage CASCADE")
-            .execute(&pool)
+        common::exec(&pool, "DROP SCHEMA IF EXISTS storage CASCADE")
             .await
             .expect("no storage schema");
-        sqlx::raw_sql(&storage_sql(NO_BUCKETS))
-            .execute(&pool)
-            .await
-            .expect("a schema with no buckets pushes cleanly where storage never existed");
+        push(&pool, NO_BUCKETS).await;
     })
     .await;
 }

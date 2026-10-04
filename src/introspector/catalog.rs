@@ -58,8 +58,9 @@ pub struct CatalogState {
     #[serde(skip)]
     pub cron_available: bool,
     pub rls_attributes: Vec<DbRlsAttributes>,
-    /// The roles each policy applies to, which `DatabaseState::rls_policies` does not carry.
-    pub policy_roles: Vec<DbPolicyRoles>,
+    /// Every policy in the swept schemas, with the roles and comment `DatabaseState::rls_policies`
+    /// does not carry.
+    pub policies: Vec<DbPolicy>,
     /// The engine's own tables, with their constraints and indexes, one entry per engine schema
     /// that has any. `DatabaseState` reads the project schema only; without this the registry and
     /// the preview links have no live fingerprint and the ledger could not record them.
@@ -83,13 +84,22 @@ pub struct EngineSchemaTables {
 /// tables: those belong to the server and the image. Every other engine schema's tables are ours.
 const HELPER_ONLY_SCHEMAS: &[&str] = &["auth", "storage"];
 
+/// A policy as `pg_policy` describes it, in the project schema or an engine schema (the
+/// `storage.objects` policies a bucket's rules become, the layer's own).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DbPolicyRoles {
+pub struct DbPolicy {
+    pub schema: String,
     pub table: String,
-    pub policy: String,
+    pub name: String,
+    /// `polcmd`: `r` select, `a` insert, `w` update, `d` delete, `*` all.
+    pub command: String,
+    pub permissive: bool,
     /// Sorted role names; `public` when the policy applies to everyone.
     pub roles: Vec<String>,
+    pub using_expr: Option<String>,
+    pub check_expr: Option<String>,
+    pub comment: Option<String>,
 }
 
 /// A trigger as `pg_trigger` describes it. `DatabaseState::triggers` reads `information_schema`,
@@ -250,7 +260,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<CatalogState>
         cron_jobs: read_cron_jobs(conn).await?,
         cron_available: cron_available(conn).await?,
         rls_attributes: read_rls_attributes(conn, &schemas).await?,
-        policy_roles: read_policy_roles(conn, schema).await?,
+        policies: read_policies(conn, &schemas).await?,
         engine_tables: read_engine_tables(conn, schema).await?,
     })
 }
@@ -283,30 +293,54 @@ async fn read_engine_tables(
     Ok(out)
 }
 
-async fn read_policy_roles(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbPolicyRoles>> {
-    let rows: Vec<(String, String, Vec<String>)> = sqlx::query_as(
-        "SELECT c.relname::text, p.polname::text,
+async fn read_policies(conn: &mut PgConnection, schemas: &[String]) -> Result<Vec<DbPolicy>> {
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        bool,
+        Vec<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT n.nspname::text, c.relname::text, p.polname::text, p.polcmd::text, p.polpermissive,
                 (SELECT array_agg(role_name ORDER BY role_name)
                    FROM unnest(p.polroles) AS r(oid)
                    CROSS JOIN LATERAL (SELECT CASE WHEN r.oid = 0 THEN 'public'
                                                    ELSE (SELECT rolname::text FROM pg_roles WHERE oid = r.oid)
-                                              END AS role_name) x)
+                                              END AS role_name) x),
+                pg_get_expr(p.polqual, p.polrelid),
+                pg_get_expr(p.polwithcheck, p.polrelid),
+                obj_description(p.oid, 'pg_policy')
          FROM pg_policy p
          JOIN pg_class c ON c.oid = p.polrelid
          JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = $1
-         ORDER BY c.relname, p.polname",
+         WHERE n.nspname = ANY($1)
+         ORDER BY n.nspname, c.relname, p.polname",
     )
-    .bind(schema)
+    .bind(schemas)
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(table, policy, roles)| DbPolicyRoles {
-            table,
-            policy,
-            roles,
-        })
+        .map(
+            |(schema, table, name, command, permissive, roles, using_expr, check_expr, comment)| {
+                DbPolicy {
+                    schema,
+                    table,
+                    name,
+                    command,
+                    permissive,
+                    roles,
+                    using_expr,
+                    check_expr,
+                    comment,
+                }
+            },
+        )
         .collect())
 }
 
