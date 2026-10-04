@@ -40,6 +40,9 @@ pub struct DoctorReport {
     /// Taken back with `adopt --release`: left alone whatever the schema says.
     #[serde(default)]
     pub released: Vec<DoctorItem>,
+    /// Drifted objects whose live definition `doctor --rebaseline` just recorded as the baseline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rebaselined: Vec<DoctorItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +110,22 @@ fn declared_tables(ast: &SchemaAst, schema: &str) -> Result<HashSet<String>> {
         .filter(|o| o.key.kind == ObjectKind::Table && o.key.schema == schema)
         .map(|o| o.key.name)
         .collect())
+}
+
+/// `supatype doctor` on a database, read as a push reads it. With `rebaseline`, the drift it finds
+/// is recorded as the new baseline first and listed as rebaselined (plan 3.2).
+pub async fn run(
+    pool: &sqlx::PgPool,
+    ast: &SchemaAst,
+    schema: &str,
+    rebaseline: bool,
+) -> Result<DoctorReport> {
+    if rebaseline {
+        return crate::rebaseline::run(pool, ast, schema).await;
+    }
+    let mut conn = pool.acquire().await?;
+    let (db, catalog, rows) = crate::adopt::read_state(&mut conn, schema).await?;
+    report(ast, &db, &catalog, &rows)
 }
 
 /// `ledger` is what the push ledger owns (`_supatype.managed_objects`). Empty for a database no

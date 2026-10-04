@@ -169,9 +169,13 @@ enum Command {
         schema: String,
         #[arg(
             long,
-            help = "Exit non-zero when missing or stale managed drift exists"
+            help = "Exit non-zero when a push would change or refuse something"
         )]
         strict: bool,
+        /// Record every drifted object's live definition as its baseline, changing no object, and
+        /// list each one (plan 3.2: after a Postgres upgrade reformats definitions).
+        #[arg(long)]
+        rebaseline: bool,
     },
     /// Apply a seed IR document to the database
     Seed {
@@ -553,15 +557,12 @@ async fn main() -> Result<()> {
             database_url,
             schema,
             strict,
+            rebaseline,
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            let catalog = supatype_engine::introspector::introspect_catalog(&pool, &schema).await?;
-            let ledger =
-                supatype_engine::ledger::load_if_present(&mut *pool.acquire().await?).await?;
             let report =
-                supatype_engine::differ::doctor::report(&ast, &db_state, &catalog, &ledger)?;
+                supatype_engine::differ::doctor::run(&pool, &ast, &schema, rebaseline).await?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             if strict && supatype_engine::differ::doctor::has_strict_issues(&report) {
                 std::process::exit(1);

@@ -110,6 +110,7 @@ mod tests {
             key: key(kind),
             recorded_def: "before".into(),
             live_def: "after".into(),
+            live_fp: "after-fp".into(),
             create_sql: "CREATE".into(),
             security_relevant: security_relevant(kind),
             inline: false,

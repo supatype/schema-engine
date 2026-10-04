@@ -11,7 +11,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::differ::doctor::{self, DoctorItem, DoctorReport};
 use crate::introspector::{
@@ -50,15 +50,25 @@ pub async fn run(
         .await
         .context("Failed to bootstrap _supatype internal state")?;
     let mut tx = pool.begin().await?;
-    let db = introspector::introspect_connection(&mut tx, schema).await?;
-    let catalog = catalog::read(&mut tx, schema).await?;
-    let rows = ledger::load(&mut tx).await?;
+    let (db, catalog, rows) = read_state(&mut tx, schema).await?;
     let (outcome, changes) = decide(ast, &db, &catalog, &rows, release, apply)?;
     if apply {
         ledger::upsert(&mut tx, &changes).await?;
         tx.commit().await?;
     }
     Ok(outcome)
+}
+
+/// What a push reads, on `conn` (a transaction, for a caller that then writes): the live state,
+/// its catalog, and the ledger, empty where no push has made one.
+pub(crate) async fn read_state(
+    conn: &mut PgConnection,
+    schema: &str,
+) -> Result<(DatabaseState, CatalogState, Vec<LedgerRow>)> {
+    let db = introspector::introspect_connection(conn, schema).await?;
+    let catalog = catalog::read(conn, schema).await?;
+    let rows = ledger::load_if_present(conn).await?;
+    Ok((db, catalog, rows))
 }
 
 /// The rows adopting would write, and the outcome that says so. Releasing wins: an object that is
