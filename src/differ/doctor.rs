@@ -1,34 +1,46 @@
 //! `supatype doctor`: what a push would find, without applying anything.
 //!
-//! What the schema expects comes from the desired set (`crate::desired`), the same list a push
-//! creates from, so every table (models, junctions, versions tables), unique constraint and index
-//! the generator writes is known here too. Doctor used to derive its own expectations from the AST
-//! and knew only the model tables and the declared indexes, so a push left generated objects
-//! behind (membership indexes, versions tables) that doctor then reported as stale.
-//!
-//! A kind that has moved onto the ledger (checks, Phase 3d) is classified from the ledger rows;
-//! the rest still from comment stamps, until each moves.
+//! The report is the reconcile's (plan section 8), so doctor and push cannot disagree about any
+//! object the ledger owns: an owned object that is absent is **missing**, one changed outside
+//! Supatype is **drifted** (with what Supatype recorded beside what the database holds), one the
+//! schema no longer asks for is **stale**, a desired name taken by someone else's object is
+//! **conflicting**, and one the user took back is **released**. Objects on a model table that
+//! Supatype did not create, columns included (D4), are **unmanaged**: a push leaves them in place.
+//! Tables are still classified by their ownership stamp, until tables move onto the ledger.
 
 use anyhow::Result;
 
 use crate::desired::{desired_objects, ObjectKey};
 use crate::introspector::catalog::CatalogState;
-use crate::introspector::constraints::{DbConstraint, DbConstraintType};
-use crate::introspector::fingerprint::ObjectKind;
-use crate::introspector::indexes::DbIndex;
+use crate::introspector::constraints::DbConstraintType;
+use crate::introspector::fingerprint::{fingerprints, ObjectKind};
+use crate::ledger::reconcile::{Action, Plan};
 use crate::ledger::LedgerRow;
 use crate::managed::{is_managed_comment, managed_comment};
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DoctorReport {
+    /// Desired and absent: an owned object removed outside Supatype, or one never created.
     pub missing: Vec<DoctorItem>,
+    /// Owned and no longer desired: a push drops it.
     pub stale_managed: Vec<DoctorItem>,
+    /// Not Supatype's, on a table it manages (or a table it does not): a push leaves it in place.
     pub unmanaged_drift: Vec<DoctorItem>,
+    /// Owned and changed outside Supatype: a push puts it back, with consent where it decides
+    /// access (plan 3.5).
+    #[serde(default)]
+    pub drifted: Vec<DoctorItem>,
+    /// A name the schema needs, taken by an object Supatype did not create: a push refuses.
+    #[serde(default)]
+    pub conflicting: Vec<DoctorItem>,
+    /// Taken back with `adopt --release`: left alone whatever the schema says.
+    #[serde(default)]
+    pub released: Vec<DoctorItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +51,46 @@ pub struct DoctorItem {
     pub name: String,
     pub fields: Vec<String>,
     pub message: String,
+    /// What Supatype recorded, for a drifted object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded: Option<String>,
+    /// What the database holds now, for a drifted or conflicting object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<String>,
+}
+
+impl DoctorItem {
+    fn new(kind: &str, table: &str, name: &str, message: String) -> DoctorItem {
+        DoctorItem {
+            kind: kind.to_string(),
+            table: table.to_string(),
+            name: name.to_string(),
+            fields: Vec::new(),
+            message,
+            recorded: None,
+            live: None,
+        }
+    }
+
+    /// An item about one ledger key: its table is its parent, or itself for a table-level object.
+    fn for_key(key: &ObjectKey, message: String) -> DoctorItem {
+        let table = if key.parent.is_empty() {
+            &key.name
+        } else {
+            &key.parent
+        };
+        DoctorItem::new(key.kind.as_str(), table, &key.name, message)
+    }
+}
+
+/// `table.name`, or the name alone for a table-level object.
+fn label(key: &ObjectKey) -> String {
+    let kind = key.kind.as_str().replace('_', " ");
+    if key.parent.is_empty() {
+        format!("{kind} {}", key.name)
+    } else {
+        format!("{kind} {}.{}", key.parent, key.name)
+    }
 }
 
 /// The tables, unique constraints and indexes a push of `ast` creates, read off the desired set.
@@ -51,7 +103,6 @@ struct Expected {
 
 struct ExpectedConstraint {
     table: String,
-    name: String,
     columns: Vec<String>,
 }
 
@@ -90,7 +141,6 @@ fn expected(ast: &SchemaAst, schema: &str) -> Result<Expected> {
             }
             ObjectKind::Unique => out.uniques.push(ExpectedConstraint {
                 table: parent,
-                name,
                 columns: columns("columns"),
             }),
             ObjectKind::Index => out.indexes.push(ExpectedIndex {
@@ -114,286 +164,225 @@ pub fn report(
     catalog: &CatalogState,
     ledger: &[LedgerRow],
 ) -> Result<DoctorReport> {
+    let plan = crate::push::reconcile_for_report(ast, db, catalog, ledger)?;
+    let mut out = DoctorReport::default();
+    for action in &plan.actions {
+        classify(action, &mut out);
+    }
+    out.unmanaged_drift
+        .extend(unmanaged_objects(ast, db, catalog, ledger, &plan));
     let expected = expected(ast, &db.schema)?;
-    let schema_tables = &expected.tables;
-    // Columnar indexes from the differ's state, expression-only ones (a singleton's `((TRUE))`)
-    // from the catalog: one list, as the fingerprints read them.
-    let indexes: Vec<&DbIndex> = db
-        .indexes
-        .iter()
-        .chain(&catalog.expression_indexes)
-        .collect();
-    // Every key the ledger owns, whatever the kind, so a kind that moves onto the ledger changes
-    // nothing here: a filter asks `owned(kind, table, name)`.
-    let owned: HashSet<(ObjectKind, &str, &str)> = ledger
-        .iter()
-        .map(|r| (r.key.kind, r.key.parent.as_str(), r.key.name.as_str()))
-        .collect();
+    table_items(db, &expected.tables, &mut out);
+    Ok(out)
+}
 
-    let expected_unique_keys: HashSet<(&str, &str)> = expected
-        .uniques
-        .iter()
-        .map(|e| (e.table.as_str(), e.name.as_str()))
-        .collect();
-    let expected_index_keys: HashSet<(&str, &str)> = expected
-        .indexes
-        .iter()
-        .map(|e| (e.table.as_str(), e.name.as_str()))
-        .collect();
-
-    let mut missing = Vec::new();
-    let mut stale_managed = Vec::new();
-    let mut unmanaged_drift = Vec::new();
-
-    for exp in &expected.uniques {
-        let exists = db.constraints.iter().any(|c| {
-            c.constraint_type == DbConstraintType::Unique
-                && c.table == exp.table
-                && c.columns == exp.columns
-        });
-        if !exists {
-            missing.push(DoctorItem {
-                kind: "unique_constraint".into(),
-                table: exp.table.clone(),
-                name: exp.name.clone(),
-                fields: exp.columns.clone(),
-                message: format!(
-                    "AST expects unique on {}.{}: run `supatype push`",
-                    exp.table,
-                    exp.columns.join(", ")
-                ),
-            });
-        }
-    }
-
-    for exp in &expected.indexes {
-        let exists = indexes
-            .iter()
-            .any(|i| i.table == exp.table && i.name == exp.name);
-        if !exists {
-            missing.push(DoctorItem {
-                kind: index_kind(exp.unique),
-                table: exp.table.clone(),
-                name: exp.name.clone(),
-                fields: exp.fields.clone(),
-                message: format!(
-                    "AST expects index {} on {}: run `supatype push`",
-                    exp.name, exp.table
-                ),
-            });
-        }
-    }
-
-    for constraint in db.constraints.iter().filter(|c| {
-        c.constraint_type == DbConstraintType::Unique && schema_tables.contains(&c.table)
-    }) {
-        if expected_unique_keys.contains(&(constraint.table.as_str(), constraint.name.as_str()))
-            || expected
-                .uniques
-                .iter()
-                .any(|e| e.table == constraint.table && e.columns == constraint.columns)
-        {
-            continue;
-        }
-        let item = doctor_constraint_item(constraint);
-        if is_managed_comment(constraint.comment.as_deref()) {
-            stale_managed.push(item);
-        } else {
-            unmanaged_drift.push(item);
-        }
-    }
-
-    // Check constraints Supatype did not write, on tables it manages: no ledger row, and no stamp
-    // from an engine older than the ledger.
-    //
-    // Doctor does not decide whether someone else's `CHECK` means what ours would: comparing
-    // expressions needs the database (`ledger::probe`), and that is the push's job, which adopts
-    // an equivalent one under our name and refuses a different one. Here the honest position is to
-    // say the constraint is theirs. Push adds its own alongside, which is a duplicate rule rather
-    // than a wrong one, and the operator is the one who can tell whether the two mean the same.
-    let expected_checks = expected_check_constraint_count(ast);
-    for constraint in db.constraints.iter().filter(|c| {
-        c.constraint_type == DbConstraintType::Check
-            && schema_tables.contains(&c.table)
-            && !is_managed_comment(c.comment.as_deref())
-            && !owned.contains(&(ObjectKind::Check, c.table.as_str(), c.name.as_str()))
-    }) {
-        // A column's own NOT NULL or an enum's value list are not rules anyone declared here.
-        let expression = constraint.check_expression.as_deref().unwrap_or("");
-        if expression.contains("IS NOT NULL") {
-            continue;
-        }
-        let will_add = expected_checks
-            .get(constraint.table.as_str())
-            .copied()
-            .unwrap_or(0);
-        unmanaged_drift.push(DoctorItem {
-            kind: "check_constraint".into(),
-            table: constraint.table.clone(),
-            name: constraint.name.clone(),
-            fields: constraint.columns.clone(),
-            message: if will_add > 0 {
-                format!(
-                    "Unmanaged check {} on {} was not created by Supatype and will not be adopted. \
-                     Push adds {will_add} constraint(s) of its own to this table; if yours enforces \
-                     the same rule, drop it to avoid enforcing it twice. Expression: {expression}",
-                    constraint.name, constraint.table
-                )
+/// One reconcile action as the report's category, or nothing for what needs no attention: a
+/// kept, forgotten, adopted or replaced object.
+fn classify(action: &Action, out: &mut DoctorReport) {
+    match action {
+        Action::Create { key, .. } => out.missing.push(DoctorItem::for_key(
+            key,
+            format!(
+                "{} is declared and does not exist: `supatype push` creates it",
+                label(key)
+            ),
+        )),
+        Action::Recreate { key, .. } => out.missing.push(DoctorItem::for_key(
+            key,
+            format!(
+                "{} is Supatype's and was removed outside Supatype: `supatype push` recreates it",
+                label(key)
+            ),
+        )),
+        Action::Drift {
+            key,
+            recorded_def,
+            live_def,
+            security_relevant,
+            ..
+        } => {
+            let consent = if *security_relevant {
+                ", after asking, since it decides who may read or write"
             } else {
+                ""
+            };
+            let mut item = DoctorItem::for_key(
+                key,
                 format!(
-                    "Unmanaged check {} on {} was not created by Supatype and is left alone. \
-                     Declare it in the schema if it should be managed. Expression: {expression}",
-                    constraint.name, constraint.table
-                )
-            },
-        });
+                    "{} was changed outside Supatype: `supatype push` puts it back{consent}",
+                    label(key)
+                ),
+            );
+            item.recorded = Some(recorded_def.clone());
+            item.live = Some(live_def.clone());
+            out.drifted.push(item);
+        }
+        Action::Drop { key, .. } => out.stale_managed.push(DoctorItem::for_key(
+            key,
+            format!(
+                "{} is Supatype's and no longer declared: `supatype push` drops it",
+                label(key)
+            ),
+        )),
+        Action::Conflict { key, live_def, .. } => {
+            let mut item = DoctorItem::for_key(
+                key,
+                format!(
+                    "{} exists under a name the schema needs and was not created by Supatype: \
+                     `supatype push` refuses until it is adopted with `supatype adopt` or renamed",
+                    label(key)
+                ),
+            );
+            item.live = Some(live_def.clone());
+            out.conflicting.push(item);
+        }
+        Action::Released { key } => out.released.push(DoctorItem::for_key(
+            key,
+            format!(
+                "{} was released with `supatype adopt --release`: Supatype leaves it alone",
+                label(key)
+            ),
+        )),
+        Action::Adopt { .. }
+        | Action::Keep { .. }
+        | Action::Replace { .. }
+        | Action::Forget { .. } => {}
     }
+}
 
-    for idx in indexes
+/// The kinds a user adds to a model table that a push must leave alone (D4 for columns).
+const USER_KINDS: [ObjectKind; 7] = [
+    ObjectKind::Column,
+    ObjectKind::Index,
+    ObjectKind::Check,
+    ObjectKind::Unique,
+    ObjectKind::ForeignKey,
+    ObjectKind::Policy,
+    ObjectKind::Trigger,
+];
+
+/// Objects on a model table that Supatype did not create and does not record: someone else's,
+/// so a push leaves them in place. Not reported: the index behind a primary key or unique
+/// constraint, which is the constraint's, and a `NOT NULL` check, which no one declared.
+fn unmanaged_objects(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    catalog: &CatalogState,
+    ledger: &[LedgerRow],
+    plan: &Plan,
+) -> Vec<DoctorItem> {
+    let model_tables: HashSet<&str> = ast.models.iter().map(|m| m.table_name()).collect();
+    let known: BTreeSet<&ObjectKey> = ledger
         .iter()
-        .filter(|i| !i.is_primary && schema_tables.contains(&i.table))
-    {
-        if expected_index_keys.contains(&(idx.table.as_str(), idx.name.as_str())) {
-            continue;
-        }
-        // The index behind a unique constraint is the constraint's, reported above if at all.
-        if idx.unique
-            && db.constraints.iter().any(|c| {
-                c.name == idx.name
-                    && c.table == idx.table
-                    && c.constraint_type == DbConstraintType::Unique
-            })
-        {
-            continue;
-        }
-        let managed = is_managed_comment(idx.comment.as_deref());
-        let item = DoctorItem {
-            kind: index_kind(idx.unique),
-            table: idx.table.clone(),
-            name: idx.name.clone(),
-            fields: idx.columns.clone(),
-            message: if managed {
-                format!(
-                    "Managed index {} on {} is not in AST; review before push",
-                    idx.name, idx.table
-                )
-            } else {
-                format!(
-                    "Unmanaged index {} on {}: push will not drop; manual decision required",
-                    idx.name, idx.table
-                )
-            },
-        };
-        if managed {
-            stale_managed.push(item);
-        } else {
-            unmanaged_drift.push(item);
-        }
-    }
+        .map(|r| &r.key)
+        .chain(plan.actions.iter().map(Action::key))
+        .collect();
+    let constraint_names: HashSet<(&str, &str)> = db
+        .constraints
+        .iter()
+        .filter(|c| {
+            matches!(
+                c.constraint_type,
+                DbConstraintType::PrimaryKey | DbConstraintType::Unique
+            )
+        })
+        .map(|c| (c.table.as_str(), c.name.as_str()))
+        .collect();
 
-    // Tables. The ownership gate declines to drop an unmarked table, and declines to drop a column
-    // from one, so an operator seeing a clean report and a push that leaves a table behind would
-    // conclude push is broken. Wording matches the constraint and index cases deliberately: the
-    // mechanism is the same one.
+    fingerprints(db, catalog)
+        .into_iter()
+        .filter(|f| USER_KINDS.contains(&f.kind) && f.schema == db.schema)
+        .filter(|f| model_tables.contains(f.parent.as_str()))
+        .filter(|f| !f.stamped() && !known.contains(&f.key()))
+        .filter(|f| match f.kind {
+            ObjectKind::Index => {
+                !f.definition.contains("primary=t")
+                    && !constraint_names.contains(&(f.parent.as_str(), f.name.as_str()))
+            }
+            ObjectKind::Check => !f.definition.contains("IS NOT NULL"),
+            _ => true,
+        })
+        .map(|f| {
+            let key = f.key();
+            let declare = if key.kind == ObjectKind::Column {
+                "Declare the column in the schema to manage it."
+            } else {
+                "Declare it in the schema to manage it, or drop it by hand."
+            };
+            let mut item = DoctorItem::for_key(
+                &key,
+                format!(
+                    "{} was not created by Supatype: `supatype push` leaves it in place. {declare}",
+                    label(&key)
+                ),
+            );
+            // Its definition, since its name rarely says what it does: a check's expression,
+            // say, which the operator compares with the one the schema declares.
+            item.live = Some(f.definition);
+            item
+        })
+        .collect()
+}
+
+/// Tables, still by their ownership stamp. The gate declines to drop an unmarked table, and
+/// declines to drop a column from one, so an operator seeing a clean report and a push that leaves
+/// a table behind would conclude push is broken.
+fn table_items(db: &DatabaseState, schema_tables: &HashSet<String>, out: &mut DoctorReport) {
     for table in &db.tables {
         let managed = is_managed_comment(table.comment.as_deref());
         let in_schema = schema_tables.contains(&table.name);
 
-        // In the schema and unmarked: the table is diffed normally, but the gate declines to drop a
-        // column the schema no longer declares. That is the difference `adopt` resolves.
+        // In the schema and unmarked: push refuses to attach access rules to it until it is
+        // adopted. That is the difference `adopt` resolves.
         if in_schema && !managed {
-            unmanaged_drift.push(DoctorItem {
-                kind: "table".into(),
-                table: table.name.clone(),
-                name: table.name.clone(),
-                fields: Vec::new(),
-                message: format!(
+            out.unmanaged_drift.push(DoctorItem::new(
+                "table",
+                &table.name,
+                &table.name,
+                format!(
                     "Table {} matches a model but is not managed: push will not drop its columns; \
                      run `supatype adopt` to bring it under management",
                     table.name
                 ),
-            });
+            ));
             continue;
         }
-
         if in_schema {
             continue;
         }
 
         // Absent from the schema. Marked means push will drop it; unmarked means push will not.
-        let item = DoctorItem {
-            kind: "table".into(),
-            table: table.name.clone(),
-            name: table.name.clone(),
-            fields: Vec::new(),
-            message: if managed {
+        if managed {
+            out.stale_managed.push(DoctorItem::new(
+                "table",
+                &table.name,
+                &table.name,
                 format!(
                     "Managed table {} is not in AST; review before push",
                     table.name
-                )
-            } else {
+                ),
+            ));
+        } else {
+            out.unmanaged_drift.push(DoctorItem::new(
+                "table",
+                &table.name,
+                &table.name,
                 format!(
                     "Unmanaged table {}: push will not drop; manual decision required",
                     table.name
-                )
-            },
-        };
-        if managed {
-            stale_managed.push(item);
-        } else {
-            unmanaged_drift.push(item);
+                ),
+            ));
         }
     }
-
-    Ok(DoctorReport {
-        missing,
-        stale_managed,
-        unmanaged_drift,
-    })
 }
 
-fn index_kind(unique: bool) -> String {
-    if unique { "unique_index" } else { "index" }.to_string()
-}
-
+/// Whether the report has something a push would change or refuse: what `doctor --strict` fails
+/// on. Unmanaged objects and released ones are reported, not failures.
 pub fn has_strict_issues(report: &DoctorReport) -> bool {
-    !report.missing.is_empty() || !report.stale_managed.is_empty()
-}
-
-/// How many `CHECK`s Supatype will create per table: column bounds plus model-level constraints.
-///
-/// A count rather than the expressions, because the message only needs to say "yours will sit
-/// alongside ours". Whether two check expressions mean the same thing is a question for the
-/// database (`ledger::probe`), which the push asks; doctor does not pretend to answer it.
-fn expected_check_constraint_count(ast: &SchemaAst) -> HashMap<&str, usize> {
-    let mut counts: HashMap<&str, usize> = HashMap::new();
-    for model in &ast.models {
-        let total = crate::desired::expected_checks(model).len();
-        if total > 0 {
-            *counts.entry(model.table_name()).or_default() += total;
-        }
-    }
-    counts
-}
-
-fn doctor_constraint_item(constraint: &DbConstraint) -> DoctorItem {
-    DoctorItem {
-        kind: "unique_constraint".into(),
-        table: constraint.table.clone(),
-        name: constraint.name.clone(),
-        fields: constraint.columns.clone(),
-        message: if is_managed_comment(constraint.comment.as_deref()) {
-            format!(
-                "Managed constraint {} on {} is not in AST; review before push",
-                constraint.name, constraint.table
-            )
-        } else {
-            format!(
-                "Unmanaged constraint {} on {}: push will not drop; manual decision required",
-                constraint.name, constraint.table
-            )
-        },
-    }
+    !report.missing.is_empty()
+        || !report.stale_managed.is_empty()
+        || !report.drifted.is_empty()
+        || !report.conflicting.is_empty()
 }
 
 /// SQL statements to stamp matching tables/constraints/indexes during adoption (comments only).

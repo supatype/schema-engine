@@ -229,10 +229,6 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
 
 /// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
 /// objects the migration's own statements create and which tables it drops.
-///
-/// What the database can hold decides what is desired (plan section 10): without `pg_cron` the
-/// cron jobs are not desired, as the layer says so at apply time and there is nothing to record;
-/// a grant to an API role this database does not have is desired nowhere.
 fn reconcile_with(
     diff: &DiffOutput,
     ledger: &[LedgerRow],
@@ -241,6 +237,21 @@ fn reconcile_with(
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<reconcile::Plan> {
+    let desired = desired_here(diff, catalog, schema, ast)?;
+    let live = with_grants_of_nothing(live, ledger.iter().map(|r| &r.key));
+    reconcile_desired(diff, ledger, &live, &desired, schema, ast)
+}
+
+/// What a push of `ast` desires on this database. What the database can hold decides it (plan
+/// section 10): without `pg_cron` the cron jobs are not desired, as the layer says so at apply time
+/// and there is nothing to record; a grant to an API role this database does not have is desired
+/// nowhere.
+fn desired_here(
+    diff: &DiffOutput,
+    catalog: &CatalogState,
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<Vec<crate::desired::DesiredObject>> {
     let fields = match diff.field_masking {
         FieldMaskingTier::Views => FieldEnforcement::Views(&diff.field_view_plan),
         FieldMaskingTier::None | FieldMaskingTier::Extension => FieldEnforcement::Labels,
@@ -251,13 +262,52 @@ fn reconcile_with(
         ObjectKind::TableGrant => catalog.granted_roles.contains(&d.key.name),
         _ => true,
     });
-    let live = with_grants_of_nothing(live, ledger.iter().map(|r| &r.key));
+    Ok(desired)
+}
+
+/// The reconcile that a push of `ast` would plan against these states, with no database to ask:
+/// what `doctor` reports (plan section 8). Unlike [`plan`] it does not refuse a declared table the
+/// engine does not own (doctor reports it), and it cannot prove an unstamped check equivalent with
+/// the database, so a check a push would adopt is reported as conflicting. A desired grant of
+/// nothing reads as present whether or not a row records it: after a push it is.
+pub fn reconcile_for_report(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    catalog: &CatalogState,
+    ledger: &[LedgerRow],
+) -> Result<reconcile::Plan> {
+    let schema = if db.schema.is_empty() {
+        "public"
+    } else {
+        db.schema.as_str()
+    };
+    let diff = differ::diff(ast, db)?;
+    let desired = desired_here(&diff, catalog, schema, ast)?;
+    let nothing_held = desired
+        .iter()
+        .filter(|d| d.structure.get("privileges").is_some_and(String::is_empty))
+        .map(|d| &d.key);
+    let live = with_grants_of_nothing(
+        &fingerprints(db, catalog),
+        ledger.iter().map(|r| &r.key).chain(nothing_held),
+    );
+    reconcile_desired(&diff, ledger, &live, &desired, schema, ast)
+}
+
+fn reconcile_desired(
+    diff: &DiffOutput,
+    ledger: &[LedgerRow],
+    live: &[ObjectFingerprint],
+    desired: &[crate::desired::DesiredObject],
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<reconcile::Plan> {
     let created_by_parent = created_by_parent(diff, schema, ast)?;
     let dropped_tables = dropped_tables(diff, schema);
     Ok(reconcile::reconcile(reconcile::Inputs {
-        desired: &desired,
+        desired,
         ledger,
-        live: &live,
+        live,
         created_by_parent: &created_by_parent,
         dropped_tables: &dropped_tables,
         location,
