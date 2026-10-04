@@ -236,31 +236,17 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     // Supatype since, so `diff` showed one plan and push applied another.
     // Which tables are ours is the ledger's to say (Phase 4.11), so the table and column differs
     // drop, rename and attach rules only where it does: `read_state` puts that in the state.
-    let State {
-        db,
-        catalog,
-        fingerprints,
-        ledger,
-    } = read_state(&mut conn, schema).await?;
-    let previous_ast = migration_history::load_latest_schema_ast(pool).await;
-    let mut diff = differ::diff_with_previous(ast, &db, previous_ast.as_ref())?;
+    let (
+        _,
+        Decision {
+            diff, reconcile, ..
+        },
+    ) = read_and_decide(&mut conn, pool, ast, schema).await?;
 
     // An unchanged schema produces an empty diff, so the renderer's own check would never run and
     // the push would report success while a declared table sat in the API with none of its rules
     // applied. Checked here, before the CLI asks anything about a push it is going to refuse.
     migration::assert_no_unmanaged_model_tables(&diff)?;
-
-    // D4: the column differ drops only a column the ledger records as ours. One someone added to
-    // a managed table, or one an older engine made that this push has not recorded yet, stays.
-    let owned_columns: BTreeSet<(&str, &str)> = ledger
-        .iter()
-        .filter(|r| r.key.kind == ObjectKind::Column && r.key.schema == schema)
-        .map(|r| (r.key.parent.as_str(), r.key.name.as_str()))
-        .collect();
-    diff.keep_columns_not_ours(|table, column| owned_columns.contains(&(table, column)));
-    let mut reconcile = reconcile_with(&diff, &ledger, &fingerprints, &catalog, schema, ast)?;
-    let proven = probe::equivalent(&mut conn, &reconcile).await?;
-    reconcile.adopt_equivalent(&proven);
 
     Ok(Plan {
         ast,
@@ -268,6 +254,72 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
         diff,
         reconcile,
     })
+}
+
+/// What a push decides against `state`: the migration diff, gated on the ledger, and the reconcile,
+/// with the desired set they were made from. `doctor`, `adopt`, `--rebaseline` and the check after
+/// a push all start here too, so none of them can disagree with a push.
+pub struct Decision {
+    pub diff: DiffOutput,
+    pub reconcile: reconcile::Plan,
+    pub desired: Vec<crate::desired::DesiredObject>,
+}
+
+/// [`Decision`] without asking the database anything: an unstamped same-named check the database
+/// would deparse to ours is still a conflict here. `previous` is the schema of the last push, for
+/// telling a renamed table or column from a dropped and added one.
+pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> Result<Decision> {
+    // A state built by hand (a test) may not name its schema.
+    let schema = match state.db.schema.as_str() {
+        "" => "public",
+        named => named,
+    };
+    let mut diff = differ::diff_with_previous(ast, &state.db, previous)?;
+    // D4: the column differ drops only a column the ledger records as ours. One someone added to
+    // a managed table, or one an older engine made that this push has not recorded yet, stays.
+    let owned_columns: BTreeSet<(&str, &str)> = state
+        .ledger
+        .iter()
+        .filter(|r| r.key.kind == ObjectKind::Column && r.key.schema == schema)
+        .map(|r| (r.key.parent.as_str(), r.key.name.as_str()))
+        .collect();
+    diff.keep_columns_not_ours(|table, column| owned_columns.contains(&(table, column)));
+    let desired = desired_here(&diff, &state.catalog, schema, ast)?;
+    let live = with_grants_of_nothing(&state.fingerprints, state.ledger.iter().map(|r| &r.key));
+    let reconcile = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;
+    Ok(Decision {
+        diff,
+        reconcile,
+        desired,
+    })
+}
+
+/// Everything a push knows before it writes: [`read_state`] on `conn` (a transaction, for a caller
+/// that then writes), then [`decide_probed`] against the schema of the last push.
+pub async fn read_and_decide(
+    conn: &mut PgConnection,
+    pool: &PgPool,
+    ast: &SchemaAst,
+    schema: &str,
+) -> Result<(State, Decision)> {
+    let state = read_state(conn, schema).await?;
+    let previous = migration_history::load_latest_schema_ast(pool).await;
+    let decision = decide_probed(conn, ast, &state, previous.as_ref()).await?;
+    Ok((state, decision))
+}
+
+/// [`decide`], then asking the database to settle what it can (`ledger::probe`): a same-named
+/// object it proves equivalent to ours is adopted rather than refused.
+pub async fn decide_probed(
+    conn: &mut PgConnection,
+    ast: &SchemaAst,
+    state: &State,
+    previous: Option<&SchemaAst>,
+) -> Result<Decision> {
+    let mut decision = decide(ast, state, previous)?;
+    let proven = probe::equivalent(conn, &decision.reconcile).await?;
+    decision.reconcile.adopt_equivalent(&proven);
+    Ok(decision)
 }
 
 /// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
@@ -306,35 +358,6 @@ fn desired_here(
         _ => true,
     });
     Ok(desired)
-}
-
-/// The reconcile that a push of `ast` would plan against these states, with no database to ask:
-/// what `doctor` reports (plan section 8). Unlike [`plan`] it does not refuse a declared table the
-/// engine does not own (doctor reports it), and it cannot prove an unstamped check equivalent with
-/// the database, so a check a push would adopt is reported as conflicting. A desired grant of
-/// nothing reads as present whether or not a row records it: after a push it is. Returns the
-/// desired set beside the plan, for a caller that reports on it too.
-pub fn reconcile_for_report(
-    ast: &SchemaAst,
-    state: &State,
-) -> Result<(reconcile::Plan, Vec<crate::desired::DesiredObject>)> {
-    let schema = if state.db.schema.is_empty() {
-        "public"
-    } else {
-        state.db.schema.as_str()
-    };
-    let diff = differ::diff(ast, &state.db)?;
-    let desired = desired_here(&diff, &state.catalog, schema, ast)?;
-    let nothing_held = desired
-        .iter()
-        .filter(|d| d.structure.get("privileges").is_some_and(String::is_empty))
-        .map(|d| &d.key);
-    let live = with_grants_of_nothing(
-        &state.fingerprints,
-        state.ledger.iter().map(|r| &r.key).chain(nothing_held),
-    );
-    let plan = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;
-    Ok((plan, desired))
 }
 
 fn reconcile_desired(
@@ -635,14 +658,6 @@ async fn within_transaction(
         .await
         .context("Failed to introspect after migration")?;
 
-    let drift_warnings = differ::integrity::post_push_warnings(plan.ast, &after.db, &after.catalog);
-    if strict && !differ::integrity::post_push_ok(plan.ast, &after.db, &after.catalog, true) {
-        bail!(
-            "Push rolled back: post-apply schema drift in strict mode ({})",
-            drift_warnings.join("; ")
-        );
-    }
-
     let schema_snap = serde_json::to_value(plan.ast).ok();
     let admin_cfg = admin::generate(plan.ast).ok();
     let migration_id = migration_history::insert_applied_migration(
@@ -675,9 +690,35 @@ async fn within_transaction(
         eprintln!("Warning: failed to record field-enforcement capability: {e}");
     }
 
+    // Checked last, with the rows just written, so it reads the database as the next push will.
+    let check = differ::integrity::post_push(plan.ast, &after_push(after, tx).await?);
+    if strict && !check.settled {
+        bail!(
+            "Push rolled back: post-apply schema drift in strict mode ({})",
+            check.warnings.join("; ")
+        );
+    }
+
     Ok(Applied {
-        drift_warnings,
+        drift_warnings: check.warnings,
         studio_metadata: admin_cfg.zip(schema_snap),
+    })
+}
+
+/// The state after apply, with the ledger as this push has just recorded it.
+async fn after_push(after: Live, tx: &mut Transaction<'_, Postgres>) -> Result<State> {
+    let ledger = ledger::load(tx).await?;
+    let Live {
+        mut db,
+        catalog,
+        fingerprints,
+    } = after;
+    db.set_table_ownership(&ledger);
+    Ok(State {
+        db,
+        catalog,
+        fingerprints,
+        ledger,
     })
 }
 

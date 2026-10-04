@@ -403,3 +403,31 @@ async fn an_owned_check_edited_by_hand_is_drift_and_is_put_back() {
     })
     .await;
 }
+
+/// Doctor and push decide the same way (one planner): a same-named check the database deparses to
+/// ours is one a push adopts, so doctor must not call it a conflict.
+#[tokio::test]
+async fn doctor_agrees_with_push_about_a_check_the_database_proves_ours() {
+    common::with_integration_pool(|pool| async move {
+        let ast = schema(Some(10), None);
+        exec(
+            &pool,
+            "CREATE TABLE public.products (
+               id integer PRIMARY KEY, name text NOT NULL, price integer NOT NULL,
+               CONSTRAINT products_name_bounds CHECK (char_length(name) <= 10));
+             COMMENT ON TABLE public.products IS 'supatype:managed;kind=table;table=products;fields=;v=1';",
+        )
+        .await
+        .unwrap();
+
+        let report = supatype_engine::inspect::doctor(&pool, &ast, "public", false)
+            .await
+            .unwrap();
+        assert!(
+            !report.conflicting.iter().any(|i| i.name == "products_name_bounds"),
+            "doctor calls a check a push would adopt a conflict: {:#?}",
+            report.conflicting
+        );
+    })
+    .await;
+}

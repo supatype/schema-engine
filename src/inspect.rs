@@ -32,18 +32,19 @@ pub async fn doctor(
         return self::rebaseline(pool, ast, schema).await;
     }
     let mut conn = pool.acquire().await?;
-    let state = push::read_state(&mut conn, schema).await?;
-    Ok(doctor::inspect(ast, &state)?.1)
+    let (state, decision) = push::read_and_decide(&mut conn, pool, ast, schema).await?;
+    Ok(doctor::report_of(ast, &state, &decision))
 }
 
 /// Records every drifted object's live definition as its baseline, in one transaction, and returns
 /// the report with those objects moved from `drifted` to `rebaselined`.
 pub async fn rebaseline(pool: &PgPool, ast: &SchemaAst, schema: &str) -> Result<DoctorReport> {
     let mut tx = pool.begin().await?;
-    let state = push::read_state(&mut tx, schema).await?;
-    let (plan, mut report) = doctor::inspect(ast, &state)?;
+    let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
+    let mut report = doctor::report_of(ast, &state, &decision);
     let rows: BTreeMap<&ObjectKey, &LedgerRow> = state.ledger.iter().map(|r| (&r.key, r)).collect();
-    let (moved, items): (Vec<LedgerRow>, Vec<DoctorItem>) = plan
+    let (moved, items): (Vec<LedgerRow>, Vec<DoctorItem>) = decision
+        .reconcile
         .actions
         .iter()
         .filter_map(|action| rebaselined(action, &rows))
@@ -53,6 +54,7 @@ pub async fn rebaseline(pool: &PgPool, ast: &SchemaAst, schema: &str) -> Result<
     // Drift is a row's live definition moving, so every drifted object had a row and was recorded.
     report.drifted.clear();
     report.rebaselined = items;
+    report.blocking = doctor::has_strict_issues(&report);
     Ok(report)
 }
 
