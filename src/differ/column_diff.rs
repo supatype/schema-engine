@@ -28,8 +28,6 @@ pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
         | FieldAst::SmallInt(f)
         | FieldAst::Date(f)
         | FieldAst::Timestamp(f)
-        | FieldAst::Serial(f)
-        | FieldAst::BigSerial(f)
         | FieldAst::Money(f)
         | FieldAst::Ip(f)
         | FieldAst::Cidr(f)
@@ -41,6 +39,10 @@ pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
         | FieldAst::RichText(f)
         | FieldAst::Bytes(f)
         | FieldAst::Color(f) => Some(f.required),
+        // `SERIAL` is `NOT NULL` whatever the field says: Postgres declares it so, and the
+        // generator writes it bare. Reading `required` here asked for `DROP NOT NULL` on the push
+        // after every optional serial was created, so it converged one push late.
+        FieldAst::Serial(_) | FieldAst::BigSerial(_) => Some(true),
         FieldAst::Slug(f) => Some(f.required),
         FieldAst::Enum(f) => Some(f.required),
         FieldAst::Json(f) => Some(f.required),
@@ -753,8 +755,11 @@ pub fn diff(
     for col in &added {
         if !renamed_added.contains(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
+                // A serial fills existing rows from its own sequence, so it needs no backfill.
+                let fills_itself = matches!(**field, FieldAst::Serial(_) | FieldAst::BigSerial(_));
                 if field_is_required(field) == Some(true)
                     && add_column_backfill_default(field).is_none()
+                    && !fills_itself
                 {
                     warnings.push(required_field_existing_table_warning(
                         model.table_name(),
