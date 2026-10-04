@@ -213,7 +213,7 @@ fn test_no_drop_id_on_noop_diff() {
 // ── 2. Field insertion order preserved ────────────────────────────────────────
 
 /// Fields in the generated CREATE TABLE SQL must appear in the same order as
-/// defined in the input JSON — not alphabetically or HashMap-randomised.
+/// defined in the input JSON, not alphabetically or HashMap-randomised.
 #[test]
 fn test_field_order_preserved_in_create_table_sql() {
     // Fields deliberately in non-alphabetical order: z_field, a_field, m_field
@@ -454,7 +454,7 @@ fn test_migration_comments_are_ascii_only() {
 /// Rename-column migration comment must use ASCII arrow `->`, not Unicode `→`.
 #[test]
 fn test_rename_column_comment_uses_ascii_arrow() {
-    // Schema now has "new_name"; DB still has "old_name" — differ should detect rename.
+    // Schema now has "new_name"; DB still has "old_name": the differ should detect a rename.
     let schema = r#"{
   "astVersion": 2,
   "models": [

@@ -112,7 +112,7 @@ fn test_index_sql_has_no_concurrently() {
 
     assert!(
         !sql.contains("CONCURRENTLY"),
-        "migration SQL must not contain CONCURRENTLY — cannot run inside a transaction"
+        "migration SQL must not contain CONCURRENTLY, which cannot run inside a transaction"
     );
 }
 
