@@ -904,6 +904,16 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
         .await
         .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
 
+    // The ledger goes back with the objects. Both tables exist on any database a push bootstrapped
+    // since; asserted here for one bootstrapped before the undo table was.
+    for sql in [
+        crate::ledger::create_table_sql(),
+        crate::ledger::undo::create_table_sql(),
+    ] {
+        (&mut *tx).execute(sqlx::raw_sql(&sql)).await?;
+    }
+    crate::ledger::undo::restore(&mut tx, latest.id).await?;
+
     let mark_sql = format!(
         "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = $1"
     );
@@ -1051,8 +1061,11 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     for sql in ensure_all_migration_columns_sql() {
         sqlx::raw_sql(&sql).execute(pool).await?;
     }
-    // After `migrations`, which it references.
+    // After `migrations`, which both reference.
     sqlx::raw_sql(&crate::ledger::create_table_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&crate::ledger::undo::create_table_sql())
         .execute(pool)
         .await?;
 

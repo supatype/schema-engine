@@ -778,6 +778,13 @@ async fn record_ledger(
             reconcile::RowAfter::Leave => {}
         }
     }
+    // What each row was before this push, so rolling the push back puts the ledger back too.
+    let touched: Vec<ObjectKey> = rows
+        .iter()
+        .map(|r| r.key.clone())
+        .chain(removed.iter().cloned())
+        .collect();
+    ledger::undo::remember(tx, migration_id, &touched).await?;
     ledger::upsert(tx, &rows).await?;
     ledger::delete(tx, &removed).await
 }
