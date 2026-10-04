@@ -277,8 +277,11 @@ async fn membership_compiles_to_a_correlated_semi_join() {
 async fn membership_sources_get_their_index() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        // The migration a push applies: the membership index is the reconcile's since Phase 4.3,
+        // no longer a line the policy renderer emits.
+        let sql = supatype_engine::push::fresh_migration(&ast, "public", false)
+            .unwrap()
+            .up_script();
         sqlx::raw_sql(&sql)
             .execute(&pool)
             .await

@@ -178,29 +178,13 @@ COMMENT ON CONSTRAINT "kitchen_sink_emailField_key" ON "public"."kitchen_sink" I
 
 COMMENT ON CONSTRAINT "kitchen_sink_slugField_key" ON "public"."kitchen_sink" IS 'supatype:managed;kind=unique_constraint;table=kitchen_sink;fields=slugField;v=1';
 
-DROP INDEX IF EXISTS "public"."kitchen_sink_jsonb_field_idx";
 CREATE INDEX IF NOT EXISTS "kitchen_sink_jsonb_field_idx" ON "public"."kitchen_sink" USING gin ("jsonb_field");
-COMMENT ON INDEX "public"."kitchen_sink_jsonb_field_idx" IS 'supatype:managed;kind=index;table=kitchen_sink;fields=jsonb_field;v=1';
 
-DROP INDEX IF EXISTS "public"."kitchen_sink_vector_field_idx";
 CREATE INDEX IF NOT EXISTS "kitchen_sink_vector_field_idx" ON "public"."kitchen_sink" USING hnsw ("vector_field");
-COMMENT ON INDEX "public"."kitchen_sink_vector_field_idx" IS 'supatype:managed;kind=index;table=kitchen_sink;fields=vector_field;v=1';
 
-DROP INDEX IF EXISTS "public"."kitchen_sink_deleted_at_idx";
 CREATE INDEX IF NOT EXISTS "kitchen_sink_deleted_at_idx" ON "public"."kitchen_sink" USING btree ("deleted_at");
-COMMENT ON INDEX "public"."kitchen_sink_deleted_at_idx" IS 'supatype:managed;kind=index;table=kitchen_sink;fields=deleted_at;v=1';
 
 COMMENT ON TABLE "public"."kitchen_sink" IS 'supatype:managed;kind=table;table=kitchen_sink;fields=;v=1';
-
--- [safe] Add index on: kitchen_sink(jsonb_field)
-DROP INDEX IF EXISTS "public"."kitchen_sink_jsonb_field_idx";
-CREATE INDEX IF NOT EXISTS "kitchen_sink_jsonb_field_idx" ON "public"."kitchen_sink" USING gin ("jsonb_field");
-COMMENT ON INDEX "public"."kitchen_sink_jsonb_field_idx" IS 'supatype:managed;kind=index;table=kitchen_sink;fields=jsonb_field;v=1';
-
--- [safe] Add index on: kitchen_sink(vector_field)
-DROP INDEX IF EXISTS "public"."kitchen_sink_vector_field_idx";
-CREATE INDEX IF NOT EXISTS "kitchen_sink_vector_field_idx" ON "public"."kitchen_sink" USING hnsw ("vector_field");
-COMMENT ON INDEX "public"."kitchen_sink_vector_field_idx" IS 'supatype:managed;kind=index;table=kitchen_sink;fields=vector_field;v=1';
 
 -- [safe] Enable RLS: kitchen_sink
 ALTER TABLE "public"."kitchen_sink" ENABLE ROW LEVEL SECURITY;

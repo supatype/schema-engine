@@ -39,7 +39,6 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::DropRlsPolicy { .. } => 11,
         Operation::CreateRlsPolicy { .. } => 12,
         Operation::DropUniqueConstraint { .. } => 15,
-        Operation::DropIndex { .. } => 16,
         Operation::DropColumn { .. } => 17,
         Operation::DropTable { .. } => 18,
         Operation::DropEnum { .. } => 19,

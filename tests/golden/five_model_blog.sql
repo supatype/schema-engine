@@ -186,9 +186,7 @@ CREATE TABLE IF NOT EXISTS "public"."posts" (
 
 COMMENT ON CONSTRAINT "posts_slug_key" ON "public"."posts" IS 'supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1';
 
-DROP INDEX IF EXISTS "public"."posts_author_id_idx";
 CREATE INDEX IF NOT EXISTS "posts_author_id_idx" ON "public"."posts" USING btree ("author_id");
-COMMENT ON INDEX "public"."posts_author_id_idx" IS 'supatype:managed;kind=index;table=posts;fields=author_id;v=1';
 
 COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fields=;v=1';
 
@@ -213,11 +211,6 @@ CREATE TABLE IF NOT EXISTS "public"."tags" (
 COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1';
 
 COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fields=;v=1';
-
--- [safe] Add index on: posts(author_id)
-DROP INDEX IF EXISTS "public"."posts_author_id_idx";
-CREATE INDEX IF NOT EXISTS "posts_author_id_idx" ON "public"."posts" USING btree ("author_id");
-COMMENT ON INDEX "public"."posts_author_id_idx" IS 'supatype:managed;kind=index;table=posts;fields=author_id;v=1';
 
 -- [safe] Enable RLS: users
 ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;

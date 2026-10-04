@@ -134,14 +134,10 @@ pub fn render_policy_migration_sql(
     // match our naming is silently replaced.
     let comment = crate::managed::managed_comment("rls_policy", table, &[suffix]);
 
-    // Index the join columns any membership test reads. Emitted with the policy
-    // because that is when the requirement appears; `IF NOT EXISTS` keeps a
-    // re-emission free. An index dropped by hand later is not restored until the
-    // policy itself changes, which is the known limit of doing it here.
-    let indexes = membership_index_sql(schema, rule);
-
+    // The membership indexes a rule's join columns need are the reconcile's (Phase 4.3), so one
+    // dropped by hand comes back on the next push whether or not the policy changed.
     format!(
-        "{indexes}{sql}COMMENT ON POLICY \"{table}_{suffix}\" ON \"{schema}\".\"{table}\" IS '{comment}';\n"
+        "{sql}COMMENT ON POLICY \"{table}_{suffix}\" ON \"{schema}\".\"{table}\" IS '{comment}';\n"
     )
 }
 

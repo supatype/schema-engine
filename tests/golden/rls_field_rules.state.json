@@ -378,7 +378,7 @@
         "unique": false,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=posts;fields=author_id;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX posts_author_id_idx ON public.posts USING btree (author_id)"

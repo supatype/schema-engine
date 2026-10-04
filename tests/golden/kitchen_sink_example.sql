@@ -172,9 +172,7 @@ CREATE TABLE IF NOT EXISTS "public"."page" (
 
 COMMENT ON CONSTRAINT "page_slug_key" ON "public"."page" IS 'supatype:managed;kind=unique_constraint;table=page;fields=slug;v=1';
 
-DROP INDEX IF EXISTS "public"."page_body_gin_idx";
 CREATE INDEX IF NOT EXISTS "page_body_gin_idx" ON "public"."page" USING gin ("body");
-COMMENT ON INDEX "public"."page_body_gin_idx" IS 'supatype:managed;kind=index;table=page;fields=body;v=1';
 
 COMMENT ON TABLE "public"."page" IS 'supatype:managed;kind=table;table=page;fields=;v=1';
 
@@ -230,13 +228,9 @@ COMMENT ON CONSTRAINT "talk_slug_key" ON "public"."talk" IS 'supatype:managed;ki
 
 ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_check_1" CHECK ("starts_at" <= "ends_at");
 
-DROP INDEX IF EXISTS "public"."talk_day_starts_at_idx";
 CREATE INDEX IF NOT EXISTS "talk_day_starts_at_idx" ON "public"."talk" USING btree ("day", "starts_at");
-COMMENT ON INDEX "public"."talk_day_starts_at_idx" IS 'supatype:managed;kind=index;table=talk;fields=day,starts_at;v=1';
 
-DROP INDEX IF EXISTS "public"."talk_starts_at_idx";
 CREATE INDEX IF NOT EXISTS "talk_starts_at_idx" ON "public"."talk" USING btree ("starts_at");
-COMMENT ON INDEX "public"."talk_starts_at_idx" IS 'supatype:managed;kind=index;table=talk;fields=starts_at;v=1';
 
 COMMENT ON TABLE "public"."talk" IS 'supatype:managed;kind=table;table=talk;fields=;v=1';
 
@@ -299,9 +293,7 @@ CREATE TABLE IF NOT EXISTS "public"."chat_message" (
 
 ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_check_1" CHECK (char_length("body") >= 2);
 
-DROP INDEX IF EXISTS "public"."chat_message_room_idx";
 CREATE INDEX IF NOT EXISTS "chat_message_room_idx" ON "public"."chat_message" USING btree ("room");
-COMMENT ON INDEX "public"."chat_message_room_idx" IS 'supatype:managed;kind=index;table=chat_message;fields=room;v=1';
 
 COMMENT ON TABLE "public"."chat_message" IS 'supatype:managed;kind=table;table=chat_message;fields=;v=1';
 
@@ -317,8 +309,6 @@ CREATE TABLE IF NOT EXISTS "public"."_global_site_settings" (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "_global_site_settings_singleton_idx" ON "public"."_global_site_settings" ((TRUE));
-
-COMMENT ON INDEX "public"."_global_site_settings_singleton_idx" IS 'supatype:managed;kind=unique_index;table=_global_site_settings;fields=;v=1';
 
 COMMENT ON TABLE "public"."_global_site_settings" IS 'supatype:managed;kind=table;table=_global_site_settings;fields=;v=1';
 
@@ -399,11 +389,6 @@ CREATE TABLE IF NOT EXISTS "public"."talk_versions" (
 COMMENT ON TABLE "public"."talk_versions" IS 'supatype:managed;kind=table;table=talk_versions;fields=;v=1';
 
 CREATE INDEX IF NOT EXISTS "talk_versions_record_idx" ON "public"."talk_versions" ("record_id", "version" DESC);
-
--- [safe] Add index on: talk(day, starts_at)
-DROP INDEX IF EXISTS "public"."talk_day_starts_at_idx";
-CREATE INDEX IF NOT EXISTS "talk_day_starts_at_idx" ON "public"."talk" USING btree ("day", "starts_at");
-COMMENT ON INDEX "public"."talk_day_starts_at_idx" IS 'supatype:managed;kind=index;table=talk;fields=day,starts_at;v=1';
 
 -- [safe] Enable RLS: page
 ALTER TABLE "public"."page" ENABLE ROW LEVEL SECURITY;

@@ -161,9 +161,7 @@ COMMENT ON CONSTRAINT "customers_email_key" ON "public"."customers" IS 'supatype
 
 COMMENT ON CONSTRAINT "customers_stripeId_key" ON "public"."customers" IS 'supatype:managed;kind=unique_constraint;table=customers;fields=stripeId;v=1';
 
-DROP INDEX IF EXISTS "public"."customers_deleted_at_idx";
 CREATE INDEX IF NOT EXISTS "customers_deleted_at_idx" ON "public"."customers" USING btree ("deleted_at");
-COMMENT ON INDEX "public"."customers_deleted_at_idx" IS 'supatype:managed;kind=index;table=customers;fields=deleted_at;v=1';
 
 COMMENT ON TABLE "public"."customers" IS 'supatype:managed;kind=table;table=customers;fields=;v=1';
 
@@ -183,9 +181,7 @@ CREATE TABLE IF NOT EXISTS "public"."products" (
 
 COMMENT ON CONSTRAINT "products_slug_key" ON "public"."products" IS 'supatype:managed;kind=unique_constraint;table=products;fields=slug;v=1';
 
-DROP INDEX IF EXISTS "public"."products_status_idx";
 CREATE INDEX IF NOT EXISTS "products_status_idx" ON "public"."products" USING btree ("status");
-COMMENT ON INDEX "public"."products_status_idx" IS 'supatype:managed;kind=index;table=products;fields=status;v=1';
 
 COMMENT ON TABLE "public"."products" IS 'supatype:managed;kind=table;table=products;fields=;v=1';
 
@@ -200,9 +196,7 @@ CREATE TABLE IF NOT EXISTS "public"."orders" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-DROP INDEX IF EXISTS "public"."orders_customer_id_status_idx";
 CREATE INDEX IF NOT EXISTS "orders_customer_id_status_idx" ON "public"."orders" USING btree ("customer_id", "status");
-COMMENT ON INDEX "public"."orders_customer_id_status_idx" IS 'supatype:managed;kind=index;table=orders;fields=customer_id,status;v=1';
 
 COMMENT ON TABLE "public"."orders" IS 'supatype:managed;kind=table;table=orders;fields=;v=1';
 
@@ -216,16 +210,6 @@ CREATE TABLE IF NOT EXISTS "public"."order_items" (
 );
 
 COMMENT ON TABLE "public"."order_items" IS 'supatype:managed;kind=table;table=order_items;fields=;v=1';
-
--- [safe] Add index on: products(status)
-DROP INDEX IF EXISTS "public"."products_status_idx";
-CREATE INDEX IF NOT EXISTS "products_status_idx" ON "public"."products" USING btree ("status");
-COMMENT ON INDEX "public"."products_status_idx" IS 'supatype:managed;kind=index;table=products;fields=status;v=1';
-
--- [safe] Add index on: orders(customer_id, status)
-DROP INDEX IF EXISTS "public"."orders_customer_id_status_idx";
-CREATE INDEX IF NOT EXISTS "orders_customer_id_status_idx" ON "public"."orders" USING btree ("customer_id", "status");
-COMMENT ON INDEX "public"."orders_customer_id_status_idx" IS 'supatype:managed;kind=index;table=orders;fields=customer_id,status;v=1';
 
 -- [safe] Enable RLS: customers
 ALTER TABLE "public"."customers" ENABLE ROW LEVEL SECURITY;

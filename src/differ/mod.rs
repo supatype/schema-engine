@@ -3,7 +3,6 @@ pub mod constraint_diff;
 pub mod doctor;
 pub mod enum_diff;
 pub mod field_access_diff;
-pub mod index_diff;
 pub mod integrity;
 pub mod ordering;
 pub mod risk_analyser;
@@ -119,10 +118,6 @@ pub enum Operation {
     AddIndex {
         table: String,
         index: Box<IndexAst>,
-        risk: Risk,
-    },
-    DropIndex {
-        index_name: String,
         risk: Risk,
     },
     AddForeignKey {
@@ -279,7 +274,6 @@ pub fn diff_with_previous(
     enum_diff::diff(ast, db, &mut ops, &mut warnings)?;
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
     constraint_diff::diff(ast, db, &mut ops)?;
-    index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
     field_access_diff::validate(ast, db, &mut warnings)?;
     warnings.extend(crate::generator::sql::storage::rule_warnings(ast));
@@ -358,7 +352,6 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::AlterColumn { risk, .. }
         | Operation::RecreateColumn { risk, .. }
         | Operation::AddIndex { risk, .. }
-        | Operation::DropIndex { risk, .. }
         | Operation::AddForeignKey { risk, .. }
         | Operation::AddUniqueConstraint { risk, .. }
         | Operation::DropUniqueConstraint { risk, .. }

@@ -94,13 +94,6 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
             let idx_name = index.name.as_deref().unwrap_or(&derived);
             format!("DROP INDEX IF EXISTS \"{idx_name}\";")
         }
-        // DropIndex → cannot restore
-        Operation::DropIndex { index_name, .. } => {
-            format!(
-                "-- WARNING: Cannot automatically roll back DROP INDEX \"{index_name}\". \
-                     Recreate the index manually."
-            )
-        }
         // AddForeignKey → DROP CONSTRAINT
         Operation::AddForeignKey {
             table,
@@ -336,7 +329,6 @@ fn forward_description(op: &Operation) -> String {
         Operation::AddIndex { table, index, .. } => {
             format!("add index on {table}({})", index.fields.join(","))
         }
-        Operation::DropIndex { index_name, .. } => format!("drop index {index_name}"),
         Operation::AddForeignKey {
             table, relation, ..
         } => format!("add fk {table} -> {}", relation.target),

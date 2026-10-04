@@ -159,16 +159,9 @@ CREATE TABLE IF NOT EXISTS "public"."documents" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-DROP INDEX IF EXISTS "public"."documents_embedding_idx";
 CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding");
-COMMENT ON INDEX "public"."documents_embedding_idx" IS 'supatype:managed;kind=index;table=documents;fields=embedding;v=1';
 
 COMMENT ON TABLE "public"."documents" IS 'supatype:managed;kind=table;table=documents;fields=;v=1';
-
--- [safe] Add index on: documents(embedding)
-DROP INDEX IF EXISTS "public"."documents_embedding_idx";
-CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding");
-COMMENT ON INDEX "public"."documents_embedding_idx" IS 'supatype:managed;kind=index;table=documents;fields=embedding;v=1';
 
 -- [safe] Enable RLS: documents
 ALTER TABLE "public"."documents" ENABLE ROW LEVEL SECURITY;

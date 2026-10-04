@@ -6,9 +6,9 @@ use crate::generator::sql::column_conversion::{
 };
 use crate::ledger::reconcile;
 use crate::managed::{
-    comment_on_constraint_sql, comment_on_index_sql, expected_check_constraint_name,
-    expected_model_constraint_name, expected_unique_constraint_name, foreign_key_name,
-    managed_comment, primary_key_name, type_check_name,
+    comment_on_constraint_sql, expected_check_constraint_name, expected_model_constraint_name,
+    expected_unique_constraint_name, foreign_key_name, managed_comment, primary_key_name,
+    type_check_name,
 };
 use crate::parser::accessors::{column_names_for, db_unique};
 use crate::parser::ast::{
@@ -368,7 +368,6 @@ fn render_forward_operation_lines(
             | Operation::AlterColumn { risk, .. }
             | Operation::RecreateColumn { risk, .. }
             | Operation::AddIndex { risk, .. }
-            | Operation::DropIndex { risk, .. }
             | Operation::AddForeignKey { risk, .. }
             | Operation::AddUniqueConstraint { risk, .. }
             | Operation::DropUniqueConstraint { risk, .. }
@@ -614,7 +613,6 @@ fn op_description(op: &Operation) -> String {
         Operation::AddIndex { table, index, .. } => {
             format!("Add index on: {table}({})", index.fields.join(", "))
         }
-        Operation::DropIndex { index_name, .. } => format!("Drop index: {index_name}"),
         Operation::AddForeignKey {
             table, relation, ..
         } => format!("Add FK: {table} -> {}", relation.target),
@@ -843,9 +841,6 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             ..
         } => recreate_column_sql(table, column, field.as_ref(), dependencies, schema),
         Operation::AddIndex { table, index, .. } => create_index_sql(table, index, schema),
-        Operation::DropIndex { index_name, .. } => {
-            Ok(format!("DROP INDEX IF EXISTS \"{index_name}\";"))
-        }
         Operation::AddForeignKey {
             table,
             field_name,
@@ -1179,15 +1174,14 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         statements.push(create_index_sql(table, &index, schema)?);
     }
 
-    // Singleton (global config): enforce exactly one row via a partial unique index.
+    // Singleton (global config): enforce exactly one row via a unique index on an expression.
+    // Recorded by the ledger (Phase 4.3), so no stamp.
     if model.options.singleton {
         let idx_name = format!("{table}_singleton_idx");
         statements.push(format!(
             "CREATE UNIQUE INDEX IF NOT EXISTS \"{idx_name}\" \
              ON \"{schema}\".\"{table}\" ((TRUE));"
         ));
-        let comment = managed_comment("unique_index", table, &[]);
-        statements.push(comment_on_index_sql(&idx_name, &comment, schema));
     }
 
     // Stamp ownership, exactly as indexes, constraints and RLS policies already do.
@@ -1952,26 +1946,13 @@ fn create_index_sql(table: &str, index: &IndexAst, schema: &str) -> Result<Strin
         .map(|f| format!("\"{f}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let idx_name = index.name.as_deref().unwrap_or_else(|| {
-        Box::leak(format!("{table}_{}_idx", index.fields.join("_")).into_boxed_str())
-    });
+    let derived = format!("{table}_{}_idx", index.fields.join("_"));
+    let idx_name = index.name.as_deref().unwrap_or(&derived);
 
-    let kind = if index.unique {
-        "unique_index"
-    } else {
-        "index"
-    };
-    let field_refs: Vec<&str> = index.fields.iter().map(String::as_str).collect();
-    let comment = managed_comment(kind, table, &field_refs);
-    let comment_sql = comment_on_index_sql(idx_name, &comment, schema);
-
-    // Dropped first so the operation means "this table carries exactly this index" rather than
-    // "this index is new". The differ only emits an add when the live index does not match the
-    // declared one, and `IF NOT EXISTS` on its own would keep the old one, so an index that changed
-    // shape would silently stay as it was. Emitting a separate drop does not work either: adds are
-    // applied before drops, so the pair would create nothing and then remove what was there.
+    // The `CREATE` alone, no stamp (the ledger is the record, plan section 6) and no drop before
+    // it: an index whose shape changed is the reconcile's `Replace`, which drops and recreates.
     Ok(format!(
-        "DROP INDEX IF EXISTS \"{schema}\".\"{idx_name}\";\nCREATE {unique}INDEX IF NOT EXISTS \"{idx_name}\" ON \"{schema}\".\"{table}\" USING {method} ({cols});\n{comment_sql}"
+        "CREATE {unique}INDEX IF NOT EXISTS \"{idx_name}\" ON \"{schema}\".\"{table}\" USING {method} ({cols});"
     ))
 }
 

@@ -43,8 +43,8 @@ use crate::introspector::fingerprint::{normalise_sql, ObjectKind};
 use crate::managed::{
     comment_on_constraint, comment_on_index, comment_on_table, comment_value,
     expected_check_constraint_name, expected_model_constraint_name, expected_model_index_name,
-    expected_unique_constraint_name, foreign_key_name, managed_comment, primary_key_name,
-    truncate_identifier, type_check_name,
+    expected_unique_constraint_name, foreign_key_name, primary_key_name, truncate_identifier,
+    type_check_name,
 };
 use crate::parser::accessors::{
     column_names_for, db_foreign_key, default_foreign_key_column, versions_of, versions_table_name,
@@ -594,11 +594,9 @@ impl<'a> Builder<'a> {
         }
         if model.options.singleton {
             let name = truncate_identifier(table, "_singleton_idx");
-            let comment = managed_comment("unique_index", table, &[]);
             let create = format!(
-                "CREATE UNIQUE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{table}\" ((TRUE));\n{}",
-                self.schema,
-                crate::managed::comment_on_index_sql(&name, &comment, self.schema)
+                "CREATE UNIQUE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{table}\" ((TRUE));",
+                self.schema
             );
             // No column key: its structure is the expression, which is not predictable text.
             let mut structure = BTreeMap::new();

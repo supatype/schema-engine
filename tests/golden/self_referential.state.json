@@ -167,7 +167,7 @@
         "unique": false,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=categories;fields=parent_id;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX categories_parent_id_idx ON public.categories USING btree (parent_id)"
@@ -223,7 +223,7 @@
         "unique": false,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=employees;fields=manager_id;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX employees_manager_id_idx ON public.employees USING btree (manager_id)"
