@@ -13,7 +13,7 @@ use anyhow::Result;
 /// `schema` is the schema Supatype manages (`schema.pg_schema`). It used to be a literal `"public"`
 /// here and in five other generators, which meant a project pointed at its own schema created its
 /// tables in the right place and then attached its policies, grants, labels and membership
-/// subqueries to `public` — either erroring, or silently reading a same-named table belonging to
+/// subqueries to `public`: either erroring, or silently reading a same-named table belonging to
 /// whoever else is in that schema. The second case is the one this parameter exists for.
 pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
     let mut out = String::new();
@@ -70,14 +70,14 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
 /// SQL DDL for the auth helper functions a policy may call.
 ///
 /// Delegates to `auth_functions` rather than keeping a second copy. There were
-/// two definitions of `auth.uid()` and `auth.role()` — this one, installed by a
+/// two definitions of `auth.uid()` and `auth.role()`: this one, installed by a
 /// migration, and the canonical one reinstalled by `reapply_auth_helpers` at
 /// bootstrap. They had already diverged: this copy read only the top-level `role`
 /// claim, so a fresh push installed a version that ignored `app_metadata.role`
 /// until something else happened to overwrite it. Any helper added on one side
 /// (`auth.claim`, say) was simply missing on the other.
 ///
-/// Safe to run repeatedly — every function is `CREATE OR REPLACE`.
+/// Safe to run repeatedly, since every function is `CREATE OR REPLACE`.
 pub fn generate_auth_helpers() -> String {
     let config = crate::generator::sql::auth_functions::AuthFunctionConfig {
         project_ref: String::new(),
@@ -224,7 +224,7 @@ pub const AUTH_UID: &str = "(SELECT auth.uid())";
 /// Default schema for policies, affordance functions and grants.
 ///
 /// A fallback, not the answer: the generators here take the managed schema as a parameter. This
-/// covers callers with genuinely nothing to pass — an introspected `DatabaseState` whose `schema` is
+/// covers callers with genuinely nothing to pass, an introspected `DatabaseState` whose `schema` is
 /// empty, for instance.
 pub const DEFAULT_POLICY_SCHEMA: &str = "public";
 
@@ -280,7 +280,7 @@ pub fn access_rule_to_expr(
     }
 }
 
-/// "The source set is non-empty" — no column involved.
+/// "The source set is non-empty", with no column involved.
 fn set_exists_expr(
     ast: &SchemaAst,
     model: &ModelAst,
@@ -334,7 +334,7 @@ fn membership_to_expr(
     schema: &str,
 ) -> String {
     let own_table = db_table_name(model);
-    // Qualified so the correlated reference is unambiguous — the subquery's own
+    // Qualified so the correlated reference is unambiguous: the subquery's own
     // table may well have a column of the same name, and an unqualified reference
     // would silently bind to the *inner* one, making the test always true.
     let own_col = format!("\"{own_table}\".\"{}\"", column.replace('"', "\"\""));
@@ -372,7 +372,7 @@ fn membership_to_expr(
             // Inside a `can_*` function the row is a derived table aliased with the
             // model's own name, and a self-referential membership
             // (`In<"parent_id", Rows<"posts", "id", …>>`) would otherwise resolve
-            // `FROM "posts"` to that single row instead of the table — quietly
+            // `FROM "posts"` to that single row instead of the table, quietly
             // answering about one row when it should have searched all of them.
             let mut sql = format!(
                 "EXISTS (SELECT 1 FROM \"{schema}\".\"{table_esc}\" \
@@ -402,7 +402,7 @@ fn membership_to_expr(
 ///
 /// A filter like `Eq<"user_id", AuthUid>` renders as `"user_id" = …`, which inside
 /// the subquery would resolve against whichever table happens to have that column
-/// — and if both do, silently against the wrong one. Only already-unqualified
+/// and if both do, silently against the wrong one. Only already-unqualified
 /// references are touched, so an explicit `"other"."col"` is left alone.
 fn qualify_bare_columns(expr: &str, table: &str) -> String {
     let table_esc = table.replace('"', "\"\"");
@@ -424,7 +424,7 @@ fn qualify_bare_columns(expr: &str, table: &str) -> String {
         let followed_by_dot = tail.starts_with('.');
         // A quoted identifier straight after FROM or JOIN is a *table*, not a
         // column. Qualifying it produced `"categories"."posts"`, which Postgres
-        // read as a schema-qualified relation that does not exist — so every
+        // read as a schema-qualified relation that does not exist, so every
         // membership rule broke the moment its expression was reused here.
         let in_table_position = matches!(
             last_word(&out).to_ascii_uppercase().as_str(),
@@ -464,8 +464,8 @@ fn literal_to_sql(value: &LiteralValue) -> String {
 
 /// Columns a `Rows<>` source joins on, as `(table, column)` pairs.
 ///
-/// The DSL names the join columns, so the classic RLS performance footgun — a
-/// membership subquery scanning an unindexed join table for every row tested —
+/// The DSL names the join columns, so the classic RLS performance footgun (a
+/// membership subquery scanning an unindexed join table for every row tested)
 /// becomes generated infrastructure instead of something the developer has to
 /// know about.
 pub fn membership_index_targets(rule: &AccessRule) -> Vec<(String, String)> {
@@ -520,7 +520,7 @@ pub fn membership_index_sql(schema: &str, rule: &AccessRule) -> String {
 /// Joins composed rules, parenthesising any child that is itself a composition.
 ///
 /// Without the parentheses `Any<[a, All<[b, c]>]>` would render as `a OR b AND c`,
-/// which Postgres reads as `a OR (b AND c)` — correct by luck here, and wrong the
+/// which Postgres reads as `a OR (b AND c)`: correct by luck here, and wrong the
 /// moment the nesting is the other way round. Precedence is never left to chance.
 fn join_rules(
     ast: &SchemaAst,
@@ -603,7 +603,7 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
         Operand::Literal { value } => literal_to_sql(value),
 
         // Each temporal operand is one scalar subquery, so the planner evaluates it
-        // once per query as an InitPlan rather than per row — the same reason
+        // once per query as an InitPlan rather than per row, the same reason
         // `auth.uid()` is wrapped.
         Operand::Now => "(SELECT now())".to_string(),
         Operand::StartOf { unit } => {
@@ -646,7 +646,7 @@ fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// Owner / OwnerFrom — compare auth.uid() to a row column or ownership via a related model.
+/// Owner / OwnerFrom: compare auth.uid() to a row column or ownership via a related model.
 /// Quotes a column so it is unambiguous as an identifier.
 ///
 /// Also what lets `qualify_bare_columns` find these references when the same
@@ -727,13 +727,13 @@ fn owner_column_on_model(model: &ModelAst) -> Option<String> {
 ///
 /// These functions are the answer, generated from the same AST as the policies, so
 /// there is exactly one definition of what access means. PostgREST exposes them as
-/// computed columns — `?select=*,can_delete_posts` — so Studio gets the affordance
+/// computed columns (`?select=*,can_delete_posts`) so Studio gets the affordance
 /// from the query it was already running, with no extra request and no per-row call
 /// from the client. They are also what `explain` and hand-written queries use.
 ///
 /// The parameter is named after the table so the policy expression can be reused
 /// verbatim: inside the body `posts.author_id` resolves against the composite
-/// argument. Bare column references are qualified for the same reason — a function
+/// argument. Bare column references are qualified for the same reason: a function
 /// body has no `FROM` clause for them to resolve against.
 pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
     let mut out = String::new();
@@ -758,7 +758,7 @@ pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
 
             // The expression is used exactly as the policy uses it. The function
             // body supplies a scope its column references resolve against, so
-            // nothing has to be rewritten — which is what lets a `Custom` rule's
+            // nothing has to be rewritten, which is what lets a `Custom` rule's
             // raw SQL answer definitively rather than "unknown".
             let expr = access_rule_to_expr(ast, model, rule, schema);
             out.push_str(&render_can_function(schema, table, op, &expr));
@@ -863,7 +863,7 @@ fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> Str
     )
 }
 
-/// `SECURITY LABEL FOR supatype` per field rule — what makes a `fields` rule actually
+/// `SECURITY LABEL FOR supatype` per field rule: what makes a `fields` rule actually
 /// enforced rather than merely described.
 ///
 /// The label points the extension at the predicates [`generate_can_functions`] already
@@ -874,9 +874,9 @@ fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> Str
 /// **A read rule is named only when one exists.** A `write`-only rule leaves reads
 /// unrestricted, and labelling it with a trivially-true `READ` predicate would cost a
 /// function call per row per read to answer a question nobody asked. The `can_read_*`
-/// function is still generated — Studio wants a uniform affordance surface — it just
+/// function is still generated (Studio wants a uniform affordance surface); it just
 /// does not appear in the label.
-/// `skip` names tables the schema declares but Supatype did not create — see
+/// `skip` names tables the schema declares but Supatype did not create; see
 /// [`crate::differ::DiffOutput::unmanaged_model_tables`]. A `SECURITY LABEL` on their column is a
 /// change to their table.
 pub fn generate_security_labels(ast: &SchemaAst, schema: &str, skip: &[String]) -> String {
@@ -1018,7 +1018,7 @@ $auth_usage_probe$;
 /// outright, so there is no hand-written label under `supatype` to protect. Labels under
 /// any other provider, and in any other schema, are untouched.
 ///
-/// Emitted even when the schema has no field rules at all — that is exactly the case
+/// Emitted even when the schema has no field rules at all: that is exactly the case
 /// where the last rule was just removed. Guarded on the extension existing, because
 /// without the provider registered a `SECURITY LABEL` statement cannot even parse; and
 /// without the provider there can be no labels to clear.
@@ -1073,7 +1073,7 @@ fn sql_string(value: &str) -> String {
 /// the way it does in the policy: a bare `title` against the derived table, a
 /// qualified `"posts"."site_id"` against the same alias. That includes the raw SQL
 /// of a `Custom` rule, whose identifiers cannot be rewritten because there is no
-/// way to know which of them are columns — the earlier approach rewrote the
+/// way to know which of them are columns; the earlier approach rewrote the
 /// expression instead and so had to answer "unknown" for those, which is precisely
 /// the state these functions exist to eliminate.
 fn render_can_function(schema: &str, table: &str, op: &str, expr: &str) -> String {
