@@ -603,9 +603,18 @@ pub fn diff(
                     risk: Risk::Safe,
                 });
             }
+            // The versions layer's draft-select policy is its own, whether or not the model has
+            // rules of its own; dropped here, the layer recreated it at the end of the same
+            // migration and the push was never up to date.
+            let draft_select = crate::parser::accessors::versions_of(model)
+                .is_some_and(|v| v.drafts)
+                .then(|| format!("{table}_draft_select"));
             for db_pol in db_policies {
                 if !db_pol.managed {
                     unmanaged.push(format!("{table}.{}", db_pol.name));
+                    continue;
+                }
+                if draft_select.as_deref() == Some(db_pol.name.as_str()) {
                     continue;
                 }
                 ops.push(Operation::DropRlsPolicy {

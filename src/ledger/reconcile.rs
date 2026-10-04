@@ -266,11 +266,17 @@ impl Action {
         statements
     }
 
-    /// Whether the removal runs after the migration's operations rather than before: a function's
-    /// does, because the trigger that depends on it may sit on a table the operations drop, and
-    /// goes with the table.
-    pub fn removal_is_late(&self) -> bool {
-        self.key().kind == ObjectKind::Function
+    /// Whether the removal runs after the migration's operations rather than before. A function's
+    /// does, because the trigger that depends on it may sit on a table the operations drop and
+    /// goes with the table; unless the function's own identity names the row type of a table
+    /// being dropped (an affordance function takes its table), in which case the function must go
+    /// first or the table cannot.
+    pub fn removal_is_late(&self, dropped_tables: &[String]) -> bool {
+        let key = self.key();
+        key.kind == ObjectKind::Function
+            && !dropped_tables.iter().any(|table| {
+                key.name.contains(&format!(".{table})")) || key.name.contains(&format!(".{table},"))
+            })
     }
 
     /// Undoes the addition: drops what this action created. An inline `Create` has one too; its

@@ -10,8 +10,9 @@
 //!   set predicts equal what the catalog reports (desired-versus-live is trustworthy, which is
 //!   what auto-adopt relies on).
 //!
-//! The versions layer's policies and the draft views are not in the set yet (Phase 2c), so the
-//! migration scan leaves them out explicitly rather than quietly.
+//! The scan reads statements against the project schema and compares them with the set's objects
+//! there; the engine's own schemas (`_supatype`, `draft`, `supatype`) are the ledger's to account
+//! for, and the cron jobs exist only where `pg_cron` does.
 
 mod common;
 
@@ -24,7 +25,6 @@ use supatype_engine::{
         fingerprint::{fingerprints, ObjectKind},
     },
     parser,
-    parser::accessors::versions_table_name,
     parser::ast::SchemaAst,
     push,
 };
@@ -60,27 +60,11 @@ fn kinds_in_set() -> &'static [ObjectKind] {
 }
 
 /// Every `CONSTRAINT "x"`, `INDEX IF NOT EXISTS "x"` and `CREATE POLICY "x"` in statements that
-/// touch the project schema. Statements against `_supatype`, `draft`, `api` and `supatype` are the
-/// versions layer and the field views, which are not in the set yet.
-fn names_in_sql(sql: &str, ast: &SchemaAst) -> BTreeSet<String> {
-    let versions_tables: BTreeSet<String> = ast
-        .models
-        .iter()
-        .map(|m| versions_table_name(m.table_name()))
-        .collect();
+/// touch the project schema.
+fn names_in_sql(sql: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for statement in sql.split(';') {
         if !statement.contains("\"public\".") {
-            continue;
-        }
-        // Policies on a versions table, and the draft-select policy, come from the versions
-        // layer (2c). Their table's own keys and indexes are in the set.
-        if statement.contains("CREATE POLICY")
-            && (versions_tables
-                .iter()
-                .any(|vt| statement.contains(&format!("ON \"public\".\"{vt}\"")))
-                || statement.contains("_draft_select\""))
-        {
             continue;
         }
         for marker in [
@@ -105,7 +89,7 @@ fn names_in_sql(sql: &str, ast: &SchemaAst) -> BTreeSet<String> {
 
 fn names_in_set(set: &[DesiredObject]) -> BTreeSet<String> {
     set.iter()
-        .filter(|o| kinds_in_set().contains(&o.key.kind))
+        .filter(|o| kinds_in_set().contains(&o.key.kind) && o.key.schema == "public")
         .map(|o| o.key.name.clone())
         .collect()
 }
@@ -125,7 +109,7 @@ async fn the_set_and_the_migration_name_the_same_objects() {
             let sql = first_push_sql(&pool, &ast).await;
             let set = desired_objects(&ast, "public").unwrap();
 
-            let in_sql = names_in_sql(&sql, &ast);
+            let in_sql = names_in_sql(&sql);
             let in_set = names_in_set(&set);
             let only_sql: Vec<_> = in_sql.difference(&in_set).collect();
             let only_set: Vec<_> = in_set.difference(&in_sql).collect();
@@ -202,6 +186,10 @@ async fn after_a_push_every_desired_object_exists_with_the_structure_it_predicte
 
             let mut problems = Vec::new();
             for o in desired_objects(&ast, "public").unwrap() {
+                // Where `pg_cron` is absent the layer says so and schedules nothing.
+                if o.key.kind == ObjectKind::CronJob && !catalog.cron_available {
+                    continue;
+                }
                 let key = (
                     o.key.kind,
                     o.key.schema.clone(),

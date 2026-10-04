@@ -149,6 +149,8 @@ DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'draft') THEN
     EXECUTE 'DROP VIEW IF EXISTS "draft"."posts"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."ledger"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."tags"';
   END IF;
 END $$;
 

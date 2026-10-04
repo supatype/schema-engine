@@ -52,6 +52,11 @@ pub struct CatalogState {
     pub security_labels: Vec<DbSecurityLabel>,
     /// Empty when the database has no `cron.job`, which is most databases.
     pub cron_jobs: Vec<DbCronJob>,
+    /// Whether `cron.job` exists here at all. A job the schema wants is desired only where it can
+    /// be scheduled; elsewhere the layer says so and the ledger records nothing (plan section 10).
+    /// A fact about the database, not its state, so not part of the serialised catalog.
+    #[serde(skip)]
+    pub cron_available: bool,
     pub rls_attributes: Vec<DbRlsAttributes>,
     /// The roles each policy applies to, which `DatabaseState::rls_policies` does not carry.
     pub policy_roles: Vec<DbPolicyRoles>,
@@ -243,6 +248,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<CatalogState>
         column_grants: read_column_grants(conn, &schemas).await?,
         security_labels: read_security_labels(conn, &schemas).await?,
         cron_jobs: read_cron_jobs(conn).await?,
+        cron_available: cron_available(conn).await?,
         rls_attributes: read_rls_attributes(conn, &schemas).await?,
         policy_roles: read_policy_roles(conn, schema).await?,
         engine_tables: read_engine_tables(conn, schema).await?,
@@ -655,11 +661,16 @@ async fn read_security_labels(
         .collect())
 }
 
+async fn cron_available(conn: &mut PgConnection) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT to_regclass('cron.job') IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await?,
+    )
+}
+
 async fn read_cron_jobs(conn: &mut PgConnection) -> Result<Vec<DbCronJob>> {
-    let present: bool = sqlx::query_scalar("SELECT to_regclass('cron.job') IS NOT NULL")
-        .fetch_one(&mut *conn)
-        .await?;
-    if !present {
+    if !cron_available(conn).await? {
         return Ok(Vec::new());
     }
     let rows: Vec<(Option<String>, String, String, bool)> = sqlx::query_as(

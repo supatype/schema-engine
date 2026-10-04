@@ -144,6 +144,16 @@ RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT AS $fn$
   SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)
 $fn$;
 
+-- Drop draft views before column changes; recreated at the end of this migration.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'draft') THEN
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."students"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."courses"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."tags"';
+  END IF;
+END $$;
+
 -- [safe] Create table: students
 CREATE TABLE IF NOT EXISTS "public"."students" (
     "id" UUID CONSTRAINT "students_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),

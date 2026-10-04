@@ -465,30 +465,32 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
 /// `IF EXISTS` on both the schema check and the view: this runs on the first push for a model that
 /// has just become versioned, where neither exists yet.
 pub fn drop_draft_views_sql(ast: &SchemaAst) -> String {
-    // `drafts: true`, not merely versioned. A model keeping history with `drafts: false` has no
-    // pending version to preview and so no view, and naming one here would emit a drop for a
-    // relation that never exists.
-    let models: Vec<_> = versioned_models(ast)
-        .into_iter()
-        .filter(|m| versions_of(m).is_some_and(|v| v.drafts))
-        .collect();
-    if models.is_empty() {
+    // Every model, not only the ones with drafts now: a model that had drafts and stopped, or
+    // stopped keeping versions at all, still has the view, and its history table cannot be dropped
+    // while the view reads it (nothing cascades, plan 3.3). The drop is `IF EXISTS`, so a model
+    // that never had one costs a no-op.
+    if ast.models.is_empty() {
         return String::new();
     }
+    let tables: Vec<&str> = ast.models.iter().map(|m| m.table_name()).collect();
+    format!(
+        "-- Drop draft views before column changes; recreated at the end of this migration.\n{}",
+        drop_views_in_schema_sql(DRAFT_SCHEMA, &tables)
+    )
+}
 
-    let mut out = String::from(
-        "-- Drop draft views before column changes; recreated at the end of this migration.\n",
+/// `DROP VIEW IF EXISTS` for each of `tables` in `schema`, guarded on the schema rather than
+/// assuming it: a plain `DROP VIEW IF EXISTS draft.x` still raises when `draft` itself is absent,
+/// which is every first push.
+pub fn drop_views_in_schema_sql(schema: &str, tables: &[&str]) -> String {
+    let mut out = format!(
+        "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '{schema}') THEN\n"
     );
-    // Guarded on the schema rather than assuming it: a plain `DROP VIEW IF EXISTS draft.x` still
-    // raises when `draft` itself is absent, which is every first push.
-    out.push_str(
-        "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'draft') THEN\n",
-    );
-    for model in models {
+    for table in tables {
         out.push_str(&format!(
-            "    EXECUTE 'DROP VIEW IF EXISTS {draft}.{table}';\n",
-            draft = quoted(DRAFT_SCHEMA),
-            table = quoted(model.table_name()),
+            "    EXECUTE 'DROP VIEW IF EXISTS {}.{}';\n",
+            quoted(schema),
+            quoted(table),
         ));
     }
     out.push_str("  END IF;\nEND $$;\n\n");

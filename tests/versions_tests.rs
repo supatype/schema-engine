@@ -216,7 +216,7 @@ fn no_draft_view_for_a_model_that_only_keeps_history() {
     // so there is never a pending version to preview.
     let sql = forward_sql();
     assert!(
-        !sql.contains("\"draft\".\"ledger\""),
+        !sql.contains("CREATE VIEW \"draft\".\"ledger\""),
         "a model with drafts off has no pending version and needs no draft view"
     );
     assert!(
@@ -490,11 +490,14 @@ fn draft_views_are_dropped_before_column_changes() {
         "the early drop must be guarded on the draft schema existing"
     );
 
-    // A schema with no versioned model emits none of this.
+    // Every model's view is named, versioned or not: a model that stopped drafting, or stopped
+    // keeping versions, still has the view, and its history table cannot be dropped while the view
+    // reads it (nothing cascades). A schema with no model emits none of this.
     let plain = parser::parse(include_str!("fixtures/basic_blog.json")).unwrap();
+    let drops = versions::drop_draft_views_sql(&plain);
     assert!(
-        versions::drop_draft_views_sql(&plain).is_empty(),
-        "a schema with no versioned model should emit no draft drops"
+        drops.contains("DROP VIEW IF EXISTS \"draft\".\"posts\""),
+        "every model's draft view is named: {drops}"
     );
     let _ = ast;
 }

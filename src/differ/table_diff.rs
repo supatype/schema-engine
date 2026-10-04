@@ -1,5 +1,6 @@
 use super::column_diff;
 use super::{Operation, Risk};
+use crate::introspector::constraints::DbConstraintType;
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
@@ -155,6 +156,7 @@ pub fn diff(
         }
     }
 
+    let mut to_drop: Vec<&str> = Vec::new();
     for db_table in &db.tables {
         if !schema_table_names.contains(db_table.name.as_str())
             && !is_extension_managed_table(db_table.name.as_str())
@@ -173,15 +175,19 @@ pub fn diff(
                 ));
                 continue;
             }
-
-            // Genuinely removed table. Its own constraints go with it; a foreign key from another
-            // table into it is the reconcile's to drop first, which the migration runs before
-            // this (plan 3.3: nothing cascades).
-            ops.push(Operation::DropTable {
-                table: db_table.name.clone(),
-                risk: Risk::Destructive,
-            });
+            to_drop.push(db_table.name.as_str());
         }
+    }
+    // Genuinely removed tables. A table's own constraints go with it; a foreign key from another
+    // surviving table into it is the reconcile's to drop first, which the migration runs before
+    // this (plan 3.3: nothing cascades). Between the dropped tables themselves, the one holding
+    // the foreign key goes before the one it points at (a junction before its models, a history
+    // table before its model), or Postgres refuses the parent's drop.
+    for table in drop_order(to_drop, db) {
+        ops.push(Operation::DropTable {
+            table: table.to_string(),
+            risk: Risk::Destructive,
+        });
     }
 
     for jt in &ast.junction_tables {
@@ -245,9 +251,70 @@ fn previous_model<'a>(
         .find(|m| m.table_name() == table_name)
 }
 
+/// `tables` ordered so that no table is dropped while another in the list still references it:
+/// each round takes the tables nothing remaining points at. A cycle (two tables referencing each
+/// other) falls back to the given order, and Postgres names the problem.
+fn drop_order<'a>(mut tables: Vec<&'a str>, db: &DatabaseState) -> Vec<&'a str> {
+    let mut ordered = Vec::with_capacity(tables.len());
+    while !tables.is_empty() {
+        let referenced: std::collections::HashSet<&str> = db
+            .constraints
+            .iter()
+            .filter(|c| c.constraint_type == DbConstraintType::ForeignKey)
+            .filter(|c| tables.contains(&c.table.as_str()))
+            .filter_map(|c| c.foreign_table.as_deref())
+            .filter(|parent| tables.contains(parent))
+            .collect();
+        let (ready, waiting): (Vec<&str>, Vec<&str>) =
+            tables.iter().partition(|t| !referenced.contains(*t));
+        if ready.is_empty() {
+            ordered.extend(waiting);
+            break;
+        }
+        ordered.extend(ready);
+        tables = waiting;
+    }
+    ordered
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_extension_managed_table;
+    use super::{drop_order, is_extension_managed_table};
+    use crate::introspector::constraints::{DbConstraint, DbConstraintType};
+    use crate::state::database_state::DatabaseState;
+
+    fn fk(table: &str, parent: &str) -> DbConstraint {
+        DbConstraint {
+            table: table.into(),
+            name: format!("{table}_{parent}_fkey"),
+            constraint_type: DbConstraintType::ForeignKey,
+            columns: vec!["x".into()],
+            foreign_table: Some(parent.into()),
+            foreign_schema: None,
+            foreign_columns: Some(vec!["id".into()]),
+            check_expression: None,
+            on_delete: None,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn a_table_is_dropped_before_the_one_it_references() {
+        let db = DatabaseState {
+            constraints: vec![fk("enrolments", "courses"), fk("enrolments", "students")],
+            ..DatabaseState::default()
+        };
+        assert_eq!(
+            drop_order(vec!["courses", "enrolments", "students"], &db),
+            ["enrolments", "courses", "students"]
+        );
+        // A cycle falls back to the given order rather than looping.
+        let cycle = DatabaseState {
+            constraints: vec![fk("a", "b"), fk("b", "a")],
+            ..DatabaseState::default()
+        };
+        assert_eq!(drop_order(vec!["a", "b"], &cycle), ["a", "b"]);
+    }
 
     #[test]
     fn ignores_known_extension_managed_tables() {

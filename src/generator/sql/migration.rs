@@ -476,17 +476,23 @@ impl Migration {
     ) -> Result<Migration> {
         assert_forward_allowed(diff, force)?;
         // The reconcile's removals first, so a drop the operations depend on has happened (a
-        // foreign key into a table they drop; nothing ever cascades), then the operations, then
-        // the reconcile's additions, which may need a table or column the operations create.
-        let removals: Vec<String> = reconcile
+        // foreign key into a table they drop, a function taking its row type; nothing ever
+        // cascades), then the operations, then the reconcile's additions, which may need a table
+        // or column the operations create. A function nothing of the operations depends on waits
+        // for them instead: the trigger that depends on it may sit on a table they drop, and goes
+        // with the table.
+        let dropped_tables: Vec<String> = diff
+            .operations
             .iter()
-            .filter(|a| !a.removal_is_late())
-            .filter_map(reconcile::Action::removal_sql)
+            .filter_map(|op| match op {
+                Operation::DropTable { table, .. } => Some(table.clone()),
+                _ => None,
+            })
             .collect();
-        // A function's removal waits for the operations instead: the trigger that depends on it
-        // may sit on a table they drop, and goes with the table.
-        let (late, early): (Vec<&reconcile::Action>, Vec<&reconcile::Action>) =
-            reconcile.iter().partition(|a| a.removal_is_late());
+        let (late, early): (Vec<&reconcile::Action>, Vec<&reconcile::Action>) = reconcile
+            .iter()
+            .partition(|a| a.removal_is_late(&dropped_tables));
+        let removals: Vec<String> = early.iter().filter_map(|a| a.removal_sql()).collect();
         let late_removals: Vec<String> = late.iter().filter_map(|a| a.removal_sql()).collect();
         let additions: Vec<String> = reconcile
             .iter()
@@ -741,8 +747,14 @@ fn render_create_rls_policy_sql(
 pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {
     match op {
         Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast),
+        // Never `CASCADE` (plan 3.3): what depends on the table and is ours is dropped before it
+        // (its draft and api views here, a foreign key from another table or an affordance
+        // function by the reconcile); what depends on it and is not ours blocks the drop and is
+        // named, rather than vanishing.
         Operation::DropTable { table, .. } => Ok(format!(
-            "DROP TABLE IF EXISTS \"{schema}\".\"{table}\" CASCADE;"
+            "{}{}DROP TABLE IF EXISTS \"{schema}\".\"{table}\";",
+            super::versions::drop_views_in_schema_sql("draft", &[table]),
+            super::versions::drop_views_in_schema_sql(super::field_views::VIEW_SCHEMA, &[table]),
         )),
         Operation::RenameTable { from, to, .. } => Ok(format!(
             "ALTER TABLE \"{schema}\".\"{from}\" RENAME TO \"{to}\";"
