@@ -416,7 +416,7 @@ fn a_schema_with_no_versioned_model_carries_no_preview_bounds() {
 fn what_a_push_applies_carries_the_same_layer_as_the_migration_file() {
     // These are two renderers over the same steps, and they drifted: the drafts and publishing
     // layer was added to the file and not to the push, so a push created the snapshot tables and
-    // none of the views, functions or policies that make them mean anything — and reported success.
+    // none of the views, functions or policies that make them mean anything, and reported success.
     // Every test rendered the file, so every test passed. Only a real database showed it.
     let ast = versioned_ast();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
