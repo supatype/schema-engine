@@ -203,11 +203,7 @@ CREATE TABLE IF NOT EXISTS "public"."every" (
     "vector_plain" vector(8)
 );
 
-COMMENT ON CONSTRAINT "every_slug_plain_key" ON "public"."every" IS 'supatype:managed;kind=unique_constraint;table=every;fields=slug_plain;v=1';
-
 CREATE INDEX IF NOT EXISTS "every_blocks_plain_gin_idx" ON "public"."every" USING gin ("blocks_plain");
-
-COMMENT ON TABLE "public"."every" IS 'supatype:managed;kind=table;table=every;fields=;v=1';
 
 -- [safe] Create table: every_localised
 CREATE TABLE IF NOT EXISTS "public"."every_localised" (
@@ -246,11 +242,7 @@ CREATE TABLE IF NOT EXISTS "public"."every_localised" (
     "blocks_loc" JSONB
 );
 
-COMMENT ON CONSTRAINT "every_localised_slug_loc_key" ON "public"."every_localised" IS 'supatype:managed;kind=unique_constraint;table=every_localised;fields=slug_loc;v=1';
-
 CREATE INDEX IF NOT EXISTS "every_localised_blocks_loc_gin_idx" ON "public"."every_localised" USING gin ("blocks_loc");
-
-COMMENT ON TABLE "public"."every_localised" IS 'supatype:managed;kind=table;table=every_localised;fields=;v=1';
 
 -- [safe] Create table: every_required
 CREATE TABLE IF NOT EXISTS "public"."every_required" (
@@ -294,11 +286,7 @@ CREATE TABLE IF NOT EXISTS "public"."every_required" (
     "vector_req" vector(8) NOT NULL
 );
 
-COMMENT ON CONSTRAINT "every_required_slug_req_key" ON "public"."every_required" IS 'supatype:managed;kind=unique_constraint;table=every_required;fields=slug_req;v=1';
-
 CREATE INDEX IF NOT EXISTS "every_required_blocks_req_gin_idx" ON "public"."every_required" USING gin ("blocks_req");
-
-COMMENT ON TABLE "public"."every_required" IS 'supatype:managed;kind=table;table=every_required;fields=;v=1';
 
 -- [safe] Create table: every_defaulted
 CREATE TABLE IF NOT EXISTS "public"."every_defaulted" (
@@ -342,11 +330,7 @@ CREATE TABLE IF NOT EXISTS "public"."every_defaulted" (
     "vector_def" vector(8)
 );
 
-COMMENT ON CONSTRAINT "every_defaulted_slug_def_key" ON "public"."every_defaulted" IS 'supatype:managed;kind=unique_constraint;table=every_defaulted;fields=slug_def;v=1';
-
 CREATE INDEX IF NOT EXISTS "every_defaulted_blocks_def_gin_idx" ON "public"."every_defaulted" USING gin ("blocks_def");
-
-COMMENT ON TABLE "public"."every_defaulted" IS 'supatype:managed;kind=table;table=every_defaulted;fields=;v=1';
 
 -- [safe] Create table: every_read_only
 CREATE TABLE IF NOT EXISTS "public"."every_read_only" (
@@ -390,19 +374,13 @@ CREATE TABLE IF NOT EXISTS "public"."every_read_only" (
     "vector_ro" vector(8)
 );
 
-COMMENT ON CONSTRAINT "every_read_only_slug_ro_key" ON "public"."every_read_only" IS 'supatype:managed;kind=unique_constraint;table=every_read_only;fields=slug_ro;v=1';
-
 CREATE INDEX IF NOT EXISTS "every_read_only_blocks_ro_gin_idx" ON "public"."every_read_only" USING gin ("blocks_ro");
-
-COMMENT ON TABLE "public"."every_read_only" IS 'supatype:managed;kind=table;table=every_read_only;fields=;v=1';
 
 -- [safe] Create table: relations
 CREATE TABLE IF NOT EXISTS "public"."relations" (
     "id" UUID CONSTRAINT "relations_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "owner_id" UUID
 );
-
-COMMENT ON TABLE "public"."relations" IS 'supatype:managed;kind=table;table=relations;fields=;v=1';
 
 -- [safe] Create table: composites
 CREATE TABLE IF NOT EXISTS "public"."composites" (
@@ -417,16 +395,12 @@ CREATE TABLE IF NOT EXISTS "public"."composites" (
 
 CREATE INDEX IF NOT EXISTS "composites_deleted_at_idx" ON "public"."composites" USING btree ("deleted_at");
 
-COMMENT ON TABLE "public"."composites" IS 'supatype:managed;kind=table;table=composites;fields=;v=1';
-
 -- [safe] Create junction table: relations_every
 CREATE TABLE IF NOT EXISTS "public"."relations_every" (
     "relations_id" UUID NOT NULL CONSTRAINT "relations_every_relations_id_fkey" REFERENCES "public"."relations" ("id") ON DELETE CASCADE,
     "every_id" UUID NOT NULL CONSTRAINT "relations_every_every_id_fkey" REFERENCES "public"."every" ("id") ON DELETE CASCADE,
     CONSTRAINT "relations_every_pkey" PRIMARY KEY ("relations_id", "every_id")
 );
-
-COMMENT ON TABLE "public"."relations_every" IS 'supatype:managed;kind=table;table=relations_every;fields=;v=1';
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_every"("every" "public"."every")

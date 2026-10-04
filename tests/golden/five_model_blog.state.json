@@ -57,7 +57,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=categories;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -124,7 +124,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=comments;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -211,7 +211,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=posts;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -238,7 +238,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=tags;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -295,7 +295,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=users;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [
@@ -467,7 +467,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=categories;fields=name;v=1"
+        "comment": null
       },
       {
         "table": "categories",
@@ -495,7 +495,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=categories;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "comments",
@@ -601,7 +601,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "tags",
@@ -615,7 +615,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1"
+        "comment": null
       },
       {
         "table": "tags",
@@ -655,7 +655,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=users;fields=email;v=1"
+        "comment": null
       },
       {
         "table": "users",

@@ -97,7 +97,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=locations;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [

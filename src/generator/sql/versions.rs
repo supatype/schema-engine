@@ -9,8 +9,8 @@
 //!
 //! Four pieces, in the order a migration needs them:
 //!
-//! 1. **The versions table**, created like a junction table: engine-owned, stamped with the managed
-//!    marker, `IF NOT EXISTS`. Its shape is fixed and does not vary with the model, so it is emitted
+//! 1. **The versions table**, created like a junction table: engine-owned, recorded in the ledger,
+//!    `IF NOT EXISTS`. Its shape is fixed and does not vary with the model, so it is emitted
 //!    by an operation of its own rather than diffed column by column.
 //! 2. **Helpers** in `_supatype`, reading the caller's membership and any preview claim.
 //! 3. **`draft.<table>` views** with `security_invoker`, reconstructing the model's column shape out
@@ -51,8 +51,8 @@ pub fn versioned_models(ast: &SchemaAst) -> Vec<&ModelAst> {
 
 /// Every snapshot table this schema owns, for the differ's "tables we know about" set.
 ///
-/// Without this the removed-table pass drops them on the next push: they carry the managed marker,
-/// so the ownership gate is no protection, and the drop takes every version with it.
+/// Without this the removed-table pass drops them on the next push: they are Supatype's by their
+/// ledger rows, so the ownership gate is no protection, and the drop takes every version with it.
 pub fn versions_tables(ast: &SchemaAst) -> Vec<String> {
     versioned_models(ast)
         .iter()
@@ -136,7 +136,6 @@ pub fn create_versions_table_sql(
     record_id_type: &str,
     primary_key: &str,
 ) -> String {
-    let marker = crate::managed::managed_comment("table", versions_table, &[]);
     let index = versions_record_index_name(versions_table);
     let pk_name = crate::managed::primary_key_name(versions_table);
     let fk_name = crate::managed::foreign_key_name(versions_table, "record_id");
@@ -164,7 +163,6 @@ pub fn create_versions_table_sql(
          \"published_locales\" JSONB NOT NULL DEFAULT '{{}}',\n    \
          CONSTRAINT {record_version_key_q} UNIQUE (\"record_id\", \"version\")\n\
          );\n\n\
-         COMMENT ON TABLE {schema_q}.{versions_q} IS '{marker}';\n\n\
          CREATE INDEX IF NOT EXISTS {index_q} ON {schema_q}.{versions_q} (\"record_id\", \"version\" DESC);",
         schema_q = quoted(schema),
         versions_q = quoted(versions_table),

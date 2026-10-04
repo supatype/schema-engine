@@ -159,7 +159,7 @@ impl ObjectKey {
     /// `COMMENT ON <this object> IS <text>`, `NULL` when `text` is `None`, for the kinds whose
     /// comment Postgres keeps. Used to take an older engine's stamp out of a comment while keeping
     /// whatever the user wrote beside it (plan section 6). The table, constraint and index forms
-    /// are the ones `managed.rs` writes stamps with, so writer and remover cannot disagree.
+    /// are the ones an older engine wrote its stamps with.
     pub fn comment_sql(&self, text: Option<&str>) -> Option<String> {
         let ObjectKey {
             kind,

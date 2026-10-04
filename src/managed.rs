@@ -1,4 +1,6 @@
-//! Supatype-managed object metadata (Postgres comments + naming conventions).
+//! Naming conventions for the objects Supatype creates, and the one thing left of its comment stamps:
+//! recognising and removing an older engine's `supatype:managed` stamp (plan section 7). Since Phase
+//! 6 nothing writes one; ownership is the ledger's.
 
 pub const MANAGED_PREFIX: &str = "supatype:managed";
 
@@ -19,14 +21,6 @@ pub fn comment_without_stamp(comment: Option<&str>) -> Option<String> {
         .collect();
     let rest = rest.join("\n");
     (!rest.trim().is_empty()).then_some(rest)
-}
-
-/// Build a `COMMENT ON` value for a managed constraint or index.
-pub fn managed_comment(kind: &str, table: &str, fields: &[&str]) -> String {
-    format!(
-        "{MANAGED_PREFIX};kind={kind};table={table};fields={};v=1",
-        fields.join(",")
-    )
 }
 
 /// Postgres's identifier limit: `NAMEDATALEN - 1` bytes.
@@ -95,8 +89,8 @@ pub fn expected_model_index_name(table: &str, fields: &[String]) -> String {
     truncate_identifier(&format!("{table}_{}", fields.join("_")), "_idx")
 }
 
-/// The value side of a `COMMENT ON ... IS`: a quoted literal, or `NULL` to clear it. The one place
-/// the quoting lives, for the stamp writers here and the ledger's stamp remover alike.
+/// The value side of a `COMMENT ON ... IS`: a quoted literal, or `NULL` to clear it, for the ledger
+/// putting back what a user wrote beside a stamp it removes.
 pub fn comment_value(text: Option<&str>) -> String {
     match text {
         Some(t) => format!("'{}'", t.replace('\'', "''")),
@@ -131,28 +125,4 @@ pub fn comment_on_index(schema: &str, index: &str, text: Option<&str>) -> String
         "COMMENT ON INDEX \"{schema}\".\"{index}\" IS {};",
         comment_value(text)
     )
-}
-
-/// SQL to stamp a constraint comment.
-pub fn comment_on_constraint_sql(
-    table: &str,
-    constraint: &str,
-    comment: &str,
-    schema: &str,
-) -> String {
-    comment_on_constraint(schema, table, constraint, Some(comment))
-}
-
-/// SQL to stamp a table comment.
-///
-/// The stamp is what the ownership gate reads, so adoption and creation must produce the same
-/// marker: `migration.rs` writes exactly this on `CREATE TABLE`. A table adopted with a different
-/// shape would stay undroppable forever, and the differ could never converge.
-pub fn comment_on_table_sql(table: &str, comment: &str, schema: &str) -> String {
-    comment_on_table(schema, table, Some(comment))
-}
-
-/// SQL to stamp an index comment.
-pub fn comment_on_index_sql(index_name: &str, comment: &str, schema: &str) -> String {
-    comment_on_index(schema, index_name, Some(comment))
 }

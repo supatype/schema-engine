@@ -27,7 +27,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=course_tags;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -94,7 +94,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=courses;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -121,7 +121,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=enrollments;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -178,7 +178,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=students;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -205,7 +205,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=tags;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [
@@ -398,7 +398,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=courses;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "enrollments",
@@ -471,7 +471,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=students;fields=email;v=1"
+        "comment": null
       },
       {
         "table": "students",
@@ -499,7 +499,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1"
+        "comment": null
       },
       {
         "table": "tags",

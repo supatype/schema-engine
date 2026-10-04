@@ -68,10 +68,48 @@ pub struct LedgerRow {
     pub migration_id: Option<i32>,
 }
 
-/// The hash of what we intend: the normalised `CREATE` text. Our own text both times, so no
-/// deparse normalisation is involved.
+impl LedgerRow {
+    /// Whether `create_sql` is what this row recorded as intended. Compared by the recorded
+    /// statement as well as its fingerprint, so a row an older engine wrote, whose statement still
+    /// carried an ownership stamp, matches the same statement without one (Phase 6).
+    pub fn intends(&self, create_sql: &str) -> bool {
+        let wanted = desired_fingerprint(self.key.kind, create_sql);
+        wanted == self.desired_fp || wanted == desired_fingerprint(self.key.kind, &self.desired_sql)
+    }
+}
+
+/// The hash of what we intend: the normalised `CREATE` text without its `COMMENT ON` statements.
+/// Our own text both times, so no deparse normalisation is involved; and comments are the user's
+/// (plan section 6), never part of what a push intends.
 pub fn desired_fingerprint(kind: ObjectKind, create_sql: &str) -> String {
-    hash(kind, &[&normalise_sql(create_sql)])
+    hash(kind, &[&normalise_sql(&without_comments(create_sql))])
+}
+
+/// `sql` without its `COMMENT ON ... ;` statements. A comment's text is a quoted literal that may
+/// itself hold semicolons (an older engine's stamp does), so quotes are followed to find the end.
+fn without_comments(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut rest = sql;
+    while let Some(at) = rest.find("COMMENT ON ") {
+        out.push_str(&rest[..at]);
+        rest = after_statement(&rest[at..]);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What follows the statement `sql` starts with: everything after its first `;` outside quotes.
+fn after_statement(sql: &str) -> &str {
+    let mut quoted = false;
+    for (i, c) in sql.char_indices() {
+        match c {
+            // A doubled quote inside a literal toggles twice, which leaves it quoted.
+            '\'' => quoted = !quoted,
+            ';' if !quoted => return &sql[i + 1..],
+            _ => {}
+        }
+    }
+    ""
 }
 
 pub fn create_table_sql() -> String {
@@ -297,4 +335,48 @@ pub async fn set_migration(
     .await
     .context("link ledger rows to their migration")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STAMPED: &str =
+        "ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"posts_slug_key\" UNIQUE (\"slug\");\n\
+        COMMENT ON CONSTRAINT \"posts_slug_key\" ON \"public\".\"posts\" IS \
+        'supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1';";
+    const PLAIN: &str =
+        "ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"posts_slug_key\" UNIQUE (\"slug\");";
+
+    #[test]
+    fn a_comment_is_no_part_of_what_is_intended_semicolons_and_all() {
+        assert_eq!(
+            normalise_sql(&without_comments(STAMPED)),
+            normalise_sql(PLAIN)
+        );
+        let quoted = "COMMENT ON TABLE t IS 'it''s; ours';CREATE INDEX i ON t (a);";
+        assert_eq!(without_comments(quoted), "CREATE INDEX i ON t (a);");
+    }
+
+    #[test]
+    fn a_row_an_older_engine_wrote_with_a_stamp_intends_the_statement_without_it() {
+        let key = ObjectKey {
+            kind: ObjectKind::Unique,
+            schema: "public".into(),
+            parent: "posts".into(),
+            name: "posts_slug_key".into(),
+        };
+        let row = LedgerRow {
+            key,
+            // As the engine fingerprinted it before comments were left out.
+            desired_fp: hash(ObjectKind::Unique, &[&normalise_sql(STAMPED)]),
+            desired_sql: STAMPED.into(),
+            live_fp: String::new(),
+            live_def: String::new(),
+            status: Status::Managed,
+            migration_id: None,
+        };
+        assert!(row.intends(PLAIN));
+        assert!(!row.intends("ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"posts_slug_key\" UNIQUE (\"title\");"));
+    }
 }

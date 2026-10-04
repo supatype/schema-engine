@@ -166,10 +166,6 @@ CREATE TABLE IF NOT EXISTS "public"."authors" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "authors_email_key" ON "public"."authors" IS 'supatype:managed;kind=unique_constraint;table=authors;fields=email;v=1';
-
-COMMENT ON TABLE "public"."authors" IS 'supatype:managed;kind=table;table=authors;fields=;v=1';
-
 -- [safe] Create table: articles
 CREATE TABLE IF NOT EXISTS "public"."articles" (
     "id" UUID CONSTRAINT "articles_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -184,15 +180,11 @@ CREATE TABLE IF NOT EXISTS "public"."articles" (
     "deleted_at" TIMESTAMPTZ
 );
 
-COMMENT ON CONSTRAINT "articles_slug_key" ON "public"."articles" IS 'supatype:managed;kind=unique_constraint;table=articles;fields=slug;v=1';
-
 CREATE INDEX IF NOT EXISTS "articles_search_vector_idx" ON "public"."articles" USING gin ("search_vector");
 
 CREATE INDEX IF NOT EXISTS "articles_author_id_idx" ON "public"."articles" USING btree ("author_id");
 
 CREATE INDEX IF NOT EXISTS "articles_deleted_at_idx" ON "public"."articles" USING btree ("deleted_at");
-
-COMMENT ON TABLE "public"."articles" IS 'supatype:managed;kind=table;table=articles;fields=;v=1';
 
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
@@ -201,18 +193,10 @@ CREATE TABLE IF NOT EXISTS "public"."tags" (
     "slug" TEXT NOT NULL CONSTRAINT "tags_slug_key" UNIQUE
 );
 
-COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1';
-
-COMMENT ON CONSTRAINT "tags_slug_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=slug;v=1';
-
-COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fields=;v=1';
-
 -- [safe] Create table: articles
 CREATE TABLE IF NOT EXISTS "public"."articles" (
     "id" UUID CONSTRAINT "articles_pkey" PRIMARY KEY DEFAULT gen_random_uuid()
 );
-
-COMMENT ON TABLE "public"."articles" IS 'supatype:managed;kind=table;table=articles;fields=;v=1';
 
 -- [safe] Create junction table: article_tags
 CREATE TABLE IF NOT EXISTS "public"."article_tags" (
@@ -220,8 +204,6 @@ CREATE TABLE IF NOT EXISTS "public"."article_tags" (
     "tag_id" UUID NOT NULL CONSTRAINT "article_tags_tag_id_fkey" REFERENCES "public"."tags" ("id") ON DELETE CASCADE,
     CONSTRAINT "article_tags_pkey" PRIMARY KEY ("article_tag_id", "tag_id")
 );
-
-COMMENT ON TABLE "public"."article_tags" IS 'supatype:managed;kind=table;table=article_tags;fields=;v=1';
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_authors"("authors" "public"."authors")

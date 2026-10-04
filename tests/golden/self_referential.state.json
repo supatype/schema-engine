@@ -87,7 +87,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=categories;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -154,7 +154,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=employees;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [
@@ -286,7 +286,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=categories;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "employees",
@@ -312,7 +312,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=employees;fields=email;v=1"
+        "comment": null
       },
       {
         "table": "employees",

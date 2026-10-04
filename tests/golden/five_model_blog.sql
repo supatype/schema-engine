@@ -165,10 +165,6 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "users_email_key" ON "public"."users" IS 'supatype:managed;kind=unique_constraint;table=users;fields=email;v=1';
-
-COMMENT ON TABLE "public"."users" IS 'supatype:managed;kind=table;table=users;fields=;v=1';
-
 -- [safe] Create table: categories
 CREATE TABLE IF NOT EXISTS "public"."categories" (
     "id" UUID CONSTRAINT "categories_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -177,12 +173,6 @@ CREATE TABLE IF NOT EXISTS "public"."categories" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-COMMENT ON CONSTRAINT "categories_name_key" ON "public"."categories" IS 'supatype:managed;kind=unique_constraint;table=categories;fields=name;v=1';
-
-COMMENT ON CONSTRAINT "categories_slug_key" ON "public"."categories" IS 'supatype:managed;kind=unique_constraint;table=categories;fields=slug;v=1';
-
-COMMENT ON TABLE "public"."categories" IS 'supatype:managed;kind=table;table=categories;fields=;v=1';
 
 -- [safe] Create table: posts
 CREATE TABLE IF NOT EXISTS "public"."posts" (
@@ -196,11 +186,7 @@ CREATE TABLE IF NOT EXISTS "public"."posts" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "posts_slug_key" ON "public"."posts" IS 'supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1';
-
 CREATE INDEX IF NOT EXISTS "posts_author_id_idx" ON "public"."posts" USING btree ("author_id");
-
-COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fields=;v=1';
 
 -- [safe] Create table: comments
 CREATE TABLE IF NOT EXISTS "public"."comments" (
@@ -212,17 +198,11 @@ CREATE TABLE IF NOT EXISTS "public"."comments" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE "public"."comments" IS 'supatype:managed;kind=table;table=comments;fields=;v=1';
-
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
     "id" UUID CONSTRAINT "tags_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" TEXT NOT NULL CONSTRAINT "tags_name_key" UNIQUE
 );
-
-COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1';
-
-COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fields=;v=1';
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users")

@@ -27,7 +27,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=ledger;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -124,7 +124,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=ledger_versions;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -191,7 +191,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=posts;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -288,7 +288,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=posts_versions;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -315,7 +315,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=tags;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [

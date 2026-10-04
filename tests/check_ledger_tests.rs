@@ -290,10 +290,10 @@ async fn a_check_stamped_by_an_older_engine_moves_into_the_ledger_and_out_of_its
         assert!(applied(&push(&pool, &ast).await.unwrap()));
         // What a pre-ledger engine left behind: a stamped constraint and no ledger row. A user
         // line beside the stamp must survive the move.
+        common::as_an_older_engine_left_it(&pool).await.unwrap();
         exec(
             &pool,
-            "DELETE FROM _supatype.managed_objects WHERE true;
-             COMMENT ON CONSTRAINT products_name_bounds ON public.products IS
+            "COMMENT ON CONSTRAINT products_name_bounds ON public.products IS
                E'supatype:managed;kind=check;table=products;fields=name;v=1\\nkeep this line';",
         )
         .await

@@ -176,11 +176,7 @@ CREATE TABLE IF NOT EXISTS "public"."page" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "page_slug_key" ON "public"."page" IS 'supatype:managed;kind=unique_constraint;table=page;fields=slug;v=1';
-
 CREATE INDEX IF NOT EXISTS "page_body_gin_idx" ON "public"."page" USING gin ("body");
-
-COMMENT ON TABLE "public"."page" IS 'supatype:managed;kind=table;table=page;fields=;v=1';
 
 -- [safe] Create table: speaker
 CREATE TABLE IF NOT EXISTS "public"."speaker" (
@@ -196,10 +192,6 @@ CREATE TABLE IF NOT EXISTS "public"."speaker" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "speaker_slug_key" ON "public"."speaker" IS 'supatype:managed;kind=unique_constraint;table=speaker;fields=slug;v=1';
-
-COMMENT ON TABLE "public"."speaker" IS 'supatype:managed;kind=table;table=speaker;fields=;v=1';
-
 -- [safe] Create table: room
 CREATE TABLE IF NOT EXISTS "public"."room" (
     "id" UUID CONSTRAINT "room_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -209,8 +201,6 @@ CREATE TABLE IF NOT EXISTS "public"."room" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-COMMENT ON TABLE "public"."room" IS 'supatype:managed;kind=table;table=room;fields=;v=1';
 
 -- [safe] Create table: talk
 CREATE TABLE IF NOT EXISTS "public"."talk" (
@@ -230,15 +220,11 @@ CREATE TABLE IF NOT EXISTS "public"."talk" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "talk_slug_key" ON "public"."talk" IS 'supatype:managed;kind=unique_constraint;table=talk;fields=slug;v=1';
-
 ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_check_1" CHECK ("starts_at" <= "ends_at");
 
 CREATE INDEX IF NOT EXISTS "talk_day_starts_at_idx" ON "public"."talk" USING btree ("day", "starts_at");
 
 CREATE INDEX IF NOT EXISTS "talk_starts_at_idx" ON "public"."talk" USING btree ("starts_at");
-
-COMMENT ON TABLE "public"."talk" IS 'supatype:managed;kind=table;table=talk;fields=;v=1';
 
 -- [safe] Create table: sponsor
 CREATE TABLE IF NOT EXISTS "public"."sponsor" (
@@ -255,10 +241,6 @@ CREATE TABLE IF NOT EXISTS "public"."sponsor" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "sponsor_name_key" ON "public"."sponsor" IS 'supatype:managed;kind=unique_constraint;table=sponsor;fields=name;v=1';
-
-COMMENT ON TABLE "public"."sponsor" IS 'supatype:managed;kind=table;table=sponsor;fields=;v=1';
-
 -- [safe] Create table: attendee
 CREATE TABLE IF NOT EXISTS "public"."attendee" (
     "id" UUID CONSTRAINT "attendee_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -267,8 +249,6 @@ CREATE TABLE IF NOT EXISTS "public"."attendee" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-COMMENT ON TABLE "public"."attendee" IS 'supatype:managed;kind=table;table=attendee;fields=;v=1';
 
 -- [safe] Create table: ticket
 CREATE TABLE IF NOT EXISTS "public"."ticket" (
@@ -282,10 +262,6 @@ CREATE TABLE IF NOT EXISTS "public"."ticket" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-COMMENT ON CONSTRAINT "ticket_reference_key" ON "public"."ticket" IS 'supatype:managed;kind=unique_constraint;table=ticket;fields=reference;v=1';
-
-COMMENT ON TABLE "public"."ticket" IS 'supatype:managed;kind=table;table=ticket;fields=;v=1';
 
 -- [safe] Create table: chat_message
 CREATE TABLE IF NOT EXISTS "public"."chat_message" (
@@ -301,8 +277,6 @@ ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_check_1" CHECK 
 
 CREATE INDEX IF NOT EXISTS "chat_message_room_idx" ON "public"."chat_message" USING btree ("room");
 
-COMMENT ON TABLE "public"."chat_message" IS 'supatype:managed;kind=table;table=chat_message;fields=;v=1';
-
 -- [safe] Create table: _global_site_settings
 CREATE TABLE IF NOT EXISTS "public"."_global_site_settings" (
     "id" UUID CONSTRAINT "_global_site_settings_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -315,8 +289,6 @@ CREATE TABLE IF NOT EXISTS "public"."_global_site_settings" (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "_global_site_settings_singleton_idx" ON "public"."_global_site_settings" ((TRUE));
-
-COMMENT ON TABLE "public"."_global_site_settings" IS 'supatype:managed;kind=table;table=_global_site_settings;fields=;v=1';
 
 -- [safe] Create versions table: page_versions
 CREATE TABLE IF NOT EXISTS "public"."page_versions" (
@@ -339,8 +311,6 @@ CREATE TABLE IF NOT EXISTS "public"."page_versions" (
     "published_locales" JSONB NOT NULL DEFAULT '{}',
     CONSTRAINT "page_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
-
-COMMENT ON TABLE "public"."page_versions" IS 'supatype:managed;kind=table;table=page_versions;fields=;v=1';
 
 CREATE INDEX IF NOT EXISTS "page_versions_record_idx" ON "public"."page_versions" ("record_id", "version" DESC);
 
@@ -366,8 +336,6 @@ CREATE TABLE IF NOT EXISTS "public"."speaker_versions" (
     CONSTRAINT "speaker_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
 
-COMMENT ON TABLE "public"."speaker_versions" IS 'supatype:managed;kind=table;table=speaker_versions;fields=;v=1';
-
 CREATE INDEX IF NOT EXISTS "speaker_versions_record_idx" ON "public"."speaker_versions" ("record_id", "version" DESC);
 
 -- [safe] Create versions table: talk_versions
@@ -391,8 +359,6 @@ CREATE TABLE IF NOT EXISTS "public"."talk_versions" (
     "published_locales" JSONB NOT NULL DEFAULT '{}',
     CONSTRAINT "talk_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
-
-COMMENT ON TABLE "public"."talk_versions" IS 'supatype:managed;kind=table;table=talk_versions;fields=;v=1';
 
 CREATE INDEX IF NOT EXISTS "talk_versions_record_idx" ON "public"."talk_versions" ("record_id", "version" DESC);
 

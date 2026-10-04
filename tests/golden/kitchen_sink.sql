@@ -182,17 +182,11 @@ CREATE TABLE IF NOT EXISTS "public"."kitchen_sink" (
     "deleted_at" TIMESTAMPTZ
 );
 
-COMMENT ON CONSTRAINT "kitchen_sink_emailField_key" ON "public"."kitchen_sink" IS 'supatype:managed;kind=unique_constraint;table=kitchen_sink;fields=emailField;v=1';
-
-COMMENT ON CONSTRAINT "kitchen_sink_slugField_key" ON "public"."kitchen_sink" IS 'supatype:managed;kind=unique_constraint;table=kitchen_sink;fields=slugField;v=1';
-
 CREATE INDEX IF NOT EXISTS "kitchen_sink_jsonb_field_idx" ON "public"."kitchen_sink" USING gin ("jsonb_field");
 
 CREATE INDEX IF NOT EXISTS "kitchen_sink_vector_field_idx" ON "public"."kitchen_sink" USING hnsw ("vector_field");
 
 CREATE INDEX IF NOT EXISTS "kitchen_sink_deleted_at_idx" ON "public"."kitchen_sink" USING btree ("deleted_at");
-
-COMMENT ON TABLE "public"."kitchen_sink" IS 'supatype:managed;kind=table;table=kitchen_sink;fields=;v=1';
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_kitchen_sink"("kitchen_sink" "public"."kitchen_sink")

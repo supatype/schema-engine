@@ -162,10 +162,6 @@ CREATE TABLE IF NOT EXISTS "public"."users" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "users_email_key" ON "public"."users" IS 'supatype:managed;kind=unique_constraint;table=users;fields=email;v=1';
-
-COMMENT ON TABLE "public"."users" IS 'supatype:managed;kind=table;table=users;fields=;v=1';
-
 -- [safe] Create table: posts
 CREATE TABLE IF NOT EXISTS "public"."posts" (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -176,10 +172,6 @@ CREATE TABLE IF NOT EXISTS "public"."posts" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-COMMENT ON CONSTRAINT "posts_slug_key" ON "public"."posts" IS 'supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1';
-
-COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fields=;v=1';
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users")

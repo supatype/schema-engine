@@ -169,8 +169,6 @@ CREATE TABLE IF NOT EXISTS "public"."documents" (
 
 CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding");
 
-COMMENT ON TABLE "public"."documents" IS 'supatype:managed;kind=table;table=documents;fields=;v=1';
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."documents")
   RETURNS boolean LANGUAGE sql STABLE AS $can$

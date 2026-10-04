@@ -164,23 +164,17 @@ CREATE TABLE IF NOT EXISTS "public"."posts" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fields=;v=1';
-
 -- [safe] Create table: ledger
 CREATE TABLE IF NOT EXISTS "public"."ledger" (
     "id" UUID CONSTRAINT "ledger_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "note" TEXT NOT NULL
 );
 
-COMMENT ON TABLE "public"."ledger" IS 'supatype:managed;kind=table;table=ledger;fields=;v=1';
-
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
     "id" UUID CONSTRAINT "tags_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "label" TEXT NOT NULL
 );
-
-COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fields=;v=1';
 
 -- [safe] Create versions table: posts_versions
 CREATE TABLE IF NOT EXISTS "public"."posts_versions" (
@@ -203,8 +197,6 @@ CREATE TABLE IF NOT EXISTS "public"."posts_versions" (
     "published_locales" JSONB NOT NULL DEFAULT '{}',
     CONSTRAINT "posts_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
-
-COMMENT ON TABLE "public"."posts_versions" IS 'supatype:managed;kind=table;table=posts_versions;fields=;v=1';
 
 CREATE INDEX IF NOT EXISTS "posts_versions_record_idx" ON "public"."posts_versions" ("record_id", "version" DESC);
 
@@ -229,8 +221,6 @@ CREATE TABLE IF NOT EXISTS "public"."ledger_versions" (
     "published_locales" JSONB NOT NULL DEFAULT '{}',
     CONSTRAINT "ledger_versions_record_id_version_key" UNIQUE ("record_id", "version")
 );
-
-COMMENT ON TABLE "public"."ledger_versions" IS 'supatype:managed;kind=table;table=ledger_versions;fields=;v=1';
 
 CREATE INDEX IF NOT EXISTS "ledger_versions_record_idx" ON "public"."ledger_versions" ("record_id", "version" DESC);
 
