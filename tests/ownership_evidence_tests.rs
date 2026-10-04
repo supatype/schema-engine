@@ -674,9 +674,17 @@ async fn adopting_a_table_keeps_the_comment_its_owner_wrote() {
             json!({ "id": int_pk() }),
             plain_options(),
         )]);
-        supatype_engine::adopt::run(&pool, &ast, "public", &[], true)
-            .await
-            .expect("adopt applies");
+        supatype_engine::adopt::run(
+            &pool,
+            &ast,
+            "public",
+            supatype_engine::adopt::Request {
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("adopt applies");
         let comment = table_comment(&pool, "widgets").await.unwrap_or_default();
         assert!(
             comment.contains("Widgets we sell."),

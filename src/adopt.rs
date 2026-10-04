@@ -32,54 +32,75 @@ pub struct Outcome {
     pub adopt: Vec<DoctorItem>,
     /// The objects taken back.
     pub release: Vec<DoctorItem>,
+    /// Released objects handed back to Supatype.
+    pub reclaim: Vec<DoctorItem>,
     /// The whole report, for context.
     pub doctor: DoctorReport,
 }
 
-/// Reads, decides, and with `apply` writes the rows, in one transaction. `release` names objects
-/// as doctor prints them: `kind:name` for a table-level object, `kind:table.name` otherwise.
+/// What to do beyond adopting the conflicts. Objects are named as doctor prints them: `kind:name`
+/// for a table-level object, `kind:table.name` otherwise.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Request<'a> {
+    /// Objects every push should leave alone from now on.
+    pub release: &'a [String],
+    /// Released objects to hand back, so the next push brings them to the schema again.
+    pub reclaim: &'a [String],
+    /// Write the rows; without it, a preview.
+    pub apply: bool,
+}
+
+/// Reads, decides, and with `request.apply` writes the rows, in one transaction.
 pub async fn run(
     pool: &PgPool,
     ast: &SchemaAst,
     schema: &str,
-    release: &[String],
-    apply: bool,
+    request: Request<'_>,
 ) -> Result<Outcome> {
     migration_history::bootstrap_internal_state(pool)
         .await
         .context("Failed to bootstrap _supatype internal state")?;
     let mut tx = pool.begin().await?;
     let state = push::read_state(&mut tx, schema).await?;
-    let (outcome, changes) = decide(ast, &state, release, apply)?;
-    if apply {
+    let (outcome, changes) = decide(ast, &state, request)?;
+    if request.apply {
         ledger::upsert(&mut tx, &changes).await?;
         tx.commit().await?;
     }
     Ok(outcome)
 }
 
-/// The rows adopting would write, and the outcome that says so. Releasing wins: an object that is
-/// both a conflict and named in `release` is released, and one named twice is released once.
+/// The rows adopting would write, and the outcome that says so. Releasing wins over adopting a
+/// conflict; an object named both to release and to reclaim is refused; one named twice is written
+/// once.
 fn decide(
     ast: &SchemaAst,
     state: &State,
-    release: &[String],
-    apply: bool,
+    request: Request<'_>,
 ) -> Result<(Outcome, Vec<LedgerRow>)> {
     let (plan, report) = doctor::inspect(ast, state)?;
     let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
         state.fingerprints.iter().map(|f| (f.key(), f)).collect();
-    let mut released: Vec<LedgerRow> = Vec::new();
-    for spec in release {
-        let row = released_row(spec, &state.ledger, &live, &plan)?;
-        if !released.iter().any(|r| r.key == row.key) {
-            released.push(row);
-        }
+    let released = rows_named(request.release, |spec| {
+        released_row(spec, &state.ledger, &live, &plan)
+    })?;
+    let reclaimed = rows_named(request.reclaim, |spec| reclaimed_row(spec, &state.ledger))?;
+    if let Some(both) = released
+        .iter()
+        .find(|r| reclaimed.iter().any(|c| c.key == r.key))
+    {
+        bail!(
+            "{} is named both to release and to reclaim: choose one",
+            both.key
+        );
     }
     let mut adopted = adopted_rows(&plan, &live);
     adopted.retain(|a| !released.iter().any(|r| r.key == a.key));
     let outcome = Outcome {
-        status: status(apply, adopted.len() + released.len()),
+        status: status(
+            request.apply,
+            adopted.len() + released.len() + reclaimed.len(),
+        ),
         adopt: items(
             &adopted,
             "will be Supatype's: the next push makes it match the schema",
@@ -88,9 +109,42 @@ fn decide(
             &released,
             "will be left alone by every push, whatever the schema says",
         ),
+        reclaim: items(
+            &reclaimed,
+            "will be Supatype's again: the next push makes it match the schema",
+        ),
         doctor: report,
     };
-    Ok((outcome, [adopted, released].concat()))
+    Ok((outcome, [adopted, released, reclaimed].concat()))
+}
+
+/// The row for each object `specs` names, each object once however often it is named.
+fn rows_named(specs: &[String], row: impl Fn(&str) -> Result<LedgerRow>) -> Result<Vec<LedgerRow>> {
+    let mut rows: Vec<LedgerRow> = Vec::new();
+    for spec in specs {
+        let next = row(spec)?;
+        if !rows.iter().any(|r| r.key == next.key) {
+            rows.push(next);
+        }
+    }
+    Ok(rows)
+}
+
+/// The released row `spec` names, handed back as `adopted`. Its record is kept, so the next push
+/// treats it as any object of Supatype's: puts back a hand edit (asking first for access rules), or
+/// replaces what it recorded with what the schema declares.
+fn reclaimed_row(spec: &str, rows: &[LedgerRow]) -> Result<LedgerRow> {
+    let wanted = parse_object(spec)?;
+    let released = rows.iter().filter(|r| r.status == Status::Released);
+    let key = resolve(spec, &wanted, released.map(|r| &r.key), "released")?;
+    let row = rows
+        .iter()
+        .find(|r| r.key == key)
+        .expect("resolved from the ledger's own rows");
+    Ok(LedgerRow {
+        status: Status::Adopted,
+        ..row.clone()
+    })
 }
 
 fn status(apply: bool, changes: usize) -> &'static str {
@@ -152,7 +206,7 @@ fn released_row(
         .map(|r| &r.key)
         .chain(live.keys())
         .chain(plan.actions.iter().map(reconcile::Action::key));
-    let key = resolve(spec, &wanted, known)?;
+    let key = resolve(spec, &wanted, known, "to release")?;
     if let Some(row) = rows.iter().find(|r| r.key == key) {
         return Ok(LedgerRow {
             status: Status::Released,
@@ -174,10 +228,12 @@ fn released_row(
 }
 
 /// The one known object with `wanted`'s kind, parent and name, in whatever schema it lives.
+/// `which` says what was being looked for ("to release", "released"), for the error.
 fn resolve<'k>(
     spec: &str,
     wanted: &ObjectKey,
     known: impl Iterator<Item = &'k ObjectKey>,
+    which: &str,
 ) -> Result<ObjectKey> {
     let mut matches: Vec<&ObjectKey> = known
         .filter(|k| k.kind == wanted.kind && k.parent == wanted.parent && k.name == wanted.name)
@@ -186,9 +242,9 @@ fn resolve<'k>(
     matches.dedup();
     match matches.as_slice() {
         [one] => Ok((*one).clone()),
-        [] => bail!("nothing to release is named {spec:?}: run `supatype doctor` for the names"),
+        [] => bail!("nothing {which} is named {spec:?}: run `supatype doctor` for the names"),
         many => bail!(
-            "{spec:?} names {} objects, one per schema ({}); release is not yet able to tell them apart",
+            "{spec:?} names {} objects, one per schema ({}); adopt is not yet able to tell them apart",
             many.len(),
             many.iter().map(|k| k.schema.as_str()).collect::<Vec<_>>().join(", ")
         ),

@@ -53,6 +53,9 @@ pub struct DbRequest {
     /// For `adopt`: objects every push should leave alone, as `kind:table.name` (plan section 8).
     #[serde(default)]
     pub release: Vec<String>,
+    /// For `adopt`: released objects to hand back to Supatype, named the same way.
+    #[serde(default)]
+    pub reclaim: Vec<String>,
     /// For `doctor`: record the drift it finds as the new baseline (plan 3.2).
     #[serde(default)]
     pub rebaseline: bool,

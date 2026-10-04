@@ -179,7 +179,9 @@ async fn adopting_a_table_makes_push_manage_it_thereafter() {
         assert!(recorded_tables(&pool).await.is_empty());
 
         // The preview names it and writes nothing; applying records it and edits nothing.
-        let preview = adopt::run(&pool, &ast, "public", &[], false).await.unwrap();
+        let preview = adopt::run(&pool, &ast, "public", adopt::Request::default())
+            .await
+            .unwrap();
         assert_eq!(preview.status, "preview");
         assert!(preview
             .adopt
@@ -189,7 +191,17 @@ async fn adopting_a_table_makes_push_manage_it_thereafter() {
             recorded_tables(&pool).await.is_empty(),
             "a preview wrote rows"
         );
-        let applied = adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
+        let applied = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(applied.status, "adopted");
         assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
         assert!(
@@ -241,7 +253,17 @@ async fn adoption_never_takes_a_table_the_schema_does_not_declare() {
         .expect("fixture applies");
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        let outcome = adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
+        let outcome = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(
             !outcome.adopt.iter().any(|i| i.name == "theirs"),
             "adoption took a table the schema never mentions: {:?}",
@@ -262,11 +284,31 @@ async fn adoption_is_idempotent() {
             .expect("fixture applies");
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
+        adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
 
         // Running it again must be a no-op: `supatype adopt` is a command an operator will run
         // twice, and anything listed reads as "there is still work to do".
-        let second = adopt::run(&pool, &ast, "public", &[], true).await.unwrap();
+        let second = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(second.status, "nothing_to_adopt", "{:?}", second.adopt);
         assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
     })
@@ -281,13 +323,30 @@ async fn a_released_object_is_left_alone_by_every_push() {
 
         // Kept by hand: released, so the push neither puts it back nor drops it (plan 3.5).
         let release = ["table:widget".to_string()];
-        let preview = adopt::run(&pool, &ast, "public", &release, false)
-            .await
-            .unwrap();
+        let preview = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                release: &release,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert!(preview.release.iter().any(|i| i.name == "widget"));
-        adopt::run(&pool, &ast, "public", &release, true)
-            .await
-            .unwrap();
+        adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                release: &release,
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(recorded_tables(&pool).await, ["widget released"]);
 
         let empty = parser::parse(NO_MODELS).expect("empty schema parses");
@@ -304,7 +363,17 @@ async fn a_released_object_is_left_alone_by_every_push() {
         );
 
         // A name that is not an object says so, and writes nothing.
-        let wrong = adopt::run(&pool, &ast, "public", &["table:nope".to_string()], true).await;
+        let wrong = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                release: &["table:nope".to_string()],
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await;
         assert!(format!("{:#}", wrong.unwrap_err()).contains("supatype doctor"));
     })
     .await;
@@ -321,12 +390,77 @@ async fn releasing_a_conflict_takes_it_back_instead_of_adopting_it() {
 
         // Named twice, and also a conflict adopt would take: released, once.
         let release = ["table:widget".to_string(), "table:widget".to_string()];
-        let outcome = adopt::run(&pool, &ast, "public", &release, true)
-            .await
-            .expect("one row per object, whoever names it");
+        let outcome = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                release: &release,
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("one row per object, whoever names it");
         assert!(outcome.adopt.is_empty(), "{:?}", outcome.adopt);
         assert_eq!(outcome.release.len(), 1);
         assert_eq!(recorded_tables(&pool).await, ["widget released"]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_reclaimed_object_is_supatypes_again() {
+    common::with_integration_pool(|pool| async move {
+        let ast = parser::parse(ONE_MODEL).expect("fixture parses");
+        let empty = parser::parse(NO_MODELS).expect("empty schema parses");
+        common::push(&pool, &ast).await.unwrap();
+        let widget = ["table:widget".to_string()];
+        let release = adopt::Request {
+            release: &widget,
+            apply: true,
+            ..Default::default()
+        };
+        adopt::run(&pool, &ast, "public", release).await.unwrap();
+
+        // Not released: nothing to reclaim, and a name cannot be both.
+        let both = adopt::Request {
+            release: &widget,
+            reclaim: &widget,
+            apply: true,
+        };
+        let refused = adopt::run(&pool, &ast, "public", both).await.unwrap_err();
+        assert!(format!("{refused:#}").contains("both to release and to reclaim"));
+        let other = ["index:widget.nope".to_string()];
+        let not_released = adopt::Request {
+            reclaim: &other,
+            apply: true,
+            ..Default::default()
+        };
+        let refused = adopt::run(&pool, &ast, "public", not_released)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{refused:#}").contains("nothing released"),
+            "{refused:#}"
+        );
+
+        let reclaim = adopt::Request {
+            reclaim: &widget,
+            apply: true,
+            ..Default::default()
+        };
+        let outcome = adopt::run(&pool, &ast, "public", reclaim).await.unwrap();
+        assert!(outcome.reclaim.iter().any(|i| i.name == "widget"));
+        assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
+
+        // Ours again: a push that no longer declares it drops it.
+        common::push_with(&pool, &empty, forced()).await.unwrap();
+        let gone: bool = sqlx::query_scalar("SELECT to_regclass('public.widget') IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(gone, "a reclaimed table is still left alone");
     })
     .await;
 }

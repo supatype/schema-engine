@@ -338,7 +338,12 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
     if req.no_cache {
         tracing::warn!("{}", crate::state::migration_history::NO_CACHE_NOTICE);
     }
-    let outcome = crate::adopt::run(&pool, &ast, &req.schema, &req.release, req.yes)
+    let request = crate::adopt::Request {
+        release: &req.release,
+        reclaim: &req.reclaim,
+        apply: req.yes,
+    };
+    let outcome = crate::adopt::run(&pool, &ast, &req.schema, request)
         .await
         .map_err(engine_error)?;
     Ok(Json(serde_json::to_value(&outcome).map_err(engine_error)?))
