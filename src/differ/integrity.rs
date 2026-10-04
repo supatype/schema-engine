@@ -1,12 +1,31 @@
-use super::doctor::{has_strict_issues, report};
+use super::doctor::{has_strict_issues, report, DoctorReport};
+use crate::introspector::catalog::CatalogState;
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 
+/// The doctor's view of the database just pushed. A doctor that cannot even build its expectations
+/// is itself a finding, so the failure is reported as one rather than swallowed.
+fn post_push_report(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    catalog: &CatalogState,
+) -> Result<DoctorReport, String> {
+    // No ledger: the checks it classifies only ever reach `unmanaged_drift`, which the post-push
+    // gate does not read.
+    report(ast, db, catalog, &[]).map_err(|e| format!("doctor could not run after the push: {e:#}"))
+}
+
 /// Post-push check: AST desired state vs fresh introspection.
 /// Returns warning messages when managed-object drift remains.
-pub fn post_push_warnings(ast: &SchemaAst, db: &DatabaseState) -> Vec<String> {
-    // No ledger: the checks it classifies only ever reach `unmanaged_drift`, which this does not read.
-    let doctor = report(ast, db, &[]);
+pub fn post_push_warnings(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    catalog: &CatalogState,
+) -> Vec<String> {
+    let doctor = match post_push_report(ast, db, catalog) {
+        Ok(report) => report,
+        Err(message) => return vec![message],
+    };
     let mut warnings = Vec::new();
 
     for item in &doctor.missing {
@@ -19,9 +38,15 @@ pub fn post_push_warnings(ast: &SchemaAst, db: &DatabaseState) -> Vec<String> {
     warnings
 }
 
-pub fn post_push_ok(ast: &SchemaAst, db: &DatabaseState, strict: bool) -> bool {
-    // No ledger: the checks it classifies only ever reach `unmanaged_drift`, which this does not read.
-    let doctor = report(ast, db, &[]);
+pub fn post_push_ok(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    catalog: &CatalogState,
+    strict: bool,
+) -> bool {
+    let Ok(doctor) = post_push_report(ast, db, catalog) else {
+        return false;
+    };
     if strict {
         !has_strict_issues(&doctor)
     } else {

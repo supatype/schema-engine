@@ -190,4 +190,5 @@ jobs:
             --test statement_attribution_tests \
             --test ledger_tests \
             --test push_orchestrator_tests \
-            --test check_ledger_tests
+            --test check_ledger_tests \
+            --test phase3_acceptance_tests

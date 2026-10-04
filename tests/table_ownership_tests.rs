@@ -377,7 +377,7 @@ async fn access_rules_are_not_applied_to_an_unowned_table() {
         assert_eq!(policies, 0, "policies were attached to a table Supatype does not own");
 
         // And after adoption the rules do apply — the gate must be an opt-in, not a dead end.
-        for statement in supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db, "public") {
+        for statement in supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db, &supatype_engine::introspector::catalog::CatalogState::default(), "public").unwrap() {
             sqlx::raw_sql(&statement).execute(&pool).await.expect("stamp applies");
         }
         let adopted_db = introspector::introspect(&pool, "public").await.unwrap();

@@ -676,7 +676,14 @@ async fn adopting_a_table_keeps_the_comment_its_owner_wrote() {
         )]);
         let db = introspector::introspect(&pool, "public").await.unwrap();
 
-        for statement in doctor::adopt_stamp_sql(&ast, &db, "public") {
+        for statement in doctor::adopt_stamp_sql(
+            &ast,
+            &db,
+            &supatype_engine::introspector::catalog::CatalogState::default(),
+            "public",
+        )
+        .unwrap()
+        {
             exec(&pool, &statement)
                 .await
                 .expect("adopt statement applies");
