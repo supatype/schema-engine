@@ -598,6 +598,8 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_composites"("composites" "public
   $can$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
+CREATE SCHEMA IF NOT EXISTS "supatype";
 ALTER TABLE "public"."relations" ADD CONSTRAINT "relations_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "public"."every" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 CREATE OR REPLACE FUNCTION _platform.normalise_every_defaulted_rich_text()
 RETURNS TRIGGER AS $$

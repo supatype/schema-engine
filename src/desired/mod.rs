@@ -213,9 +213,14 @@ pub struct DesiredObject {
 
 /// The kinds the engine never removes (D9): row-level security on a table it owns is never turned
 /// off automatically, because a table with RLS on and no policies denies everything and turning it
-/// off is a decision no reconcile should make. A row nothing desires any more is forgotten.
+/// off is a decision no reconcile should make; and a schema or sequence (plan section 15: created if
+/// missing, never dropped), since a schema may hold what is not ours and a sequence goes with its
+/// column. A row nothing desires any more is forgotten.
 pub fn never_removed(kind: ObjectKind) -> bool {
-    kind == ObjectKind::RlsAttributes
+    matches!(
+        kind,
+        ObjectKind::RlsAttributes | ObjectKind::Schema | ObjectKind::Sequence
+    )
 }
 
 /// The kinds whose drift fails a non-interactive push (plan 3.5): what decides who may read or
@@ -266,11 +271,13 @@ pub fn desired_objects_for(
         b.field_labels();
     }
     b.table_grants(matches!(fields, FieldEnforcement::Views(_)));
+    b.engine_schemas(matches!(fields, FieldEnforcement::Views(_)));
     b.constraint_helpers();
     b.platform_functions();
     for model in &ast.models {
         b.model_table(model)?;
         b.model_columns(model)?;
+        b.model_sequences(model);
         b.model_primary_key(model);
         b.model_uniques(model)?;
         b.model_foreign_keys(model)?;
@@ -789,6 +796,64 @@ impl<'a> Builder<'a> {
         let structure = BTreeMap::from([("enabled", flag(true))]);
         let create = rls_enable_sql(self.schema, table);
         self.push(key, structure, create, vec![self.table_key(table)]);
+    }
+
+    /// The engine's own schemas a push creates (Phase 4.10): the platform and helper schemas and
+    /// Studio's on every push, `draft` with any versioned model, and `api` under tier 2 masking.
+    /// Ours by name and never dropped (plan section 15). `auth` and `storage` are shared, and the
+    /// project schema is the user's.
+    fn engine_schemas(&mut self, views: bool) {
+        let mut schemas = vec![
+            PLATFORM_SCHEMA,
+            crate::generator::sql::versions::HELPER_SCHEMA,
+            crate::generator::sql::versions::RPC_SCHEMA,
+        ];
+        if self.ast.models.iter().any(|m| versions_of(m).is_some()) {
+            schemas.push(crate::generator::sql::versions::DRAFT_SCHEMA);
+        }
+        if views {
+            schemas.push(crate::generator::sql::field_views::VIEW_SCHEMA);
+        }
+        for name in schemas {
+            let key = ObjectKey {
+                kind: ObjectKind::Schema,
+                schema: name.to_string(),
+                parent: String::new(),
+                name: name.to_string(),
+            };
+            let create = format!("CREATE SCHEMA IF NOT EXISTS \"{name}\";");
+            self.push(key, BTreeMap::new(), create, Vec::new());
+        }
+    }
+
+    /// The sequence a `SERIAL` or `BIGSERIAL` column owns (Phase 4.10), under the name Postgres
+    /// gives it. Made and kept by its column, so recorded only, and never dropped. A name Postgres
+    /// would have to shorten past 63 bytes is not predicted, and so not recorded.
+    fn model_sequences(&mut self, model: &ModelAst) {
+        let table = model.table_name();
+        for (field_name, field) in &model.fields {
+            if !matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_)) {
+                continue;
+            }
+            for column in column_names_for(field_name, field) {
+                let name = format!("{table}_{column}_seq");
+                if name.len() > 63 {
+                    continue;
+                }
+                let structure = BTreeMap::from([("owned_by", format!("{table}.{column}"))]);
+                let create = format!(
+                    "ALTER SEQUENCE \"{schema}\".\"{name}\" OWNED BY \"{schema}\".\"{table}\".\"{column}\";",
+                    schema = self.schema
+                );
+                let column_key = self.key(ObjectKind::Column, table, &column);
+                self.push(
+                    self.key(ObjectKind::Sequence, "", &name),
+                    structure,
+                    create,
+                    vec![column_key],
+                );
+            }
+        }
     }
 
     /// What each API role may do on each model table (Phase 4.7c, D7): the exact privilege set,

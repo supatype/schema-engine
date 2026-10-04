@@ -69,25 +69,30 @@ pub fn no_location(_: &ObjectKey) -> Location {
 /// statement. A grant is named by its table and role, and only the API roles on model tables are
 /// ever desired, whose privileges the engine always re-asserted (D7): an upgrade takes them over
 /// and leaves them holding exactly what the rules allow. Row-level security is named by its table,
-/// and only tables the schema owns ask for it.
+/// and only tables the schema owns ask for it. A schema is named by itself, and only the engine's
+/// own schemas are desired.
 /// The kinds the column differ creates, alters and drops, because a column holds data that a drop
 /// and re-create would lose: type conversions, renames and nullability are the differ's, gated on the
-/// ledger (D4). The reconcile records them and runs no SQL of its own for them.
+/// ledger (D4). A serial column's sequence is made and kept by its column. The reconcile records
+/// them and runs no SQL of its own for them.
 pub fn altered_by_the_differ(kind: ObjectKind) -> bool {
-    kind == ObjectKind::Column
+    matches!(kind, ObjectKind::Column | ObjectKind::Sequence)
 }
 
 fn claimed_by_name(kind: ObjectKind) -> bool {
     matches!(
         kind,
-        ObjectKind::Policy | ObjectKind::TableGrant | ObjectKind::RlsAttributes
+        ObjectKind::Policy
+            | ObjectKind::TableGrant
+            | ObjectKind::RlsAttributes
+            | ObjectKind::Schema
     )
 }
 
 /// The kinds whose `CREATE` replaces what is there, so a new definition needs no drop first:
 /// functions and triggers (`CREATE OR REPLACE`; dropping first would fail anyway, as a trigger
 /// depends on its function), and grants, whose statement revokes everything before it grants the
-/// exact set, and RLS enablement, which `ENABLE` simply asserts. Not views: `CREATE OR REPLACE VIEW` refuses anything but appending columns, so a
+/// exact set, and RLS enablement and schemas, whose statements simply assert them. Not views: `CREATE OR REPLACE VIEW` refuses anything but appending columns, so a
 /// changed view is dropped and made again.
 fn replaced_in_place(kind: ObjectKind) -> bool {
     matches!(
@@ -96,6 +101,7 @@ fn replaced_in_place(kind: ObjectKind) -> bool {
             | ObjectKind::Trigger
             | ObjectKind::TableGrant
             | ObjectKind::RlsAttributes
+            | ObjectKind::Schema
     )
 }
 
@@ -385,6 +391,7 @@ impl Action {
     pub fn undo_removal(&self) -> Option<String> {
         match self {
             action if altered_by_the_differ(action.key().kind) => None,
+            action if never_removed(action.key().kind) => None,
             Action::Replace { previous_sql, .. } => Some(previous_sql.clone()),
             Action::Drift { create_sql, .. } => Some(create_sql.clone()),
             Action::Drop { recorded_sql, .. } => recorded_sql.clone(),

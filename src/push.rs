@@ -40,7 +40,8 @@ use crate::state::{migration_history, studio_state};
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
 /// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
 /// views since 4.6, security labels since 4.7a, policies since 4.7b, grants since 4.7c, RLS
-/// enablement since 4.8, columns since 4.9 (recorded; the column differ alters them).
+/// enablement since 4.8, columns since 4.9 (recorded; the column differ alters them), primary keys,
+/// the engine's schemas and serial sequences since 4.10.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -54,6 +55,9 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::TableGrant,
     ObjectKind::RlsAttributes,
     ObjectKind::Column,
+    ObjectKind::PrimaryKey,
+    ObjectKind::Schema,
+    ObjectKind::Sequence,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,

@@ -283,6 +283,8 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
   $can$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
+CREATE SCHEMA IF NOT EXISTS "supatype";
 CREATE OR REPLACE FUNCTION _platform.set_courses_slug()
 RETURNS TRIGGER AS $$
 BEGIN

@@ -346,6 +346,8 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
   $can$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
+CREATE SCHEMA IF NOT EXISTS "supatype";
 ALTER TABLE "public"."comments" ADD CONSTRAINT "comments_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."comments" ADD CONSTRAINT "comments_post_id_fkey" FOREIGN KEY ("post_id") REFERENCES "public"."posts" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE CASCADE;

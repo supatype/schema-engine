@@ -320,6 +320,8 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_order_items"("order_items" "publ
   $can$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
+CREATE SCHEMA IF NOT EXISTS "supatype";
 ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."orders" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "public"."orders" ADD CONSTRAINT "orders_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;

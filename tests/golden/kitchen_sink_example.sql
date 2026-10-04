@@ -1634,6 +1634,7 @@ END;
 $cron$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
 ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_auth_user_id_fkey" FOREIGN KEY ("auth_user_id") REFERENCES "auth"."users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_room_id_fkey" FOREIGN KEY ("room_id") REFERENCES "public"."room" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_speaker_id_fkey" FOREIGN KEY ("speaker_id") REFERENCES "public"."speaker" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
