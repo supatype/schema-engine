@@ -303,18 +303,6 @@ pub async fn execute_sql(Json(req): Json<SqlExecRequest>) -> EngineResponse<SqlE
     }))
 }
 
-// ── Validate (DB) ───────────────────────────────────────────────────────────
-
-pub async fn validate(Json(req): Json<ValidateRequest>) -> EngineResponse<serde_json::Value> {
-    let diff: crate::differ::DiffOutput = serde_json::from_value(req.diff).map_err(engine_error)?;
-    let url = resolve_database_url(req.database_url)?;
-    let pool = connect_db(&url).await?;
-    let report = crate::differ::risk_analyser::validate(&diff, &pool)
-        .await
-        .map_err(engine_error)?;
-    Ok(Json(serde_json::to_value(&report).unwrap()))
-}
-
 // ── Doctor (DB: drift report; with `rebaseline`, ledger rows only) ──────────
 
 pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {

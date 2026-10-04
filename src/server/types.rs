@@ -69,14 +69,6 @@ fn default_schema() -> String {
     "public".to_string()
 }
 
-/// Request body for /validate endpoint.
-#[derive(Deserialize)]
-pub struct ValidateRequest {
-    pub diff: serde_json::Value,
-    #[serde(default)]
-    pub database_url: Option<String>,
-}
-
 /// Request body for /auth-functions endpoint.
 #[derive(Deserialize)]
 pub struct AuthFunctionsRequest {

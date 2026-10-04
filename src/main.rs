@@ -156,11 +156,6 @@ enum Command {
         #[arg(long, default_value = "public")]
         schema: String,
     },
-    /// Validate a migration is safe to apply
-    Validate {
-        #[arg(long, env = "DATABASE_URL")]
-        database_url: String,
-    },
     /// Report schema drift between AST and live database (read-only)
     Doctor {
         #[arg(long, env = "DATABASE_URL")]
@@ -549,13 +544,6 @@ async fn main() -> Result<()> {
             }
             let result = migration_history::apply_rollback(&pool, &schema).await?;
             println!("{}", serde_json::to_string(&result)?);
-        }
-        Command::Validate { database_url } => {
-            let diff: supatype_engine::differ::DiffOutput =
-                serde_json::from_str(&input).context("Failed to parse diff JSON")?;
-            let pool = sqlx::PgPool::connect(&database_url).await?;
-            let report = supatype_engine::differ::risk_analyser::validate(&diff, &pool).await?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
         }
         Command::Doctor {
             database_url,

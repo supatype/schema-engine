@@ -81,7 +81,6 @@ Two binaries ship from this crate: `supatype-engine`, which the Supatype CLI she
 | `push` | Apply the schema and record it in migration history |
 | `migrations` | List recorded migrations, or fetch one migration's schema source snapshot |
 | `rollback` | Roll back the last applied migration |
-| `validate` | Check that a migration is safe to apply |
 | `doctor` | Report drift between the AST and the live database (read only) |
 | `adopt` | Stamp managed comments on existing objects that match the AST |
 
@@ -147,7 +146,7 @@ supatype-engine generate -i schema.json --lang swift
 | `--license <key>` | License key for gated features |
 
 Database commands take `--database-url`, which also reads `DATABASE_URL`. All of them except
-`migrations` and `validate` also take `--schema` (default `public`).
+`migrations` also take `--schema` (default `public`).
 
 ### Push flags
 
@@ -237,7 +236,7 @@ ENGINE_ADMIN_TOKEN=<token> supatype-engine-server
 
 Routes mirror the subcommands. Compute only: `/parse`, `/generate`, `/triggers`, `/rls`, `/storage`,
 `/postgrest`, `/auth-functions`, `/sso`, `/admin`, `/studio`, `/openapi`. Database backed:
-`/introspect`, `/diff`, `/migrate`, `/push`, `/migrations`, `/rollback`, `/validate`, `/doctor`,
+`/introspect`, `/diff`, `/migrate`, `/push`, `/migrations`, `/rollback`, `/doctor`,
 `/adopt`, `/studio-config`, `/sql`. `/health` sits behind the admin token as well.
 
 A Docker image is published as `supatype/schema-engine`, built from the `Dockerfile` in this repo
