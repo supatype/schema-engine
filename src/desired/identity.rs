@@ -129,13 +129,186 @@ fn split_identifier(s: &str) -> Vec<String> {
     parts
 }
 
-/// `quote_ident`'s rule: bare when the name is a plain lowercase identifier, quoted otherwise.
+/// Every keyword `quote_ident` quotes: the ones Postgres does not class as unreserved
+/// (`select word from pg_get_keywords() where catcode <> 'U'` on Postgres 17), sorted for
+/// binary search.
+const QUOTED_KEYWORDS: &[&str] = &[
+    "all",
+    "analyse",
+    "analyze",
+    "and",
+    "any",
+    "array",
+    "as",
+    "asc",
+    "asymmetric",
+    "authorization",
+    "between",
+    "bigint",
+    "binary",
+    "bit",
+    "boolean",
+    "both",
+    "case",
+    "cast",
+    "char",
+    "character",
+    "check",
+    "coalesce",
+    "collate",
+    "collation",
+    "column",
+    "concurrently",
+    "constraint",
+    "create",
+    "cross",
+    "current_catalog",
+    "current_date",
+    "current_role",
+    "current_schema",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "dec",
+    "decimal",
+    "default",
+    "deferrable",
+    "desc",
+    "distinct",
+    "do",
+    "else",
+    "end",
+    "except",
+    "exists",
+    "extract",
+    "false",
+    "fetch",
+    "float",
+    "for",
+    "foreign",
+    "freeze",
+    "from",
+    "full",
+    "grant",
+    "greatest",
+    "group",
+    "grouping",
+    "having",
+    "ilike",
+    "in",
+    "initially",
+    "inner",
+    "inout",
+    "int",
+    "integer",
+    "intersect",
+    "interval",
+    "into",
+    "is",
+    "isnull",
+    "join",
+    "json",
+    "json_array",
+    "json_arrayagg",
+    "json_exists",
+    "json_object",
+    "json_objectagg",
+    "json_query",
+    "json_scalar",
+    "json_serialize",
+    "json_table",
+    "json_value",
+    "lateral",
+    "leading",
+    "least",
+    "left",
+    "like",
+    "limit",
+    "localtime",
+    "localtimestamp",
+    "merge_action",
+    "national",
+    "natural",
+    "nchar",
+    "none",
+    "normalize",
+    "not",
+    "notnull",
+    "null",
+    "nullif",
+    "numeric",
+    "offset",
+    "on",
+    "only",
+    "or",
+    "order",
+    "out",
+    "outer",
+    "overlaps",
+    "overlay",
+    "placing",
+    "position",
+    "precision",
+    "primary",
+    "real",
+    "references",
+    "returning",
+    "right",
+    "row",
+    "select",
+    "session_user",
+    "setof",
+    "similar",
+    "smallint",
+    "some",
+    "substring",
+    "symmetric",
+    "system_user",
+    "table",
+    "tablesample",
+    "then",
+    "time",
+    "timestamp",
+    "to",
+    "trailing",
+    "treat",
+    "trim",
+    "true",
+    "union",
+    "unique",
+    "user",
+    "using",
+    "values",
+    "varchar",
+    "variadic",
+    "verbose",
+    "when",
+    "where",
+    "window",
+    "with",
+    "xmlattributes",
+    "xmlconcat",
+    "xmlelement",
+    "xmlexists",
+    "xmlforest",
+    "xmlnamespaces",
+    "xmlparse",
+    "xmlpi",
+    "xmlroot",
+    "xmlserialize",
+    "xmltable",
+];
+
+/// `quote_ident`'s rule: bare when the name is a plain lowercase identifier that is not a quoted
+/// keyword, quoted otherwise. Leaving keywords bare keyed `public.user` against the catalog's
+/// `public."user"`.
 fn quote_if_needed(ident: &str) -> String {
     let simple = !ident.is_empty()
         && ident
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-        && !ident.chars().next().is_some_and(|c| c.is_ascii_digit());
+        && !ident.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && QUOTED_KEYWORDS.binary_search(&ident).is_err();
     if simple {
         ident.to_string()
     } else {
@@ -210,5 +383,22 @@ mod tests {
             function_key("g", "x \"Mixed\".\"Case\""),
             "g(\"Mixed\".\"Case\")"
         );
+    }
+
+    /// `quote_ident` quotes a keyword Postgres does not leave unreserved, so a model whose table is
+    /// `user` has a row type the catalog writes `public."user"`. Keyed bare, the push could not find
+    /// the `can_*` function it had just created and refused (the blog example).
+    #[test]
+    fn a_type_named_after_a_reserved_word_is_quoted_as_the_catalog_quotes_it() {
+        assert_eq!(
+            function_key("can_create_user", "\"user\" \"public\".\"user\""),
+            "can_create_user(public.\"user\")"
+        );
+        // Column-name and type-function keywords are quoted too; an unreserved one is not.
+        assert_eq!(quote_if_needed("between"), "\"between\"");
+        assert_eq!(quote_if_needed("join"), "\"join\"");
+        assert_eq!(quote_if_needed("comment"), "comment");
+        // The lookup is a binary search, which is only right over a sorted list.
+        assert!(QUOTED_KEYWORDS.windows(2).all(|w| w[0] < w[1]));
     }
 }
