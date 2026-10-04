@@ -363,7 +363,6 @@ fn render_forward_operation_lines(
             | Operation::AddIndex { risk, .. }
             | Operation::DropIndex { risk, .. }
             | Operation::AddForeignKey { risk, .. }
-            | Operation::DropForeignKey { risk, .. }
             | Operation::AddUniqueConstraint { risk, .. }
             | Operation::DropUniqueConstraint { risk, .. }
             | Operation::CreateEnum { risk, .. }
@@ -472,27 +471,44 @@ impl Migration {
         ast: &SchemaAst,
     ) -> Result<Migration> {
         assert_forward_allowed(diff, force)?;
-        let reconciled: Vec<String> = reconcile.iter().flat_map(reconcile::Action::sql).collect();
-        let mut body = render_forward_core(diff, schema, ast)?;
-        body.extend(reconciled_section(reconciled.clone()));
+        // The reconcile's removals first, so a drop the operations depend on has happened (a
+        // foreign key into a table they drop; nothing ever cascades), then the operations, then
+        // the reconcile's additions, which may need a table or column the operations create.
+        let removals: Vec<String> = reconcile
+            .iter()
+            .filter_map(reconcile::Action::removal_sql)
+            .collect();
+        let additions: Vec<String> = reconcile
+            .iter()
+            .flat_map(reconcile::Action::addition_sql)
+            .collect();
+        let mut body = reconciled_section(removals.clone());
+        body.extend(render_forward_core(diff, schema, ast)?);
+        body.extend(reconciled_section(additions.clone()));
 
-        // Rolling back undoes the reconcile's statements first, newest effect first, then the
-        // operations' own.
+        // Undone in reverse: the additions, then the operations, then what the removals took.
         let mut down = reconciled_section(
             reconcile
                 .iter()
                 .rev()
-                .flat_map(reconcile::Action::rollback_sql)
+                .filter_map(reconcile::Action::undo_addition)
                 .collect(),
         );
         down.extend(super::rollback::statements(diff, schema)?);
+        down.extend(reconciled_section(
+            reconcile
+                .iter()
+                .rev()
+                .filter_map(reconcile::Action::undo_removal)
+                .collect(),
+        ));
 
         let mut migration = Migration {
             preamble: render_forward_preamble(diff),
             body,
             down,
             hash: String::new(),
-            reconciled: reconciled.len(),
+            reconciled: removals.len() + additions.len(),
             risk: if diff.summary.is_destructive {
                 "destructive"
             } else if diff.summary.cautious > 0 {
@@ -595,9 +611,6 @@ fn op_description(op: &Operation) -> String {
         Operation::AddForeignKey {
             table, relation, ..
         } => format!("Add FK: {table} -> {}", relation.target),
-        Operation::DropForeignKey {
-            table, constraint, ..
-        } => format!("Drop FK: {table}.{constraint}"),
         Operation::AddUniqueConstraint { table, column, .. } => {
             format!("Add unique constraint: {table}.{column}")
         }
@@ -845,11 +858,6 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             schema,
             ref_schema.as_deref().unwrap_or(schema),
         ),
-        Operation::DropForeignKey {
-            table, constraint, ..
-        } => Ok(format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
-        )),
         Operation::AddUniqueConstraint {
             table,
             column,

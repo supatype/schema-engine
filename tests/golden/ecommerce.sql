@@ -210,15 +210,6 @@ CREATE TABLE IF NOT EXISTS "public"."order_items" (
 
 COMMENT ON TABLE "public"."order_items" IS 'supatype:managed;kind=table;table=order_items;fields=;v=1';
 
--- [safe] Add FK: orders -> Customer
-ALTER TABLE "public"."orders" ADD CONSTRAINT "orders_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- [safe] Add FK: order_items -> Order
-ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."orders" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- [safe] Add FK: order_items -> Product
-ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
 -- [safe] Add index on: products(status)
 DROP INDEX IF EXISTS "public"."products_status_idx";
 CREATE INDEX IF NOT EXISTS "products_status_idx" ON "public"."products" USING btree ("status");
@@ -577,6 +568,11 @@ BEGIN
   END LOOP;
 END
 $mask_clear$;
+
+-- reconciled objects
+ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."orders" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "public"."orders" ADD CONSTRAINT "orders_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 COMMIT;
 

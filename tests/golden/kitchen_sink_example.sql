@@ -393,21 +393,6 @@ COMMENT ON TABLE "public"."talk_versions" IS 'supatype:managed;kind=table;table=
 
 CREATE INDEX IF NOT EXISTS "talk_versions_record_idx" ON "public"."talk_versions" ("record_id", "version" DESC);
 
--- [safe] Add FK: talk -> Speaker
-ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_speaker_id_fkey" FOREIGN KEY ("speaker_id") REFERENCES "public"."speaker" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- [safe] Add FK: talk -> Room
-ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_room_id_fkey" FOREIGN KEY ("room_id") REFERENCES "public"."room" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- [safe] Add FK: ticket -> supatype:user
-ALTER TABLE "public"."ticket" ADD CONSTRAINT "ticket_auth_user_id_fkey" FOREIGN KEY ("auth_user_id") REFERENCES "auth"."users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- [safe] Add FK: ticket -> Attendee
-ALTER TABLE "public"."ticket" ADD CONSTRAINT "ticket_attendee_id_fkey" FOREIGN KEY ("attendee_id") REFERENCES "public"."attendee" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- [safe] Add FK: chat_message -> supatype:user
-ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_auth_user_id_fkey" FOREIGN KEY ("auth_user_id") REFERENCES "auth"."users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
 -- [safe] Add index on: talk(day, starts_at)
 DROP INDEX IF EXISTS "public"."talk_day_starts_at_idx";
 CREATE INDEX IF NOT EXISTS "talk_day_starts_at_idx" ON "public"."talk" USING btree ("day", "starts_at");
@@ -2290,6 +2275,13 @@ BEGIN
     'SELECT _supatype.prune_versions(), _supatype.prune_preview_links()');
 END;
 $cron$;
+
+-- reconciled objects
+ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_auth_user_id_fkey" FOREIGN KEY ("auth_user_id") REFERENCES "auth"."users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_room_id_fkey" FOREIGN KEY ("room_id") REFERENCES "public"."room" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_speaker_id_fkey" FOREIGN KEY ("speaker_id") REFERENCES "public"."speaker" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "public"."ticket" ADD CONSTRAINT "ticket_attendee_id_fkey" FOREIGN KEY ("attendee_id") REFERENCES "public"."attendee" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "public"."ticket" ADD CONSTRAINT "ticket_auth_user_id_fkey" FOREIGN KEY ("auth_user_id") REFERENCES "auth"."users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 COMMIT;
 

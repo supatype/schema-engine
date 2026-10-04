@@ -165,9 +165,6 @@ COMMENT ON CONSTRAINT "posts_slug_key" ON "public"."posts" IS 'supatype:managed;
 
 COMMENT ON TABLE "public"."posts" IS 'supatype:managed;kind=table;table=posts;fields=;v=1';
 
--- [safe] Add FK: posts -> User
-ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
 -- [safe] Enable RLS: users
 ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 
@@ -376,6 +373,9 @@ BEGIN
   END LOOP;
 END
 $mask_clear$;
+
+-- reconciled objects
+ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 COMMIT;
 

@@ -35,8 +35,8 @@ use crate::state::database_state::DatabaseState;
 use crate::state::{migration_history, studio_state};
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
-/// on the reconcile is its differ: check constraints since Phase 3d.
-pub const MOVED_KINDS: &[ObjectKind] = &[ObjectKind::Check];
+/// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1.
+pub const MOVED_KINDS: &[ObjectKind] = &[ObjectKind::Check, ObjectKind::ForeignKey];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
 /// `packages/realtime`, `schema-push-lock`). Realtime skips WAL polls while this is held.
@@ -174,18 +174,8 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     // applied. Checked here, before the CLI asks anything about a push it is going to refuse.
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
-    let desired = desired_objects(ast, schema)?;
     let ledger = ledger::load_if_present(&mut conn).await?;
-    let created_by_parent = created_by_parent(&diff, schema, ast)?;
-    let dropped_tables = dropped_tables(&diff, schema);
-    let mut reconcile = reconcile::reconcile(reconcile::Inputs {
-        desired: &desired,
-        ledger: &ledger,
-        live: &live.fingerprints,
-        created_by_parent: &created_by_parent,
-        dropped_tables: &dropped_tables,
-        kinds: MOVED_KINDS,
-    });
+    let mut reconcile = reconcile_with(&diff, &ledger, &live.fingerprints, schema, ast)?;
     let proven = probe::equivalent(&mut conn, &reconcile).await?;
     reconcile.adopt_equivalent(&proven);
 
@@ -195,6 +185,37 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
         diff,
         reconcile,
     })
+}
+
+/// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
+/// objects the migration's own statements create and which tables it drops.
+fn reconcile_with(
+    diff: &DiffOutput,
+    ledger: &[LedgerRow],
+    live: &[ObjectFingerprint],
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<reconcile::Plan> {
+    let desired = desired_objects(ast, schema)?;
+    let created_by_parent = created_by_parent(diff, schema, ast)?;
+    let dropped_tables = dropped_tables(diff, schema);
+    Ok(reconcile::reconcile(reconcile::Inputs {
+        desired: &desired,
+        ledger,
+        live,
+        created_by_parent: &created_by_parent,
+        dropped_tables: &dropped_tables,
+        kinds: MOVED_KINDS,
+    }))
+}
+
+/// The migration a push of `ast` against an empty database would apply, with no database to ask:
+/// the differ's operations and the reconcile's creations. For the tests that render fixtures a
+/// database refuses; everything else goes through [`plan`].
+pub fn fresh_migration(ast: &SchemaAst, schema: &str, force: bool) -> Result<Migration> {
+    let diff = differ::diff(ast, &DatabaseState::default())?;
+    let reconcile = reconcile_with(&diff, &[], &[], schema, ast)?;
+    Migration::render(&diff, &reconcile.actions, force, schema, ast)
 }
 
 /// The objects of a moved kind that the migration's own statements create: a check declared

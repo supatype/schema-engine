@@ -1476,10 +1476,6 @@
         "comment": null
       },
       {
-        "name": "_supatype",
-        "comment": null
-      },
-      {
         "name": "auth",
         "comment": null
       },
@@ -1490,10 +1486,6 @@
       {
         "name": "public",
         "comment": "standard public schema"
-      },
-      {
-        "name": "supatype",
-        "comment": null
       }
     ],
     "sequences": [],

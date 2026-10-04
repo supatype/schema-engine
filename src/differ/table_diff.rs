@@ -1,7 +1,6 @@
 use super::column_diff;
 use super::{Operation, Risk};
-use crate::introspector::constraints::DbConstraintType;
-use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
+use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 use strsim::jaro_winkler;
@@ -49,14 +48,6 @@ pub fn diff(
         .map(|m| m.table_name())
         .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
         .chain(versions_tables.iter().map(String::as_str))
-        .collect();
-
-    // Build a set of existing FK constraint names for fast lookup
-    let db_fk_names: std::collections::HashSet<&str> = db
-        .constraints
-        .iter()
-        .filter(|c| c.constraint_type == DbConstraintType::ForeignKey)
-        .map(|c| c.name.as_str())
         .collect();
 
     // Detect table renames: new tables (in schema, not in DB) vs removed tables (in DB, not in schema)
@@ -136,15 +127,13 @@ pub fn diff(
                     ast.effective_default_locale(),
                     prev_model,
                 )?;
-                emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
             } else {
-                // Genuinely new table: create it and its FK constraints
+                // Genuinely new table. Its foreign keys are the reconcile's (Phase 4.1).
                 ops.push(Operation::CreateTable {
                     table: model.table_name().to_string(),
                     model: Box::new(model.clone()),
                     risk: Risk::Safe,
                 });
-                emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
             }
         } else {
             // Existing table: diff its columns
@@ -163,10 +152,6 @@ pub fn diff(
                 ast.effective_default_locale(),
                 prev_model,
             )?;
-
-            // Also diff FK relations (add new FKs, drop removed FKs)
-            emit_fk_ops_for_model(model, ast, &db_fk_names, ops);
-            drop_removed_fks(model, db, ops);
         }
     }
 
@@ -189,18 +174,9 @@ pub fn diff(
                 continue;
             }
 
-            // Genuinely removed table: drop its FKs, then the table
-            for constraint in &db.constraints {
-                if constraint.table == db_table.name
-                    && constraint.constraint_type == DbConstraintType::ForeignKey
-                {
-                    ops.push(Operation::DropForeignKey {
-                        table: db_table.name.clone(),
-                        constraint: constraint.name.clone(),
-                        risk: Risk::Destructive,
-                    });
-                }
-            }
+            // Genuinely removed table. Its own constraints go with it; a foreign key from another
+            // table into it is the reconcile's to drop first, which the migration runs before
+            // this (plan 3.3: nothing cascades).
             ops.push(Operation::DropTable {
                 table: db_table.name.clone(),
                 risk: Risk::Destructive,
@@ -267,90 +243,6 @@ fn previous_model<'a>(
         .models
         .iter()
         .find(|m| m.table_name() == table_name)
-}
-
-/// Emit AddForeignKey ops for all belongsTo relations on a model that don't already exist in the DB.
-fn emit_fk_ops_for_model(
-    model: &crate::parser::ast::ModelAst,
-    ast: &SchemaAst,
-    db_fk_names: &std::collections::HashSet<&str>,
-    ops: &mut Vec<Operation>,
-) {
-    for (field_name, field) in &model.fields {
-        if let FieldAst::Relation(rel) = field {
-            if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                let fk_col = rel
-                    .foreign_key
-                    .as_deref()
-                    .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                let constraint_name = crate::managed::foreign_key_name(model.table_name(), fk_col);
-
-                if !db_fk_names.contains(constraint_name.as_str()) {
-                    let (ref_table, ref_schema) = if let Some((sys_schema, sys_table)) =
-                        crate::parser::resolver::resolve_system_ref(&rel.target)
-                    {
-                        (sys_table.to_string(), Some(sys_schema.to_string()))
-                    } else {
-                        let t = ast
-                            .models
-                            .iter()
-                            .find(|m| m.name == rel.target)
-                            .map(|m| m.table_name().to_string())
-                            .unwrap_or_else(|| crate::parser::resolver::to_snake_case(&rel.target));
-                        (t, None)
-                    };
-
-                    ops.push(Operation::AddForeignKey {
-                        table: model.table_name().to_string(),
-                        field_name: field_name.clone(),
-                        relation: Box::new(rel.clone()),
-                        ref_table,
-                        ref_schema,
-                        risk: Risk::Safe,
-                    });
-                }
-            }
-        }
-    }
-}
-
-/// Emit DropForeignKey for any DB FK on this table whose constraint name is no longer
-/// derivable from the current schema's belongsTo relations.
-fn drop_removed_fks(
-    model: &crate::parser::ast::ModelAst,
-    db: &DatabaseState,
-    ops: &mut Vec<Operation>,
-) {
-    // Build the set of FK constraint names that should exist per the schema
-    let expected_fks: std::collections::HashSet<String> = model
-        .fields
-        .iter()
-        .filter_map(|(field_name, field)| {
-            if let FieldAst::Relation(rel) = field {
-                if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                    let fk_col = rel
-                        .foreign_key
-                        .as_deref()
-                        .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                    return Some(crate::managed::foreign_key_name(model.table_name(), fk_col));
-                }
-            }
-            None
-        })
-        .collect();
-
-    for constraint in &db.constraints {
-        if constraint.table == model.table_name()
-            && constraint.constraint_type == DbConstraintType::ForeignKey
-            && !expected_fks.contains(&constraint.name)
-        {
-            ops.push(Operation::DropForeignKey {
-                table: model.table_name().to_string(),
-                constraint: constraint.name.clone(),
-                risk: Risk::Safe,
-            });
-        }
-    }
 }
 
 #[cfg(test)]

@@ -4080,10 +4080,6 @@
         "comment": null
       },
       {
-        "name": "_supatype",
-        "comment": null
-      },
-      {
         "name": "auth",
         "comment": null
       },
@@ -4096,7 +4092,7 @@
         "comment": "standard public schema"
       },
       {
-        "name": "supatype",
+        "name": "storage",
         "comment": null
       }
     ],
@@ -4612,6 +4608,43 @@
           "TRUNCATE",
           "UPDATE"
         ]
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "grantee": "anon",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
       }
     ],
     "columnGrants": [],
@@ -4711,6 +4744,18 @@
       {
         "schema": "public",
         "table": "ticket",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "storage",
+        "table": "buckets",
+        "enabled": false,
+        "forced": false
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
         "enabled": true,
         "forced": false
       }

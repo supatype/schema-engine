@@ -3,7 +3,7 @@ use supatype_engine::{
     differ,
     generator::sql::migration,
     introspector::tables::{DbColumn, DbTable},
-    parser,
+    parser, push,
     state::database_state::DatabaseState,
 };
 
@@ -351,8 +351,8 @@ fn test_belongs_to_fk_derived_from_field_name() {
 }"#;
 
     let ast = parser::parse(schema).unwrap();
-    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let sql = migration::generate(&diff, false, "public", &ast).unwrap();
+    // The whole first push, foreign keys included: they are the reconcile's since Phase 4.1.
+    let sql = push::fresh_migration(&ast, "public", false).unwrap().up();
 
     assert!(
         sql.contains("\"author_id\""),

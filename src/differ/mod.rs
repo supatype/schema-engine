@@ -137,11 +137,6 @@ pub enum Operation {
         ref_schema: Option<String>,
         risk: Risk,
     },
-    DropForeignKey {
-        table: String,
-        constraint: String,
-        risk: Risk,
-    },
     AddUniqueConstraint {
         table: String,
         column: String,
@@ -377,7 +372,6 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::AddIndex { risk, .. }
         | Operation::DropIndex { risk, .. }
         | Operation::AddForeignKey { risk, .. }
-        | Operation::DropForeignKey { risk, .. }
         | Operation::AddUniqueConstraint { risk, .. }
         | Operation::DropUniqueConstraint { risk, .. }
         | Operation::CreateEnum { risk, .. }

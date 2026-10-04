@@ -121,13 +121,6 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
                 "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
             )
         }
-        // DropForeignKey → cannot restore definition
-        Operation::DropForeignKey {
-            table, constraint, ..
-        } => {
-            format!("-- WARNING: Cannot automatically roll back DROP CONSTRAINT \"{table}\".\"{constraint}\". \
-                     Restore from backup.")
-        }
         Operation::AddUniqueConstraint {
             table, constraint, ..
         } => {
@@ -355,9 +348,6 @@ fn forward_description(op: &Operation) -> String {
         Operation::AddForeignKey {
             table, relation, ..
         } => format!("add fk {table} -> {}", relation.target),
-        Operation::DropForeignKey {
-            table, constraint, ..
-        } => format!("drop fk {table}.{constraint}"),
         Operation::AddUniqueConstraint { table, column, .. } => {
             format!("add unique {table}.{column}")
         }
