@@ -14,10 +14,7 @@
 
 mod common;
 
-use supatype_engine::{
-    differ, generator::sql::migration, introspector, parser, push,
-    state::database_state::DatabaseState,
-};
+use supatype_engine::{introspector, parser, push};
 
 /// One model carrying every bound shape that reaches the database, scalar and localized.
 const SCHEMA: &str = r#"{
@@ -83,12 +80,6 @@ const SCHEMA: &str = r#"{
     }
   ]
 }"#;
-
-fn forward_sql_for(schema_json: &str, db: &DatabaseState) -> String {
-    let ast = parser::parse(schema_json).unwrap();
-    let diff = differ::diff(&ast, db).unwrap();
-    migration::forward_sql(&diff, true, "public", &ast).unwrap()
-}
 
 /// The push a user runs, which is what reconciles a check that already exists.
 async fn push(pool: &sqlx::PgPool, schema_json: &str) -> anyhow::Result<push::Outcome> {
@@ -176,10 +167,7 @@ const BREACHES: &[(&str, &str, &str)] = &[
 #[tokio::test]
 async fn every_declared_bound_is_enforced_by_the_database() {
     common::with_integration_pool(|pool| async move {
-        sqlx::raw_sql(&forward_sql_for(SCHEMA, &DatabaseState::default()))
-            .execute(&pool)
-            .await
-            .expect("generated DDL must apply");
+        push(&pool, SCHEMA).await.expect("generated DDL must apply");
 
         // The compliant row establishes that the failures below are caused by the breach and not by
         // something wrong with the row as a whole.
@@ -326,10 +314,7 @@ const ABSENT: &[(&str, &str)] = &[
 #[tokio::test]
 async fn bounds_are_inclusive_and_absence_is_legal() {
     common::with_integration_pool(|pool| async move {
-        sqlx::raw_sql(&forward_sql_for(SCHEMA, &DatabaseState::default()))
-            .execute(&pool)
-            .await
-            .expect("generated DDL must apply");
+        push(&pool, SCHEMA).await.expect("generated DDL must apply");
 
         for (column, value, which) in AT_THE_BOUNDARY {
             sqlx::raw_sql(&insert_with(column, value))
@@ -466,10 +451,7 @@ fn insert_event(column: &str, value: &str) -> String {
 #[tokio::test]
 async fn model_constraints_are_enforced_by_the_database() {
     common::with_integration_pool(|pool| async move {
-        sqlx::raw_sql(&forward_sql_for(CONSTRAINED, &DatabaseState::default()))
-            .execute(&pool)
-            .await
-            .expect("constraint DDL must apply");
+        push(&pool, CONSTRAINED).await.expect("constraint DDL must apply");
 
         sqlx::raw_sql(&insert_event("", ""))
             .execute(&pool)
@@ -573,8 +555,7 @@ async fn changing_a_model_constraint_takes_effect() {
 #[tokio::test]
 async fn a_constraint_mentioning_is_not_null_is_not_lost_to_introspection() {
     common::with_integration_pool(|pool| async move {
-        sqlx::raw_sql(&forward_sql_for(CONSTRAINED, &DatabaseState::default()))
-            .execute(&pool)
+        push(&pool, CONSTRAINED)
             .await
             .expect("constraint DDL must apply");
 
@@ -626,8 +607,7 @@ async fn a_constraint_mentioning_is_not_null_is_not_lost_to_introspection() {
 #[tokio::test]
 async fn a_constraint_no_record_mentions_is_adopted_not_added_twice() {
     common::with_integration_pool(|pool| async move {
-        sqlx::raw_sql(&forward_sql_for(CONSTRAINED, &DatabaseState::default()))
-            .execute(&pool)
+        push(&pool, CONSTRAINED)
             .await
             .expect("constraint DDL must apply");
 

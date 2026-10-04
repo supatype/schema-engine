@@ -12,8 +12,7 @@ mod common;
 
 use supatype_engine::{
     differ::{self, FieldMaskingTier},
-    generator::sql::{migration, storage},
-    introspector, parser,
+    parser,
 };
 
 /// One masked column with a row-dependent read rule, and one ordinary table with no field rules —
@@ -85,21 +84,23 @@ async fn prepare(pool: &sqlx::PgPool) {
         .expect("auth helpers");
 }
 
-/// Apply the schema the way a push does, returning the diff that produced it.
+/// Apply the schema with the push a user runs, returning the diff that produced it.
 async fn push(pool: &sqlx::PgPool) -> differ::DiffOutput {
     let ast = parser::parse(SCHEMA).expect("schema parses");
-    let db = introspector::introspect(pool, "public")
+    let plan = supatype_engine::push::prepare(pool, &ast, "public")
         .await
-        .expect("introspect");
-    let diff = differ::diff(&ast, &db).expect("diff");
-    let storage_sql = storage::generate(&ast).expect("storage sql");
-    let sql =
-        migration::push_storage_and_model_batch_sql(&storage_sql, &diff, true, "public", &ast)
-            .expect("migration renders");
-    sqlx::raw_sql(&sql)
-        .execute(pool)
-        .await
-        .unwrap_or_else(|e| panic!("push does not apply: {e}\n\n{sql}"));
+        .expect("the push plans");
+    let diff = plan.diff.clone();
+    supatype_engine::push::apply(
+        pool,
+        plan,
+        supatype_engine::push::ApplyOptions {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("push does not apply: {e}"));
     diff
 }
 

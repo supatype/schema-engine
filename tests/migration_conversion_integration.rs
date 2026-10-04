@@ -6,7 +6,15 @@
 mod common;
 
 use common::with_integration_pool;
-use supatype_engine::{differ, generator::sql::migration, introspector, parser};
+use supatype_engine::{differ, generator::sql::migration, introspector, parser, push};
+
+/// A retype is destructive, so the push that makes one is forced.
+fn forced() -> push::ApplyOptions {
+    push::ApplyOptions {
+        force: true,
+        ..Default::default()
+    }
+}
 
 #[tokio::test]
 async fn integer_to_jsonb_preserves_numeric_json() {
@@ -67,11 +75,9 @@ async fn integer_to_jsonb_preserves_numeric_json() {
 }"#;
 
         let ast = parser::parse(ast_json).unwrap();
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &db).unwrap();
-        let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migrate");
+        common::push_with(&pool, &ast, forced())
+            .await
+            .expect("migrate");
 
         let row: (serde_json::Value,) = sqlx::query_as("SELECT value FROM conv_test WHERE id = 1")
             .fetch_one(&pool)
@@ -145,11 +151,9 @@ async fn text_to_richtext_wraps_lexical_document() {
 }"#;
 
         let ast = parser::parse(ast_json).unwrap();
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &db).unwrap();
-        let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migrate");
+        common::push_with(&pool, &ast, forced())
+            .await
+            .expect("migrate");
 
         let row: (serde_json::Value,) = sqlx::query_as("SELECT body FROM rt_test WHERE id = 1")
             .fetch_one(&pool)

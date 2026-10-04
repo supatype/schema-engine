@@ -1,17 +1,15 @@
 //! Phase 1c of the managed-object ownership plan: the fingerprints hold still when nothing changed,
 //! and move for exactly the object that did.
 //!
-//! The first property is the one a ledger lives or dies by. Every push re-asserts triggers,
-//! functions, grants and the versions layer with `CREATE OR REPLACE`; if that moved a fingerprint,
-//! every owned object would read as hand-edited after every push.
+//! The first property is the one a ledger lives or dies by. Every push re-asserts the versions
+//! layer, the affordance functions and the probes with `CREATE OR REPLACE`; if that moved a
+//! fingerprint, every owned object would read as hand-edited after every push.
 
 mod common;
 
 use std::collections::BTreeMap;
 
 use supatype_engine::{
-    differ,
-    generator::sql::{migration, triggers},
     introspector::{
         self,
         fingerprint::{fingerprints, ObjectFingerprint, ObjectKind},
@@ -24,16 +22,9 @@ async fn exec(pool: &sqlx::PgPool, sql: &str) {
     sqlx::raw_sql(sql).execute(pool).await.expect("sql applies");
 }
 
-/// The full push the CLI runs: forward migration (versions layer included), then the trigger SQL.
+/// The push the CLI runs.
 async fn push(pool: &sqlx::PgPool, ast: &SchemaAst) {
-    let db = introspector::introspect(pool, "public").await.unwrap();
-    let diff = differ::diff(ast, &db).unwrap();
-    exec(
-        pool,
-        &migration::forward_sql(&diff, false, "public", ast).unwrap(),
-    )
-    .await;
-    exec(pool, &triggers::generate(ast, "public").unwrap()).await;
+    common::push(pool, ast).await.expect("push applies");
 }
 
 type Key = (ObjectKind, String, String, String);

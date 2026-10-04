@@ -109,19 +109,8 @@ fn seed(args: &[&str]) -> Run {
 macro_rules! with_schema {
     (|$pool:ident, $url:ident| $body:block) => {
         common::with_integration_pool(|$pool| async move {
-            use supatype_engine::generator::sql::migration;
-            use supatype_engine::state::database_state::DatabaseState;
-
             let ast = supatype_engine::parser::parse(SCHEMA).expect("the schema parses");
-            let sql = migration::forward_sql(
-                &supatype_engine::differ::diff(&ast, &DatabaseState::default()).expect("diffs"),
-                false,
-                "public",
-                &ast,
-            )
-            .expect("renders");
-            sqlx::raw_sql(&sql)
-                .execute(&$pool)
+            common::push(&$pool, &ast)
                 .await
                 .expect("the schema applies");
             sqlx::raw_sql("CREATE SCHEMA IF NOT EXISTS _supatype")

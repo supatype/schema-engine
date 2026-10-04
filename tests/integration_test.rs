@@ -34,7 +34,6 @@ async fn test_fresh_five_model_blog_schema() {
         assert_eq!(create_table_count, 5, "should create 5 tables");
 
         let sql = migration::generate(&diff, false, "public", &ast).unwrap();
-        let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
         assert!(
             sql.contains("BEGIN;"),
             "migration must be wrapped in transaction"
@@ -49,8 +48,7 @@ async fn test_fresh_five_model_blog_schema() {
             "full migration file must contain rollback section"
         );
 
-        sqlx::raw_sql(&apply_sql)
-            .execute(&pool)
+        common::push(&pool, &ast)
             .await
             .expect("migration must apply without error");
 
@@ -114,11 +112,7 @@ async fn test_geospatial_schema_idempotent_after_push() {
         let input = include_str!("fixtures/geospatial.json");
         let ast = parser::parse(input).expect("geospatial fixture parses");
 
-        let empty = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &empty).unwrap();
-        let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&apply_sql)
-            .execute(&pool)
+        common::push(&pool, &ast)
             .await
             .expect("geospatial migration must apply");
 
@@ -208,18 +202,25 @@ async fn test_idempotency_no_diff_after_apply() {
         let input = include_str!("fixtures/five_model_blog.json");
         let ast = parser::parse(input).unwrap();
 
-        let empty = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &empty).unwrap();
-        let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&apply_sql).execute(&pool).await.unwrap();
+        common::push(&pool, &ast).await.unwrap();
 
-        let after = introspector::introspect(&pool, "public").await.unwrap();
-        let second_diff = differ::diff(&ast, &after).unwrap();
-
+        let second = supatype_engine::push::prepare(&pool, &ast, "public")
+            .await
+            .unwrap();
         assert_eq!(
-            second_diff.operations.len(),
+            second.diff.operations.len(),
             0,
             "second push should produce zero operations (idempotency)"
+        );
+        let changes: Vec<_> = second
+            .reconcile
+            .actions
+            .iter()
+            .filter(|a| a.is_change())
+            .collect();
+        assert!(
+            changes.is_empty(),
+            "and change no owned object: {changes:?}"
         );
     })
     .await;
@@ -234,9 +235,11 @@ async fn test_up_to_date_push_records_initial_baseline_once() {
         let input = include_str!("fixtures/five_model_blog.json");
         let ast = parser::parse(input).unwrap();
 
-        let empty = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &empty).unwrap();
-        let apply_sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        // What a first push applies, without the history it would record: the case under test is
+        // a database whose schema is current and whose history is empty.
+        let apply_sql = supatype_engine::push::fresh_migration(&ast, "public", false)
+            .unwrap()
+            .up_script();
         sqlx::raw_sql(&apply_sql).execute(&pool).await.unwrap();
 
         sqlx::raw_sql(migration_history::create_internal_schema_sql())
