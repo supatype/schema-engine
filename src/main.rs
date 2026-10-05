@@ -570,7 +570,6 @@ async fn main() -> Result<()> {
             use supatype_engine::state::migration_history;
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            migration_history::assert_project_schema(&pool, &schema).await?;
             if no_cache {
                 eprintln!("{}", migration_history::NO_CACHE_NOTICE);
             }

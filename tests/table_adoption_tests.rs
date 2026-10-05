@@ -464,3 +464,64 @@ async fn a_reclaimed_object_is_supatypes_again() {
     })
     .await;
 }
+
+/// The first thing a project on an existing database does: its first push refuses a table that is
+/// already there, and the refusal says to run `adopt`. Adopt then has to work on a database
+/// Supatype has never written to. The CLI subcommand checked the project schema before anything
+/// had created `_supatype.schema_state`, and failed with `relation "_supatype.schema_state" does
+/// not exist`.
+#[tokio::test]
+async fn adoption_works_on_a_database_supatype_has_never_pushed_to() {
+    common::with_integration_pool(|pool| async move {
+        sqlx::raw_sql("CREATE TABLE public.widget (id int primary key, name text)")
+            .execute(&pool)
+            .await
+            .expect("fixture applies");
+        let ast = parser::parse(ONE_MODEL).expect("fixture parses");
+
+        let applied = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("adopt on a never-pushed database");
+        assert_eq!(applied.status, "adopted");
+        assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
+        common::push(&pool, &ast)
+            .await
+            .expect("the push it unblocks");
+    })
+    .await;
+}
+
+/// One project per database holds for adopt as it does for push, whichever way adopt is called:
+/// the HTTP route never checked, and the CLI subcommand checked before the table existed.
+#[tokio::test]
+async fn adoption_refuses_a_database_that_holds_another_project_schema() {
+    common::with_integration_pool(|pool| async move {
+        let empty = parser::parse(NO_MODELS).expect("empty schema parses");
+        common::push(&pool, &empty)
+            .await
+            .expect("bootstraps the engine tables");
+        sqlx::raw_sql(
+            "UPDATE _supatype.schema_state SET project_schema = 'tenant_other' WHERE id = 1",
+        )
+        .execute(&pool)
+        .await
+        .expect("records another project");
+        let ast = parser::parse(ONE_MODEL).expect("fixture parses");
+
+        let refused = adopt::run(&pool, &ast, "public", adopt::Request::default()).await;
+        let message = format!(
+            "{:#}",
+            refused.expect_err("adopt into another project's database")
+        );
+        assert!(message.contains("tenant_other"), "{message}");
+    })
+    .await;
+}
