@@ -286,6 +286,15 @@ fn after_keyword<'a>(s: &'a str, keyword: &str) -> Option<&'a str> {
     None
 }
 
+/// What follows `keyword` when `s` starts with it as a whole word, compared without case.
+fn strip_keyword<'a>(s: &'a str, keyword: &str) -> Option<&'a str> {
+    let s = s.trim_start();
+    let head = s.get(..keyword.len())?;
+    let rest = &s[keyword.len()..];
+    (head.eq_ignore_ascii_case(keyword) && rest.starts_with(|c: char| c.is_ascii_whitespace()))
+        .then_some(rest)
+}
+
 /// The roles after `TO` or `FROM`, trimmed, without the trailing `;`.
 fn roles_after(s: &str, word: &str) -> Vec<String> {
     let Some(rest) = after_keyword(s, word) else {
@@ -584,26 +593,33 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
         }
     }
     if starts("SECURITY LABEL ") {
-        let Some(column) = after_keyword(h, "COLUMN") else {
+        // A label on a column is keyed `table.column`, one on the table itself by the table.
+        let Some(on) = after_keyword(h, "ON") else {
             return Attribution::Unknown;
         };
-        let (parts, _) = match qualified_name(column) {
-            Some(x) => x,
-            None => return Attribution::Unknown,
+        let (s, parent) = if let Some(column) = strip_keyword(on, "COLUMN") {
+            let (parts, _) = match qualified_name(column) {
+                Some(x) => x,
+                None => return Attribution::Unknown,
+            };
+            let (s, t, c) = split_column(parts, schema);
+            (s, format!("{t}.{c}"))
+        } else if let Some(table) = strip_keyword(on, "TABLE") {
+            let (parts, _) = match qualified_name(table) {
+                Some(x) => x,
+                None => return Attribution::Unknown,
+            };
+            split_schema(parts, schema)
+        } else {
+            return Attribution::Unknown;
         };
-        let (s, t, c) = split_column(parts, schema);
         let provider = h["SECURITY LABEL ".len()..]
             .trim_start()
             .strip_prefix("FOR ")
             .and_then(|r| r.split_whitespace().next())
             .unwrap_or("")
             .to_string();
-        return Attribution::Object(key(
-            ObjectKind::SecurityLabel,
-            &s,
-            &format!("{t}.{c}"),
-            &provider,
-        ));
+        return Attribution::Object(key(ObjectKind::SecurityLabel, &s, &parent, &provider));
     }
     if starts("GRANT ") || starts("REVOKE ") {
         // Table and view privileges: `GRANT ... ON s.t TO r1, r2` / `REVOKE ... ON s.t FROM r`.
@@ -751,6 +767,7 @@ mod tests {
             ("CREATE VIEW \"draft\".\"posts\" WITH (security_invoker = true) AS SELECT 1;", ObjectKind::View, "draft", "", "posts"),
             ("SECURITY LABEL FOR supatype ON COLUMN \"public\".\"posts\".\"salary\" IS 'MASK READ x';", ObjectKind::SecurityLabel, "public", "posts.salary", "supatype"),
             ("GRANT SELECT ON \"draft\".\"posts\" TO authenticated;", ObjectKind::TableGrant, "draft", "posts", "authenticated"),
+            ("SECURITY LABEL FOR supatype ON TABLE \"public\".\"posts\" IS NULL;", ObjectKind::SecurityLabel, "public", "posts", "supatype"),
         ];
         for (sql, kind, schema, parent, name) in cases {
             match attribute("public", sql, &mut ctx) {

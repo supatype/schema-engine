@@ -895,13 +895,26 @@ fn label_target(schema: &str, table: &str, column: &str) -> String {
 /// The statement that takes a column's label off, guarded on the extension: without the provider
 /// registered a `SECURITY LABEL` statement cannot even parse.
 pub fn drop_field_label_sql(schema: &str, table: &str, column: &str) -> String {
-    let statement = format!(
+    guarded_label_drop(&format!(
         "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN {} IS NULL",
         label_target(schema, table, column)
-    );
+    ))
+}
+
+/// [`drop_field_label_sql`] for a label on the table itself. The engine writes none, but one found
+/// under its provider is its by location, so the reconcile drops it and needs the statement.
+pub fn drop_table_label_sql(schema: &str, table: &str) -> String {
+    guarded_label_drop(&format!(
+        "SECURITY LABEL FOR {MASK_PROVIDER} ON TABLE \"{}\".\"{}\" IS NULL",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\"")
+    ))
+}
+
+fn guarded_label_drop(statement: &str) -> String {
     format!(
         "DO $mask_label$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = '{MASK_EXTENSION}') THEN\n    EXECUTE {};\n  END IF;\nEND\n$mask_label$;",
-        sql_string(&statement)
+        sql_string(statement)
     )
 }
 

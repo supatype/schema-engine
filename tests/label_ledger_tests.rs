@@ -249,3 +249,54 @@ async fn labels_under_our_provider_with_no_row_are_ours() {
     })
     .await;
 }
+
+/// A label under our provider on a table rather than a column is ours by location like any other,
+/// so the reconcile drops it. Its key has no `table.column` parent, and rendering the drop
+/// panicked ("is on the reconcile with no drop statement") instead of taking the label off.
+#[test]
+fn a_table_label_under_our_provider_is_dropped_not_a_panic() {
+    use supatype_engine::introspector::catalog::{CatalogState, DbSecurityLabel};
+    use supatype_engine::state::database_state::DatabaseState;
+
+    let ast = parser::parse(r#"{ "astVersion": 2, "models": [] }"#).unwrap();
+    let catalog = CatalogState {
+        security_labels: vec![DbSecurityLabel {
+            schema: "public".into(),
+            table: "theirs".into(),
+            column: None,
+            provider: "supatype".into(),
+            label: "MASK READ x".into(),
+        }],
+        ..CatalogState::default()
+    };
+    let db = DatabaseState {
+        schema: "public".into(),
+        ..DatabaseState::default()
+    };
+    let state = push::State::of(db, catalog, vec![]);
+    let decision = push::decide(&ast, &state, None).unwrap();
+    assert!(
+        decision
+            .reconcile
+            .actions
+            .iter()
+            .any(|a| a.key().kind == ObjectKind::SecurityLabel && a.key().parent == "theirs"),
+        "{:?}",
+        decision.reconcile.actions
+    );
+    let migration = supatype_engine::generator::sql::migration::Migration::render(
+        &decision.diff,
+        &decision.reconcile.actions,
+        false,
+        "public",
+        &ast,
+    )
+    .unwrap();
+    assert!(
+        migration
+            .up()
+            .contains(r#"SECURITY LABEL FOR supatype ON TABLE "public"."theirs" IS NULL"#),
+        "{}",
+        migration.up()
+    );
+}

@@ -40,7 +40,10 @@ use crate::generator::sql::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, option_columns,
         render_operation,
     },
-    rls::{drop_field_label_sql, field_labels, membership_index_targets, MASK_PROVIDER},
+    rls::{
+        drop_field_label_sql, drop_table_label_sql, field_labels, membership_index_targets,
+        MASK_PROVIDER,
+    },
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql},
 };
@@ -142,11 +145,12 @@ impl ObjectKey {
             ObjectKind::CronJob => format!(
                 "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}';\n  END IF;\nEND;\n$cron$;"
             ),
-            // The parent is `table.column`; only our own provider's labels are ever desired.
-            ObjectKind::SecurityLabel => {
-                let (table, column) = parent.split_once('.')?;
-                drop_field_label_sql(schema, table, column)
-            }
+            // The parent is `table.column`, or the table for a label on the table itself; only our
+            // own provider's labels are ever desired or dropped.
+            ObjectKind::SecurityLabel => match parent.split_once('.') {
+                Some((table, column)) => drop_field_label_sql(schema, table, column),
+                None => drop_table_label_sql(schema, parent),
+            },
             // The parent is the table and the name the role: everything it holds there goes.
             ObjectKind::TableGrant => revoke_all_sql(schema, parent, name),
             ObjectKind::Schema
