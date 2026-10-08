@@ -311,7 +311,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX categories_name_key ON public.categories USING btree (name)"
+        "definition": "CREATE UNIQUE INDEX categories_name_key ON public.categories USING btree (name)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "categories",
@@ -325,7 +327,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX categories_pkey ON public.categories USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX categories_pkey ON public.categories USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "categories",
@@ -339,7 +343,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX categories_slug_key ON public.categories USING btree (slug)"
+        "definition": "CREATE UNIQUE INDEX categories_slug_key ON public.categories USING btree (slug)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "comments",
@@ -353,7 +359,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX comments_pkey ON public.comments USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX comments_pkey ON public.comments USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "posts",
@@ -367,7 +375,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX idx_posts_category_id_rls ON public.posts USING btree (category_id)"
+        "definition": "CREATE INDEX idx_posts_category_id_rls ON public.posts USING btree (category_id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "posts",
@@ -381,7 +391,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX posts_author_id_idx ON public.posts USING btree (author_id)"
+        "definition": "CREATE INDEX posts_author_id_idx ON public.posts USING btree (author_id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "posts",
@@ -395,7 +407,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX posts_pkey ON public.posts USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX posts_pkey ON public.posts USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "posts",
@@ -409,7 +423,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX posts_slug_key ON public.posts USING btree (slug)"
+        "definition": "CREATE UNIQUE INDEX posts_slug_key ON public.posts USING btree (slug)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "tags",
@@ -423,7 +439,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX tags_name_key ON public.tags USING btree (name)"
+        "definition": "CREATE UNIQUE INDEX tags_name_key ON public.tags USING btree (name)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "tags",
@@ -437,7 +455,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX tags_pkey ON public.tags USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX tags_pkey ON public.tags USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "users",
@@ -451,7 +471,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)"
+        "definition": "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "users",
@@ -465,7 +487,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)",
+        "include": [],
+        "options": ""
       }
     ],
     "constraints": [
@@ -481,6 +505,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -495,6 +520,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -509,6 +535,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -525,6 +552,7 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
+        "definition": "FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
         "comment": null
       },
       {
@@ -539,6 +567,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -555,6 +584,7 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
+        "definition": "FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
         "comment": null
       },
       {
@@ -571,6 +601,7 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
+        "definition": "FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
         "comment": null
       },
       {
@@ -587,6 +618,7 @@
         ],
         "checkExpression": null,
         "onDelete": "SET NULL",
+        "definition": "FOREIGN KEY (category_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL",
         "comment": null
       },
       {
@@ -601,6 +633,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -615,6 +648,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -629,6 +663,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -643,6 +678,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -655,6 +691,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((email ~* '^[^@]+@[^@]+\\.[^@]+$'::text))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -669,6 +706,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -683,6 +721,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       }
     ],
@@ -693,7 +732,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
+        "checkExpr": "(( SELECT auth.role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
         "managed": false
       },
       {
@@ -701,7 +740,7 @@
         "name": "categories_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "((( SELECT role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM posts\n  WHERE (posts.author_id = ( SELECT uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT uid() AS uid)))))))",
+        "usingExpr": "((( SELECT auth.role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM posts\n  WHERE (posts.author_id = ( SELECT auth.uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT auth.uid() AS uid)))))))",
         "checkExpr": null,
         "managed": false
       },
@@ -720,7 +759,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "managed": false
       },
       {
@@ -728,7 +767,7 @@
         "name": "comments_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "((author_id = ( SELECT uid() AS uid)) AND (NOT (( SELECT role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = claim_text('app_metadata.tier'::text)))",
+        "usingExpr": "((author_id = ( SELECT auth.uid() AS uid)) AND (NOT (( SELECT auth.role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = auth.claim_text('app_metadata.tier'::text)))",
         "checkExpr": null,
         "managed": false
       },
@@ -737,8 +776,8 @@
         "name": "comments_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = author_id)",
         "managed": false
       },
       {
@@ -746,7 +785,7 @@
         "name": "posts_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -756,7 +795,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "managed": false
       },
       {
@@ -764,7 +803,7 @@
         "name": "posts_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "((( SELECT role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '30 days'::interval))) AND (updated_at <= ( SELECT (now() + '7 days'::interval)))))",
+        "usingExpr": "((( SELECT auth.role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '30 days'::interval))) AND (updated_at <= ( SELECT (now() + '7 days'::interval)))))",
         "checkExpr": null,
         "managed": false
       },
@@ -773,7 +812,7 @@
         "name": "posts_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
         "checkExpr": "(title <> ''::text)",
         "managed": false
       },
@@ -800,7 +839,7 @@
         "name": "users_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -818,8 +857,8 @@
         "name": "users_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "managed": false
       }
     ],
@@ -1049,7 +1088,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  NEW.\"content\" := CASE WHEN NEW.\"content\" IS NULL THEN NULL WHEN NEW.\"content\" ? 'root' THEN NEW.\"content\" WHEN jsonb_typeof(NEW.\"content\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"content\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"content\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"content\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"content\"::text::text)))))) END;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.\"content\" := CASE WHEN NEW.\"content\" IS NULL THEN NULL WHEN NEW.\"content\" ? 'root' THEN NEW.\"content\" WHEN jsonb_typeof(NEW.\"content\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"content\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"content\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"content\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"content\"::text::text)))))) END;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -1061,7 +1108,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_categories_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -1073,7 +1128,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_posts_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -1085,7 +1148,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -1097,7 +1168,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "val text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1109,7 +1188,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1121,7 +1208,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1133,7 +1228,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1145,7 +1248,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1157,7 +1268,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1169,7 +1288,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1181,7 +1308,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1193,7 +1328,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1205,7 +1348,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1217,7 +1368,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -1229,7 +1388,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n"
       },
       {
         "schema": "api",
@@ -1241,7 +1408,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nDECLARE\n  stored \"public\".\"users\";\nBEGIN\n  IF TG_OP = 'DELETE' THEN\n    DELETE FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n    RETURN OLD;\n  END IF;\n\n  IF TG_OP = 'INSERT' THEN\n    -- Masked columns on a new row are governed by the write rule alone; there is no\n    -- stored value to round-trip against.\n    INSERT INTO \"public\".\"users\" (\"id\", \"email\", \"name\", \"created_at\", \"updated_at\") VALUES (NEW.\"id\", NEW.\"email\", NEW.\"name\", NEW.\"created_at\", NEW.\"updated_at\");\n    RETURN NEW;\n  END IF;\n\n  SELECT * INTO stored FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n\n    -- email\n                 -- Three cases, in the order tier 1 handles them — measured against the\n                 -- extension, not inferred from its documentation:\n                 --\n                 -- 1. The caller cannot read the column. Their write is silently discarded rather\n                 --    than refused: the extension reports the UPDATE as applied and leaves the\n                 --    stored value alone. It is also what keeps a whole-object PATCH working for a\n                 --    client that never saw the value.\n                 -- 2. The caller can read it and sent back what is stored: nothing to do.\n                 -- 3. A real edit, so the write rule decides. `IS NOT TRUE` is load-bearing here:\n                 --    a predicate comparing a column to an absent claim is NULL, and `NOT NULL`\n                 --    would let the write through.\n                 IF (SELECT ((SELECT auth.role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   NEW.\"email\" := stored.\"email\";\n                 ELSIF NEW.\"email\" IS NOT DISTINCT FROM stored.\"email\" THEN\n                   NEW.\"email\" := stored.\"email\";\n                 ELSIF TRUE IS NOT TRUE THEN\n                   RAISE EXCEPTION 'permission denied for column email of relation users'\n                     USING ERRCODE = '42501';\n                 END IF;\n\n    -- name\n                 -- Three cases, in the order tier 1 handles them — measured against the\n                 -- extension, not inferred from its documentation:\n                 --\n                 -- 1. The caller cannot read the column. Their write is silently discarded rather\n                 --    than refused: the extension reports the UPDATE as applied and leaves the\n                 --    stored value alone. It is also what keeps a whole-object PATCH working for a\n                 --    client that never saw the value.\n                 -- 2. The caller can read it and sent back what is stored: nothing to do.\n                 -- 3. A real edit, so the write rule decides. `IS NOT TRUE` is load-bearing here:\n                 --    a predicate comparing a column to an absent claim is NULL, and `NOT NULL`\n                 --    would let the write through.\n                 IF (SELECT ((SELECT auth.role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   NEW.\"name\" := stored.\"name\";\n                 ELSIF NEW.\"name\" IS NOT DISTINCT FROM stored.\"name\" THEN\n                   NEW.\"name\" := stored.\"name\";\n                 ELSIF (SELECT ((TRUE) AND ((SELECT auth.role()) = 'admin')) FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   RAISE EXCEPTION 'permission denied for column name of relation users'\n                     USING ERRCODE = '42501';\n                 END IF;\n\n    -- id\n                 -- Three cases, in the order tier 1 handles them — measured against the\n                 -- extension, not inferred from its documentation:\n                 --\n                 -- 1. The caller cannot read the column. Their write is silently discarded rather\n                 --    than refused: the extension reports the UPDATE as applied and leaves the\n                 --    stored value alone. It is also what keeps a whole-object PATCH working for a\n                 --    client that never saw the value.\n                 -- 2. The caller can read it and sent back what is stored: nothing to do.\n                 -- 3. A real edit, so the write rule decides. `IS NOT TRUE` is load-bearing here:\n                 --    a predicate comparing a column to an absent claim is NULL, and `NOT NULL`\n                 --    would let the write through.\n                 IF TRUE IS NOT TRUE THEN\n                   NEW.\"id\" := stored.\"id\";\n                 ELSIF NEW.\"id\" IS NOT DISTINCT FROM stored.\"id\" THEN\n                   NEW.\"id\" := stored.\"id\";\n                 ELSIF (SELECT ((SELECT auth.uid()) = \"id\") FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   RAISE EXCEPTION 'permission denied for column id of relation users'\n                     USING ERRCODE = '42501';\n                 END IF;\n\n  UPDATE \"public\".\"users\"\n     SET \"id\" = NEW.\"id\",\n           \"email\" = NEW.\"email\",\n           \"name\" = NEW.\"name\",\n           \"created_at\" = NEW.\"created_at\",\n           \"updated_at\" = NEW.\"updated_at\"\n   WHERE \"id\" = OLD.\"id\";\n  RETURN NEW;\nEND ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION api.users__write()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nDECLARE\n  stored \"public\".\"users\";\nBEGIN\n  IF TG_OP = 'DELETE' THEN\n    DELETE FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n    RETURN OLD;\n  END IF;\n\n  IF TG_OP = 'INSERT' THEN\n    -- Masked columns on a new row are governed by the write rule alone; there is no\n    -- stored value to round-trip against.\n    INSERT INTO \"public\".\"users\" (\"id\", \"email\", \"name\", \"created_at\", \"updated_at\") VALUES (NEW.\"id\", NEW.\"email\", NEW.\"name\", NEW.\"created_at\", NEW.\"updated_at\");\n    RETURN NEW;\n  END IF;\n\n  SELECT * INTO stored FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n\n    -- email\n                 -- Three cases, in the order tier 1 handles them — measured against the\n                 -- extension, not inferred from its documentation:\n                 --\n                 -- 1. The caller cannot read the column. Their write is silently discarded rather\n                 --    than refused: the extension reports the UPDATE as applied and leaves the\n                 --    stored value alone. It is also what keeps a whole-object PATCH working for a\n                 --    client that never saw the value.\n                 -- 2. The caller can read it and sent back what is stored: nothing to do.\n                 -- 3. A real edit, so the write rule decides. `IS NOT TRUE` is load-bearing here:\n                 --    a predicate comparing a column to an absent claim is NULL, and `NOT NULL`\n                 --    would let the write through.\n                 IF (SELECT ((SELECT auth.role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   NEW.\"email\" := stored.\"email\";\n                 ELSIF NEW.\"email\" IS NOT DISTINCT FROM stored.\"email\" THEN\n                   NEW.\"email\" := stored.\"email\";\n                 ELSIF TRUE IS NOT TRUE THEN\n                   RAISE EXCEPTION 'permission denied for column email of relation users'\n                     USING ERRCODE = '42501';\n                 END IF;\n\n    -- name\n                 -- Three cases, in the order tier 1 handles them — measured against the\n                 -- extension, not inferred from its documentation:\n                 --\n                 -- 1. The caller cannot read the column. Their write is silently discarded rather\n                 --    than refused: the extension reports the UPDATE as applied and leaves the\n                 --    stored value alone. It is also what keeps a whole-object PATCH working for a\n                 --    client that never saw the value.\n                 -- 2. The caller can read it and sent back what is stored: nothing to do.\n                 -- 3. A real edit, so the write rule decides. `IS NOT TRUE` is load-bearing here:\n                 --    a predicate comparing a column to an absent claim is NULL, and `NOT NULL`\n                 --    would let the write through.\n                 IF (SELECT ((SELECT auth.role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   NEW.\"name\" := stored.\"name\";\n                 ELSIF NEW.\"name\" IS NOT DISTINCT FROM stored.\"name\" THEN\n                   NEW.\"name\" := stored.\"name\";\n                 ELSIF (SELECT ((TRUE) AND ((SELECT auth.role()) = 'admin')) FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   RAISE EXCEPTION 'permission denied for column name of relation users'\n                     USING ERRCODE = '42501';\n                 END IF;\n\n    -- id\n                 -- Three cases, in the order tier 1 handles them — measured against the\n                 -- extension, not inferred from its documentation:\n                 --\n                 -- 1. The caller cannot read the column. Their write is silently discarded rather\n                 --    than refused: the extension reports the UPDATE as applied and leaves the\n                 --    stored value alone. It is also what keeps a whole-object PATCH working for a\n                 --    client that never saw the value.\n                 -- 2. The caller can read it and sent back what is stored: nothing to do.\n                 -- 3. A real edit, so the write rule decides. `IS NOT TRUE` is load-bearing here:\n                 --    a predicate comparing a column to an absent claim is NULL, and `NOT NULL`\n                 --    would let the write through.\n                 IF TRUE IS NOT TRUE THEN\n                   NEW.\"id\" := stored.\"id\";\n                 ELSIF NEW.\"id\" IS NOT DISTINCT FROM stored.\"id\" THEN\n                   NEW.\"id\" := stored.\"id\";\n                 ELSIF (SELECT ((SELECT auth.uid()) = \"id\") FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n                   RAISE EXCEPTION 'permission denied for column id of relation users'\n                     USING ERRCODE = '42501';\n                 END IF;\n\n  UPDATE \"public\".\"users\"\n     SET \"id\" = NEW.\"id\",\n           \"email\" = NEW.\"email\",\n           \"name\" = NEW.\"name\",\n           \"created_at\" = NEW.\"created_at\",\n           \"updated_at\" = NEW.\"updated_at\"\n   WHERE \"id\" = OLD.\"id\";\n  RETURN NEW;\nEND $function$\n"
       },
       {
         "schema": "auth",
@@ -1253,7 +1428,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1265,7 +1448,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1277,7 +1468,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1289,7 +1488,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1301,7 +1508,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1313,7 +1528,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -1325,307 +1548,515 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n$function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_categories",
-        "identityArguments": "categories categories",
+        "identityArguments": "categories public.categories",
         "identityTypes": "public.categories",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "categories public.categories",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_comments",
-        "identityArguments": "comments comments",
+        "identityArguments": "comments public.comments",
         "identityTypes": "public.comments",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "comments public.comments",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_posts",
-        "identityArguments": "posts posts",
+        "identityArguments": "posts public.posts",
         "identityTypes": "public.posts",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "posts public.posts",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"tags\".\"name\" = ANY(ARRAY['featured', 'archive'])\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"tags\".\"name\" = ANY(ARRAY['featured', 'archive'])\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_users",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_categories",
-        "identityArguments": "categories categories",
+        "identityArguments": "categories public.categories",
         "identityTypes": "public.categories",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "categories public.categories",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_comments",
-        "identityArguments": "comments comments",
+        "identityArguments": "comments public.comments",
         "identityTypes": "public.comments",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "comments public.comments",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_posts",
-        "identityArguments": "posts posts",
+        "identityArguments": "posts public.posts",
         "identityTypes": "public.posts",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "posts public.posts",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_users",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_categories",
-        "identityArguments": "categories categories",
+        "identityArguments": "categories public.categories",
         "identityTypes": "public.categories",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT auth.uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT auth.uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "categories public.categories",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT auth.uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT auth.uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_comments",
-        "identityArguments": "comments comments",
+        "identityArguments": "comments public.comments",
         "identityTypes": "public.comments",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"author_id\" = (SELECT auth.uid())\n    AND\n    NOT ((SELECT auth.role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = auth.claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "comments public.comments",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"author_id\" = (SELECT auth.uid())\n    AND\n    NOT ((SELECT auth.role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = auth.claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_posts",
-        "identityArguments": "posts posts",
+        "identityArguments": "posts public.posts",
         "identityTypes": "public.posts",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 days')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 days'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "posts public.posts",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 days')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 days'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"name\" IS NOT NULL\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"name\" IS NOT NULL\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_users",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT TRUE\n    OR\n    \"created_at\" >= (SELECT date_trunc('year', now()))\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n    OR\n    \"created_at\" >= (SELECT date_trunc('year', now()))\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_users__email",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n             SELECT (SELECT auth.role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__email(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (SELECT auth.role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_users__id",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n             SELECT TRUE\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__id(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT TRUE\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_users__name",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n             SELECT (SELECT auth.role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (SELECT auth.role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_categories",
-        "identityArguments": "categories categories",
+        "identityArguments": "categories public.categories",
         "identityTypes": "public.categories",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "categories public.categories",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_comments",
-        "identityArguments": "comments comments",
+        "identityArguments": "comments public.comments",
         "identityTypes": "public.comments",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "comments public.comments",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_posts",
-        "identityArguments": "posts posts",
+        "identityArguments": "posts public.posts",
         "identityTypes": "public.posts",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "posts public.posts",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_users",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_write_users__id",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n             SELECT (SELECT auth.uid()) = \"id\"\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_write_users__id(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (SELECT auth.uid()) = \"id\"\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n"
       },
       {
         "schema": "public",
         "name": "can_write_users__name",
-        "identityArguments": "users users",
+        "identityArguments": "users public.users",
         "identityTypes": "public.users",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n             SELECT (TRUE) AND ((SELECT auth.role()) = 'admin')\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
-        "comment": null
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_write_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (TRUE) AND ((SELECT auth.role()) = 'admin')\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n"
       }
     ],
     "views": [
@@ -1633,35 +2064,35 @@
         "schema": "api",
         "name": "categories",
         "materialized": false,
-        "definition": " SELECT id,\n    name,\n    slug,\n    created_at,\n    updated_at\n   FROM categories;",
+        "definition": " SELECT id,\n    name,\n    slug,\n    created_at,\n    updated_at\n   FROM public.categories;",
         "comment": null
       },
       {
         "schema": "api",
         "name": "comments",
         "materialized": false,
-        "definition": " SELECT id,\n    body,\n    post_id,\n    author_id,\n    created_at,\n    updated_at\n   FROM comments;",
+        "definition": " SELECT id,\n    body,\n    post_id,\n    author_id,\n    created_at,\n    updated_at\n   FROM public.comments;",
         "comment": null
       },
       {
         "schema": "api",
         "name": "posts",
         "materialized": false,
-        "definition": " SELECT id,\n    title,\n    slug,\n    content,\n    author_id,\n    category_id,\n    created_at,\n    updated_at\n   FROM posts;",
+        "definition": " SELECT id,\n    title,\n    slug,\n    content,\n    author_id,\n    category_id,\n    created_at,\n    updated_at\n   FROM public.posts;",
         "comment": null
       },
       {
         "schema": "api",
         "name": "tags",
         "materialized": false,
-        "definition": " SELECT id,\n    name\n   FROM tags;",
+        "definition": " SELECT id,\n    name\n   FROM public.tags;",
         "comment": null
       },
       {
         "schema": "api",
         "name": "users",
         "materialized": false,
-        "definition": " SELECT id,\n        CASE\n            WHEN (( SELECT role() AS role)) = 'admin'::text THEN email\n            ELSE NULL::text\n        END AS email,\n        CASE\n            WHEN (( SELECT role() AS role)) = 'admin'::text THEN name\n            ELSE NULL::text\n        END AS name,\n    created_at,\n    updated_at\n   FROM users;",
+        "definition": " SELECT id,\n        CASE\n            WHEN (( SELECT auth.role() AS role)) = 'admin'::text THEN email\n            ELSE NULL::text\n        END AS email,\n        CASE\n            WHEN (( SELECT auth.role() AS role)) = 'admin'::text THEN name\n            ELSE NULL::text\n        END AS name,\n    created_at,\n    updated_at\n   FROM public.users;",
         "comment": null
       }
     ],
@@ -2019,7 +2450,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
+        "checkExpr": "(( SELECT auth.role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
         "comment": null
       },
       {
@@ -2031,7 +2462,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((( SELECT role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM posts\n  WHERE (posts.author_id = ( SELECT uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT uid() AS uid)))))))",
+        "usingExpr": "((( SELECT auth.role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM public.posts\n  WHERE (posts.author_id = ( SELECT auth.uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM public.posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT auth.uid() AS uid)))))))",
         "checkExpr": null,
         "comment": null
       },
@@ -2058,7 +2489,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "comment": null
       },
       {
@@ -2070,7 +2501,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((author_id = ( SELECT uid() AS uid)) AND (NOT (( SELECT role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = claim_text('app_metadata.tier'::text)))",
+        "usingExpr": "((author_id = ( SELECT auth.uid() AS uid)) AND (NOT (( SELECT auth.role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = auth.claim_text('app_metadata.tier'::text)))",
         "checkExpr": null,
         "comment": null
       },
@@ -2083,8 +2514,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = author_id)",
         "comment": null
       },
       {
@@ -2096,7 +2527,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -2110,7 +2541,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "comment": null
       },
       {
@@ -2122,7 +2553,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((( SELECT role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '30 days'::interval))) AND (updated_at <= ( SELECT (now() + '7 days'::interval)))))",
+        "usingExpr": "((( SELECT auth.role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '30 days'::interval))) AND (updated_at <= ( SELECT (now() + '7 days'::interval)))))",
         "checkExpr": null,
         "comment": null
       },
@@ -2135,7 +2566,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
         "checkExpr": "(title <> ''::text)",
         "comment": null
       },
@@ -2174,7 +2605,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -2200,8 +2631,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "comment": null
       }
     ],

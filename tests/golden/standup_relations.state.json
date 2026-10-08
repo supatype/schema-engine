@@ -110,7 +110,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX profile_pkey ON public.profile USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX profile_pkey ON public.profile USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "team",
@@ -124,7 +126,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX team_pkey ON public.team USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX team_pkey ON public.team USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "team",
@@ -138,7 +142,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX team_slug_key ON public.team USING btree (slug)"
+        "definition": "CREATE UNIQUE INDEX team_slug_key ON public.team USING btree (slug)",
+        "include": [],
+        "options": ""
       }
     ],
     "constraints": [
@@ -154,6 +160,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -170,6 +177,7 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
+        "definition": "FOREIGN KEY (owner_id) REFERENCES profile(id) ON UPDATE CASCADE ON DELETE CASCADE",
         "comment": null
       },
       {
@@ -184,6 +192,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -198,6 +207,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       }
     ],
@@ -207,7 +217,7 @@
         "name": "profile_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
         "checkExpr": null,
         "managed": false
       },
@@ -217,7 +227,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "managed": false
       },
       {
@@ -234,8 +244,8 @@
         "name": "profile_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "managed": false
       },
       {
@@ -243,7 +253,7 @@
         "name": "team_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = owner_id)",
         "checkExpr": null,
         "managed": false
       },
@@ -253,7 +263,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'authenticated'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'authenticated'::text)",
         "managed": false
       },
       {
@@ -270,8 +280,8 @@
         "name": "team_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = owner_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = owner_id)",
         "managed": false
       }
     ],
@@ -355,7 +365,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_team_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -367,7 +385,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -379,7 +405,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "val text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -391,7 +425,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -403,7 +445,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -415,7 +465,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -427,7 +485,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -439,7 +505,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -451,7 +525,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -463,7 +545,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -475,7 +565,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -487,7 +585,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -499,7 +605,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -511,7 +625,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n"
       },
       {
         "schema": "auth",
@@ -523,7 +645,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -535,7 +665,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -547,7 +685,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -559,7 +705,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -571,7 +725,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -583,7 +745,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -595,103 +765,175 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n$function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_profile",
-        "identityArguments": "profile profile",
+        "identityArguments": "profile public.profile",
         "identityTypes": "public.profile",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "profile public.profile",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_profile(profile public.profile)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_team",
-        "identityArguments": "team team",
+        "identityArguments": "team public.team",
         "identityTypes": "public.team",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'authenticated'\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "team public.team",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_team(team public.team)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'authenticated'\n      FROM (SELECT ($1).*) AS \"team\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_profile",
-        "identityArguments": "profile profile",
+        "identityArguments": "profile public.profile",
         "identityTypes": "public.profile",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "profile public.profile",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_profile(profile public.profile)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_team",
-        "identityArguments": "team team",
+        "identityArguments": "team public.team",
         "identityTypes": "public.team",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"owner_id\"\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "team public.team",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_team(team public.team)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"owner_id\"\n      FROM (SELECT ($1).*) AS \"team\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_profile",
-        "identityArguments": "profile profile",
+        "identityArguments": "profile public.profile",
         "identityTypes": "public.profile",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "profile public.profile",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_profile(profile public.profile)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"profile\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_team",
-        "identityArguments": "team team",
+        "identityArguments": "team public.team",
         "identityTypes": "public.team",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "team public.team",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_team(team public.team)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"team\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_profile",
-        "identityArguments": "profile profile",
+        "identityArguments": "profile public.profile",
         "identityTypes": "public.profile",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "profile public.profile",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_profile(profile public.profile)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"profile\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_team",
-        "identityArguments": "team team",
+        "identityArguments": "team public.team",
         "identityTypes": "public.team",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"owner_id\"\n      FROM (SELECT ($1).*) AS \"team\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "team public.team",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_team(team public.team)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"owner_id\"\n      FROM (SELECT ($1).*) AS \"team\";\n  $function$\n"
       }
     ],
     "views": [],
@@ -814,7 +1056,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
         "checkExpr": null,
         "comment": null
       },
@@ -828,7 +1070,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "comment": null
       },
       {
@@ -853,8 +1095,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "comment": null
       },
       {
@@ -866,7 +1108,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = owner_id)",
         "checkExpr": null,
         "comment": null
       },
@@ -880,7 +1122,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'authenticated'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'authenticated'::text)",
         "comment": null
       },
       {
@@ -905,8 +1147,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = owner_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = owner_id)",
         "comment": null
       }
     ],
