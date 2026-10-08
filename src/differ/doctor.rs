@@ -139,6 +139,18 @@ pub fn report_of(ast: &SchemaAst, state: &State, decision: &Decision) -> DoctorR
     }
     out.unmanaged_drift
         .extend(unmanaged_objects(ast, state, plan));
+    // A column added outside Supatype that a narrowed write grant leaves unwritable says so, and
+    // how to include it (#63).
+    let narrowed = crate::push::NarrowedColumns::of(ast, state, &decision.diff, &state.db.schema);
+    for (table, column, roles) in &narrowed.ungranted {
+        if let Some(item) = out
+            .unmanaged_drift
+            .iter_mut()
+            .find(|i| i.kind == "column" && i.table == *table && i.name == *column)
+        {
+            item.message = crate::push::ungranted_message(table, column, roles);
+        }
+    }
     // Every table a push owns in the project schema (models, junction and versions tables). The
     // engine's own tables are the ledger's to account for.
     let declared: HashSet<&str> = decision

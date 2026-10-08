@@ -786,6 +786,19 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                     });
                 }
             }
+            // A column adopted while the schema does not declare it stays recorded as long as it
+            // is there: the push keeps it, and a narrowed write grant includes it (#63).
+            (None, Some(_))
+                if key.kind == ObjectKind::Column
+                    && status == Status::Adopted
+                    && !goes_with_its_table(&key) =>
+            {
+                changes.push(Action::Keep {
+                    key,
+                    create_sql: row.desired_sql.clone(),
+                    status,
+                })
+            }
             // Never removed (D9): a row nothing desires any more is forgotten, not undone.
             (None, Some(_))
                 if !goes_with_its_table(&key)

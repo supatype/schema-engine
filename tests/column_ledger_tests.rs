@@ -261,6 +261,63 @@ async fn a_released_column_is_never_dropped() {
     .await;
 }
 
+/// A column someone added that the schema does not declare can be adopted by name (#63): it is
+/// recorded as adopted, kept by every push rather than dropped as an undeclared column of ours, and
+/// its row stays while the column does. Adopting it is asked for by name only.
+#[tokio::test]
+async fn a_column_someone_added_can_be_adopted_and_is_kept() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!({}));
+        push(&pool, &ast).await.unwrap();
+        exec(&pool, "ALTER TABLE public.posts ADD COLUMN extra TEXT")
+            .await
+            .unwrap();
+
+        // Not a conflict: adopting every conflict leaves it alone.
+        supatype_engine::adopt::run(
+            &pool,
+            &ast,
+            "public",
+            supatype_engine::adopt::Request {
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!recorded(&pool).await.contains(&"extra".to_string()));
+
+        let extra = ["column:posts.extra".to_string()];
+        let outcome = supatype_engine::adopt::run(
+            &pool,
+            &ast,
+            "public",
+            supatype_engine::adopt::Request {
+                apply: true,
+                keys: Some(&extra),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.adopt.len(), 1, "{:?}", outcome.adopt);
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM _supatype.managed_objects
+              WHERE kind = 'column' AND parent = 'posts' AND name = 'extra'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "adopted");
+
+        let after = push(&pool, &ast).await.unwrap();
+        assert!(up_to_date(&after), "{after:?}");
+        assert!(live_columns(&pool).await.contains(&"extra".to_string()));
+        assert!(recorded(&pool).await.contains(&"extra".to_string()));
+    })
+    .await;
+}
+
 /// `timestamps` turned on for a table that predates it: the option's columns are added, with the
 /// definition `CREATE TABLE` gives them, and recorded. One dropped by hand is put back the same way.
 #[tokio::test]

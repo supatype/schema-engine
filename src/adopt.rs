@@ -51,7 +51,8 @@ pub struct Request<'a> {
     pub apply: bool,
     /// The conflicts the preview showed, named the same way: only these are adopted, and if any
     /// of them is no longer a conflict nothing is written, since the database is not the one
-    /// previewed. `None` adopts whatever conflicts there are when it runs.
+    /// previewed. A key may also name a column added outside the schema (`column:table.name`),
+    /// which is adopted only when named. `None` adopts whatever conflicts there are when it runs.
     pub keys: Option<&'a [String]>,
 }
 
@@ -114,7 +115,8 @@ fn choose(
             both.key
         );
     }
-    let mut adopted = adopted_rows(plan, &live, request.keys)?;
+    let columns = undeclared_columns(ast, state, decision);
+    let mut adopted = adopted_rows(plan, &live, &columns, request.keys)?;
     adopted.retain(|a| !released.iter().any(|r| r.key == a.key));
     let outcome = Outcome {
         status: status(
@@ -225,18 +227,45 @@ fn items(rows: &[LedgerRow], consequence: &str) -> Vec<DoctorItem> {
         .collect()
 }
 
+/// The columns someone added to a model table of ours that the schema does not declare and the
+/// ledger has no row for: Supatype leaves them alone (D4), and `adopt` takes one only when it is
+/// named, so that a field rule's narrowed write grant includes it (#63).
+fn undeclared_columns(ast: &SchemaAst, state: &State, decision: &Decision) -> Vec<ObjectKey> {
+    let desired: Vec<&ObjectKey> = decision.desired.iter().map(|d| &d.key).collect();
+    state
+        .fingerprints
+        .iter()
+        .map(ObjectFingerprint::key)
+        .filter(|k| {
+            k.kind == ObjectKind::Column
+                && k.schema == state.db.schema
+                && ast.models.iter().any(|m| m.table_name() == k.parent)
+                && state
+                    .db
+                    .tables
+                    .iter()
+                    .any(|t| t.name == k.parent && state.db.owns_table(t))
+                && !desired.contains(&k)
+                && !state.ledger.iter().any(|r| r.key == *k)
+        })
+        .collect()
+}
+
 /// A row for each conflict: the object under a name the schema needs, recorded as it is. With
-/// `keys`, only the conflicts they name, and none at all if one of them is not a conflict now.
+/// `keys`, only the conflicts they name, and none at all if one of them is not a conflict now; a
+/// key may also name one of `columns`, a column added outside the schema, which is adopted only
+/// when named.
 fn adopted_rows(
     plan: &reconcile::Plan,
     live: &BTreeMap<ObjectKey, &ObjectFingerprint>,
+    columns: &[ObjectKey],
     keys: Option<&[String]>,
 ) -> Result<Vec<LedgerRow>> {
     let conflicts = plan.conflicts().map(reconcile::Action::key);
     let chosen: Vec<ObjectKey> = match keys {
         None => conflicts.cloned().collect(),
         Some(specs) => {
-            let conflicts: Vec<&ObjectKey> = conflicts.collect();
+            let conflicts: Vec<&ObjectKey> = conflicts.chain(columns).collect();
             let mut chosen = Vec::new();
             for spec in specs {
                 let wanted = parse_object(spec)?;

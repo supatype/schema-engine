@@ -383,8 +383,29 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     // D4: the column differ drops only a column the ledger records as ours. One someone added to
     // a managed table, one released with `adopt --release`, or one an older engine made that this
     // push has not recorded yet, stays.
+    // A column adopted with `supatype adopt column:<table>.<column>` while the schema does not
+    // declare it is kept: Supatype knows of it (and a narrowed write grant includes it), but has
+    // no definition to bring it to.
+    let adopted: BTreeSet<(&str, &str)> = state
+        .ledger
+        .iter()
+        .filter(|r| {
+            r.key.kind == ObjectKind::Column
+                && r.key.schema == schema
+                && r.status == ledger::Status::Adopted
+        })
+        .map(|r| (r.key.parent.as_str(), r.key.name.as_str()))
+        .collect();
+    diff.operations.retain(|op| {
+        !matches!(op, Operation::DropColumn { table, column, .. }
+            if adopted.contains(&(table.as_str(), column.as_str())))
+    });
+    diff.summary = differ::DiffSummary::of(&diff.operations);
     diff.keep_columns_not_ours(|table, column| state.db.column_owned(table, column) == Some(true));
-    let desired = desired_here(&diff, &state.catalog, schema, ast)?;
+    let narrowed = NarrowedColumns::of(ast, state, &diff, schema);
+    diff.warnings.extend(narrowed.warnings());
+    let mut desired = desired_here(&diff, &state.catalog, schema, ast)?;
+    narrowed.grant_adopted(&mut desired, ast, &diff, schema);
     let live = with_grants_of_nothing(&state.fingerprints, state.ledger.iter().map(|r| &r.key));
     let named = named_by_the_engine(previous, &state.db, schema);
     let mut reconcile =
@@ -520,6 +541,119 @@ fn desired_here(
         _ => true,
     });
     Ok(desired)
+}
+
+/// The columns of model tables whose write privilege a field rule narrows that the schema does not
+/// declare (#63). A narrowed grant names the declared columns, so such a column gets no write
+/// privilege for the narrowed role: one the ledger has no row for was added outside Supatype and
+/// is reported, with how to include it; one adopted (`supatype adopt column:<table>.<column>`) is
+/// granted beside the declared ones.
+pub struct NarrowedColumns {
+    /// `(table, column)` adopted while undeclared, in the table's column order.
+    adopted: Vec<(String, String)>,
+    /// `(table, column, roles)` with no row, and the narrowed roles it gets no write grant for.
+    pub ungranted: Vec<(String, String, Vec<&'static str>)>,
+}
+
+impl NarrowedColumns {
+    pub fn of(ast: &SchemaAst, state: &State, diff: &DiffOutput, schema: &str) -> NarrowedColumns {
+        let status = |table: &str, column: &str| {
+            state
+                .ledger
+                .iter()
+                .find(|r| {
+                    r.key.kind == ObjectKind::Column
+                        && r.key.schema == schema
+                        && r.key.parent == table
+                        && r.key.name == column
+                })
+                .map(|r| r.status)
+        };
+        let mut adopted = Vec::new();
+        let mut ungranted: Vec<(String, String, Vec<&'static str>)> = Vec::new();
+        for grant in grants::table_grants(ast, views(diff)) {
+            if grant.narrowed.is_empty() {
+                continue;
+            }
+            let Some(table) = state.db.tables.iter().find(|t| t.name == grant.table) else {
+                continue;
+            };
+            for column in &table.columns {
+                if grant.columns.contains(&column.name) {
+                    continue;
+                }
+                let at = (grant.table.clone(), column.name.clone());
+                match status(&grant.table, &column.name) {
+                    Some(ledger::Status::Adopted) if !adopted.contains(&at) => adopted.push(at),
+                    None => match ungranted
+                        .iter_mut()
+                        .find(|(t, c, _)| (t, c) == (&at.0, &at.1))
+                    {
+                        Some((_, _, roles)) => roles.push(grant.role),
+                        None => ungranted.push((at.0, at.1, vec![grant.role])),
+                    },
+                    _ => {}
+                }
+            }
+        }
+        NarrowedColumns { adopted, ungranted }
+    }
+
+    /// One line per column added outside Supatype that a narrowed grant leaves unwritable.
+    pub fn warnings(&self) -> Vec<String> {
+        self.ungranted
+            .iter()
+            .map(|(table, column, roles)| ungranted_message(table, column, roles))
+            .collect()
+    }
+
+    /// The narrowed grants of `desired` with the adopted columns of their table added to the
+    /// columns they grant on.
+    fn grant_adopted(
+        &self,
+        desired: &mut [crate::desired::DesiredObject],
+        ast: &SchemaAst,
+        diff: &DiffOutput,
+        schema: &str,
+    ) {
+        if self.adopted.is_empty() {
+            return;
+        }
+        for mut grant in grants::table_grants(ast, views(diff)) {
+            if grant.narrowed.is_empty() {
+                continue;
+            }
+            let extra = self
+                .adopted
+                .iter()
+                .filter(|(t, _)| *t == grant.table)
+                .map(|(_, c)| c.clone());
+            grant.columns.extend(extra);
+            if let Some(d) = desired.iter_mut().find(|d| {
+                d.key.kind == ObjectKind::TableGrant
+                    && d.key.schema == schema
+                    && d.key.parent == grant.table
+                    && d.key.name == grant.role
+            }) {
+                d.create_sql = grant.create_sql(schema);
+            }
+        }
+    }
+}
+
+/// What push and doctor say of a column added outside Supatype on a table whose write grant a
+/// field rule narrows.
+pub fn ungranted_message(table: &str, column: &str, roles: &[&str]) -> String {
+    format!(
+        "column {table}.{column} was added outside Supatype and has no write grant for {}; run \
+         `supatype adopt column:{table}.{column}` to include it",
+        roles.join(", ")
+    )
+}
+
+/// Whether field rules are enforced by the `api` views, whose base tables hold nothing.
+fn views(diff: &DiffOutput) -> bool {
+    matches!(diff.field_masking, FieldMaskingTier::Views)
 }
 
 fn reconcile_desired(
@@ -1026,4 +1160,169 @@ pub(crate) async fn take_engine_lock(tx: &mut PgConnection) -> Result<()> {
         return Err(EngineBusy.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::introspector::tables::{DbColumn, DbTable};
+    use crate::ledger::Status;
+
+    /// `posts` with a field rule that narrows `authenticated`'s update to every column but
+    /// `locked`, on a database that can load the masking extension.
+    fn narrowed() -> SchemaAst {
+        crate::parser::parse(
+            r#"{"astVersion":2,"models":[{"name":"Post","fields":{
+                "id":{"kind":"integer","primaryKey":true,"required":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}},
+                "title":{"kind":"text","required":true,"annotations":{"db":{"pgType":"TEXT","unique":false}}},
+                "locked":{"kind":"text","annotations":{"db":{"pgType":"TEXT","unique":false}}}
+              },"options":{"timestamps":false,"softDelete":false,"singleton":false},
+              "annotations":{"db":{"tableName":"posts","indexes":[]},"platform":{"access":{
+                "read":{"type":"public"},"update":{"type":"authenticated"},
+                "fields":{"locked":{"write":{"type":"private"}}}}}}}]}"#,
+        )
+        .unwrap()
+    }
+
+    fn row(kind: ObjectKind, parent: &str, name: &str, status: Status) -> LedgerRow {
+        LedgerRow {
+            key: ObjectKey {
+                kind,
+                schema: "public".into(),
+                parent: parent.into(),
+                name: name.into(),
+            },
+            desired_fp: String::new(),
+            desired_sql: String::new(),
+            live_fp: String::new(),
+            live_def: String::new(),
+            status,
+            migration_id: Some(1),
+        }
+    }
+
+    /// `posts` live with the declared columns and `extra`, which the schema does not declare.
+    fn state(extra: Option<Status>) -> State {
+        let column = |name: &str| DbColumn {
+            name: name.into(),
+            data_type: "text".into(),
+            udt_name: "text".into(),
+            nullable: true,
+            ..Default::default()
+        };
+        let db = DatabaseState {
+            schema: "public".into(),
+            tables: vec![DbTable {
+                schema: "public".into(),
+                name: "posts".into(),
+                columns: ["id", "title", "locked", "extra"]
+                    .into_iter()
+                    .map(column)
+                    .collect(),
+                comment: None,
+            }],
+            extensions: vec![rls::MASK_EXTENSION.to_string()],
+            ..Default::default()
+        };
+        let catalog = CatalogState {
+            granted_roles: ["anon", "authenticated"].map(String::from).into(),
+            ..Default::default()
+        };
+        let mut ledger = vec![row(ObjectKind::Table, "", "posts", Status::Managed)];
+        ledger.extend(extra.map(|status| row(ObjectKind::Column, "posts", "extra", status)));
+        State::of(db, catalog, ledger)
+    }
+
+    fn update_grant(decision: &Decision) -> &str {
+        &decision
+            .desired
+            .iter()
+            .find(|d| {
+                d.key.kind == ObjectKind::TableGrant
+                    && d.key.parent == "posts"
+                    && d.key.name == "authenticated"
+            })
+            .expect("authenticated's grant")
+            .create_sql
+    }
+
+    /// #63: a narrowed write grant names the declared columns, so a column added outside
+    /// Supatype gets no write privilege from it. Push and doctor say so and how to include it;
+    /// adopted, it is granted beside the declared ones, kept rather than dropped, and no longer
+    /// reported.
+    #[test]
+    fn a_column_added_outside_supatype_is_flagged_until_adopted_then_granted() {
+        let ast = narrowed();
+        let flag = "column posts.extra was added outside Supatype and has no write grant for \
+                    authenticated; run `supatype adopt column:posts.extra` to include it";
+
+        let found = state(None);
+        let decision = decide(&ast, &found, None).unwrap();
+        assert!(
+            decision.diff.warnings.iter().any(|w| w == flag),
+            "{:?}",
+            decision.diff.warnings
+        );
+        assert!(!update_grant(&decision).contains("'extra'"));
+        let report = crate::differ::doctor::report_of(&ast, &found, &decision);
+        assert!(
+            report
+                .unmanaged_drift
+                .iter()
+                .any(|i| i.name == "extra" && i.message == flag),
+            "{report:#?}"
+        );
+        // Not ours: never dropped.
+        assert!(!decision
+            .diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::DropColumn { column, .. } if column == "extra")));
+
+        let adopted = state(Some(Status::Adopted));
+        let decision = decide(&ast, &adopted, None).unwrap();
+        assert!(
+            !decision
+                .diff
+                .warnings
+                .iter()
+                .any(|w| w.contains("posts.extra")),
+            "{:?}",
+            decision.diff.warnings
+        );
+        let grant = update_grant(&decision);
+        assert!(
+            grant.contains("'id', 'title', 'extra'"),
+            "the adopted column is granted after the declared ones: {grant}"
+        );
+        assert!(!grant.contains("'locked'"), "{grant}");
+        assert!(!decision
+            .diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::DropColumn { column, .. } if column == "extra")));
+        assert!(
+            decision.reconcile.actions.iter().any(|a| matches!(
+                a,
+                reconcile::Action::Keep { key, .. } if key.kind == ObjectKind::Column && key.name == "extra"
+            )),
+            "the adopted column's row is kept: {:?}",
+            decision.reconcile.actions
+        );
+        let report = crate::differ::doctor::report_of(&ast, &adopted, &decision);
+        assert!(
+            !report.unmanaged_drift.iter().any(|i| i.name == "extra"),
+            "{report:#?}"
+        );
+
+        // Ours by a managed row, undeclared: still the differ's to drop, and not flagged.
+        let managed = state(Some(Status::Managed));
+        let decision = decide(&ast, &managed, None).unwrap();
+        assert!(decision
+            .diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::DropColumn { column, .. } if column == "extra")));
+        assert!(!decision.diff.warnings.iter().any(|w| w == flag));
+    }
 }

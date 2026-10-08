@@ -294,3 +294,76 @@ async fn a_narrowed_grant_follows_the_declared_columns() {
     })
     .await;
 }
+
+/// #63: a narrowed write grant names the declared columns, so a column someone adds outside the
+/// schema gets no write privilege from it. Push and doctor say so and how to include it; once
+/// `supatype adopt column:<table>.<column>` records it, the grant includes it and the warning stops.
+#[tokio::test]
+async fn a_column_added_outside_supatype_is_granted_once_adopted() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            return;
+        }
+        let ast = posts(json!({
+            "read": { "type": "public" },
+            "update": { "type": "authenticated" },
+            "fields": { "locked": { "write": { "type": "private" } } }
+        }));
+        push(&pool, &ast).await.unwrap();
+        exec(&pool, "ALTER TABLE public.posts ADD COLUMN extra TEXT")
+            .await
+            .unwrap();
+
+        let flag = "column posts.extra was added outside Supatype and has no write grant for \
+                    authenticated; run `supatype adopt column:posts.extra` to include it";
+        let plan = push::plan(&pool, &ast, "public").await.unwrap();
+        assert!(
+            plan.diff.warnings.iter().any(|w| w == flag),
+            "{:?}",
+            plan.diff.warnings
+        );
+        let report = supatype_engine::inspect::doctor(&pool, &ast, "public", false)
+            .await
+            .unwrap();
+        assert!(
+            report
+                .unmanaged_drift
+                .iter()
+                .any(|i| i.name == "extra" && i.message == flag),
+            "{report:#?}"
+        );
+        // A warning, not a refusal.
+        push(&pool, &ast).await.unwrap();
+        assert_eq!(
+            columns_with(&pool, "authenticated", "UPDATE").await,
+            ["id", "title"]
+        );
+
+        let extra = ["column:posts.extra".to_string()];
+        supatype_engine::adopt::run(
+            &pool,
+            &ast,
+            "public",
+            supatype_engine::adopt::Request {
+                apply: true,
+                keys: Some(&extra),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let plan = push::plan(&pool, &ast, "public").await.unwrap();
+        assert!(
+            !plan.diff.warnings.iter().any(|w| w.contains("posts.extra")),
+            "{:?}",
+            plan.diff.warnings
+        );
+        push(&pool, &ast).await.unwrap();
+        assert_eq!(
+            columns_with(&pool, "authenticated", "UPDATE").await,
+            ["extra", "id", "title"]
+        );
+        assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
+    })
+    .await;
+}

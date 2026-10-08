@@ -219,9 +219,10 @@ enum Command {
         /// it to the schema again. Repeatable.
         #[arg(long)]
         reclaim: Vec<String>,
-        /// With `--yes`: a conflict the preview listed, named the same way. Only these are
-        /// adopted, and nothing is if one of them is no longer a conflict. Repeatable; without it
-        /// `--yes` adopts every conflict found when it runs.
+        /// With `--yes`: a conflict the preview listed, named the same way, or a column added
+        /// outside the schema (`column:table.name`), which is adopted only when named. Only these
+        /// are adopted, and nothing is if one of them is no longer a conflict. Repeatable; without
+        /// it `--yes` adopts every conflict found when it runs.
         #[arg(long = "key")]
         keys: Vec<String>,
         /// With `--yes`: adopt no conflict at all, only `--release` and `--reclaim`. The binary's
