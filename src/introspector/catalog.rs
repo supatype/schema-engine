@@ -12,7 +12,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::PgConnection;
+use sqlx::{PgConnection, Row};
 
 use super::indexes::{self, DbIndex};
 
@@ -153,8 +153,33 @@ pub struct DbFunction {
     /// `i`, `s` or `v`.
     pub volatility: String,
     pub security_definer: bool,
+    /// `prosrc`, or for a `BEGIN ATOMIC` body, whose `prosrc` is empty, the body as
+    /// `pg_get_function_sqlbody` deparses it.
     pub body: String,
     pub comment: Option<String>,
+    /// `pg_get_function_arguments`: names, modes and defaults, which the identity leaves out.
+    #[serde(default)]
+    pub arguments: String,
+    /// `proconfig`, in catalog order: the `SET search_path = ''` a security definer function
+    /// pins, and any other `SET` it carries.
+    #[serde(default)]
+    pub config: Vec<String>,
+    #[serde(default)]
+    pub strict: bool,
+    #[serde(default)]
+    pub leakproof: bool,
+    /// `s` safe, `r` restricted or `u` unsafe.
+    #[serde(default)]
+    pub parallel: String,
+    /// `procost` and `prorows` as text.
+    #[serde(default)]
+    pub cost: String,
+    #[serde(default)]
+    pub rows: String,
+    /// `pg_get_functiondef`: the whole `CREATE OR REPLACE FUNCTION` (or `PROCEDURE`), with every
+    /// property above. What a rollback runs to put the function back as it was.
+    #[serde(default)]
+    pub definition: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -443,19 +468,6 @@ async fn read_triggers(
         .collect())
 }
 
-type FunctionRow = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    String,
-    bool,
-    String,
-    Option<String>,
-);
-
 async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<Vec<DbFunction>> {
     // `identity_types`: `proargtypes` holds the input argument types in order. A `pg_catalog`
     // type is written by `format_type` (`timestamp with time zone`, `text[]`); any other type is
@@ -463,7 +475,7 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
     // the `search_path`, and the key must not change with the session. An array of such a type
     // is its element type, qualified, with `[]` (`public.things[]`), as the declaration writes
     // it, not the array type's own name (`public._things`).
-    let rows: Vec<FunctionRow> = sqlx::query_as(
+    let rows = sqlx::query(
         "SELECT n.nspname::text, p.proname::text,
                 pg_get_function_identity_arguments(p.oid),
                 COALESCE((SELECT string_agg(
@@ -480,8 +492,14 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
                           LEFT JOIN pg_type e ON t.typelem <> 0 AND t.typlen = -1 AND e.oid = t.typelem
                           LEFT JOIN pg_namespace en ON en.oid = e.typnamespace), ''),
                 COALESCE(pg_get_function_result(p.oid), ''),
-                l.lanname::text, p.provolatile::text, p.prosecdef, p.prosrc,
-                obj_description(p.oid, 'pg_proc')
+                l.lanname::text, p.provolatile::text, p.prosecdef,
+                CASE WHEN p.prosqlbody IS NOT NULL THEN pg_get_function_sqlbody(p.oid)
+                     ELSE p.prosrc END,
+                obj_description(p.oid, 'pg_proc'),
+                pg_get_function_arguments(p.oid),
+                p.proconfig::text[], p.proisstrict, p.proleakproof, p.proparallel::text,
+                p.procost::text, p.prorows::text,
+                pg_get_functiondef(p.oid)
          FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace
          JOIN pg_language l ON l.oid = p.prolang
@@ -493,34 +511,32 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
     .fetch_all(&mut *conn)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(
-            |(
-                schema,
-                name,
-                identity_arguments,
-                identity_types,
-                return_type,
-                language,
-                volatility,
-                security_definer,
-                body,
-                comment,
-            )| DbFunction {
-                schema,
-                name,
-                identity_arguments,
-                identity_types,
-                return_type,
-                language,
-                volatility,
-                security_definer,
-                body,
-                comment,
-            },
-        )
-        .collect())
+    rows.iter()
+        .map(|row| -> Result<DbFunction> {
+            Ok(DbFunction {
+                schema: row.try_get(0)?,
+                name: row.try_get(1)?,
+                identity_arguments: row.try_get(2)?,
+                identity_types: row.try_get(3)?,
+                return_type: row.try_get(4)?,
+                language: row.try_get(5)?,
+                volatility: row.try_get(6)?,
+                security_definer: row.try_get(7)?,
+                body: row.try_get(8)?,
+                comment: row.try_get(9)?,
+                arguments: row.try_get(10)?,
+                config: row
+                    .try_get::<Option<Vec<String>>, _>(11)?
+                    .unwrap_or_default(),
+                strict: row.try_get(12)?,
+                leakproof: row.try_get(13)?,
+                parallel: row.try_get(14)?,
+                cost: row.try_get(15)?,
+                rows: row.try_get(16)?,
+                definition: row.try_get(17)?,
+            })
+        })
+        .collect()
 }
 
 async fn read_views(conn: &mut PgConnection, schemas: &[String]) -> Result<Vec<DbView>> {

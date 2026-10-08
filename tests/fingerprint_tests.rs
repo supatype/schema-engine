@@ -207,3 +207,76 @@ async fn column_order_does_not_enter_a_table_fingerprint() {
     })
     .await;
 }
+
+/// Taking the pinned `search_path` off a security definer function, or making it non-strict, is a
+/// hand edit like any other; and a `BEGIN ATOMIC` body, whose `prosrc` is empty, is still a body.
+/// The statement a rollback runs to put the function back is the catalog's own, pin and all.
+#[tokio::test]
+async fn a_functions_settings_and_atomic_body_enter_its_fingerprint() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE FUNCTION public.whoami() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+               SET search_path = '' AS $$ SELECT current_user::text $$;
+             CREATE FUNCTION public.strict_one(n int) RETURNS int LANGUAGE sql STRICT
+               AS $$ SELECT n $$;
+             CREATE FUNCTION public.atomic_answer() RETURNS int LANGUAGE sql
+               BEGIN ATOMIC SELECT 41; END;",
+        )
+        .await;
+        let catalog = introspector::introspect_catalog(&pool, "public")
+            .await
+            .unwrap();
+        let whoami = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "whoami")
+            .unwrap();
+        assert_eq!(whoami.config, vec!["search_path=\"\"".to_string()]);
+        let atomic = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "atomic_answer")
+            .unwrap();
+        assert!(atomic.body.contains("41"), "{:?}", atomic.body);
+
+        let db = introspector::introspect(&pool, "public").await.unwrap();
+        let fps = fingerprints(&db, &catalog);
+        let whoami_fp = fps
+            .iter()
+            .find(|f| f.kind == ObjectKind::Function && f.name == "whoami()")
+            .unwrap();
+        let rollback = whoami_fp.create_sql.as_deref().unwrap();
+        assert!(rollback.contains("SET search_path TO ''"), "{rollback}");
+        assert!(rollback.contains("SECURITY DEFINER"), "{rollback}");
+        let before = snapshot(&pool).await;
+
+        exec(
+            &pool,
+            "ALTER FUNCTION public.whoami() RESET search_path;
+             ALTER FUNCTION public.strict_one(int) CALLED ON NULL INPUT;
+             CREATE OR REPLACE FUNCTION public.atomic_answer() RETURNS int LANGUAGE sql
+               BEGIN ATOMIC SELECT 42; END;",
+        )
+        .await;
+        let after = snapshot(&pool).await;
+        let mut diff = moved(&before, &after);
+        diff.sort();
+        assert_eq!(diff.len(), 3, "{diff:?}");
+        for name in ["atomic_answer()", "strict_one(integer)", "whoami()"] {
+            assert!(diff.iter().any(|d| d.contains(name)), "{name}: {diff:?}");
+        }
+
+        // The rollback statement restores the pin.
+        sqlx::raw_sql(rollback).execute(&pool).await.unwrap();
+        let restored = snapshot(&pool).await;
+        let key = (
+            ObjectKind::Function,
+            "public".to_string(),
+            String::new(),
+            "whoami()".to_string(),
+        );
+        assert_eq!(restored[&key], before[&key]);
+    })
+    .await;
+}

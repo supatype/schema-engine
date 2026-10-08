@@ -236,7 +236,8 @@ pub fn normalise_sql(sql: &str) -> String {
             b'$' => {
                 // `$tag$` where the tag is empty or an identifier; `$1` is a parameter, and a `$`
                 // inside an identifier (`a$b`) is part of it.
-                let in_word = i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+                let in_word =
+                    i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
                 let mut j = i + 1;
                 while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
                     j += 1;
@@ -368,6 +369,13 @@ impl ObjectKind {
                 "volatility",
                 "security_definer",
                 "body",
+                "arguments",
+                "config",
+                "strict",
+                "leakproof",
+                "parallel",
+                "cost",
+                "rows",
             ],
             ObjectKind::View => &["materialized", "definition"],
             ObjectKind::Policy => &["command", "permissive", "roles", "using", "with_check"],
@@ -422,7 +430,17 @@ fn entry(
 
 /// `CREATE OR REPLACE FUNCTION` for a function as the catalog reports it: the O1 definition
 /// renderer for this kind, and what a rollback runs to restore one the push replaced.
+///
+/// `pg_get_functiondef`'s own statement, which carries everything the function is: its `SET
+/// search_path`, `STRICT`, `LEAKPROOF`, `PARALLEL`, `COST`, `ROWS`, argument names and defaults,
+/// and a procedure as a procedure. Rebuilt from parts, a rollback put a `SECURITY DEFINER`
+/// function back without the `search_path` it pinned. The parts are the fallback only for a
+/// catalog serialised before the definition was read.
 fn function_create_sql(f: &DbFunction) -> String {
+    let definition = f.definition.trim();
+    if !definition.is_empty() {
+        return format!("{};", definition.trim_end_matches(';'));
+    }
     let volatility = match f.volatility.as_str() {
         "i" => "IMMUTABLE",
         "s" => "STABLE",
@@ -868,6 +886,10 @@ fn policy_and_catalog_entries(
     for f in &catalog.functions {
         let name = format!("{}({})", f.name, f.identity_types);
         let body = normalise_sql(&f.body);
+        let arguments = normalise_sql(&f.arguments);
+        // One `SET` per entry, as `proconfig` holds them; a value may itself hold a comma
+        // (`search_path=a, b`), so entries are joined on what no setting contains.
+        let config = f.config.join("\u{1f}");
         let mut fingerprint = entry(
             ObjectKind::Function,
             &f.schema,
@@ -879,6 +901,13 @@ fn policy_and_catalog_entries(
                 f.volatility.as_str(),
                 flag(f.security_definer),
                 body.as_str(),
+                arguments.as_str(),
+                config.as_str(),
+                flag(f.strict),
+                flag(f.leakproof),
+                f.parallel.as_str(),
+                f.cost.as_str(),
+                f.rows.as_str(),
             ],
         )
         .commented(f.comment.as_deref());
@@ -1021,7 +1050,10 @@ mod tests {
             "CHECK ((x = 'a  b'))"
         );
         assert_ne!(normalise_sql("x = 'a  b'"), normalise_sql("x = 'a b'"));
-        assert_eq!(normalise_sql("SELECT  \"my  col\"  FROM t"), "SELECT \"my  col\" FROM t");
+        assert_eq!(
+            normalise_sql("SELECT  \"my  col\"  FROM t"),
+            "SELECT \"my  col\" FROM t"
+        );
         assert_eq!(
             normalise_sql("AS $fn$\n  SELECT  1\n$fn$ ;"),
             "AS $fn$\n  SELECT  1\n$fn$"
@@ -1052,6 +1084,77 @@ mod tests {
         // Unterminated quotes run to the end without panicking.
         assert_eq!(normalise_sql("'abc  "), "'abc  ");
         assert_eq!(normalise_sql("E'ab\\"), "E'ab\\");
+    }
+
+    fn definer(config: &[&str]) -> CatalogState {
+        let set = config
+            .iter()
+            .map(|c| {
+                let (k, v) = c.split_once('=').unwrap();
+                format!(" SET {k} TO '{v}'\n")
+            })
+            .collect::<String>();
+        CatalogState {
+            functions: vec![DbFunction {
+                schema: "_supatype".into(),
+                name: "whoami".into(),
+                identity_arguments: String::new(),
+                identity_types: String::new(),
+                return_type: "text".into(),
+                language: "sql".into(),
+                volatility: "s".into(),
+                security_definer: true,
+                body: " SELECT current_user ".into(),
+                comment: None,
+                arguments: String::new(),
+                config: config.iter().map(|c| c.to_string()).collect(),
+                strict: false,
+                leakproof: false,
+                parallel: "u".into(),
+                cost: "100".into(),
+                rows: "0".into(),
+                definition: format!(
+                    "CREATE OR REPLACE FUNCTION _supatype.whoami()\n RETURNS text\n LANGUAGE sql\n \
+                     STABLE SECURITY DEFINER\n{set}AS $function$ SELECT current_user $function$\n"
+                ),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// A security definer function whose pinned `search_path` was taken off is a different
+    /// function: the fingerprint has to say so, and the statement a rollback runs has to put
+    /// the pin back.
+    #[test]
+    fn a_function_differing_only_in_its_settings_is_a_different_function() {
+        let db = DatabaseState::default();
+        let pinned = fingerprints(&db, &definer(&["search_path="]));
+        let bare = fingerprints(&db, &definer(&[]));
+        assert_ne!(pinned[0].fingerprint, bare[0].fingerprint);
+        assert!(pinned[0].definition.contains("config=search_path="));
+
+        let sql = pinned[0].create_sql.as_deref().unwrap();
+        assert!(sql.contains("SET search_path TO ''"), "{sql}");
+        assert!(sql.ends_with("$function$;"), "{sql}");
+
+        let mut strict = definer(&["search_path="]);
+        strict.functions[0].strict = true;
+        assert_ne!(
+            fingerprints(&db, &strict)[0].fingerprint,
+            pinned[0].fingerprint
+        );
+        let mut parallel = definer(&["search_path="]);
+        parallel.functions[0].parallel = "s".into();
+        assert_ne!(
+            fingerprints(&db, &parallel)[0].fingerprint,
+            pinned[0].fingerprint
+        );
+        let mut defaults = definer(&["search_path="]);
+        defaults.functions[0].arguments = "n integer DEFAULT 1".into();
+        assert_ne!(
+            fingerprints(&db, &defaults)[0].fingerprint,
+            pinned[0].fingerprint
+        );
     }
 
     #[test]
