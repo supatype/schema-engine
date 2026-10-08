@@ -276,14 +276,9 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     };
     let mut diff = differ::diff_with_previous(ast, &state.db, previous)?;
     // D4: the column differ drops only a column the ledger records as ours. One someone added to
-    // a managed table, or one an older engine made that this push has not recorded yet, stays.
-    let owned_columns: BTreeSet<(&str, &str)> = state
-        .ledger
-        .iter()
-        .filter(|r| r.key.kind == ObjectKind::Column && r.key.schema == schema)
-        .map(|r| (r.key.parent.as_str(), r.key.name.as_str()))
-        .collect();
-    diff.keep_columns_not_ours(|table, column| owned_columns.contains(&(table, column)));
+    // a managed table, one released with `adopt --release`, or one an older engine made that this
+    // push has not recorded yet, stays.
+    diff.keep_columns_not_ours(|table, column| state.db.column_owned(table, column) == Some(true));
     let desired = desired_here(&diff, &state.catalog, schema, ast)?;
     let live = with_grants_of_nothing(&state.fingerprints, state.ledger.iter().map(|r| &r.key));
     let reconcile = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;

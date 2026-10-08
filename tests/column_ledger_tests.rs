@@ -198,6 +198,35 @@ async fn an_upgrade_records_the_declared_columns_and_drops_nothing_unrecorded() 
     .await;
 }
 
+/// A column released with `adopt --release` is the user's again: removing it from the schema and
+/// forcing the push leaves it, as it leaves one Supatype never had.
+#[tokio::test]
+async fn a_released_column_is_never_dropped() {
+    common::with_integration_pool(|pool| async move {
+        let with_summary = posts(json!({ "summary": text() }));
+        push(&pool, &with_summary).await.unwrap();
+        let summary = ["column:posts.summary".to_string()];
+        supatype_engine::adopt::run(
+            &pool,
+            &with_summary,
+            "public",
+            supatype_engine::adopt::Request {
+                release: &summary,
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        common::push_with(&pool, &posts(json!({})), forced())
+            .await
+            .unwrap();
+        assert!(live_columns(&pool).await.contains(&"summary".to_string()));
+    })
+    .await;
+}
+
 /// A rename is a similarity guess, so only a column that is ours may be its source: one someone
 /// added (`subtitel`) is not renamed into a declared one (`subtitle`), which is added beside it.
 #[tokio::test]
