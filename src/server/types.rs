@@ -57,6 +57,10 @@ pub struct DbRequest {
     /// For `adopt`: released objects to hand back to Supatype, named the same way.
     #[serde(default)]
     pub reclaim: Vec<String>,
+    /// For `adopt` with `yes`: the conflicts the preview listed, named the same way. Only these are
+    /// adopted, and nothing is if one is no longer a conflict. Absent, every conflict found is.
+    #[serde(default)]
+    pub keys: Option<Vec<String>>,
     /// For `doctor`: record the drift it finds as the new baseline (plan 3.2).
     #[serde(default)]
     pub rebaseline: bool,

@@ -219,6 +219,11 @@ enum Command {
         /// it to the schema again. Repeatable.
         #[arg(long)]
         reclaim: Vec<String>,
+        /// With `--yes`: a conflict the preview listed, named the same way. Only these are
+        /// adopted, and nothing is if one of them is no longer a conflict. Repeatable; without it
+        /// `--yes` adopts every conflict found when it runs.
+        #[arg(long = "key")]
+        keys: Vec<String>,
         /// No longer does anything: the database is always read live. Accepted for one release so
         /// scripts that pass it keep working, and says so.
         #[arg(long, hide = true)]
@@ -574,6 +579,7 @@ async fn main() -> Result<()> {
             yes,
             release,
             reclaim,
+            keys,
             no_cache,
         } => {
             use supatype_engine::state::migration_history;
@@ -586,6 +592,7 @@ async fn main() -> Result<()> {
                 release: &release,
                 reclaim: &reclaim,
                 apply: yes,
+                keys: (!keys.is_empty()).then_some(keys.as_slice()),
             };
             let outcome = supatype_engine::adopt::run(&pool, &ast, &schema, request).await?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);

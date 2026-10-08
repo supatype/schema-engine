@@ -333,6 +333,7 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
         release: &req.release,
         reclaim: &req.reclaim,
         apply: req.yes,
+        keys: req.keys.as_deref(),
     };
     let outcome = crate::adopt::run(&pool, &ast, &req.schema, request)
         .await
