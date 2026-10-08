@@ -919,10 +919,10 @@ impl<'a> Builder<'a> {
     /// A model's triggers and the `_platform` functions of its own they run. The trigger's parts
     /// are the catalog's structural ones (`pg_trigger`), not its deparsed definition.
     fn model_triggers(&mut self, model: &ModelAst) {
-        for function in triggers::model_functions(model) {
+        for function in triggers::model_functions(model, &self.names) {
             self.platform_function(&function);
         }
-        for trigger in triggers::model_triggers(model) {
+        for trigger in triggers::model_triggers(model, &self.names) {
             let mut structure = BTreeMap::new();
             structure.insert("timing", "BEFORE".to_string());
             structure.insert("events", trigger.events.join(","));

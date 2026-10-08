@@ -207,7 +207,9 @@ fn posts_in(table: &str) -> SchemaAst {
 }
 
 /// A rename keeps the rows, the primary key follows the table's new name, and the serial's
-/// sequence is renamed with it so the ledger finds it; the rollback renames it back.
+/// sequence is renamed with it so the ledger finds it. The old table's affordance functions go
+/// before the rename, not after it (when their row type has the new name and the drop by the old
+/// one finds nothing, leaving them behind), and the rollback puts everything back.
 #[tokio::test]
 async fn a_renamed_table_takes_its_sequence_and_primary_key_with_it() {
     common::with_integration_pool(|pool| async move {
@@ -236,6 +238,23 @@ async fn a_renamed_table_takes_its_sequence_and_primary_key_with_it() {
         )
         .await;
         assert_eq!(pk, ["posts_archive_pkey"]);
+        let functions = names_in_catalog(
+            &pool,
+            "SELECT p.oid::regprocedure::text FROM pg_proc p
+              WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'can_%'
+              ORDER BY 1",
+        )
+        .await;
+        assert_eq!(
+            functions,
+            [
+                "can_create_posts_archive(posts_archive)",
+                "can_delete_posts_archive(posts_archive)",
+                "can_read_posts_archive(posts_archive)",
+                "can_update_posts_archive(posts_archive)",
+            ],
+            "the old table's functions were left behind"
+        );
         // The default still draws from the same, renamed, sequence.
         let next: i32 =
             sqlx::query_scalar("INSERT INTO public.posts_archive (slug) VALUES ('b') RETURNING id")
@@ -246,22 +265,29 @@ async fn a_renamed_table_takes_its_sequence_and_primary_key_with_it() {
         assert!(up_to_date(
             &push(&pool, &posts_in("posts_archive")).await.unwrap()
         ));
-        // Its rollback renames the sequence back with the table. (Not applied here: rolling a
-        // table rename back recreates the old table's `can_*` functions before the table has its
-        // old name again, which fails on its own, whatever the sequence.)
-        let down: String = sqlx::query_scalar(
-            "SELECT sql_down FROM _supatype.migrations ORDER BY id DESC LIMIT 1",
+        // Rolling it back renames the table and its sequence back, and puts the old table's
+        // affordance functions back on its row type once it has its name again.
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("the rename rolls back");
+        assert_eq!(sequences(&pool).await, ["posts_id_seq"]);
+        let functions = names_in_catalog(
+            &pool,
+            "SELECT p.oid::regprocedure::text FROM pg_proc p
+              WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'can_%'
+              ORDER BY 1",
         )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let back = down
-            .find("ALTER TABLE \"public\".\"posts_archive\" RENAME TO \"posts\";")
-            .expect("the rollback renames the table back");
-        assert!(
-            down[back..].contains("'posts_id_seq'"),
-            "the rollback leaves the sequence named for the new table:\n{down}"
+        .await;
+        assert_eq!(
+            functions,
+            [
+                "can_create_posts(posts)",
+                "can_delete_posts(posts)",
+                "can_read_posts(posts)",
+                "can_update_posts(posts)",
+            ]
         );
+        assert!(up_to_date(&push(&pool, &posts_in("posts")).await.unwrap()));
     })
     .await;
 }
@@ -294,6 +320,85 @@ async fn a_renamed_serial_column_takes_its_sequence_with_it() {
             .await
             .expect("the rename rolls back");
         assert_eq!(sequences(&pool).await, ["tickets_ticket_number_seq"]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn checks_named_alike_across_tables_take_a_digit() {
+    common::with_integration_pool(|pool| async move {
+        let email = json!({ "kind": "email", "annotations": { "db": { "pgType": "TEXT" } } });
+        let ast = schema(vec![
+            model("Post", "post", json!({ "id": id(), "tag_email": email })),
+            model("PostTag", "post_tag", json!({ "id": id(), "email": email })),
+        ]);
+        push(&pool, &ast).await.unwrap();
+        assert_eq!(
+            recorded(&pool, ObjectKind::Check).await,
+            ["post_tag_email_check", "post_tag_email_check1"]
+        );
+        assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
+    })
+    .await;
+}
+
+/// A table name at the identifier limit with timestamps, a slug, rich text, access rules and
+/// drafts: every function, trigger, policy, view and snapshot table it generates fits, and the
+/// push finds each one it made.
+#[tokio::test]
+async fn a_long_table_with_every_generated_object_pushes_and_converges() {
+    common::with_integration_pool(|pool| async move {
+        let table = "a_very_long_table_name_for_testing_postgres_identifier_truncati";
+        let mut m = model(
+            "Long",
+            table,
+            json!({
+                "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                        "default": { "kind": "genRandomUuid" },
+                        "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+                "title": text(false),
+                "a_rather_long_slug_column_name_that_goes_on": {
+                    "kind": "slug", "required": false, "from": "title",
+                    "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+                "body": { "kind": "richText", "required": false,
+                          "annotations": { "db": { "pgType": "JSONB", "unique": false } } }
+            }),
+        );
+        m["options"]["timestamps"] = json!(true);
+        m["options"]["versions"] = json!({ "drafts": true, "keep": 5 });
+        m["annotations"]["platform"]["access"] = json!({
+            "read": { "type": "public" }, "create": { "type": "authenticated" },
+            "update": { "type": "authenticated" }, "delete": { "type": "authenticated" }
+        });
+        let doc = json!({
+            "astVersion": 2,
+            "locales": ["en"],
+            "defaultLocale": "en",
+            "publishing": {
+                "draftVisibility": ["admin", "developer", "editor"],
+                "previewDefaultTtl": 900,
+                "previewMaxRecordTtl": 604800,
+                "previewMaxProjectTtl": 86400,
+                "previewAllowProjectScope": true
+            },
+            "models": [m]
+        });
+        let ast = parser::parse(&doc.to_string()).unwrap();
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            &format!("INSERT INTO public.\"{table}\" (title) VALUES ('Hello World')"),
+        )
+        .await
+        .unwrap();
+        let slug: String = sqlx::query_scalar(&format!(
+            "SELECT a_rather_long_slug_column_name_that_goes_on FROM public.\"{table}\""
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(slug, "hello-world", "the slug trigger did not run");
+        assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
     })
     .await;
 }

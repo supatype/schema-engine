@@ -354,3 +354,115 @@ fn a_long_serial_sequence_is_predicted() {
         ["a_very_long_table_name_for_testing_postgres_identifier_t_id_seq"]
     );
 }
+
+/// Check and foreign key names are chosen as Postgres chooses them: free of every constraint name
+/// in the schema, not only those on the same table. `post.tag_email` and `post_tag.email` both
+/// make `post_tag_email_check`, and the second takes the digit.
+#[test]
+fn a_check_clash_across_tables_takes_a_digit() {
+    let email = json!({ "kind": "email", "annotations": { "db": { "pgType": "TEXT" } } });
+    let ast = parse(vec![
+        model("Post", "post", json!({ "id": id(), "tag_email": email })),
+        model("PostTag", "post_tag", json!({ "id": id(), "email": email })),
+    ]);
+    let names = ObjectNames::for_schema(&ast);
+    assert_eq!(
+        names.type_check("post", "tag_email"),
+        "post_tag_email_check"
+    );
+    assert_eq!(
+        names.type_check("post_tag", "email"),
+        "post_tag_email_check1"
+    );
+    let desired = desired_objects(&ast, "public").unwrap();
+    let checks: Vec<&str> = desired
+        .iter()
+        .filter(|o| o.key.kind == ObjectKind::Check)
+        .map(|o| o.key.name.as_str())
+        .collect();
+    assert!(checks.contains(&"post_tag_email_check1"), "{checks:?}");
+}
+
+/// A table name at the identifier limit, with every generated function and trigger it can have:
+/// each name fits, so Postgres stores what the desired set keys.
+fn long_everything() -> Value {
+    let table = "a_very_long_table_name_for_testing_postgres_identifier_truncati";
+    let mut m = model(
+        "Long",
+        table,
+        json!({
+            "id": id(),
+            "title": text(false),
+            "a_rather_long_slug_column_name_that_goes_on": {
+                "kind": "slug", "required": false, "from": "title",
+                "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+            "body": { "kind": "richText", "required": false,
+                      "annotations": { "db": { "pgType": "JSONB", "unique": false } } }
+        }),
+    );
+    m["options"]["timestamps"] = json!(true);
+    m["options"]["versions"] = json!({ "drafts": true, "keep": 5 });
+    m["annotations"]["platform"]["access"] = json!({
+        "read": { "type": "public" }, "create": { "type": "authenticated" },
+        "update": { "type": "authenticated" }, "delete": { "type": "authenticated" }
+    });
+    m
+}
+
+fn with_publishing(models: Vec<Value>) -> SchemaAst {
+    let doc = json!({
+        "astVersion": 2,
+        "locales": ["en"],
+        "defaultLocale": "en",
+        "publishing": {
+            "draftVisibility": ["admin", "developer", "editor"],
+            "previewDefaultTtl": 900,
+            "previewMaxRecordTtl": 604800,
+            "previewMaxProjectTtl": 86400,
+            "previewAllowProjectScope": true
+        },
+        "models": models
+    });
+    parser::parse(&doc.to_string()).unwrap()
+}
+
+#[test]
+fn every_generated_name_of_a_long_table_fits() {
+    let ast = with_publishing(vec![long_everything()]);
+    let desired = desired_objects(&ast, "public").unwrap();
+    let kinds = [
+        ObjectKind::Function,
+        ObjectKind::Trigger,
+        ObjectKind::Policy,
+        ObjectKind::Table,
+        ObjectKind::Index,
+        ObjectKind::Check,
+        ObjectKind::PrimaryKey,
+        ObjectKind::ForeignKey,
+        ObjectKind::Unique,
+        ObjectKind::View,
+    ];
+    let mut seen = 0;
+    for object in desired.iter().filter(|o| kinds.contains(&o.key.kind)) {
+        let ident = object.key.name.split('(').next().unwrap();
+        assert!(
+            ident.len() <= MAX_IDENTIFIER_BYTES,
+            "{:?} {} is {} bytes",
+            object.key.kind,
+            ident,
+            ident.len()
+        );
+        seen += 1;
+    }
+    let names: Vec<&str> = desired.iter().map(|o| o.key.name.as_str()).collect();
+    for expected in [
+        "a_very_long_table_name_for_testing_postgres_identifier_versions",
+        "a_very_long_table_name_for_testing_postgres__updated_at_trigger",
+    ] {
+        assert!(
+            names.iter().any(|n| n.starts_with(expected)),
+            "{expected} missing from {names:?}"
+        );
+    }
+    assert!(seen > 20, "{seen}");
+}

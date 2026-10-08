@@ -125,19 +125,34 @@ impl NameChooser {
     /// stands when that name is free, and otherwise with a number appended to the label (`key1`,
     /// `key2`, ...), the name fitted again each time, until one is. The chosen name is then taken.
     pub fn choose(&mut self, name1: &str, name2: Option<&str>, label: &str) -> String {
-        let mut pass = 0usize;
-        loop {
-            let label = if pass == 0 {
-                label.to_string()
-            } else {
-                format!("{label}{pass}")
-            };
-            let name = make_object_name(name1, name2, &label);
-            if self.taken.insert(name.clone()) {
-                return name;
+        choose_free(&mut [self], name1, name2, label)
+    }
+}
+
+/// [`NameChooser::choose`] for a name that must be free in every one of `namespaces`, and is then
+/// taken in all of them: a primary key's or a unique constraint's, which is an index (a relation)
+/// and a constraint at once, as `ChooseRelationName` with `isconstraint` checks both.
+fn choose_free(
+    namespaces: &mut [&mut NameChooser],
+    name1: &str,
+    name2: Option<&str>,
+    label: &str,
+) -> String {
+    let mut pass = 0usize;
+    loop {
+        let label = if pass == 0 {
+            label.to_string()
+        } else {
+            format!("{label}{pass}")
+        };
+        let name = make_object_name(name1, name2, &label);
+        if namespaces.iter().all(|n| !n.taken.contains(&name)) {
+            for namespace in namespaces.iter_mut() {
+                namespace.taken.insert(name.clone());
             }
-            pass += 1;
+            return name;
         }
+        pass += 1;
     }
 }
 
@@ -200,11 +215,73 @@ pub fn membership_index_name(table: &str, column: &str) -> String {
     make_object_name(&format!("idx_{table}"), Some(column), "rls")
 }
 
+/// Name of the index that makes "the newest version of this record" a lookup rather than a scan.
+///
+/// Every read of a draft goes through it, so it is not optional decoration: the draft view's lateral
+/// join orders by `version DESC` and takes one row.
+pub fn versions_record_index_name(versions_table: &str) -> String {
+    make_object_name(versions_table, None, "record_idx")
+}
+
+/// Name of the unique constraint on `(record_id, version)`: Postgres's own for it.
+pub fn versions_record_key_name(versions_table: &str) -> String {
+    make_object_name(versions_table, Some("record_id_version"), "key")
+}
+
 /// Name of a policy on `table` (`{table}_{suffix}`), fitted to the limit as Postgres fits its own.
 /// Policy names are per table, and the suffixes a table's own policies take are distinct, so these
 /// need no collision resolution.
 pub fn policy_name(table: &str, suffix: &str) -> String {
     make_object_name(table, None, suffix)
+}
+
+/// The few answers about a model that live in modules the WASM build leaves out (`differ` and
+/// `generator::sql`, which pull in sqlx). The WASM build names only indexes and model rules (the
+/// admin metadata), and a generated name can collide only with one ending in the same label, so
+/// what these decide (primary keys, bounds, trigger functions) never changes those.
+#[cfg(not(target_arch = "wasm32"))]
+mod engine {
+    use crate::parser::ast::{FieldAst, ModelAst};
+
+    pub(super) use crate::differ::column_diff::field_is_primary_key;
+
+    pub(super) fn has_bounds(field: &FieldAst, column: &str) -> bool {
+        crate::generator::sql::migration::field_check_expression(field, column).is_some()
+    }
+
+    pub(super) fn shared_function_names() -> Vec<String> {
+        crate::generator::sql::triggers::shared_functions()
+            .into_iter()
+            .map(|f| f.name)
+            .collect()
+    }
+
+    pub(super) fn slug_fields(model: &ModelAst) -> Vec<&str> {
+        crate::generator::sql::triggers::slug_fields(model)
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod engine {
+    use crate::parser::ast::{FieldAst, ModelAst};
+
+    pub(super) fn field_is_primary_key(_: &FieldAst) -> bool {
+        false
+    }
+
+    pub(super) fn has_bounds(_: &FieldAst, _: &str) -> bool {
+        false
+    }
+
+    pub(super) fn shared_function_names() -> Vec<String> {
+        Vec::new()
+    }
+
+    pub(super) fn slug_fields(_: &ModelAst) -> Vec<&str> {
+        Vec::new()
+    }
 }
 
 /// What one generated name belongs to: the table, the kind of object, and what on the table it
@@ -218,12 +295,17 @@ type NameOwner = (String, &'static str, String);
 /// and table names in one namespace per schema, and a clash there is `42P07` on the second
 /// `CREATE`. So `order.item_code` and `order_item.code` cannot both have `order_item_code_key`:
 /// the first in declaration order keeps it and the second gets `order_item_code_key1`, as Postgres
-/// itself would have given it. Check and foreign key names only have to be unique on their table,
-/// so they are chosen per table. Tables and the names the schema states outright are claimed
-/// first, then the sequences (Postgres names a serial's sequence when it creates the table, before
-/// anything else on it), then each model's keys and indexes in declaration order. The desired set
-/// and the generator both read their names from here, so what a push creates is what the ledger
-/// looks for.
+/// itself would have given it. Constraint names are chosen as Postgres chooses them too: free of
+/// every constraint name in the schema, not only those on the same table, and a primary key or
+/// unique constraint, being both an index and a constraint, free in both. Tables, the names the
+/// schema states outright and the versions tables' fixed names are claimed first, then the
+/// sequences (Postgres names a serial's sequence when it creates the table, before anything else
+/// on it), then each model's keys and indexes in declaration order, then the checks and foreign
+/// keys. The functions and triggers a push generates are fitted the same way, with a digit where
+/// two would otherwise share a name: trigger names per table, function names per schema (a
+/// function taking its table's row type is told apart by that argument and needs none). The
+/// desired set and the generator both read their names from here, so what a push creates is what
+/// the ledger looks for.
 #[derive(Debug, Default, Clone)]
 pub struct ObjectNames {
     chosen: HashMap<NameOwner, String>,
@@ -241,8 +323,7 @@ fn index_owner(index: &IndexAst) -> String {
 
 impl ObjectNames {
     pub fn for_schema(ast: &SchemaAst) -> Self {
-        use crate::differ::column_diff::field_is_primary_key;
-        use crate::generator::sql::migration::{field_check_expression, implicit_model_indexes};
+        use crate::parser::accessors::implicit_model_indexes;
         use crate::parser::accessors::{
             column_names_for, db_foreign_key, db_unique, default_foreign_key_column, versions_of,
             versions_table_name,
@@ -251,11 +332,20 @@ impl ObjectNames {
 
         let mut names = ObjectNames::default();
         let mut relations = NameChooser::default();
+        let mut constraints = NameChooser::default();
 
         for model in &ast.models {
             relations.claim(model.table_name());
             if versions_of(model).is_some() {
-                relations.claim(&versions_table_name(model.table_name()));
+                let vt = versions_table_name(model.table_name());
+                relations.claim(&vt);
+                for key in [primary_key_name(&vt), versions_record_key_name(&vt)] {
+                    relations.claim(&key);
+                    constraints.claim(&key);
+                }
+                relations.claim(&versions_record_index_name(&vt));
+                constraints.claim(&foreign_key_name(&vt, "record_id"));
+                constraints.claim(&type_check_name(&vt, "status"));
             }
             for index in model.indexes() {
                 if let Some(name) = &index.name {
@@ -276,17 +366,19 @@ impl ObjectNames {
                     continue;
                 }
                 for column in column_names_for(field_name, field) {
-                    let name = relations.choose(table, Some(&column), "seq");
-                    names.set(table, "seq", &column, name);
+                    names.pick(table, "seq", &column, || {
+                        relations.choose(table, Some(&column), "seq")
+                    });
                 }
             }
         }
 
         for model in &ast.models {
             let table = model.table_name();
-            if model.fields.values().any(field_is_primary_key) {
-                let name = relations.choose(table, None, "pkey");
-                names.set(table, "pkey", "", name);
+            if model.fields.values().any(engine::field_is_primary_key) {
+                names.pick(table, "pkey", "", || {
+                    choose_free(&mut [&mut relations, &mut constraints], table, None, "pkey")
+                });
             }
             for (field_name, field) in &model.fields {
                 let unique_fk = matches!(
@@ -303,19 +395,21 @@ impl ObjectNames {
                     continue;
                 };
                 for column in columns.into_iter().filter(|c| !c.is_empty()) {
-                    if !names
-                        .chosen
-                        .contains_key(&(table.to_string(), "key", column.clone()))
-                    {
-                        let name = relations.choose(table, Some(&column), "key");
-                        names.set(table, "key", &column, name);
-                    }
+                    names.pick(table, "key", &column, || {
+                        choose_free(
+                            &mut [&mut relations, &mut constraints],
+                            table,
+                            Some(&column),
+                            "key",
+                        )
+                    });
                 }
             }
             for index in model.indexes() {
                 if index.name.is_none() {
-                    let name = relations.choose(table, Some(&name_addition(&index.fields)), "idx");
-                    names.set(table, "index", &index_owner(index), name);
+                    names.pick(table, "index", &index_owner(index), || {
+                        relations.choose(table, Some(&name_addition(&index.fields)), "idx")
+                    });
                 }
             }
             // The indexes nobody declares: a named one is a Blocks GIN, the rest Postgres's own.
@@ -325,36 +419,39 @@ impl ObjectNames {
                 } else {
                     "idx"
                 };
-                let owner = index_owner(&index);
-                if !names
-                    .chosen
-                    .contains_key(&(table.to_string(), "index", owner.clone()))
-                {
-                    let name = relations.choose(table, Some(&name_addition(&index.fields)), label);
-                    names.set(table, "index", &owner, name);
-                }
+                names.pick(table, "index", &index_owner(&index), || {
+                    relations.choose(table, Some(&name_addition(&index.fields)), label)
+                });
             }
             if model.options.singleton {
-                let name = relations.choose(table, None, "singleton_idx");
-                names.set(table, "singleton", "", name);
+                names.pick(table, "singleton", "", || {
+                    relations.choose(table, None, "singleton_idx")
+                });
             }
         }
         for junction in &ast.junction_tables {
-            let name = relations.choose(&junction.name, None, "pkey");
-            names.set(&junction.name, "pkey", "", name);
+            names.pick(&junction.name, "pkey", "", || {
+                choose_free(
+                    &mut [&mut relations, &mut constraints],
+                    &junction.name,
+                    None,
+                    "pkey",
+                )
+            });
         }
 
-        // Per table: foreign keys, the checks a field type carries, declared bounds, model rules.
+        // Foreign keys, the checks a field type carries, declared bounds and model rules, each free
+        // of every constraint name in the schema.
         for model in &ast.models {
             let table = model.table_name();
-            let mut constraints = NameChooser::default();
             for (field_name, field) in &model.fields {
                 if let FieldAst::Relation(rel) = field {
                     if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                         let column = db_foreign_key(field, field_name)
                             .unwrap_or_else(|| default_foreign_key_column(field_name));
-                        let name = constraints.choose(table, Some(&column), "fkey");
-                        names.set(table, "fkey", &column, name);
+                        names.pick(table, "fkey", &column, || {
+                            constraints.choose(table, Some(&column), "fkey")
+                        });
                     }
                 }
             }
@@ -372,29 +469,221 @@ impl ObjectNames {
                 };
                 for column in columns.into_iter().filter(|c| !c.is_empty()) {
                     if type_check {
-                        let name = constraints.choose(table, Some(&column), "check");
-                        names.set(table, "check", &column, name);
+                        names.pick(table, "check", &column, || {
+                            constraints.choose(table, Some(&column), "check")
+                        });
                     }
-                    if field_check_expression(field, &column).is_some() {
-                        let name = constraints.choose(table, Some(&column), "bounds");
-                        names.set(table, "bounds", &column, name);
+                    if engine::has_bounds(field, &column) {
+                        names.pick(table, "bounds", &column, || {
+                            constraints.choose(table, Some(&column), "bounds")
+                        });
                     }
                 }
             }
             for index in 0..model.annotations.db.constraints.len() {
                 let label = model_constraint_label(index);
-                let name = constraints.choose(table, None, &label);
-                names.set(table, "rule", &index.to_string(), name);
+                names.pick(table, "rule", &index.to_string(), || {
+                    constraints.choose(table, None, &label)
+                });
             }
         }
         for junction in &ast.junction_tables {
-            let mut constraints = NameChooser::default();
             for column in [&junction.fk_a, &junction.fk_b] {
-                let name = constraints.choose(&junction.name, Some(column), "fkey");
-                names.set(&junction.name, "fkey", column, name);
+                names.pick(&junction.name, "fkey", column, || {
+                    constraints.choose(&junction.name, Some(column), "fkey")
+                });
             }
         }
+        names.functions_and_triggers(ast);
         names
+    }
+
+    /// The generated functions and triggers. A trigger is named on its table, and a function in its
+    /// schema; the affordance functions (`can_<op>_<table>`) take their table's row type, which
+    /// keeps two of them apart whatever their names, so only their per-column forms, which share
+    /// one table's type, take digits.
+    fn functions_and_triggers(&mut self, ast: &SchemaAst) {
+        use crate::parser::accessors::{versions_of, versions_table_name};
+
+        let mut platform = NameChooser::default();
+        for name in engine::shared_function_names() {
+            platform.claim(&name);
+        }
+        let mut helper = NameChooser::default();
+        let mut api = NameChooser::default();
+        for model in &ast.models {
+            let table = model.table_name();
+            let mut triggers = NameChooser::default();
+            let lower = table.to_ascii_lowercase();
+            self.pick(table, "updated_at_trigger", "", || {
+                triggers.choose(table, None, "updated_at_trigger")
+            });
+            for slug in engine::slug_fields(model) {
+                self.pick(table, "slug_function", slug, || {
+                    platform.choose(
+                        &format!("set_{lower}"),
+                        Some(&slug.to_ascii_lowercase()),
+                        "",
+                    )
+                });
+                self.pick(table, "slug_trigger", slug, || {
+                    triggers.choose(table, Some(slug), "trigger")
+                });
+            }
+            self.pick(table, "rich_text_function", "", || {
+                platform.choose(&format!("normalise_{lower}"), None, "rich_text")
+            });
+            self.pick(table, "rich_text_trigger", "", || {
+                triggers.choose(table, None, "rich_text_trigger")
+            });
+            if versions_of(model).is_some() {
+                let vt = versions_table_name(table);
+                self.pick(table, "can_edit", "", || {
+                    helper.choose("can_edit", Some(table), "")
+                });
+                self.pick(table, "sees_draft", "", || {
+                    helper.choose("sees_draft", Some(table), "")
+                });
+                self.pick(table, "versions_guard", "", || {
+                    helper.choose(&vt, None, "guard")
+                });
+                // The audit trigger sits on the model's table and shares its function's name.
+                self.pick(table, "versions_audit", "", || {
+                    choose_free(&mut [&mut helper, &mut triggers], &vt, None, "audit")
+                });
+            }
+            self.pick(table, "write_function", "", || {
+                api.choose(table, None, "_write")
+            });
+            let mut fields = NameChooser::default();
+            for op in ["read", "write"] {
+                for column in model.access().fields.keys() {
+                    self.pick(table, "field_can", &format!("{op}.{column}"), || {
+                        fields.choose(&format!("can_{op}_{table}_"), Some(column), "")
+                    });
+                }
+            }
+        }
+    }
+
+    fn named(
+        &self,
+        table: &str,
+        kind: &'static str,
+        detail: &str,
+        fallback: impl FnOnce() -> String,
+    ) -> String {
+        self.get(table, kind, detail).unwrap_or_else(fallback)
+    }
+
+    /// `{table}_updated_at_trigger`.
+    pub fn updated_at_trigger(&self, table: &str) -> String {
+        self.named(table, "updated_at_trigger", "", || {
+            make_object_name(table, None, "updated_at_trigger")
+        })
+    }
+
+    /// `_platform.set_{table}_{slug}`, folded to lower case as Postgres folds the unquoted name.
+    pub fn slug_function(&self, table: &str, slug: &str) -> String {
+        self.named(table, "slug_function", slug, || {
+            make_object_name(
+                &format!("set_{}", table.to_ascii_lowercase()),
+                Some(&slug.to_ascii_lowercase()),
+                "",
+            )
+        })
+    }
+
+    /// `{table}_{slug}_trigger`.
+    pub fn slug_trigger(&self, table: &str, slug: &str) -> String {
+        self.named(table, "slug_trigger", slug, || {
+            make_object_name(table, Some(slug), "trigger")
+        })
+    }
+
+    /// `_platform.normalise_{table}_rich_text`, folded to lower case.
+    pub fn rich_text_function(&self, table: &str) -> String {
+        self.named(table, "rich_text_function", "", || {
+            make_object_name(
+                &format!("normalise_{}", table.to_ascii_lowercase()),
+                None,
+                "rich_text",
+            )
+        })
+    }
+
+    /// `{table}_rich_text_trigger`.
+    pub fn rich_text_trigger(&self, table: &str) -> String {
+        self.named(table, "rich_text_trigger", "", || {
+            make_object_name(table, None, "rich_text_trigger")
+        })
+    }
+
+    /// `can_{op}_{table}`, the affordance function taking the table's row type.
+    pub fn can_function(&self, table: &str, op: &str) -> String {
+        make_object_name(&format!("can_{op}"), Some(table), "")
+    }
+
+    /// `can_{op}_{table}__{column}`, a field's affordance function.
+    pub fn field_can_function(&self, table: &str, op: &str, column: &str) -> String {
+        self.named(table, "field_can", &format!("{op}.{column}"), || {
+            make_object_name(&format!("can_{op}_{table}_"), Some(column), "")
+        })
+    }
+
+    /// The versions layer's `can_edit_{table}`.
+    pub fn can_edit_function(&self, table: &str) -> String {
+        self.named(table, "can_edit", "", || {
+            make_object_name("can_edit", Some(table), "")
+        })
+    }
+
+    /// The versions layer's `sees_draft_{table}`.
+    pub fn sees_draft_function(&self, table: &str) -> String {
+        self.named(table, "sees_draft", "", || {
+            make_object_name("sees_draft", Some(table), "")
+        })
+    }
+
+    /// `{versions_table}_guard`, the function and the trigger on the versions table, for `table`.
+    pub fn versions_guard(&self, table: &str, versions_table: &str) -> String {
+        self.named(table, "versions_guard", "", || {
+            make_object_name(versions_table, None, "guard")
+        })
+    }
+
+    /// `{versions_table}_audit`, the function and the trigger on the model's table, for `table`.
+    pub fn versions_audit(&self, table: &str, versions_table: &str) -> String {
+        self.named(table, "versions_audit", "", || {
+            make_object_name(versions_table, None, "audit")
+        })
+    }
+
+    /// `api.{table}__write`, the function behind a masked view's write trigger.
+    pub fn write_function(&self, table: &str) -> String {
+        self.named(table, "write_function", "", || {
+            make_object_name(table, None, "_write")
+        })
+    }
+
+    /// `{table}_write`, the write trigger on a masked view, which is the view's only trigger.
+    pub fn write_trigger(&self, table: &str) -> String {
+        make_object_name(table, None, "write")
+    }
+
+    /// Records the name `choose` picks for this object, unless it has one already: two models
+    /// on one table ask for that table's primary key twice, and it is one key.
+    fn pick(
+        &mut self,
+        table: &str,
+        kind: &'static str,
+        detail: &str,
+        choose: impl FnOnce() -> String,
+    ) {
+        if self.get(table, kind, detail).is_none() {
+            let name = choose();
+            self.set(table, kind, detail, name);
+        }
     }
 
     fn set(&mut self, table: &str, kind: &'static str, detail: &str, name: String) {

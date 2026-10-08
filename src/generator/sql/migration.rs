@@ -5,10 +5,10 @@ use crate::generator::sql::column_conversion::{
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
 };
 use crate::ledger::reconcile;
-use crate::managed::{make_object_name, ObjectNames};
+use crate::managed::ObjectNames;
 use crate::parser::ast::{
-    scalar_of, AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst,
-    RelationCardinality, RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
+    scalar_of, AccessRule, DefaultValueAst, FieldAst, IndexAst, ModelAst, RelationCardinality,
+    RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
 };
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
@@ -988,97 +988,9 @@ fn create_table_sql(
     Ok(statements.join("\n\n"))
 }
 
-/// Returns Some(true) if the field has an `index: true` flag, None otherwise.
-/// The indexes a model gets without declaring any.
-///
-/// Three rules, all of which emit a managed comment: a btree for a field marked `index`, a btree
-/// on `deleted_at` for a soft-deleting model, and a GIN for an indexed `Blocks` column.
-///
-/// Public to the crate because the differ needs the identical list. It previously expected only
-/// the indexes a schema *declares*, so each of these read as a managed index nothing accounted
-/// for, and the differ proposed dropping it. The push dropped it, recreated it from the rules
-/// above, and the next diff proposed dropping it again: `supatype push` was never idempotent for
-/// any model with an indexed Blocks column. One definition, read by both, is the only version of
-/// this that stays true.
-pub(crate) fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
-    let table = model.table_name();
-    let mut indexes = Vec::new();
-
-    for (field_name, field) in &model.fields {
-        if let Some(true) = field_index_flag(field) {
-            indexes.push(IndexAst {
-                name: None,
-                fields: vec![field_name.clone()],
-                unique: false,
-                using: IndexMethod::Btree,
-            });
-        }
-    }
-
-    // Either spelling asks for the same index, and only one is emitted. The guard reads as a
-    // plain `or` now that both branches live here; it was two blocks, and the second excluded the
-    // first to avoid adding the index twice.
-    if model.fields.contains_key("softDelete") || model.options.soft_delete {
-        indexes.push(IndexAst {
-            name: None,
-            fields: vec!["deleted_at".into()],
-            unique: false,
-            using: IndexMethod::Btree,
-        });
-    }
-
-    for (field_name, field) in &model.fields {
-        if let FieldAst::Blocks(b) = field {
-            if b.index {
-                indexes.push(IndexAst {
-                    name: Some(make_object_name(table, Some(field_name), "gin_idx")),
-                    fields: vec![field_name.clone()],
-                    unique: false,
-                    using: IndexMethod::Gin,
-                });
-            }
-        }
-    }
-
-    indexes
-}
-
-pub(crate) fn field_index_flag(field: &FieldAst) -> Option<bool> {
-    match field {
-        FieldAst::Text(f)
-        | FieldAst::Email(f)
-        | FieldAst::Uuid(f)
-        | FieldAst::Integer(f)
-        | FieldAst::Float(f)
-        | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f)
-        | FieldAst::BigInt(f)
-        | FieldAst::Bytes(f)
-        | FieldAst::SmallInt(f)
-        | FieldAst::Date(f)
-        | FieldAst::Timestamp(f)
-        | FieldAst::Serial(f)
-        | FieldAst::BigSerial(f)
-        | FieldAst::Money(f)
-        | FieldAst::Url(f)
-        | FieldAst::Ip(f)
-        | FieldAst::Cidr(f)
-        | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f)
-        | FieldAst::TsQuery(f)
-        | FieldAst::TsVector(f)
-        | FieldAst::Xml(f)
-        | FieldAst::RichText(f)
-        | FieldAst::Color(f) => {
-            if f.index {
-                Some(true)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
+// The implicit indexes live beside the other declared-field questions, where the WASM build (the
+// admin metadata names them) can reach them too.
+pub(crate) use crate::parser::accessors::implicit_model_indexes;
 
 // ─── COLUMN DEFINITION ───────────────────────────────────────────────────────
 

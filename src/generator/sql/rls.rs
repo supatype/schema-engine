@@ -735,6 +735,7 @@ fn owner_column_on_model(model: &ModelAst) -> Option<String> {
 /// body has no `FROM` clause for them to resolve against.
 pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
     let mut out = String::new();
+    let names = crate::managed::ObjectNames::for_schema(ast);
 
     for model in &ast.models {
         let access = platform_access(model);
@@ -750,7 +751,12 @@ pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
                 // An operation with no rule is denied, and a function that always
                 // returns false is more useful to a UI than a missing one it has to
                 // special-case.
-                out.push_str(&render_can_function(schema, table, op, "FALSE"));
+                out.push_str(&render_can_function(
+                    schema,
+                    table,
+                    &names.can_function(table, op),
+                    "FALSE",
+                ));
                 continue;
             };
 
@@ -759,10 +765,17 @@ pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
             // nothing has to be rewritten, which is what lets a `Custom` rule's
             // raw SQL answer definitively rather than "unknown".
             let expr = access_rule_to_expr(ast, model, rule, schema);
-            out.push_str(&render_can_function(schema, table, op, &expr));
+            out.push_str(&render_can_function(
+                schema,
+                table,
+                &names.can_function(table, op),
+                &expr,
+            ));
         }
 
-        out.push_str(&render_field_can_functions(ast, model, schema, table));
+        out.push_str(&render_field_can_functions(
+            ast, model, schema, table, &names,
+        ));
     }
 
     out
@@ -787,6 +800,7 @@ fn render_field_can_functions(
     model: &ModelAst,
     schema: &str,
     table: &str,
+    names: &crate::managed::ObjectNames,
 ) -> String {
     let mut out = String::new();
 
@@ -802,8 +816,7 @@ fn render_field_can_functions(
         out.push_str(&render_field_can_function(
             schema,
             table,
-            "read",
-            column,
+            &names.field_can_function(table, "read", column),
             read_expr.as_deref().unwrap_or("TRUE"),
         ));
 
@@ -814,7 +827,10 @@ fn render_field_can_functions(
                 None => write_expr,
             };
             out.push_str(&render_field_can_function(
-                schema, table, "write", column, &conjoined,
+                schema,
+                table,
+                &names.field_can_function(table, "write", column),
+                &conjoined,
             ));
         }
     }
@@ -822,18 +838,11 @@ fn render_field_can_functions(
     out
 }
 
-/// `can_<op>_<table>__<column>`.
+/// `can_<op>_<table>__<column>`, named by [`crate::managed::ObjectNames::field_can_function`].
 ///
 /// Double underscore between table and column so a table named `posts_salary`
 /// cannot collide with column `salary` of table `posts`.
-fn render_field_can_function(
-    schema: &str,
-    table: &str,
-    op: &str,
-    column: &str,
-    expr: &str,
-) -> String {
-    let name = format!("can_{op}_{table}__{column}");
+fn render_field_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
     let alias = table.replace('"', "\"\"");
     format!(
         "CREATE OR REPLACE FUNCTION \"{schema}\".\"{name}\"(\"{table}\" \"{schema}\".\"{table}\")
@@ -853,11 +862,18 @@ pub const MASK_EXTENSION: &str = "supatype_mask";
 pub const MASK_PROVIDER: &str = "supatype";
 
 /// A qualified, quoted reference to a generated per-column predicate.
-fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> String {
+fn field_predicate_ref(
+    names: &crate::managed::ObjectNames,
+    schema: &str,
+    op: &str,
+    table: &str,
+    column: &str,
+) -> String {
     format!(
-        "{schema}.\"can_{op}_{t}__{c}\"",
-        t = table.replace('"', "\"\""),
-        c = column.replace('"', "\"\"")
+        "{schema}.\"{}\"",
+        names
+            .field_can_function(table, op, column)
+            .replace('"', "\"\"")
     )
 }
 
@@ -923,6 +939,7 @@ pub fn drop_field_label_sql(schema: &str, table: &str, column: &str) -> String {
 /// the rule goes, which the stale-label sweep used to do.
 pub fn field_labels(ast: &SchemaAst, schema: &str) -> Vec<FieldLabel> {
     let mut out = Vec::new();
+    let names = crate::managed::ObjectNames::for_schema(ast);
     for model in &ast.models {
         let table = db_table_name(model);
         for (column, rules) in &platform_access(model).fields {
@@ -930,13 +947,13 @@ pub fn field_labels(ast: &SchemaAst, schema: &str) -> Vec<FieldLabel> {
             if rules.read.is_some() {
                 parts.push(format!(
                     "READ {}",
-                    field_predicate_ref(schema, "read", table, column)
+                    field_predicate_ref(&names, schema, "read", table, column)
                 ));
             }
             if rules.write.is_some() {
                 parts.push(format!(
                     "WRITE {}",
-                    field_predicate_ref(schema, "write", table, column)
+                    field_predicate_ref(&names, schema, "write", table, column)
                 ));
             }
             if parts.is_empty() {
@@ -1057,8 +1074,7 @@ fn sql_string(value: &str) -> String {
 /// way to know which of them are columns; the earlier approach rewrote the
 /// expression instead and so had to answer "unknown" for those, which is precisely
 /// the state these functions exist to eliminate.
-fn render_can_function(schema: &str, table: &str, op: &str, expr: &str) -> String {
-    let name = format!("can_{op}_{table}");
+fn render_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
     let alias = table.replace('"', "\"\"");
     format!(
         "CREATE OR REPLACE FUNCTION \"{schema}\".\"{name}\"(\"{table}\" \"{schema}\".\"{table}\")\n  \
