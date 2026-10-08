@@ -608,8 +608,10 @@ fn rename_constraint_sql(key: &ObjectKey, from: &str, to: &str) -> String {
 /// A live unique constraint on the same table and columns as `d`, under another name, that no row
 /// records and nothing else desires: what an older engine (or the user) made for the same field.
 /// The differ this replaced matched a unique by its columns, so an older engine's constraint under
-/// a name of its own is the same object, and adding ours beside it would duplicate the index.
-/// Once the ledger has a row, a constraint is matched by name alone.
+/// a name of its own is the same object, and adding ours beside it would duplicate the index. The
+/// caller renames it to ours only when it is ours (stamped, ours by location or naming, or recorded
+/// under that name on a table since renamed); a user's is a conflict. Once the ledger has a row, a
+/// constraint is matched by name alone.
 fn unique_by_columns<'l>(
     d: &DesiredObject,
     live: &BTreeMap<ObjectKey, &'l ObjectFingerprint>,
@@ -799,8 +801,9 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         }
     }
 
-    // Live objects taken over under a desired name of their own (a unique constraint matched by
-    // its columns), which are therefore not dropped as no longer desired.
+    // Live objects matched to a desired one under a name of their own (a unique constraint matched
+    // by its columns): ours are taken over and renamed, a user's is refused until adopted. Either
+    // way not dropped as no longer desired, nor matched to a second desired object.
     let mut renamed = BTreeSet::new();
     for (&key, d) in &desired {
         if ledger.contains_key(key) {
@@ -823,10 +826,22 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 let ours = recorded_elsewhere
                     || (inputs.location)(&from) != Location::Neutral
                     || inputs.named_by_the_engine.contains(&from);
-                let (reason, status) = match (l.stamped(), ours) {
-                    (true, _) => (AdoptReason::Stamped, Status::Managed),
-                    (false, true) => (AdoptReason::OwnedSchema, Status::Managed),
-                    (false, false) => (AdoptReason::StructureMatches, Status::Adopted),
+                let reason = match (l.stamped(), ours) {
+                    (true, _) => AdoptReason::Stamped,
+                    (false, true) => AdoptReason::OwnedSchema,
+                    // A user's own constraint on the columns ours would cover is theirs: the push
+                    // refuses until `adopt` hands it over, keyed by its own name so adopt can
+                    // record it. The push after that replaces it with ours, as any adopted
+                    // object is brought to the schema.
+                    (false, false) => {
+                        changes.push(Action::Conflict {
+                            key: from.clone(),
+                            create_sql: d.create_sql.clone(),
+                            live_def: l.definition.clone(),
+                        });
+                        renamed.insert(from);
+                        continue;
+                    }
                 };
                 changes.push(Action::Adopt {
                     key,
@@ -834,7 +849,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                     create_sql: d.create_sql.clone(),
                     comment: l.comment.clone(),
                     renamed_from: Some(from.name.clone()),
-                    status,
+                    status: Status::Managed,
                 });
                 renamed.insert(from);
             }
@@ -1462,8 +1477,9 @@ mod tests {
 
     /// With no row, a unique constraint is matched by its columns, as the differ it replaced
     /// matched it: an older engine's under a name of its own is renamed to ours and recorded, not
-    /// dropped and made again; a user's on the same columns is adopted the same way rather than
-    /// duplicated. Once a row exists, the name alone decides.
+    /// dropped and made again. A user's unstamped one on the same columns is theirs: a conflict
+    /// under its own name, for `adopt`, never renamed and never duplicated. Once a row exists, the
+    /// name alone decides.
     #[test]
     fn a_unique_with_no_row_is_matched_by_its_columns() {
         let (d, _) = unique("posts_slug_key", "slug");
@@ -1506,12 +1522,46 @@ mod tests {
 
         let user = run_uniques(std::slice::from_ref(&d), &[], std::slice::from_ref(&old));
         match &user[..] {
+            [Action::Conflict { key, live_def, .. }] => {
+                assert_eq!(key, &old.key(), "keyed by the user's name, for adopt");
+                assert_eq!(live_def, &old.definition);
+            }
+            other => panic!("a user's constraint is refused, not renamed or duplicated: {other:?}"),
+        }
+        // Adopted, it has a row: the next push brings it to the schema, ours under our name.
+        let (old_d, _) = unique("posts_slug_unique", "slug");
+        let adopted = row(&old_d, &old, Status::Adopted);
+        let next = run_uniques(
+            std::slice::from_ref(&d),
+            std::slice::from_ref(&adopted),
+            std::slice::from_ref(&old),
+        );
+        assert!(
+            matches!(&next[..], [Action::Drop { .. }, Action::Create { .. }]),
+            "{next:?}"
+        );
+
+        // Ours by location or naming, unstamped: renamed as an older engine's.
+        let none = BTreeSet::new();
+        let named = BTreeSet::from([old.key()]);
+        let ours = reconcile(Inputs {
+            desired: std::slice::from_ref(&d),
+            ledger: &[],
+            live: std::slice::from_ref(&old),
+            created_by_parent: &none,
+            dropped_tables: &none,
+            location: no_location,
+            named_by_the_engine: &named,
+            kinds: &[ObjectKind::Unique],
+        })
+        .actions;
+        match &ours[..] {
             [a @ Action::Adopt {
-                reason: AdoptReason::StructureMatches,
-                status: Status::Adopted,
+                reason: AdoptReason::OwnedSchema,
+                status: Status::Managed,
                 ..
             }] => assert_eq!(a.sql(), [rename]),
-            other => panic!("no duplicate: {other:?}"),
+            other => panic!("ours is renamed: {other:?}"),
         }
 
         // Other columns are another constraint.

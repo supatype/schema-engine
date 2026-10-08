@@ -326,7 +326,8 @@ async fn a_unique_an_older_engine_recorded_with_its_stamp_is_not_rebuilt() {
 
 /// With no row, a unique constraint is matched by its columns, as the differ it replaced matched
 /// it. An older engine's under a name of its own is renamed to ours and recorded, not dropped and
-/// built again; one someone added on the same column is adopted the same way, not duplicated.
+/// built again. One someone added on the same column is theirs: the push refuses until it is
+/// adopted, and never builds a duplicate beside it.
 #[tokio::test]
 async fn a_unique_with_no_row_is_matched_by_its_columns_not_duplicated() {
     common::with_integration_pool(|pool| async move {
@@ -374,11 +375,32 @@ async fn a_unique_with_no_row_is_matched_by_its_columns_not_duplicated() {
         )
         .await
         .unwrap();
+        let refused = push(&pool, &schema(true, false)).await.unwrap_err();
+        let message = format!("{refused:#}");
+        assert!(
+            message.contains("posts_slug_mine") && message.contains("supatype adopt"),
+            "{message}"
+        );
+        assert_eq!(constraints_on_posts(&pool).await, ["posts_slug_mine"]);
+
+        let keys = ["unique:posts.posts_slug_mine".to_string()];
+        supatype_engine::adopt::run(
+            &pool,
+            &schema(true, false),
+            "public",
+            supatype_engine::adopt::Request {
+                apply: true,
+                keys: Some(&keys),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
         push(&pool, &schema(true, false)).await.unwrap();
         assert_eq!(constraints_on_posts(&pool).await, ["posts_slug_key"]);
         assert_eq!(
             recorded(&pool, ObjectKind::Unique).await,
-            ["posts.posts_slug_key adopted"]
+            ["posts.posts_slug_key managed"]
         );
         assert!(up_to_date(
             &push(&pool, &schema(true, false)).await.unwrap()
