@@ -173,3 +173,31 @@ async fn what_someone_added_to_a_model_table_is_unmanaged_columns_included() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn an_unrecorded_object_the_push_would_replace_is_reported() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        // A policy under the schema's name that Supatype never recorded, made differently: the
+        // push replaces it (a policy's name says whose it is), so doctor must not stay silent.
+        exec(
+            &pool,
+            "DELETE FROM _supatype.managed_objects WHERE kind = 'policy';
+             ALTER POLICY posts_select ON public.posts USING (false);",
+        )
+        .await
+        .unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        assert_eq!(names(&report.conflicting), ["policy posts.posts_select"]);
+        let item = &report.conflicting[0];
+        assert!(item.message.contains("replaces it"), "{item:?}");
+        assert!(
+            item.live.as_deref().unwrap_or_default().contains("false"),
+            "{item:?}"
+        );
+        assert!(doctor::has_strict_issues(&report));
+    })
+    .await;
+}
