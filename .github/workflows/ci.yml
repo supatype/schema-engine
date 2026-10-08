@@ -206,4 +206,5 @@ jobs:
             --test doctor_ledger_tests \
             --test table_ledger_tests \
             --test rebaseline_tests \
-            --test rollback_ledger_tests
+            --test rollback_ledger_tests \
+            --test object_names_tests
