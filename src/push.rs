@@ -309,7 +309,10 @@ pub async fn read_and_decide(
 }
 
 /// [`decide`], then asking the database to settle what it can (`ledger::probe`): a same-named
-/// object it proves equivalent to ours is adopted rather than refused.
+/// object it proves equivalent to ours is adopted rather than refused. A probe the database cannot
+/// run (a read-only role or a standby, which cannot make the temporary table; a declared check on a
+/// column the table does not have yet) proves nothing, so those objects stay conflicts: `doctor`
+/// must still report, and a push still refuses them by name rather than failing on the probe.
 pub async fn decide_probed(
     conn: &mut PgConnection,
     ast: &SchemaAst,
@@ -317,7 +320,13 @@ pub async fn decide_probed(
     previous: Option<&SchemaAst>,
 ) -> Result<Decision> {
     let mut decision = decide(ast, state, previous)?;
-    let proven = probe::equivalent(conn, &decision.reconcile).await?;
+    let proven = match probe::equivalent(conn, &decision.reconcile).await {
+        Ok(proven) => proven,
+        Err(e) => {
+            tracing::warn!("equivalence probe not run, conflicts stand: {e:#}");
+            BTreeSet::new()
+        }
+    };
     decision.reconcile.adopt_equivalent(&proven);
     Ok(decision)
 }
