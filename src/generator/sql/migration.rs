@@ -403,11 +403,15 @@ impl Migration {
         // or column the operations create. A function nothing of the operations depends on waits
         // for them instead: the trigger that depends on it may sit on a table they drop, and goes
         // with the table.
+        // A table renamed away counts as dropped here: its old row type is gone once the
+        // operations run, so a function taking it has to be dropped before them, and its rollback
+        // re-created after the table has its old name back.
         let dropped_tables: Vec<String> = diff
             .operations
             .iter()
             .filter_map(|op| match op {
                 Operation::DropTable { table, .. } => Some(table.clone()),
+                Operation::RenameTable { from, .. } => Some(from.clone()),
                 _ => None,
             })
             .collect();
