@@ -140,8 +140,7 @@ pub fn create_versions_table_sql(
     let pk_name = crate::managed::primary_key_name(versions_table);
     let fk_name = crate::managed::foreign_key_name(versions_table, "record_id");
     let status_check = crate::managed::type_check_name(versions_table, "status");
-    let record_version_key =
-        crate::managed::truncate_identifier(&format!("{versions_table}_record_id_version"), "_key");
+    let record_version_key = versions_record_key_name(versions_table);
     format!(
         "CREATE TABLE IF NOT EXISTS {schema_q}.{versions_q} (\n    \
          \"id\" UUID CONSTRAINT {pk_name_q} PRIMARY KEY DEFAULT gen_random_uuid(),\n    \
@@ -182,7 +181,12 @@ pub fn create_versions_table_sql(
 /// Every read of a draft goes through it, so it is not optional decoration: the draft view's lateral
 /// join orders by `version DESC` and takes one row.
 pub fn versions_record_index_name(versions_table: &str) -> String {
-    format!("{versions_table}_record_idx")
+    crate::managed::make_object_name(versions_table, None, "record_idx")
+}
+
+/// Name of the unique constraint on `(record_id, version)`: Postgres's own for it.
+pub fn versions_record_key_name(versions_table: &str) -> String {
+    crate::managed::make_object_name(versions_table, Some("record_id_version"), "key")
 }
 
 /// The statement [`create_versions_table_sql`] ends with, on its own, for the desired object set.
@@ -411,7 +415,7 @@ CREATE OR REPLACE FUNCTION {helper}.preview_allows(target_model text, target_rec
 /// table as its owner, and the API roles are never its owner, so forcing would break the owner path
 /// without narrowing anything a caller can reach.
 fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &str) -> String {
-    let policy = format!("{versions_table}_select");
+    let policy = crate::managed::policy_name(versions_table, "select");
     format!(
         "ALTER TABLE {schema_q}.{versions_q} ENABLE ROW LEVEL SECURITY;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{versions_q};\n\
@@ -816,7 +820,7 @@ fn draft_aware_select_policy_sql(
     versions_table: &str,
     primary_key: &str,
 ) -> String {
-    let policy = format!("{table}_draft_select");
+    let policy = crate::managed::policy_name(table, "draft_select");
     let helper_fn = sees_draft_function_name(table);
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record text)\n  \
@@ -867,8 +871,8 @@ fn draft_aware_select_policy_sql(
 ///   from the stored row, so history cannot be rewritten by whoever can still edit the record.
 fn versions_write_access_sql(schema: &str, table: &str, versions_table: &str) -> String {
     let can_edit = format!("{HELPER_SCHEMA}.{}", quoted(&can_edit_function_name(table)));
-    let insert_policy = format!("{versions_table}_insert");
-    let update_policy = format!("{versions_table}_update");
+    let insert_policy = crate::managed::policy_name(versions_table, "insert");
+    let update_policy = crate::managed::policy_name(versions_table, "update");
     let guard = format!("{versions_table}_guard");
 
     format!(

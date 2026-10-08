@@ -1018,7 +1018,7 @@ fn test_rollback_reverses_create_table() {
 
     let ast = parser::parse(ast_json).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let rollback_sql = rollback::generate(&diff, "public").unwrap();
+    let rollback_sql = rollback::generate(&diff, "public", &ast).unwrap();
 
     assert!(
         rollback_sql.contains("DROP TABLE IF EXISTS"),
@@ -1857,7 +1857,7 @@ fn test_alter_column_rollback_reverses_nullability() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let rollback_sql = rollback::generate(&diff, "public").unwrap();
+    let rollback_sql = rollback::generate(&diff, "public", &ast).unwrap();
 
     // Rollback of NOT NULL should emit DROP NOT NULL
     assert!(

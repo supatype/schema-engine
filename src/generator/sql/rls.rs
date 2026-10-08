@@ -151,7 +151,7 @@ pub(crate) fn render_select_policy_sql(
     rule: &AccessRule,
 ) -> String {
     let expr = access_rule_to_expr(ast, model, rule, schema);
-    let name = format!("{table}_select");
+    let name = crate::managed::policy_name(table, "select");
     format!(
         "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR SELECT USING (\n    {expr}\n  );\n\n"
@@ -166,7 +166,7 @@ pub(crate) fn render_insert_policy_sql(
     rule: &AccessRule,
 ) -> String {
     let expr = access_rule_to_expr(ast, model, rule, schema);
-    let name = format!("{table}_insert");
+    let name = crate::managed::policy_name(table, "insert");
     format!(
         "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR INSERT WITH CHECK (\n    {expr}\n  );\n\n"
@@ -188,7 +188,7 @@ pub(crate) fn render_update_policy_sql(
         Some(c) => access_rule_to_expr(ast, model, c, schema),
         None => using_expr.clone(),
     };
-    let name = format!("{table}_update");
+    let name = crate::managed::policy_name(table, "update");
     format!(
         "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR UPDATE USING (\n    {using_expr}\n  ) WITH CHECK (\n    {check_expr}\n  );\n\n"
@@ -203,7 +203,7 @@ pub(crate) fn render_delete_policy_sql(
     rule: &AccessRule,
 ) -> String {
     let expr = access_rule_to_expr(ast, model, rule, schema);
-    let name = format!("{table}_delete");
+    let name = crate::managed::policy_name(table, "delete");
     format!(
         "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR DELETE USING (\n    {expr}\n  );\n\n"
@@ -505,7 +505,7 @@ fn collect_membership_targets(rule: &AccessRule, out: &mut Vec<(String, String)>
 pub fn membership_index_sql(schema: &str, rule: &AccessRule) -> String {
     let mut sql = String::new();
     for (table, column) in membership_index_targets(rule) {
-        let index = format!("idx_{table}_{column}_rls");
+        let index = crate::managed::membership_index_name(&table, &column);
         let t = table.replace('"', "\"\"");
         let c = column.replace('"', "\"\"");
         sql.push_str(&format!(

@@ -38,18 +38,16 @@ use crate::generator::sql::{
     grants::{revoke_all_sql, table_grants},
     migration::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, option_columns,
-        render_operation,
+        render_operation_named,
     },
     rls::{drop_field_label_sql, field_labels, membership_index_targets, MASK_PROVIDER},
     type_checks,
-    versions::{versions_record_index_name, versions_record_index_sql},
+    versions::{versions_record_index_name, versions_record_index_sql, versions_record_key_name},
 };
 use crate::introspector::fingerprint::{normalise_sql, rls_enable_sql, ObjectKind};
 use crate::managed::{
     comment_on_constraint, comment_on_index, comment_on_table, comment_value,
-    expected_check_constraint_name, expected_model_constraint_name, expected_model_index_name,
-    expected_unique_constraint_name, foreign_key_name, primary_key_name, truncate_identifier,
-    type_check_name,
+    membership_index_name, policy_name, ObjectNames,
 };
 use crate::parser::accessors::{
     column_names_for, db_foreign_key, default_foreign_key_column, versions_of, versions_table_name,
@@ -64,7 +62,7 @@ pub(crate) struct ExpectedCheck {
 }
 
 /// Every bounds and model-level check `model` asks for, named as the generator names them.
-pub(crate) fn expected_checks(model: &ModelAst) -> Vec<ExpectedCheck> {
+pub(crate) fn expected_checks(model: &ModelAst, names: &ObjectNames) -> Vec<ExpectedCheck> {
     let table = model.table_name();
     let mut out = Vec::new();
 
@@ -78,7 +76,7 @@ pub(crate) fn expected_checks(model: &ModelAst) -> Vec<ExpectedCheck> {
                 continue;
             };
             out.push(ExpectedCheck {
-                constraint: expected_check_constraint_name(table, &col),
+                constraint: names.bounds(table, &col),
                 expression,
             });
         }
@@ -93,7 +91,7 @@ pub(crate) fn expected_checks(model: &ModelAst) -> Vec<ExpectedCheck> {
             continue;
         };
         out.push(ExpectedCheck {
-            constraint: expected_model_constraint_name(table, index),
+            constraint: names.model_constraint(table, index),
             expression,
         });
     }
@@ -261,6 +259,7 @@ pub fn desired_objects_for(
     let mut b = Builder {
         ast,
         schema,
+        names: ObjectNames::for_schema(ast),
         field_views: match fields {
             FieldEnforcement::Labels => &[],
             FieldEnforcement::Views(plan) => plan,
@@ -306,6 +305,8 @@ pub fn desired_objects_for(
 struct Builder<'a> {
     ast: &'a SchemaAst,
     schema: &'a str,
+    /// Every generated name, chosen once for the whole schema, as the generator chooses them.
+    names: ObjectNames,
     field_views: &'a [FieldViewTable],
     out: Vec<DesiredObject>,
 }
@@ -358,7 +359,7 @@ impl<'a> Builder<'a> {
     }
 
     fn render(&self, op: Operation) -> Result<String> {
-        render_operation(&op, self.schema, self.ast)
+        render_operation_named(&op, self.schema, self.ast, &self.names)
     }
 
     fn alter(&self, table: &str) -> String {
@@ -424,7 +425,7 @@ impl<'a> Builder<'a> {
     // --- constraints --------------------------------------------------------------------------
 
     fn primary_key(&mut self, table: &str, columns: &[String]) {
-        let name = primary_key_name(table);
+        let name = self.names.primary_key(table);
         let cols = columns
             .iter()
             .map(|c| format!("\"{c}\""))
@@ -473,18 +474,14 @@ impl<'a> Builder<'a> {
             .into_iter()
             .filter(|e| e.table == table)
         {
+            let name = self.names.unique(table, &exp.column);
             let create = self.render(Operation::AddUniqueConstraint {
                 table: table.to_string(),
                 column: exp.column.clone(),
-                constraint: exp.constraint_name.clone(),
+                constraint: name.clone(),
                 risk: Risk::Safe,
             })?;
-            self.unique(
-                table,
-                &exp.constraint_name,
-                std::slice::from_ref(&exp.column),
-                create,
-            );
+            self.unique(table, &name, std::slice::from_ref(&exp.column), create);
         }
         // A belongsTo declared one-to-one is unique on its column, which the generator writes
         // inline and `expected_column_uniques` leaves out because it skips relation fields.
@@ -493,7 +490,7 @@ impl<'a> Builder<'a> {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) && rel.unique_fk {
                     let column = db_foreign_key(field, field_name)
                         .unwrap_or_else(|| default_foreign_key_column(field_name));
-                    let name = expected_unique_constraint_name(table, &column);
+                    let name = self.names.unique(table, &column);
                     let create = format!(
                         "{} ADD CONSTRAINT \"{name}\" UNIQUE (\"{column}\");",
                         self.alter(table)
@@ -548,7 +545,7 @@ impl<'a> Builder<'a> {
                     None,
                 ),
             };
-            let name = foreign_key_name(table, &column);
+            let name = self.names.foreign_key(table, &column);
             let ref_column = rel.references.clone().unwrap_or_else(|| "id".to_string());
             let on_delete = normalize_fk_action(rel.on_delete.as_deref().unwrap_or("restrict"));
             let create = self.render(Operation::AddForeignKey {
@@ -586,7 +583,7 @@ impl<'a> Builder<'a> {
     }
 
     fn type_check(&mut self, table: &str, column: &str, expression: &str) {
-        let name = type_check_name(table, column);
+        let name = self.names.type_check(table, column);
         let create = format!(
             "{} ADD CONSTRAINT \"{name}\" CHECK ({expression});",
             self.alter(table)
@@ -596,7 +593,7 @@ impl<'a> Builder<'a> {
 
     fn model_checks(&mut self, model: &ModelAst) {
         let table = model.table_name();
-        for exp in expected_checks(model) {
+        for exp in expected_checks(model, &self.names) {
             let create = format!(
                 "{} ADD CONSTRAINT \"{}\" CHECK ({});",
                 self.alter(table),
@@ -665,10 +662,7 @@ impl<'a> Builder<'a> {
             .cloned()
             .chain(implicit_model_indexes(model))
         {
-            let name = index
-                .name
-                .clone()
-                .unwrap_or_else(|| expected_model_index_name(table, &index.fields));
+            let name = self.names.index(table, &index);
             let create = self.render(Operation::AddIndex {
                 table: table.to_string(),
                 index: Box::new(index.clone()),
@@ -684,7 +678,7 @@ impl<'a> Builder<'a> {
             );
         }
         if model.options.singleton {
-            let name = truncate_identifier(table, "_singleton_idx");
+            let name = self.names.singleton_index(table);
             let create = format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{table}\" ((TRUE));",
                 self.schema
@@ -708,13 +702,13 @@ impl<'a> Builder<'a> {
 
     /// The policies `access` asks for on `table`, and the membership index each rule's join
     /// columns get beside them (`rls.rs` emits `idx_{table}_{column}_rls` with every policy whose
-    /// rule reads another table; the name is built there without truncation, so it is here too).
+    /// rule reads another table, fitted to the identifier limit by the same rule as here).
     fn policies_for(&mut self, table: &str, access: &AccessAst) -> Result<()> {
         let mut policies: Vec<(String, &'static str)> = Vec::new();
         for (suffix, rule) in expected_policies(access) {
             if let Some(rule) = rule {
                 for (target_table, column) in membership_index_targets(rule) {
-                    let name = format!("idx_{target_table}_{column}_rls");
+                    let name = membership_index_name(&target_table, &column);
                     let create = format!(
                         "CREATE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{}\" (\"{}\");",
                         self.schema,
@@ -727,7 +721,7 @@ impl<'a> Builder<'a> {
             policies.push((suffix.clone(), polcmd(&suffix)));
         }
         for (suffix, command) in policies {
-            let name = format!("{table}_{suffix}");
+            let name = policy_name(table, &suffix);
             let create = self.render(Operation::CreateRlsPolicy {
                 table: table.to_string(),
                 policy: name.clone(),
@@ -827,8 +821,9 @@ impl<'a> Builder<'a> {
     }
 
     /// The sequence a `SERIAL` or `BIGSERIAL` column owns (Phase 4.10), under the name Postgres
-    /// gives it. Made and kept by its column, so recorded only, and never dropped. A name Postgres
-    /// would have to shorten past 63 bytes is not predicted, and so not recorded.
+    /// gives it: `makeObjectName`'s, with a digit when another relation of the schema has it first.
+    /// Made and kept by its column, so recorded only, and never dropped; a rename of its table or
+    /// column renames it to match.
     fn model_sequences(&mut self, model: &ModelAst) {
         let table = model.table_name();
         for (field_name, field) in &model.fields {
@@ -836,10 +831,7 @@ impl<'a> Builder<'a> {
                 continue;
             }
             for column in column_names_for(field_name, field) {
-                let name = format!("{table}_{column}_seq");
-                if name.len() > 63 {
-                    continue;
-                }
+                let name = self.names.sequence(table, &column);
                 let structure = BTreeMap::from([("owned_by", format!("{table}.{column}"))]);
                 let create = format!(
                     "ALTER SEQUENCE \"{schema}\".\"{name}\" OWNED BY \"{schema}\".\"{table}\".\"{column}\";",
@@ -977,7 +969,7 @@ impl<'a> Builder<'a> {
 
         self.primary_key(&vt, &["id".to_string()]);
 
-        let fk = foreign_key_name(&vt, "record_id");
+        let fk = self.names.foreign_key(&vt, "record_id");
         let fk_create = format!(
             "{} ADD CONSTRAINT \"{fk}\" FOREIGN KEY (\"record_id\") REFERENCES \"{}\".\"{table}\" (\"{primary_key}\") ON DELETE CASCADE;",
             self.alter(&vt),
@@ -998,7 +990,7 @@ impl<'a> Builder<'a> {
 
         self.type_check(&vt, "status", type_checks::versions_status_check_expr());
 
-        let key = truncate_identifier(&format!("{vt}_record_id_version"), "_key");
+        let key = versions_record_key_name(&vt);
         let key_create = format!(
             "{} ADD CONSTRAINT \"{key}\" UNIQUE (\"record_id\", \"version\");",
             self.alter(&vt)
@@ -1045,7 +1037,7 @@ impl<'a> Builder<'a> {
             };
             let (pk, _) = versions_record_id(parent);
             let ref_table = parent.table_name().to_string();
-            let name = foreign_key_name(table, fk_col);
+            let name = self.names.foreign_key(table, fk_col);
             let create = format!(
                 "{} ADD CONSTRAINT \"{name}\" FOREIGN KEY (\"{fk_col}\") REFERENCES \"{}\".\"{ref_table}\" (\"{pk}\") ON DELETE CASCADE;",
                 self.alter(table),

@@ -5,10 +5,7 @@ use crate::generator::sql::column_conversion::{
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
 };
 use crate::ledger::reconcile;
-use crate::managed::{
-    expected_check_constraint_name, expected_model_constraint_name,
-    expected_unique_constraint_name, foreign_key_name, primary_key_name, type_check_name,
-};
+use crate::managed::{make_object_name, ObjectNames};
 use crate::parser::ast::{
     scalar_of, AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst,
     RelationCardinality, RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
@@ -294,6 +291,7 @@ fn render_forward_operation_lines(
     ast: &SchemaAst,
 ) -> Result<Vec<String>> {
     let mut lines = Vec::new();
+    let names = ObjectNames::for_schema(ast);
 
     for op in &diff.operations {
         let risk_label = match op {
@@ -318,7 +316,7 @@ fn render_forward_operation_lines(
             },
         };
 
-        let sql = render_operation(op, schema, ast)?;
+        let sql = render_operation_named(op, schema, ast, &names)?;
         lines.push(format!(
             "-- [{risk_label}] {desc}",
             desc = op_description(op)
@@ -437,7 +435,7 @@ impl Migration {
                 .chain(late.iter().rev().filter_map(|a| a.undo_removal()))
                 .collect(),
         );
-        down.extend(super::rollback::statements(diff, schema)?);
+        down.extend(super::rollback::statements(diff, schema, ast)?);
         down.extend(reconciled_section(
             early
                 .iter()
@@ -566,14 +564,14 @@ fn render_create_rls_policy_sql(
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<String> {
-    let prefix = format!("{table}_");
-    if !policy.starts_with(&prefix) {
-        bail!("CreateRlsPolicy: policy name {policy} does not start with expected prefix {prefix}");
-    }
-    let suffix = &policy[prefix.len()..];
-    if !matches!(suffix, "select" | "insert" | "update" | "delete") {
-        bail!("CreateRlsPolicy: unknown policy suffix {suffix}");
-    }
+    // Read back through the one naming rule, since a long table's name is shortened in front of
+    // the suffix and no longer starts with `{table}_`.
+    let Some(suffix) = ["select", "insert", "update", "delete"]
+        .into_iter()
+        .find(|suffix| crate::managed::policy_name(table, suffix) == policy)
+    else {
+        bail!("CreateRlsPolicy: policy name {policy} is not one of the policies of {table}");
+    };
 
     if let Some(model) = ast.models.iter().find(|m| m.table_name() == table) {
         let rule = match suffix {
@@ -645,8 +643,19 @@ fn render_create_rls_policy_sql(
 }
 
 pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {
+    render_operation_named(op, schema, ast, &ObjectNames::for_schema(ast))
+}
+
+/// [`render_operation`] with the schema's names already chosen, for a caller rendering many
+/// operations of one schema.
+pub(crate) fn render_operation_named(
+    op: &Operation,
+    schema: &str,
+    ast: &SchemaAst,
+    names: &ObjectNames,
+) -> Result<String> {
     match op {
-        Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast),
+        Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast, names),
         // Never `CASCADE` (plan 3.3): what depends on the table and is ours is dropped before it
         // (its draft and api views here, a foreign key from another table or an affordance
         // function by the reconcile); what depends on it and is not ours blocks the drop and is
@@ -656,9 +665,21 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             super::versions::drop_views_in_schema_sql("draft", &[table]),
             super::versions::drop_views_in_schema_sql(super::field_views::VIEW_SCHEMA, &[table]),
         )),
-        Operation::RenameTable { from, to, .. } => Ok(format!(
-            "ALTER TABLE \"{schema}\".\"{from}\" RENAME TO \"{to}\";"
-        )),
+        // A serial's sequence is named after its table, and keeps the old name through a rename
+        // unless it is renamed too: the desired set and the ledger know it by the new one.
+        Operation::RenameTable { from, to, .. } => {
+            let mut sql = format!("ALTER TABLE \"{schema}\".\"{from}\" RENAME TO \"{to}\";");
+            for column in serial_columns(ast, to) {
+                sql.push('\n');
+                sql.push_str(&rename_serial_sequence_sql(
+                    schema,
+                    to,
+                    &column,
+                    &names.sequence(to, &column),
+                ));
+            }
+            Ok(sql)
+        }
         Operation::AddColumn {
             table,
             column,
@@ -670,10 +691,7 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             if let FieldAst::Relation(rel) = field.as_ref() {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                     let uniq = if rel.unique_fk {
-                        format!(
-                            " CONSTRAINT \"{}\" UNIQUE",
-                            expected_unique_constraint_name(table, column)
-                        )
+                        format!(" CONSTRAINT \"{}\" UNIQUE", names.unique(table, column))
                     } else {
                         String::new()
                     };
@@ -699,7 +717,7 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
                     "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN IF NOT EXISTS \
                      \"status\" TEXT NOT NULL DEFAULT 'draft' \
                      CONSTRAINT \"{}\" CHECK ({});",
-                    type_check_name(table, "status"),
+                    names.type_check(table, "status"),
                     super::type_checks::publishable_status_check_expr()
                 )),
                 (FieldAst::Publishable, "published_at") => Some(format!(
@@ -719,7 +737,7 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             if let Some(sql) = composite_sql {
                 return Ok(sql);
             }
-            let col_def = field_to_column_def(table, column, field)?;
+            let col_def = field_to_column_def(names, table, column, field)?;
             if let Some(backfill) = add_column_backfill_default(field) {
                 return Ok(format!(
                     "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN {col_def} DEFAULT {backfill};\n\
@@ -735,9 +753,21 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
         )),
         Operation::RenameColumn {
             table, from, to, ..
-        } => Ok(format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" RENAME COLUMN \"{from}\" TO \"{to}\";"
-        )),
+        } => {
+            let mut sql = format!(
+                "ALTER TABLE \"{schema}\".\"{table}\" RENAME COLUMN \"{from}\" TO \"{to}\";"
+            );
+            if serial_columns(ast, table).contains(to) {
+                sql.push('\n');
+                sql.push_str(&rename_serial_sequence_sql(
+                    schema,
+                    table,
+                    to,
+                    &names.sequence(table, to),
+                ));
+            }
+            Ok(sql)
+        }
         Operation::AlterColumn {
             table,
             column,
@@ -751,8 +781,8 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             field,
             dependencies,
             ..
-        } => recreate_column_sql(table, column, field.as_ref(), dependencies, schema),
-        Operation::AddIndex { table, index, .. } => create_index_sql(table, index, schema),
+        } => recreate_column_sql(names, table, column, field.as_ref(), dependencies, schema),
+        Operation::AddIndex { table, index, .. } => create_index_sql(names, table, index, schema),
         Operation::AddForeignKey {
             table,
             field_name,
@@ -761,6 +791,7 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             ref_schema,
             ..
         } => add_fk_sql(
+            names,
             table,
             field_name,
             relation,
@@ -789,9 +820,9 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             let (ref_table_b, pk_b, type_b) = junction_ref_for_model(ast, table_b);
             // Ours by its ledger row, like any table Supatype creates (Phase 4.11), so a removed
             // many-to-many takes its junction with it.
-            let fk_a_name = foreign_key_name(table, fk_a);
-            let fk_b_name = foreign_key_name(table, fk_b);
-            let pk_name = primary_key_name(table);
+            let fk_a_name = names.foreign_key(table, fk_a);
+            let fk_b_name = names.foreign_key(table, fk_b);
+            let pk_name = names.primary_key(table);
             Ok(format!(
                 "CREATE TABLE IF NOT EXISTS \"{schema}\".\"{table}\" (\n    \
                  \"{fk_a}\" {type_a} NOT NULL CONSTRAINT \"{fk_a_name}\" REFERENCES \"{schema}\".\"{ref_table_a}\" (\"{pk_a}\") ON DELETE CASCADE,\n    \
@@ -841,7 +872,12 @@ pub fn option_columns(model: &ModelAst) -> Vec<(&'static str, &'static str)> {
     out
 }
 
-fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<String> {
+fn create_table_sql(
+    model: &ModelAst,
+    schema: &str,
+    ast: &SchemaAst,
+    names: &ObjectNames,
+) -> Result<String> {
     let table = &model.table_name();
     let mut col_defs: Vec<String> = Vec::new();
 
@@ -865,10 +901,7 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
                         .unwrap_or(false);
                     if !explicitly_declared {
                         let uniq = if rel.unique_fk {
-                            format!(
-                                " CONSTRAINT \"{}\" UNIQUE",
-                                expected_unique_constraint_name(table, &fk_col)
-                            )
+                            format!(" CONSTRAINT \"{}\" UNIQUE", names.unique(table, &fk_col))
                         } else {
                             String::new()
                         };
@@ -887,7 +920,7 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
             FieldAst::Publishable => {
                 col_defs.push(format!(
                     "    \"status\" TEXT NOT NULL DEFAULT 'draft' CONSTRAINT \"{}\" CHECK ({})",
-                    type_check_name(table, "status"),
+                    names.type_check(table, "status"),
                     super::type_checks::publishable_status_check_expr()
                 ));
                 col_defs.push("    \"published_at\" TIMESTAMPTZ".into());
@@ -899,7 +932,7 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
             other => {
                 col_defs.push(format!(
                     "    {}",
-                    field_to_column_def(table, field_name, other)?
+                    field_to_column_def(names, table, field_name, other)?
                 ));
             }
         }
@@ -918,7 +951,7 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
     // records them (plan 3.2) and their comments are the user's.
     for (index, rule) in model.annotations.db.constraints.iter().enumerate() {
         let expr = crate::generator::sql::constraints::constraint_to_expr(rule)?;
-        let constraint = expected_model_constraint_name(table, index);
+        let constraint = names.model_constraint(table, index);
         statements.push(format!(
             "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({expr});"
         ));
@@ -926,20 +959,20 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
 
     // Explicit model-level indexes
     for index in model.indexes() {
-        statements.push(create_index_sql(table, index, schema)?);
+        statements.push(create_index_sql(names, table, index, schema)?);
     }
 
     // And the ones nobody declares. Shared with the reconcile rather than written twice: these
     // are Supatype's by the ledger, so an index the desired set cannot account for is one a push
     // drops, and every push would then drop it and create it again.
     for index in implicit_model_indexes(model) {
-        statements.push(create_index_sql(table, &index, schema)?);
+        statements.push(create_index_sql(names, table, &index, schema)?);
     }
 
     // Singleton (global config): enforce exactly one row via a unique index on an expression.
     // Recorded by the ledger (Phase 4.3), so no stamp.
     if model.options.singleton {
-        let idx_name = format!("{table}_singleton_idx");
+        let idx_name = names.singleton_index(table);
         statements.push(format!(
             "CREATE UNIQUE INDEX IF NOT EXISTS \"{idx_name}\" \
              ON \"{schema}\".\"{table}\" ((TRUE));"
@@ -983,7 +1016,7 @@ pub(crate) fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
     // first to avoid adding the index twice.
     if model.fields.contains_key("softDelete") || model.options.soft_delete {
         indexes.push(IndexAst {
-            name: Some(format!("{table}_deleted_at_idx")),
+            name: None,
             fields: vec!["deleted_at".into()],
             unique: false,
             using: IndexMethod::Btree,
@@ -994,7 +1027,7 @@ pub(crate) fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
         if let FieldAst::Blocks(b) = field {
             if b.index {
                 indexes.push(IndexAst {
-                    name: Some(format!("{table}_{field_name}_gin_idx")),
+                    name: Some(make_object_name(table, Some(field_name), "gin_idx")),
                     fields: vec![field_name.clone()],
                     unique: false,
                     using: IndexMethod::Gin,
@@ -1045,9 +1078,14 @@ pub(crate) fn field_index_flag(field: &FieldAst) -> Option<bool> {
 
 // ─── COLUMN DEFINITION ───────────────────────────────────────────────────────
 
-fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<String> {
+fn field_to_column_def(
+    names: &ObjectNames,
+    table: &str,
+    name: &str,
+    field: &FieldAst,
+) -> Result<String> {
     match field {
-        FieldAst::Uuid(f) => Ok(scalar_col(table, name, "UUID", f, false)),
+        FieldAst::Uuid(f) => Ok(scalar_col(names, table, name, "UUID", f, false)),
         FieldAst::Text(f) | FieldAst::RichText(f) | FieldAst::Bytes(f) | FieldAst::Color(f) => {
             let pg = if matches!(field, FieldAst::RichText(_)) {
                 "JSONB"
@@ -1057,80 +1095,80 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
                 "TEXT"
             };
             let rich_text = matches!(field, FieldAst::RichText(_));
-            Ok(scalar_col(table, name, pg, f, rich_text))
+            Ok(scalar_col(names, table, name, pg, f, rich_text))
         }
         FieldAst::Email(f) => {
-            let mut def = scalar_col(table, name, "TEXT", f, false);
+            let mut def = scalar_col(names, table, name, "TEXT", f, false);
             def.push_str(&format!(
                 " CONSTRAINT \"{}\" CHECK ({})",
-                type_check_name(table, name),
+                names.type_check(table, name),
                 super::type_checks::email_check_expr(name)
             ));
             Ok(def)
         }
-        FieldAst::Integer(f) => Ok(scalar_col(table, name, "INTEGER", f, false)),
-        FieldAst::Float(f) => Ok(scalar_col(table, name, "DOUBLE PRECISION", f, false)),
-        FieldAst::Boolean(f) => Ok(scalar_col(table, name, "BOOLEAN", f, false)),
-        FieldAst::Datetime(f) => Ok(scalar_col(table, name, "TIMESTAMPTZ", f, false)),
-        FieldAst::BigInt(f) => Ok(scalar_col(table, name, "BIGINT", f, false)),
-        FieldAst::SmallInt(f) => Ok(scalar_col(table, name, "SMALLINT", f, false)),
-        FieldAst::Date(f) => Ok(scalar_col(table, name, "DATE", f, false)),
-        FieldAst::Timestamp(f) => Ok(scalar_col(table, name, "TIMESTAMP", f, false)),
+        FieldAst::Integer(f) => Ok(scalar_col(names, table, name, "INTEGER", f, false)),
+        FieldAst::Float(f) => Ok(scalar_col(names, table, name, "DOUBLE PRECISION", f, false)),
+        FieldAst::Boolean(f) => Ok(scalar_col(names, table, name, "BOOLEAN", f, false)),
+        FieldAst::Datetime(f) => Ok(scalar_col(names, table, name, "TIMESTAMPTZ", f, false)),
+        FieldAst::BigInt(f) => Ok(scalar_col(names, table, name, "BIGINT", f, false)),
+        FieldAst::SmallInt(f) => Ok(scalar_col(names, table, name, "SMALLINT", f, false)),
+        FieldAst::Date(f) => Ok(scalar_col(names, table, name, "DATE", f, false)),
+        FieldAst::Timestamp(f) => Ok(scalar_col(names, table, name, "TIMESTAMP", f, false)),
         FieldAst::Serial(f) => {
             // SERIAL is self-declaring: NOT NULL + sequence default are implicit.
             // primary_key / unique flags still apply.
-            let pk = primary_key_clause(table, f.primary_key);
-            let uniq = unique_clause(table, name, f.unique && !f.primary_key);
+            let pk = primary_key_clause(names, table, f.primary_key);
+            let uniq = unique_clause(names, table, name, f.unique && !f.primary_key);
             Ok(format!("\"{name}\" SERIAL{pk}{uniq}"))
         }
         FieldAst::BigSerial(f) => {
-            let pk = primary_key_clause(table, f.primary_key);
-            let uniq = unique_clause(table, name, f.unique && !f.primary_key);
+            let pk = primary_key_clause(names, table, f.primary_key);
+            let uniq = unique_clause(names, table, name, f.unique && !f.primary_key);
             Ok(format!("\"{name}\" BIGSERIAL{pk}{uniq}"))
         }
-        FieldAst::Money(f) => Ok(scalar_col(table, name, "NUMERIC(19,4)", f, false)),
+        FieldAst::Money(f) => Ok(scalar_col(names, table, name, "NUMERIC(19,4)", f, false)),
         FieldAst::Url(f) => {
-            let mut def = scalar_col(table, name, "TEXT", f, false);
+            let mut def = scalar_col(names, table, name, "TEXT", f, false);
             def.push_str(&format!(
                 " CONSTRAINT \"{}\" CHECK ({})",
-                type_check_name(table, name),
+                names.type_check(table, name),
                 super::type_checks::url_check_expr(name)
             ));
             Ok(def)
         }
-        FieldAst::Ip(f) => Ok(scalar_col(table, name, "INET", f, false)),
-        FieldAst::Cidr(f) => Ok(scalar_col(table, name, "CIDR", f, false)),
-        FieldAst::Macaddr(f) => Ok(scalar_col(table, name, "MACADDR", f, false)),
-        FieldAst::Interval(f) => Ok(scalar_col(table, name, "INTERVAL", f, false)),
-        FieldAst::TsQuery(f) => Ok(scalar_col(table, name, "TSQUERY", f, false)),
+        FieldAst::Ip(f) => Ok(scalar_col(names, table, name, "INET", f, false)),
+        FieldAst::Cidr(f) => Ok(scalar_col(names, table, name, "CIDR", f, false)),
+        FieldAst::Macaddr(f) => Ok(scalar_col(names, table, name, "MACADDR", f, false)),
+        FieldAst::Interval(f) => Ok(scalar_col(names, table, name, "INTERVAL", f, false)),
+        FieldAst::TsQuery(f) => Ok(scalar_col(names, table, name, "TSQUERY", f, false)),
         FieldAst::TsVector(f) => {
             // tsvector is typically NOT NULL; index is GIN.
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("\"{name}\" TSVECTOR{req}"))
         }
-        FieldAst::Xml(f) => Ok(scalar_col(table, name, "XML", f, false)),
+        FieldAst::Xml(f) => Ok(scalar_col(names, table, name, "XML", f, false)),
         FieldAst::Array(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            let uniq = unique_clause(table, name, f.unique);
+            let uniq = unique_clause(names, table, name, f.unique);
             let elem = f.element_type.to_uppercase();
-            let check = render_check(table, name, field);
+            let check = render_check(names, table, name, field);
             Ok(format!("\"{name}\" {elem}[]{req}{uniq}{check}"))
         }
         FieldAst::Slug(f) => {
-            let unique = unique_clause(table, name, f.unique);
+            let unique = unique_clause(names, table, name, f.unique);
             let req = if f.required { " NOT NULL" } else { "" };
-            let check = render_check(table, name, field);
+            let check = render_check(names, table, name, field);
             Ok(format!("\"{name}\" TEXT{req}{unique}{check}"))
         }
         FieldAst::Enum(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            let uniq = unique_clause(table, name, f.unique);
+            let uniq = unique_clause(names, table, name, f.unique);
             let default = f
                 .default
                 .as_ref()
                 .map(|d| format!(" DEFAULT '{d}'"))
                 .unwrap_or_default();
-            let check_name = type_check_name(table, name);
+            let check_name = names.type_check(table, name);
             let check = super::type_checks::enum_check_expr(name, &f.values);
             Ok(format!(
                 "\"{name}\" TEXT{req}{uniq} CONSTRAINT \"{check_name}\" CHECK ({check}){default}"
@@ -1138,12 +1176,12 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         }
         FieldAst::Json(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            let check = render_check(table, name, field);
+            let check = render_check(names, table, name, field);
             Ok(format!("\"{name}\" JSONB{req}{check}"))
         }
         FieldAst::Button(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            let check = render_check(table, name, field);
+            let check = render_check(names, table, name, field);
             Ok(format!("\"{name}\" JSONB{req}{check}"))
         }
         FieldAst::Decimal(f) => {
@@ -1153,10 +1191,11 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
                 _ => "NUMERIC".into(),
             };
             let req = if f.required { " NOT NULL" } else { "" };
-            let check = render_check(table, name, field);
+            let check = render_check(names, table, name, field);
             Ok(format!("\"{name}\" {pg}{req}{check}"))
         }
         FieldAst::Image(f) | FieldAst::File(f) => Ok(scalar_col(
+            names,
             table,
             name,
             "JSONB",
@@ -1169,6 +1208,7 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
             false,
         )),
         FieldAst::Blocks(f) => Ok(scalar_col(
+            names,
             table,
             name,
             "JSONB",
@@ -1195,7 +1235,7 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         // Plugin-defined custom field type: use the declared pg_type directly.
         FieldAst::Custom(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            let uniq = unique_clause(table, name, f.unique);
+            let uniq = unique_clause(names, table, name, f.unique);
             let default = f
                 .default
                 .as_ref()
@@ -1320,12 +1360,12 @@ pub fn field_check_expression(field: &FieldAst, name: &str) -> Option<String> {
 /// the constraint again on the next push, and the comment stamped alongside it is how a *changed*
 /// bound is detected. Anonymous inline checks were only ever created, never reconciled, so
 /// tightening a bound used to produce no migration at all.
-fn render_check(table: &str, name: &str, field: &FieldAst) -> String {
+fn render_check(names: &ObjectNames, table: &str, name: &str, field: &FieldAst) -> String {
     field_check_expression(field, name)
         .map(|expr| {
             format!(
                 " CONSTRAINT \"{}\" CHECK ({expr})",
-                expected_check_constraint_name(table, name)
+                names.bounds(table, name)
             )
         })
         .unwrap_or_default()
@@ -1415,6 +1455,7 @@ fn localized_check(
 }
 
 fn scalar_col(
+    names: &ObjectNames,
     table: &str,
     name: &str,
     pg_type: &str,
@@ -1423,13 +1464,13 @@ fn scalar_col(
 ) -> String {
     // Localized fields are stored as JSONB regardless of their base type.
     let effective_type = if f.localized { "JSONB" } else { pg_type };
-    let pk = primary_key_clause(table, f.primary_key);
+    let pk = primary_key_clause(names, table, f.primary_key);
     let req = if f.required && !f.primary_key {
         " NOT NULL"
     } else {
         ""
     };
-    let uniq = unique_clause(table, name, f.unique && !f.primary_key);
+    let uniq = unique_clause(names, table, name, f.unique && !f.primary_key);
     let default = f
         .default
         .as_ref()
@@ -1453,7 +1494,7 @@ fn scalar_col(
     .map(|expr| {
         format!(
             " CONSTRAINT \"{}\" CHECK ({expr})",
-            expected_check_constraint_name(table, name)
+            names.bounds(table, name)
         )
     })
     .unwrap_or_default();
@@ -1466,21 +1507,18 @@ fn scalar_col(
 /// named by anyone but us. Postgres names an unnamed constraint after the fact and disambiguates a
 /// collision with a digit, and a name only it knows is a name the differ and the ledger cannot
 /// look for.
-fn primary_key_clause(table: &str, primary_key: bool) -> String {
+fn primary_key_clause(names: &ObjectNames, table: &str, primary_key: bool) -> String {
     if primary_key {
-        format!(" CONSTRAINT \"{}\" PRIMARY KEY", primary_key_name(table))
+        format!(" CONSTRAINT \"{}\" PRIMARY KEY", names.primary_key(table))
     } else {
         String::new()
     }
 }
 
 /// ` CONSTRAINT "{table}_{column}_key" UNIQUE`, or nothing. See [`primary_key_clause`].
-fn unique_clause(table: &str, column: &str, unique: bool) -> String {
+fn unique_clause(names: &ObjectNames, table: &str, column: &str, unique: bool) -> String {
     if unique {
-        format!(
-            " CONSTRAINT \"{}\" UNIQUE",
-            expected_unique_constraint_name(table, column)
-        )
+        format!(" CONSTRAINT \"{}\" UNIQUE", names.unique(table, column))
     } else {
         String::new()
     }
@@ -1595,6 +1633,7 @@ fn alter_column_sql(
 }
 
 fn recreate_column_sql(
+    names: &ObjectNames,
     table: &str,
     column: &str,
     field: &FieldAst,
@@ -1622,7 +1661,7 @@ fn recreate_column_sql(
         "ALTER TABLE \"{schema}\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";"
     ));
 
-    let col_def = field_to_column_def(table, column, field)?;
+    let col_def = field_to_column_def(names, table, column, field)?;
     stmts.push(format!(
         "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN {col_def};"
     ));
@@ -1691,7 +1730,12 @@ fn recreate_column_sql(
 
 // ─── INDEX ───────────────────────────────────────────────────────────────────
 
-fn create_index_sql(table: &str, index: &IndexAst, schema: &str) -> Result<String> {
+fn create_index_sql(
+    names: &ObjectNames,
+    table: &str,
+    index: &IndexAst,
+    schema: &str,
+) -> Result<String> {
     let unique = if index.unique { "UNIQUE " } else { "" };
     let method = index.using.as_sql();
     let cols = index
@@ -1700,8 +1744,9 @@ fn create_index_sql(table: &str, index: &IndexAst, schema: &str) -> Result<Strin
         .map(|f| format!("\"{f}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let derived = format!("{table}_{}_idx", index.fields.join("_"));
-    let idx_name = index.name.as_deref().unwrap_or(&derived);
+    // The name the desired set records: the one chosen for the whole schema, never the full
+    // `{table}_{fields}_idx`, which Postgres would cut to 63 bytes behind our back.
+    let idx_name = names.index(table, index);
 
     // The `CREATE` alone, no stamp (the ledger is the record, plan section 6) and no drop before
     // it: an index whose shape changed is the reconcile's `Replace`, which drops and recreates.
@@ -1735,6 +1780,7 @@ pub(crate) fn normalize_fk_action(action: &str) -> &'static str {
 }
 
 fn add_fk_sql(
+    names: &ObjectNames,
     table: &str,
     field_name: &str,
     rel: &RelationFieldAst,
@@ -1753,7 +1799,7 @@ fn add_fk_sql(
     };
     let ref_col = rel.references.as_deref().unwrap_or("id");
     let on_delete = normalize_fk_action(rel.on_delete.as_deref().unwrap_or("restrict"));
-    let constraint = foreign_key_name(table, fk_col);
+    let constraint = names.foreign_key(table, fk_col);
 
     Ok(format!(
         "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" \
@@ -1763,6 +1809,45 @@ fn add_fk_sql(
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+/// The serial columns of the model whose table is `table`, by column name.
+pub(crate) fn serial_columns(ast: &SchemaAst, table: &str) -> Vec<String> {
+    ast.models
+        .iter()
+        .filter(|m| m.table_name() == table)
+        .flat_map(|m| &m.fields)
+        .filter(|(_, f)| matches!(f, FieldAst::Serial(_) | FieldAst::BigSerial(_)))
+        .flat_map(|(name, f)| crate::parser::accessors::column_names_for(name, f))
+        .collect()
+}
+
+/// Renames the sequence `table.column` owns to `name`, if it owns one under another name.
+///
+/// Postgres names a serial's sequence once, when it makes it, and a table or column rename leaves
+/// it as it was, so `posts_id_seq` stays `posts_id_seq` on a table now called `articles`. The
+/// desired set and the ledger know it by the name it would have now. Found through the catalog
+/// rather than by its old name, which may carry a digit Postgres added on a collision; skipped when
+/// the column is not there yet (a rename of its own, later in the same migration, renames it then).
+pub(crate) fn rename_serial_sequence_sql(
+    schema: &str,
+    table: &str,
+    column: &str,
+    name: &str,
+) -> String {
+    let relation = format!("\"{schema}\".\"{table}\"").replace('\'', "''");
+    let column = column.replace('\'', "''");
+    let name = name.replace('\'', "''");
+    format!(
+        "DO $seq$\nDECLARE\n  seq regclass;\nBEGIN\n  \
+         IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = '{relation}'::regclass AND attname = '{column}' AND NOT attisdropped) THEN\n    \
+         seq := pg_get_serial_sequence('{relation}', '{column}')::regclass;\n    \
+         IF seq IS NOT NULL AND (SELECT relname FROM pg_class WHERE oid = seq) <> '{name}' THEN\n      \
+         EXECUTE format('ALTER SEQUENCE %s RENAME TO %I', seq, '{name}');\n    \
+         END IF;\n  \
+         END IF;\n\
+         END;\n$seq$;"
+    )
+}
 
 /// FK column SQL type for a target model PK (SERIAL → INTEGER, UUID → UUID, …).
 fn fk_pg_type_for_model(ast: &SchemaAst, model_name: &str) -> String {

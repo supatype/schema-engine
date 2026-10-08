@@ -31,10 +31,10 @@ fn engine_policy_names(model: &crate::parser::ast::ModelAst) -> HashSet<String> 
     let table = model.table_name();
     let mut names: HashSet<String> = expected_policies(model.access())
         .into_iter()
-        .map(|(suffix, _)| format!("{table}_{suffix}"))
+        .map(|(suffix, _)| crate::managed::policy_name(table, &suffix))
         .collect();
     if crate::parser::accessors::versions_of(model).is_some_and(|v| v.drafts) {
-        names.insert(format!("{table}_draft_select"));
+        names.insert(crate::managed::policy_name(table, "draft_select"));
     }
     names
 }

@@ -261,7 +261,12 @@ impl ObjectOp {
 /// of its file fields uses. `rules` is indexed like [`ObjectOp::ALL`]; a set with none declared
 /// renders as drops only, which is what retires it.
 struct ObjectPolicies<'a> {
-    name: String,
+    /// What the set's policy names are made of: `storage` and the bucket's label, or the model's
+    /// table and the bucket id. The operation's suffix is the label.
+    name: (String, String),
+    /// Each declared rule's policy name, indexed like `rules`, once [`assign_policy_names`] has
+    /// chosen them.
+    policy_names: [String; 4],
     bucket_id: &'a str,
     comment: String,
     rules: [Option<&'a AccessRule>; 4],
@@ -269,7 +274,7 @@ struct ObjectPolicies<'a> {
 
 impl<'a> ObjectPolicies<'a> {
     fn new(
-        name: String,
+        name: (String, String),
         comment: String,
         bucket_id: &'a str,
         access: Option<&'a AccessAst>,
@@ -277,14 +282,11 @@ impl<'a> ObjectPolicies<'a> {
         let rules = ObjectOp::ALL.map(|op| access.and_then(|a| op.rule(a)));
         Self {
             name,
+            policy_names: Default::default(),
             bucket_id,
             comment,
             rules,
         }
-    }
-
-    fn policy_name(&self, op: ObjectOp) -> String {
-        format!("{}_{}", self.name, op.names().suffix)
     }
 
     /// The `CREATE POLICY` of every declared rule. A rule removed from the schema takes its policy
@@ -292,15 +294,18 @@ impl<'a> ObjectPolicies<'a> {
     fn render(&self) -> String {
         let b = sql_quote_bucket_id(self.bucket_id);
         let mut out = format!("-- {}\n", self.comment);
-        for (op, rule) in ObjectOp::ALL.into_iter().zip(&self.rules) {
+        for ((op, rule), name) in ObjectOp::ALL
+            .into_iter()
+            .zip(&self.rules)
+            .zip(&self.policy_names)
+        {
             let Some(rule) = rule else { continue };
             let expr = format!(
                 "bucket_id = '{b}' AND ({})",
                 access_rule_to_storage_expr(rule)
             );
             out.push_str(&format!(
-                "CREATE POLICY \"{}\" ON \"storage\".\"objects\"\n  {};\n",
-                self.policy_name(op),
+                "CREATE POLICY \"{name}\" ON \"storage\".\"objects\"\n  {};\n",
                 op.clause(&expr),
             ));
         }
@@ -346,7 +351,7 @@ fn object_policy_sets(ast: &SchemaAst) -> Vec<ObjectPolicies<'_>> {
             declared.insert(bucket.id.as_str());
         }
         sets.push(ObjectPolicies::new(
-            format!("storage_{label}"),
+            ("storage".to_string(), label.clone()),
             format!("Declarative storage policies for bucket id (sanitized label: {label})"),
             &bucket.id,
             own,
@@ -357,13 +362,31 @@ fn object_policy_sets(ast: &SchemaAst) -> Vec<ObjectPolicies<'_>> {
         let table = model.table_name();
         let access = (!declared.contains(bucket_id)).then(|| model.access());
         sets.push(ObjectPolicies::new(
-            format!("{table}_{bucket_id}"),
+            (table.to_string(), bucket_id.to_string()),
             format!("Storage policies for model '{table}', bucket '{bucket_id}'"),
             bucket_id,
             access,
         ));
     }
+    assign_policy_names(&mut sets);
     sets
+}
+
+/// Names every declared policy of `sets` the way Postgres names what it names itself
+/// (`makeObjectName`, then a digit on a clash): `{table}_{bucket}_{op}` can pass 63 bytes, and a
+/// name Postgres cut short is one the ledger never finds. They all sit on `storage.objects`, so
+/// two sets whose names shorten alike would otherwise collide; the first in emission order keeps
+/// the name.
+fn assign_policy_names(sets: &mut [ObjectPolicies<'_>]) {
+    let mut chooser = crate::managed::NameChooser::default();
+    for set in sets {
+        for (i, op) in ObjectOp::ALL.into_iter().enumerate() {
+            if set.rules[i].is_some() {
+                set.policy_names[i] =
+                    chooser.choose(&set.name.0, Some(&set.name.1), op.names().suffix);
+            }
+        }
+    }
 }
 
 /// The policies on `storage.objects` the bucket rules and the models that store into buckets ask
