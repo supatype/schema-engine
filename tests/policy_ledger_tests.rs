@@ -130,6 +130,47 @@ async fn a_policy_dropped_by_hand_is_put_back() {
 }
 
 #[tokio::test]
+async fn a_hand_edit_is_not_overwritten_without_consent_when_the_schema_changes_it_too() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &public_read()).await.unwrap();
+        exec(
+            &pool,
+            "ALTER POLICY posts_select ON public.posts USING (false)",
+        )
+        .await
+        .unwrap();
+
+        // The schema changes the policy as well, so the reconcile replaces rather than puts back;
+        // the hand edit is overwritten all the same, so it needs the same consent.
+        let signed_in = posts(json!({ "read": { "type": "authenticated" } }));
+        let plan = push::prepare(&pool, &signed_in, "public").await.unwrap();
+        let actions = policy_actions(&plan);
+        assert!(
+            matches!(
+                actions[..],
+                [Action::Replace {
+                    drifted: Some(_),
+                    ..
+                }]
+            ),
+            "{actions:?}"
+        );
+        common::apply_with_consent(&pool, plan, &signed_in).await;
+        let using = using_of(&pool, "posts_select").await.unwrap_or_default();
+        assert!(
+            using.contains("uid()"),
+            "the schema's rule was not applied: {using}"
+        );
+
+        // A change made only in the schema needs no consent.
+        push(&pool, &public_read())
+            .await
+            .expect("a schema-only change is applied without asking");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_hand_written_policy_on_a_model_table_is_never_ours() {
     common::with_integration_pool(|pool| async move {
         push(&pool, &public_read()).await.unwrap();

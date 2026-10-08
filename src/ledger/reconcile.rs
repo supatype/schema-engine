@@ -205,6 +205,10 @@ pub enum Action {
         previous_sql: String,
         inline: bool,
         status: Status,
+        /// The object was also changed outside Supatype since the last apply: replacing it
+        /// overwrites that change, so where it decides access a push asks first (plan 3.5).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drifted: Option<HandEdit>,
     },
     /// Owned, desired, present, and the catalog no longer matches what was recorded after the last
     /// apply: changed outside Supatype. Shown as a diff, then re-asserted (O1, subject to 3.5).
@@ -237,6 +241,16 @@ pub enum Action {
     Forget { key: ObjectKey },
     /// `released`: the user took it back. Left alone whatever the schema says.
     Released { key: ObjectKey },
+}
+
+/// A change made outside Supatype to an object this push replaces anyway: what was recorded after
+/// the last apply, beside what the catalog holds now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HandEdit {
+    pub recorded_def: String,
+    pub live_def: String,
+    /// The live fingerprint, which `doctor --rebaseline` records as the new baseline.
+    pub live_fp: String,
 }
 
 /// What an action leaves in the ledger once applied.
@@ -538,6 +552,7 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         create_sql: d.create_sql.clone(),
         previous_sql: previous_sql.to_string(),
         status: Status::Managed,
+        drifted: None,
     };
     let adopt = |reason, status| Action::Adopt {
         key: key.clone(),
@@ -634,6 +649,13 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             }),
             (Some(d), Some(l)) => {
                 if !row.intends(&d.create_sql) {
+                    // Decided before drift, since the schema changed too; but a hand edit it would
+                    // overwrite is still one, and must not escape the consent drift needs.
+                    let drifted = (l.fingerprint != row.live_fp).then(|| HandEdit {
+                        recorded_def: row.live_def.clone(),
+                        live_def: l.definition.clone(),
+                        live_fp: l.fingerprint.clone(),
+                    });
                     changes.push(Action::Replace {
                         key,
                         create_sql: d.create_sql.clone(),
@@ -651,6 +673,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         security_relevant: d.security_relevant,
                         inline,
                         status,
+                        drifted,
                     });
                 } else {
                     changes.push(Action::Keep {

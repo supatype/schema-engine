@@ -26,7 +26,8 @@ pub struct DriftedObject {
     pub live: Option<String>,
 }
 
-/// The objects that decide access and were changed or removed outside Supatype.
+/// The objects that decide access and were changed or removed outside Supatype, whether the push
+/// puts them back or replaces them because the schema changed them as well.
 pub fn security_drift(plan: &Plan) -> Vec<DriftedObject> {
     plan.actions
         .iter()
@@ -41,6 +42,17 @@ pub fn security_drift(plan: &Plan) -> Vec<DriftedObject> {
                 key: key.clone(),
                 recorded: recorded_def.clone(),
                 live: Some(live_def.clone()),
+            }),
+            // The schema changed it too, so the reconcile replaces rather than puts back; the
+            // hand edit is overwritten all the same.
+            Action::Replace {
+                key,
+                drifted: Some(edit),
+                ..
+            } if security_relevant(key.kind) => Some(DriftedObject {
+                key: key.clone(),
+                recorded: edit.recorded_def.clone(),
+                live: Some(edit.live_def.clone()),
             }),
             Action::Recreate {
                 key, create_sql, ..
@@ -125,6 +137,106 @@ mod tests {
             inline: false,
             status: Status::Managed,
         }
+    }
+
+    /// A policy as the schema declares it, the catalog holds it and the ledger records it.
+    mod policy {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use crate::desired::DesiredObject;
+        use crate::introspector::fingerprint::{hash, ObjectFingerprint, ObjectKind};
+        use crate::ledger::reconcile::{no_location, reconcile, Inputs, Plan};
+        use crate::ledger::{desired_fingerprint, LedgerRow, Status};
+
+        pub fn desired(using: &str) -> DesiredObject {
+            let key = super::key(ObjectKind::Policy);
+            DesiredObject {
+                drop_sql: key.drop_sql().unwrap(),
+                key,
+                structure: BTreeMap::new(),
+                create_sql: format!(
+                    "CREATE POLICY \"x\" ON \"public\".\"posts\" FOR SELECT USING ({using});"
+                ),
+                depends_on: Vec::new(),
+                security_relevant: true,
+            }
+        }
+
+        pub fn live(using: &str) -> ObjectFingerprint {
+            ObjectFingerprint {
+                kind: ObjectKind::Policy,
+                schema: "public".into(),
+                parent: "posts".into(),
+                name: "x".into(),
+                fingerprint: hash(ObjectKind::Policy, &[using]),
+                definition: format!("using={using}"),
+                comment: None,
+                create_sql: None,
+            }
+        }
+
+        pub fn row(d: &DesiredObject, l: &ObjectFingerprint) -> LedgerRow {
+            LedgerRow {
+                key: d.key.clone(),
+                desired_fp: desired_fingerprint(d.key.kind, &d.create_sql),
+                desired_sql: d.create_sql.clone(),
+                live_fp: l.fingerprint.clone(),
+                live_def: l.definition.clone(),
+                status: Status::Managed,
+                migration_id: Some(1),
+            }
+        }
+
+        pub fn plan(d: &DesiredObject, r: &LedgerRow, l: &ObjectFingerprint) -> Plan {
+            reconcile(Inputs {
+                desired: std::slice::from_ref(d),
+                ledger: std::slice::from_ref(r),
+                live: std::slice::from_ref(l),
+                created_by_parent: &BTreeSet::new(),
+                dropped_tables: &BTreeSet::new(),
+                location: no_location,
+                kinds: &[ObjectKind::Policy],
+            })
+        }
+    }
+
+    #[test]
+    fn a_hand_edit_the_schema_also_changes_still_needs_consent() {
+        // Pushed as `true`; then edited by hand to `false`, and the schema now says `owner`.
+        let pushed = policy::desired("true");
+        let recorded = policy::row(&pushed, &policy::live("true"));
+        let changed = policy::desired("owner");
+        let edited = policy::plan(&changed, &recorded, &policy::live("false"));
+        assert!(
+            matches!(
+                &edited.actions[..],
+                [Action::Replace {
+                    drifted: Some(_),
+                    ..
+                }]
+            ),
+            "{edited:?}"
+        );
+        assert_eq!(
+            security_drift(&edited),
+            [DriftedObject {
+                key: key(ObjectKind::Policy),
+                recorded: "using=true".into(),
+                live: Some("using=false".into()),
+            }],
+            "the hand edit was overwritten without consent"
+        );
+
+        // Only the schema changed: an ordinary replacement, nothing to consent to.
+        let untouched = policy::plan(&changed, &recorded, &policy::live("true"));
+        assert!(
+            matches!(
+                &untouched.actions[..],
+                [Action::Replace { drifted: None, .. }]
+            ),
+            "{untouched:?}"
+        );
+        assert!(security_drift(&untouched).is_empty());
     }
 
     #[test]
