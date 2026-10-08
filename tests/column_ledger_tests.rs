@@ -198,6 +198,57 @@ async fn an_upgrade_records_the_declared_columns_and_drops_nothing_unrecorded() 
     .await;
 }
 
+/// A rename is a similarity guess, so only a column that is ours may be its source: one someone
+/// added (`subtitel`) is not renamed into a declared one (`subtitle`), which is added beside it.
+#[tokio::test]
+async fn a_column_someone_added_is_never_renamed_into_a_declared_one() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts(json!({}))).await.unwrap();
+        exec(
+            &pool,
+            "ALTER TABLE public.posts ADD COLUMN subtitel text;
+             INSERT INTO public.posts (id, title, subtitel) VALUES (1, 'a', 'mine');",
+        )
+        .await
+        .unwrap();
+
+        let with_subtitle = posts(json!({ "subtitle": text() }));
+        let plan = push::prepare(&pool, &with_subtitle, "public")
+            .await
+            .unwrap();
+        assert!(
+            !plan
+                .diff
+                .operations
+                .iter()
+                .any(|op| matches!(op, supatype_engine::differ::Operation::RenameColumn { .. })),
+            "{:?}",
+            plan.diff.operations
+        );
+        push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
+            .unwrap();
+        let columns = live_columns(&pool).await;
+        assert!(columns.contains(&"subtitel".to_string()), "{columns:?}");
+        assert!(columns.contains(&"subtitle".to_string()), "{columns:?}");
+        assert!(!recorded(&pool).await.contains(&"subtitel".to_string()));
+
+        // One of ours is still renamed.
+        let renamed = posts(json!({ "sub_title": text() }));
+        let plan = push::prepare(&pool, &renamed, "public").await.unwrap();
+        assert!(
+            plan.diff.operations.iter().any(|op| matches!(
+                op,
+                supatype_engine::differ::Operation::RenameColumn { from, to, .. }
+                    if from == "subtitle" && to == "sub_title"
+            )),
+            "{:?}",
+            plan.diff.operations
+        );
+    })
+    .await;
+}
+
 /// A column the engine owns is changed in place by the column differ, with its data, and its row
 /// follows.
 #[tokio::test]

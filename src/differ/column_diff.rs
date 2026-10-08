@@ -103,6 +103,17 @@ fn field_for_column<'a>(model: &'a ModelAst, col_name: &str) -> Option<&'a Field
     None
 }
 
+/// Whether `model` (the last push's, when there was one) declares `column`, by a field or by an
+/// option. What says a column with no ledger row is the engine's: an older engine created it.
+pub(crate) fn declared_by(model: Option<&ModelAst>, column: &str) -> bool {
+    model.is_some_and(|m| {
+        field_for_column(m, column).is_some()
+            || crate::generator::sql::migration::option_columns(m)
+                .iter()
+                .any(|(c, _)| *c == column)
+    })
+}
+
 fn field_migration_kind(field: &FieldAst) -> Option<&'static str> {
     match field {
         FieldAst::RichText(_) => Some("richText"),
@@ -724,7 +735,16 @@ pub fn diff(
     let mut renamed_dropped = std::collections::HashSet::new();
     let mut renamed_added = std::collections::HashSet::new();
 
-    for &drop in &dropped {
+    // Only a column that is ours is renamed (D4): one the ledger records, or, where it has no row
+    // (an upgraded database), one the last push's schema declared on this table. A rename is a
+    // similarity guess, so a column someone added (`nickname`) would otherwise be renamed into a
+    // declared one (`nick_name`) and taken over with its data.
+    let ours = |column: &str| {
+        db.column_owned(&db_table.name, column)
+            .unwrap_or_else(|| declared_by(previous_model, column))
+    };
+
+    for &drop in dropped.iter().filter(|c| ours(c)) {
         if let Some(&add) = added
             .iter()
             .filter(|&&a| !renamed_added.contains(a))
