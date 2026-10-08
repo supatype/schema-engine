@@ -119,6 +119,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     // structure it can walk. Sending the rendered `CHECK` would be sending SQL to a browser and
     // giving up the ability to say which rule failed and on which field: the payoff for refusing raw
     // SQL, spent.
+    let names = crate::managed::ObjectNames::for_schema(ast);
     let constraints: Vec<Value> = model
         .annotations
         .db
@@ -129,7 +130,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
             let mut columns = Vec::new();
             crate::parser::ast::columns_in(rule, &mut columns);
             json!({
-                "name": crate::managed::expected_model_constraint_name(model.table_name(), index),
+                "name": names.model_constraint(model.table_name(), index),
                 "columns": columns,
                 "rule": rule,
             })
@@ -146,9 +147,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         .iter()
         .map(|index| {
             json!({
-                "name": index.name.clone().unwrap_or_else(|| {
-                    crate::managed::expected_model_index_name(model.table_name(), &index.fields)
-                }),
+                "name": names.index(model.table_name(), index),
                 "fields": index.fields,
                 "unique": index.unique,
                 "using": index.using,
