@@ -280,3 +280,63 @@ async fn a_functions_settings_and_atomic_body_enter_its_fingerprint() {
     })
     .await;
 }
+
+/// Deparsed text names an object bare when its schema is on the session's `search_path` and
+/// qualified otherwise. Read with the session's path, a push from a session with `app` on its
+/// path and one without fingerprinted the same objects differently and reported drift that was
+/// never made. Every read that feeds a fingerprint now runs under one pinned path, and the
+/// session's own is put back after.
+#[tokio::test]
+async fn fingerprints_do_not_depend_on_the_sessions_search_path() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE SCHEMA app;
+             CREATE TYPE app.mood AS ENUM ('ok', 'meh');
+             CREATE TABLE app.notes (id serial PRIMARY KEY, mood app.mood,
+               CONSTRAINT notes_mood_check CHECK (mood <> 'meh'::app.mood));
+             CREATE INDEX notes_mood_idx ON app.notes (mood) WHERE mood = 'ok'::app.mood;
+             CREATE FUNCTION app.cheer(m app.mood DEFAULT 'ok'::app.mood) RETURNS app.mood
+               LANGUAGE sql AS $$ SELECT m $$;",
+        )
+        .await;
+
+        let read = |path: &'static str| {
+            let pool = pool.clone();
+            async move {
+                let mut conn = pool.acquire().await.unwrap();
+                sqlx::query(&format!("SET search_path = {path}"))
+                    .execute(&mut *conn)
+                    .await
+                    .unwrap();
+                let state = supatype_engine::push::read_state(&mut conn, "app")
+                    .await
+                    .unwrap();
+                let after: String = sqlx::query_scalar("SHOW search_path")
+                    .fetch_one(&mut *conn)
+                    .await
+                    .unwrap();
+                (state.fingerprints, after)
+            }
+        };
+        let (outside, path_after) = read("public").await;
+        let (inside, _) = read("app, public").await;
+        assert_eq!(
+            path_after, "public",
+            "the session's search_path is put back"
+        );
+        assert!(
+            outside.iter().any(|f| f.name == "notes_mood_idx"),
+            "{outside:#?}"
+        );
+        let differ: Vec<_> = outside
+            .iter()
+            .zip(&inside)
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| format!("{}\n  {}\n  {}", a.key(), a.definition, b.definition))
+            .collect();
+        assert_eq!(outside.len(), inside.len());
+        assert!(differ.is_empty(), "{}", differ.join("\n"));
+    })
+    .await;
+}

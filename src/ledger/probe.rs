@@ -80,6 +80,14 @@ async fn probe_all(
             .await
             .with_context(|| format!("probe the declared check for {key}"))?;
     }
+    // Read back under the path the live definition was read under, so the two deparse alike. Set
+    // only now: the declared expressions resolve against the session's path, as the push's own
+    // `ADD CONSTRAINT` will. `SET LOCAL` goes with the rollback.
+    sqlx::query("SELECT set_config('search_path', $1, true)")
+        .bind(crate::introspector::PINNED_SEARCH_PATH)
+        .execute(&mut *tx)
+        .await
+        .context("pin the search_path for the probe's read")?;
     let names: Vec<String> = (0..candidates.len())
         .map(|i| format!("_supatype_probe_{i}"))
         .collect();
