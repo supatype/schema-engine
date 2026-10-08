@@ -342,6 +342,42 @@ async fn an_extensions_objects_are_not_reported() {
     .await;
 }
 
+/// A column grant on a table an extension owns is the extension's, as the table grant beside it
+/// already was: the column reader had no `deptype = 'e'` exclusion of its own.
+#[tokio::test]
+async fn an_extensions_column_grants_are_not_reported() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm;
+             CREATE TABLE public.ext_owned (id int, secret text);
+             GRANT SELECT ON public.ext_owned TO PUBLIC;
+             GRANT UPDATE (secret) ON public.ext_owned TO PUBLIC;
+             ALTER EXTENSION pg_trgm ADD TABLE public.ext_owned;
+             CREATE TABLE public.mine (id int, secret text);
+             GRANT UPDATE (secret) ON public.mine TO PUBLIC;",
+        )
+        .await;
+        let catalog = introspector::introspect_catalog(&pool, "public")
+            .await
+            .unwrap();
+        assert!(
+            !catalog.column_grants.iter().any(|g| g.table == "ext_owned"),
+            "an extension's column grant leaked in: {:?}",
+            catalog.column_grants
+        );
+        assert!(!catalog.table_grants.iter().any(|g| g.table == "ext_owned"));
+        assert!(
+            catalog
+                .column_grants
+                .iter()
+                .any(|g| g.table == "mine" && g.column == "secret"),
+            "a user's own column grant is still read"
+        );
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_push_of_a_versioned_schema_is_visible_in_every_kind() {
     common::with_integration_pool(|pool| async move {

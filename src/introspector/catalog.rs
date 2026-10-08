@@ -38,8 +38,11 @@ pub const OWNED_SCHEMAS: &[&str] = &["_supatype", "_platform", "draft", "api", "
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogState {
-    /// Indexes made only of expressions, which `DatabaseState::indexes` leaves out: see
-    /// [`indexes::DbIndexes`] for why they are kept apart.
+    /// The project schema's indexes made only of expressions, which `DatabaseState::indexes`
+    /// leaves out: see [`indexes::DbIndexes`] for why they are kept apart. An engine schema's are
+    /// in [`Self::engine_tables`] with the rest of its indexes, so between them every swept schema
+    /// whose tables are read is covered; `auth` and `storage` tables are never read
+    /// ([`HELPER_ONLY_SCHEMAS`]).
     pub expression_indexes: Vec<DbIndex>,
     pub triggers: Vec<DbCatalogTrigger>,
     pub functions: Vec<DbFunction>,
@@ -653,8 +656,10 @@ async fn read_column_grants(
          JOIN pg_namespace n ON n.oid = c.relnamespace
          CROSS JOIN LATERAL aclexplode(a.attacl) g
          LEFT JOIN pg_roles r ON r.oid = g.grantee
+         LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
          WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'v', 'm', 'p')
            AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
+           AND d.objid IS NULL
          GROUP BY n.nspname, c.relname, a.attname, g.grantee, r.rolname
          ORDER BY n.nspname, c.relname, a.attname, 4",
     )
