@@ -460,18 +460,25 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
     // `identity_types`: `proargtypes` holds the input argument types in order. A `pg_catalog`
     // type is written by `format_type` (`timestamp with time zone`, `text[]`); any other type is
     // schema-qualified by hand, because `format_type` would leave it bare when its schema is on
-    // the `search_path`, and the key must not change with the session.
+    // the `search_path`, and the key must not change with the session. An array of such a type
+    // is its element type, qualified, with `[]` (`public.things[]`), as the declaration writes
+    // it, not the array type's own name (`public._things`).
     let rows: Vec<FunctionRow> = sqlx::query_as(
         "SELECT n.nspname::text, p.proname::text,
                 pg_get_function_identity_arguments(p.oid),
                 COALESCE((SELECT string_agg(
                             CASE WHEN tn.nspname = 'pg_catalog'
                                  THEN pg_catalog.format_type(a.oid, NULL)
+                                 WHEN e.oid IS NOT NULL
+                                 THEN quote_ident(en.nspname) || '.' || quote_ident(e.typname) || '[]'
                                  ELSE quote_ident(tn.nspname) || '.' || quote_ident(t.typname) END,
                             ', ' ORDER BY a.ord)
                           FROM unnest(p.proargtypes) WITH ORDINALITY AS a(oid, ord)
                           JOIN pg_type t ON t.oid = a.oid
-                          JOIN pg_namespace tn ON tn.oid = t.typnamespace), ''),
+                          JOIN pg_namespace tn ON tn.oid = t.typnamespace
+                          -- A true array type, by `format_type`'s own test.
+                          LEFT JOIN pg_type e ON t.typelem <> 0 AND t.typlen = -1 AND e.oid = t.typelem
+                          LEFT JOIN pg_namespace en ON en.oid = e.typnamespace), ''),
                 COALESCE(pg_get_function_result(p.oid), ''),
                 l.lanname::text, p.provolatile::text, p.prosecdef, p.prosrc,
                 obj_description(p.oid, 'pg_proc')

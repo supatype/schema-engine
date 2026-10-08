@@ -71,7 +71,9 @@ async fn functions_carry_their_identity_body_and_properties() {
              COMMENT ON FUNCTION public.whoami() IS 'definer';
              CREATE TABLE public.things (id int);
              CREATE FUNCTION public.describe(t public.things, at timestamptz, tags text[])
-               RETURNS text LANGUAGE sql AS $$ SELECT '' $$;",
+               RETURNS text LANGUAGE sql AS $$ SELECT '' $$;
+             CREATE FUNCTION public.count_all(rows public.things[], at timestamp(3) with time zone)
+               RETURNS int LANGUAGE sql AS $$ SELECT 0 $$;",
         )
         .await;
 
@@ -115,6 +117,24 @@ async fn functions_carry_their_identity_body_and_properties() {
                 "t public.things, at timestamptz, tags text[]"
             ),
             format!("describe({})", describe.identity_types)
+        );
+        // An array of a project type is its element type with brackets, not `public._things`,
+        // and a modifier does not change the type it modifies: both as the declaration keys them.
+        let count_all = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "count_all")
+            .unwrap();
+        assert_eq!(
+            count_all.identity_types,
+            "public.things[], timestamp with time zone"
+        );
+        assert_eq!(
+            supatype_engine::desired::identity::function_key(
+                "count_all",
+                "rows public.things[], at timestamp(3) with time zone"
+            ),
+            format!("count_all({})", count_all.identity_types)
         );
         assert!(twice
             .iter()
