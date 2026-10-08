@@ -271,7 +271,13 @@
         "checkExpression": null,
         "onDelete": "SET NULL",
         "definition": "FOREIGN KEY (parent_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "categories",
@@ -346,7 +352,13 @@
         "checkExpression": null,
         "onDelete": "SET NULL",
         "definition": "FOREIGN KEY (manager_id) REFERENCES employees(id) ON UPDATE CASCADE ON DELETE SET NULL",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "employees",

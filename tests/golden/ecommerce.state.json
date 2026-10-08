@@ -578,7 +578,13 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (order_id) REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "order_items",
@@ -610,7 +616,13 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (product_id) REFERENCES products(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "orders",
@@ -627,7 +639,13 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "orders",

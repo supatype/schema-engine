@@ -47,6 +47,7 @@ fn fk(table: &str, col_name: &str, ftable: &str) -> DbConstraint {
         on_delete: Some("RESTRICT".into()),
         definition: None,
         comment: None,
+        foreign_key_options: Some(Default::default()),
     }
 }
 
@@ -5488,6 +5489,7 @@ fn managed_unique_constraint(table: &str, column: &str) -> DbConstraint {
         comment: Some(format!(
             "supatype:managed;kind=unique_constraint;table={table};fields={column};v=1"
         )),
+        foreign_key_options: None,
     }
 }
 
@@ -6541,6 +6543,7 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
                 on_delete: None,
                 definition: None,
                 comment: None,
+                foreign_key_options: None,
             },
             // A NOT NULL is a column property, not a rule anyone declared. Reporting it would bury
             // the finding that matters under one per nullable column.
@@ -6556,6 +6559,7 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
                 on_delete: None,
                 definition: None,
                 comment: None,
+                foreign_key_options: None,
             },
         ],
         ..DatabaseState::default()
@@ -6646,6 +6650,7 @@ fn test_doctor_leaves_supatype_owned_checks_alone() {
             comment: Some(
                 "supatype:managed;kind=check;table=posts;fields=excerpt;v=1;bounds=abc".into(),
             ),
+            foreign_key_options: None,
         }],
         ..DatabaseState::default()
     };

@@ -351,6 +351,10 @@ impl ObjectKind {
                 "references",
                 "referenced_columns",
                 "on_delete",
+                "on_update",
+                "match_type",
+                "deferrable",
+                "initially_deferred",
                 "definition",
             ],
             ObjectKind::Check => &["expression"],
@@ -776,8 +780,10 @@ fn relation_entries<'a>(
                     c.foreign_schema.as_deref().unwrap_or(schema),
                     c.foreign_table.as_deref().unwrap_or("")
                 );
-                // The whole deparsed constraint carries `ON UPDATE`, `MATCH`, `DEFERRABLE` and
-                // `NOT VALID`, which the parts before it do not.
+                // Parts of their own, so a desired key predicts them and a user's key that differs
+                // only in one of them is not taken for ours.
+                let options = c.foreign_key_options.clone().unwrap_or_default();
+                // The whole deparsed constraint also carries `NOT VALID`, which no part does.
                 let definition = c
                     .definition
                     .as_deref()
@@ -793,6 +799,10 @@ fn relation_entries<'a>(
                         references.as_str(),
                         foreign_columns.as_str(),
                         c.on_delete.as_deref().unwrap_or(""),
+                        options.on_update.as_str(),
+                        options.match_type.as_str(),
+                        flag(options.deferrable),
+                        flag(options.initially_deferred),
                         definition.as_str(),
                     ],
                 )
@@ -1058,6 +1068,7 @@ mod tests {
                 on_delete: None,
                 definition: None,
                 comment: None,
+                foreign_key_options: None,
             }],
             ..Default::default()
         }
@@ -1223,6 +1234,7 @@ mod tests {
                 on_delete: Some("CASCADE".into()),
                 definition: Some(definition.into()),
                 comment: None,
+                foreign_key_options: Some(Default::default()),
             }],
             ..Default::default()
         }

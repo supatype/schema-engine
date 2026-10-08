@@ -356,7 +356,13 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "course_tags",
@@ -389,7 +395,13 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "courses",
@@ -436,7 +448,13 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "enrollments",
@@ -469,7 +487,13 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE",
-        "comment": null
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "students",

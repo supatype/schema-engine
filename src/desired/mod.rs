@@ -47,6 +47,7 @@ use crate::generator::sql::{
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql, versions_record_key_name},
 };
+use crate::introspector::constraints::ForeignKeyOptions;
 use crate::introspector::fingerprint::{
     definition_value, normalise_sql, rls_enable_sql, ObjectKind,
 };
@@ -517,6 +518,12 @@ impl<'a> Builder<'a> {
         structure.insert("references", format!("{}.{}", fk.ref_schema, fk.ref_table));
         structure.insert("referenced_columns", fk.ref_column.to_string());
         structure.insert("on_delete", fk.on_delete.to_string());
+        // The rest of what the key does, read off the statement that makes it.
+        let options = foreign_key_options(&create);
+        structure.insert("on_update", options.on_update);
+        structure.insert("match_type", options.match_type);
+        structure.insert("deferrable", flag(options.deferrable));
+        structure.insert("initially_deferred", flag(options.initially_deferred));
         let mut depends_on = vec![self.table_key(table)];
         if fk.ref_schema == self.schema {
             depends_on.push(self.table_key(fk.ref_table));
@@ -1131,6 +1138,47 @@ struct ForeignKeyRef<'a> {
     on_delete: &'a str,
 }
 
+/// The `ON UPDATE`, `MATCH` and deferral a foreign key's `ADD CONSTRAINT` declares, spelled as the
+/// catalog read spells them, each at its default when the statement leaves it out. Quoted names
+/// are taken out first, so a table or column called `on update` reads as nothing.
+fn foreign_key_options(create: &str) -> ForeignKeyOptions {
+    let mut bare = String::new();
+    for (i, part) in create.split('"').enumerate() {
+        if i % 2 == 0 {
+            bare.push_str(part);
+        }
+    }
+    let sql = bare.to_ascii_uppercase();
+    let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    let tail = sql
+        .rsplit_once("REFERENCES")
+        .map(|(_, tail)| tail)
+        .unwrap_or_default();
+    let mut options = ForeignKeyOptions::default();
+    if let Some((_, after)) = tail.split_once("ON UPDATE ") {
+        if let Some(action) = [
+            "NO ACTION",
+            "RESTRICT",
+            "CASCADE",
+            "SET NULL",
+            "SET DEFAULT",
+        ]
+        .into_iter()
+        .find(|a| after.starts_with(a))
+        {
+            options.on_update = action.to_string();
+        }
+    }
+    if tail.contains("MATCH FULL") {
+        options.match_type = "FULL".into();
+    } else if tail.contains("MATCH PARTIAL") {
+        options.match_type = "PARTIAL".into();
+    }
+    options.deferrable = tail.contains("DEFERRABLE") && !tail.contains("NOT DEFERRABLE");
+    options.initially_deferred = tail.contains("INITIALLY DEFERRED");
+    options
+}
+
 /// `pg_policy.polcmd` for a policy suffix, which is how the live side reports the command.
 fn polcmd(suffix: &str) -> &'static str {
     match suffix {
@@ -1175,6 +1223,108 @@ mod tests {
         };
         assert_eq!(references("ticket_owner_id_fkey"), "auth.users");
         assert_eq!(references("ticket_venue_id_fkey"), "public.venue");
+    }
+
+    /// A foreign key's `ON UPDATE`, `MATCH` and deferral are read off its statement, quoted names
+    /// aside, each at its default when left out.
+    #[test]
+    fn a_foreign_keys_options_are_read_off_its_statement() {
+        let base = r#"ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."on update cascade" ("id") ON DELETE RESTRICT"#;
+        assert_eq!(
+            foreign_key_options(&format!("{base};")),
+            ForeignKeyOptions::default()
+        );
+        let all = foreign_key_options(&format!(
+            "{base} ON UPDATE SET NULL MATCH FULL DEFERRABLE INITIALLY DEFERRED;"
+        ));
+        assert_eq!(
+            all,
+            ForeignKeyOptions {
+                on_update: "SET NULL".into(),
+                match_type: "FULL".into(),
+                deferrable: true,
+                initially_deferred: true,
+            }
+        );
+        assert!(!foreign_key_options(&format!("{base} NOT DEFERRABLE;")).deferrable);
+    }
+
+    /// Every desired foreign key predicts `ON UPDATE`, `MATCH` and deferral, so a user's key of the
+    /// same name that differs only in one of them does not match ours and is not adopted.
+    #[test]
+    fn a_desired_foreign_key_predicts_on_update_and_deferral() {
+        use crate::introspector::{
+            catalog::CatalogState,
+            constraints::{DbConstraint, DbConstraintType},
+            fingerprint::fingerprints,
+        };
+        use crate::ledger::reconcile::parse_definition;
+        use crate::state::database_state::DatabaseState;
+
+        let ast = ast(r#"{"astVersion":2,"models":[
+              {"name":"User","fields":{
+                "id":{"kind":"integer","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}}
+              },"options":{},"annotations":{"db":{"tableName":"users","indexes":[]}}},
+              {"name":"Post","fields":{
+                "id":{"kind":"integer","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}},
+                "author":{"kind":"relation","cardinality":"belongsTo","target":"User","annotations":{"db":{"foreignKey":"author_id"}}}
+              },"options":{},"annotations":{"db":{"tableName":"posts","indexes":[]}}}
+            ]}"#);
+        let set = desired_objects(&ast, "public").unwrap();
+        let fk = set
+            .iter()
+            .find(|o| o.key.kind == ObjectKind::ForeignKey)
+            .expect("a foreign key");
+        assert_eq!(fk.structure["on_update"], "CASCADE", "{:?}", fk.create_sql);
+        assert_eq!(fk.structure["match_type"], "SIMPLE");
+        assert_eq!(fk.structure["deferrable"], "f");
+        assert_eq!(fk.structure["initially_deferred"], "f");
+
+        let live = |options: ForeignKeyOptions| {
+            let db = DatabaseState {
+                schema: "public".into(),
+                constraints: vec![DbConstraint {
+                    table: "posts".into(),
+                    name: fk.key.name.clone(),
+                    constraint_type: DbConstraintType::ForeignKey,
+                    columns: vec!["author_id".into()],
+                    foreign_table: Some("users".into()),
+                    foreign_schema: Some("public".into()),
+                    foreign_columns: Some(vec!["id".into()]),
+                    check_expression: None,
+                    on_delete: Some(fk.structure["on_delete"].clone()),
+                    definition: None,
+                    comment: None,
+                    foreign_key_options: Some(options),
+                }],
+                ..Default::default()
+            };
+            fingerprints(&db, &CatalogState::default()).remove(0)
+        };
+        let matches = |options: ForeignKeyOptions| {
+            let live = live(options);
+            let parts = parse_definition(&live.definition);
+            fk.structure
+                .iter()
+                .all(|(label, want)| parts.get(label) == Some(&want.as_str()))
+        };
+        let ours = ForeignKeyOptions {
+            on_update: "CASCADE".into(),
+            ..Default::default()
+        };
+        assert!(matches(ours.clone()));
+        assert!(
+            !matches(ForeignKeyOptions::default()),
+            "ON UPDATE NO ACTION"
+        );
+        assert!(!matches(ForeignKeyOptions {
+            deferrable: true,
+            ..ours.clone()
+        }));
+        assert!(!matches(ForeignKeyOptions {
+            match_type: "FULL".into(),
+            ..ours
+        }));
     }
 
     /// Every desired index predicts every part a same-named live index could differ in, the empty

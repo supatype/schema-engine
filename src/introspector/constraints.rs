@@ -24,6 +24,35 @@ pub struct DbConstraint {
     /// Postgres `COMMENT ON CONSTRAINT` text, when set.
     #[serde(default)]
     pub comment: Option<String>,
+    /// What a foreign key does besides `ON DELETE`, read from the catalog; `None` for the other
+    /// kinds. Fingerprinted as parts of their own so a key that differs only in one of them reads
+    /// as a different key, not as ours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_key_options: Option<ForeignKeyOptions>,
+}
+
+/// A foreign key's `ON UPDATE`, `MATCH` and deferral, as `pg_constraint` records them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyOptions {
+    /// Spelled as [`DbConstraint::on_delete`] is: `NO ACTION`, `RESTRICT`, `CASCADE`, ...
+    pub on_update: String,
+    /// `SIMPLE`, `FULL` or `PARTIAL`.
+    pub match_type: String,
+    pub deferrable: bool,
+    pub initially_deferred: bool,
+}
+
+impl Default for ForeignKeyOptions {
+    /// What a foreign key declared with none of these clauses has.
+    fn default() -> Self {
+        ForeignKeyOptions {
+            on_update: "NO ACTION".into(),
+            match_type: "SIMPLE".into(),
+            deferrable: false,
+            initially_deferred: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,9 +75,13 @@ type ConstraintRow = (
     Option<String>,
     String,
     Option<String>,
+    Option<String>,
+    String,
+    bool,
+    bool,
 );
 
-/// The `ON DELETE` action as `information_schema.referential_constraints.delete_rule` spelled it,
+/// The `ON DELETE` (or `ON UPDATE`) action as `information_schema.referential_constraints` spells it,
 /// which is the spelling the generator splices back into `ALTER TABLE ... ADD CONSTRAINT`.
 fn delete_rule(confdeltype: &str) -> Option<String> {
     let rule = match confdeltype {
@@ -60,6 +93,16 @@ fn delete_rule(confdeltype: &str) -> Option<String> {
         _ => return None,
     };
     Some(rule.to_string())
+}
+
+/// `MATCH` as SQL spells it, from `pg_constraint.confmatchtype`.
+fn match_type(confmatchtype: &str) -> String {
+    match confmatchtype {
+        "f" => "FULL",
+        "p" => "PARTIAL",
+        _ => "SIMPLE",
+    }
+    .to_string()
 }
 
 /// Every primary key, unique, foreign key and check constraint on a table in `schema`.
@@ -94,7 +137,11 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum),
             NULLIF(con.confdeltype::text, ' '),
             pg_get_constraintdef(con.oid),
-            obj_description(con.oid, 'pg_constraint')
+            obj_description(con.oid, 'pg_constraint'),
+            NULLIF(con.confupdtype::text, ' '),
+            con.confmatchtype::text,
+            con.condeferrable,
+            con.condeferred
         FROM pg_constraint con
         JOIN pg_class rel ON rel.oid = con.conrelid
         JOIN pg_namespace ns ON ns.oid = rel.relnamespace
@@ -123,6 +170,10 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
         confdeltype,
         definition,
         comment,
+        confupdtype,
+        confmatchtype,
+        condeferrable,
+        condeferred,
     ) in rows
     {
         let constraint = match contype.as_str() {
@@ -138,6 +189,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 on_delete: None,
                 definition: None,
                 comment,
+                foreign_key_options: None,
             },
             "u" => DbConstraint {
                 table,
@@ -151,6 +203,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 on_delete: None,
                 definition: None,
                 comment,
+                foreign_key_options: None,
             },
             "f" => DbConstraint {
                 table,
@@ -164,6 +217,15 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 on_delete: confdeltype.as_deref().and_then(delete_rule),
                 definition: Some(definition),
                 comment,
+                foreign_key_options: Some(ForeignKeyOptions {
+                    on_update: confupdtype
+                        .as_deref()
+                        .and_then(delete_rule)
+                        .unwrap_or_else(|| "NO ACTION".into()),
+                    match_type: match_type(&confmatchtype),
+                    deferrable: condeferrable,
+                    initially_deferred: condeferred,
+                }),
             },
             _ => DbConstraint {
                 table,
@@ -177,6 +239,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 on_delete: None,
                 definition: None,
                 comment,
+                foreign_key_options: None,
             },
         };
         constraints.push(constraint);

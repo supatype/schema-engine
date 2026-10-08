@@ -297,6 +297,7 @@ mod tests {
             on_delete: None,
             definition: None,
             comment: None,
+            foreign_key_options: Some(Default::default()),
         }
     }
 

@@ -152,73 +152,128 @@ fn no_drop_cascades_and_the_set_is_deterministic() {
     }
 }
 
+/// Every desired object of `kinds` (all of them for `None`) whose predicted structure differs from
+/// the live one after the push, or that is missing.
+async fn structure_problems(
+    pool: &sqlx::PgPool,
+    ast: &SchemaAst,
+    kinds: Option<&[ObjectKind]>,
+) -> Vec<String> {
+    let db = introspector::introspect(pool, "public").await.unwrap();
+    let catalog = introspector::introspect_catalog(pool, "public")
+        .await
+        .unwrap();
+    let live: BTreeMap<(ObjectKind, String, String, String), BTreeMap<String, String>> =
+        fingerprints(&db, &catalog)
+            .into_iter()
+            .map(|f| {
+                let parts = f
+                    .definition
+                    .lines()
+                    .filter_map(|l| l.split_once('='))
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect();
+                ((f.kind, f.schema, f.parent, f.name), parts)
+            })
+            .collect();
+
+    let mut problems = Vec::new();
+    for o in desired_objects(ast, "public").unwrap() {
+        if kinds.is_some_and(|kinds| !kinds.contains(&o.key.kind)) {
+            continue;
+        }
+        // Where `pg_cron` is absent the layer says so and schedules nothing.
+        if o.key.kind == ObjectKind::CronJob && !catalog.cron_available {
+            continue;
+        }
+        // A role the rules allow nothing holds nothing, which the catalog has no row for:
+        // the ledger records it as `holding_nothing`.
+        let holds_nothing = o.structure.get("privileges").is_some_and(String::is_empty);
+        if o.key.kind == ObjectKind::TableGrant && holds_nothing {
+            continue;
+        }
+        let key = (
+            o.key.kind,
+            o.key.schema.clone(),
+            o.key.parent.clone(),
+            o.key.name.clone(),
+        );
+        let Some(parts) = live.get(&key) else {
+            problems.push(format!("missing after push: {key:?}"));
+            continue;
+        };
+        for (label, want) in &o.structure {
+            match parts.get(*label) {
+                Some(got) if got == want => {}
+                other => problems.push(format!(
+                    "{key:?}: {label} predicted {want:?}, live {other:?}"
+                )),
+            }
+        }
+    }
+    problems
+}
+
+async fn auth_users(pool: &sqlx::PgPool) {
+    sqlx::raw_sql(
+        "CREATE SCHEMA IF NOT EXISTS auth;
+         CREATE TABLE IF NOT EXISTS auth.users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT UNIQUE);",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn after_a_push_every_desired_object_exists_with_the_structure_it_predicted() {
     for name in PUSHABLE {
         common::with_integration_pool(|pool| async move {
             let ast = fixture(name);
-            sqlx::raw_sql(
-                "CREATE SCHEMA IF NOT EXISTS auth;
-                 CREATE TABLE IF NOT EXISTS auth.users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), email TEXT UNIQUE);",
-            )
-            .execute(&pool)
-            .await
-            .unwrap();
+            auth_users(&pool).await;
             // `desired_objects` describes a database that enforces field rules with labels, so
             // the extension is installed: without it the push would choose the `api` views.
             assert!(common::mask_extension_available(&pool).await);
             common::push(&pool, &ast)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: applies: {e}"));
-
-            let db = introspector::introspect(&pool, "public").await.unwrap();
-            let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
-            let live: BTreeMap<(ObjectKind, String, String, String), BTreeMap<String, String>> =
-                fingerprints(&db, &catalog)
-                    .into_iter()
-                    .map(|f| {
-                        let parts = f
-                            .definition
-                            .lines()
-                            .filter_map(|l| l.split_once('='))
-                            .map(|(k, v)| (k.to_string(), v.to_string()))
-                            .collect();
-                        ((f.kind, f.schema, f.parent, f.name), parts)
-                    })
-                    .collect();
-
-            let mut problems = Vec::new();
-            for o in desired_objects(&ast, "public").unwrap() {
-                // Where `pg_cron` is absent the layer says so and schedules nothing.
-                if o.key.kind == ObjectKind::CronJob && !catalog.cron_available {
-                    continue;
-                }
-                // A role the rules allow nothing holds nothing, which the catalog has no row for:
-                // the ledger records it as `holding_nothing`.
-                let holds_nothing = o.structure.get("privileges").is_some_and(String::is_empty);
-                if o.key.kind == ObjectKind::TableGrant && holds_nothing {
-                    continue;
-                }
-                let key = (
-                    o.key.kind,
-                    o.key.schema.clone(),
-                    o.key.parent.clone(),
-                    o.key.name.clone(),
-                );
-                let Some(parts) = live.get(&key) else {
-                    problems.push(format!("missing after push: {key:?}"));
-                    continue;
-                };
-                for (label, want) in &o.structure {
-                    match parts.get(*label) {
-                        Some(got) if got == want => {}
-                        other => problems.push(format!(
-                            "{key:?}: {label} predicted {want:?}, live {other:?}"
-                        )),
-                    }
-                }
-            }
+            let problems = structure_problems(&pool, &ast, None).await;
             assert!(problems.is_empty(), "{name}:\n{}", problems.join("\n"));
+        })
+        .await;
+    }
+}
+
+/// Adoption compares a same-named live object with its prediction, so every function and foreign
+/// key a push creates has to match its own, options and all (`SET search_path`, `STRICT`,
+/// `ON UPDATE`, `DEFERRABLE`, ...): one that did not would read as a user's object on a database
+/// with no record of it. Neither kind depends on how field rules are enforced, so this runs
+/// without `supatype_mask` too, over the fixtures that declare no field rules and need no
+/// extension beyond the image's defaults.
+#[tokio::test]
+async fn every_function_and_foreign_key_a_push_creates_matches_its_prediction() {
+    for name in [
+        "ecommerce",
+        "five_model_blog",
+        "many_to_many",
+        "rls_access_rules",
+        "self_referential",
+        "standup_relations",
+        "versioned_blog",
+    ] {
+        common::with_integration_pool(|pool| async move {
+            let ast = fixture(name);
+            auth_users(&pool).await;
+            common::push(&pool, &ast)
+                .await
+                .unwrap_or_else(|e| panic!("{name}: applies: {e}"));
+            let kinds = [ObjectKind::Function, ObjectKind::ForeignKey];
+            let problems = structure_problems(&pool, &ast, Some(&kinds)).await;
+            assert!(problems.is_empty(), "{name}:\n{}", problems.join("\n"));
+            let desired = desired_objects(&ast, "public").unwrap();
+            assert!(
+                desired.iter().any(|o| kinds.contains(&o.key.kind)),
+                "{name}: nothing to compare"
+            );
         })
         .await;
     }
