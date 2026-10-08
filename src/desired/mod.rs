@@ -142,8 +142,9 @@ impl ObjectKey {
                 format!("DROP FUNCTION IF EXISTS \"{schema}\".\"{ident}\"({args};")
             }
             // Guarded as the schedule is: a database without `pg_cron` has no job to unschedule.
+            // Only this database's job, as introspection reads them: `cron.job` is the cluster's.
             ObjectKind::CronJob => format!(
-                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}';\n  END IF;\nEND;\n$cron$;"
+                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}' AND database = current_database();\n  END IF;\nEND;\n$cron$;"
             ),
             // The parent is `table.column`, or the table for a label on the table itself; only our
             // own provider's labels are ever desired or dropped.

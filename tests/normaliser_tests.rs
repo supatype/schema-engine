@@ -498,6 +498,8 @@ fn test_rename_column_comment_uses_ascii_arrow() {
                 col("old_name", "text"),
             ],
         }],
+        // Only a column the ledger records as ours is renamed.
+        column_ownership: [(("thing".to_string(), "old_name".to_string()), true)].into(),
         ..DatabaseState::default()
     };
 

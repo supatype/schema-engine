@@ -141,16 +141,36 @@ fn authenticated_loses_row_dependent_columns_on_insert_only() {
     );
 }
 
-// The complement has to come from the live catalog, not the AST: a column this generator never
-// saw must still be granted, or a defence-in-depth layer becomes the thing that breaks writes.
+// The granted columns are the declared ones the role may write, named in the statement, so a
+// column added to the schema changes what the push intends and the grant is applied again. Each is
+// checked against the catalog at apply time, so one not there yet never aborts the migration.
 #[test]
-fn the_granted_column_list_is_read_from_the_catalog() {
+fn the_granted_column_list_is_the_declared_columns_less_the_excluded() {
     let sql = column_grants();
+    assert!(
+        sql.contains("AND column_name IN ('id', 'open')"),
+        "anon may write only the declared columns its rules reach:\n{sql}"
+    );
     assert!(sql.contains("FROM information_schema.columns"), "{sql}");
     assert!(
         sql.contains("quote_ident(column_name)"),
         "column names must be quoted by the database, not by string building:\n{sql}"
     );
+
+    // Declaring a column changes the statement, which is what makes the push re-apply it.
+    let more = SCHEMA.replace(
+        r#""open":       { "kind": "text","#,
+        r#""extra": { "kind": "text", "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+        "open":       { "kind": "text","#,
+    );
+    let ast = parser::parse(&more).expect("schema parses");
+    let widened: Vec<String> = grants::table_grants(&ast, false)
+        .iter()
+        .filter(|g| !g.narrowed.is_empty())
+        .map(|g| g.create_sql("public"))
+        .collect();
+    assert!(widened.iter().any(|s| s.contains("'extra'")), "{widened:?}");
+    assert_ne!(widened.join("\n"), sql);
 }
 
 // Reads are never restricted this way: a column REVOKE makes `GET /table` with no `select`

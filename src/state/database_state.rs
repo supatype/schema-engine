@@ -28,6 +28,9 @@ pub struct DatabaseState {
     /// false when released. Filled by the caller that read the ledger; never part of a snapshot.
     #[serde(skip)]
     pub table_ownership: BTreeMap<String, bool>,
+    /// The same for each column the ledger has a row for, keyed by table and column (D4).
+    #[serde(skip)]
+    pub column_ownership: BTreeMap<(String, String), bool>,
     /// The `(table, policy)` pairs of this schema the ledger records as Supatype's (not released):
     /// the reconcile's to keep or drop. Filled with `table_ownership`; never part of a snapshot.
     #[serde(skip)]
@@ -45,22 +48,41 @@ impl DatabaseState {
             .unwrap_or_else(|| crate::managed::is_managed_comment(table.comment.as_deref()))
     }
 
-    /// Takes each table's ownership, and which policies are ours, from the ledger rows of `schema`.
+    /// What the ledger says of `column` on `table`: `Some(true)` when Supatype's, `Some(false)`
+    /// when released, `None` when it has no row.
+    pub fn column_owned(&self, table: &str, column: &str) -> Option<bool> {
+        self.column_ownership
+            .get(&(table.to_string(), column.to_string()))
+            .copied()
+    }
+
+    /// Takes each table's and each column's ownership, and which policies are ours, from the
+    /// ledger rows of `schema`.
     pub fn set_table_ownership(&mut self, ledger: &[LedgerRow]) {
-        self.table_ownership = ledger
-            .iter()
-            .filter(|r| r.key.kind == ObjectKind::Table && r.key.schema == self.schema)
+        let schema = self.schema.as_str();
+        let here = |kind| {
+            ledger
+                .iter()
+                .filter(move |r: &&LedgerRow| r.key.kind == kind && r.key.schema == schema)
+        };
+        let table_ownership = here(ObjectKind::Table)
             .map(|r| (r.key.name.clone(), r.status != Status::Released))
             .collect();
-        self.owned_policies = ledger
-            .iter()
-            .filter(|r| {
-                r.key.kind == ObjectKind::Policy
-                    && r.key.schema == self.schema
-                    && r.status != Status::Released
+        let column_ownership = here(ObjectKind::Column)
+            .map(|r| {
+                (
+                    (r.key.parent.clone(), r.key.name.clone()),
+                    r.status != Status::Released,
+                )
             })
+            .collect();
+        let owned_policies = here(ObjectKind::Policy)
+            .filter(|r| r.status != Status::Released)
             .map(|r| (r.key.parent.clone(), r.key.name.clone()))
             .collect();
+        self.table_ownership = table_ownership;
+        self.column_ownership = column_ownership;
+        self.owned_policies = owned_policies;
     }
 
     /// Whether a policy is Supatype's: the ledger records it, or it carries the stamp an older

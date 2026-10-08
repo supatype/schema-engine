@@ -238,3 +238,59 @@ async fn a_field_write_rule_narrows_the_write_privilege_to_columns() {
     })
     .await;
 }
+
+/// A narrowed write privilege names the declared columns the role may write, so declaring a column
+/// changes the grant and the push applies it again: the new column is writable like its siblings.
+/// Dropping a column from the schema changes it the same way, so the column privilege going with
+/// the column is the push's own change, not access changed outside Supatype.
+#[tokio::test]
+async fn a_narrowed_grant_follows_the_declared_columns() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            return;
+        }
+        let narrowed = |extra: bool| {
+            let mut ast = posts(json!({
+                "read": { "type": "public" },
+                "update": { "type": "authenticated" },
+                "fields": { "locked": { "write": { "type": "private" } } }
+            }));
+            if extra {
+                let title = ast.models[0].fields["title"].clone();
+                ast.models[0].fields.insert("summary".into(), title);
+            }
+            ast
+        };
+        push(&pool, &narrowed(false)).await.unwrap();
+        assert_eq!(
+            columns_with(&pool, "authenticated", "UPDATE").await,
+            ["id", "title"]
+        );
+
+        push(&pool, &narrowed(true)).await.unwrap();
+        assert_eq!(
+            columns_with(&pool, "authenticated", "UPDATE").await,
+            ["id", "summary", "title"],
+            "the new column has no write privilege"
+        );
+        assert!(up_to_date(&push(&pool, &narrowed(true)).await.unwrap()));
+
+        // Without consent to overwrite drift: the push's own column drop is not drift.
+        common::push_with(
+            &pool,
+            &narrowed(false),
+            push::ApplyOptions {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("dropping a declared column is not access changed outside Supatype");
+        assert_eq!(
+            columns_with(&pool, "authenticated", "UPDATE").await,
+            ["id", "title"]
+        );
+        assert!(up_to_date(&push(&pool, &narrowed(false)).await.unwrap()));
+    })
+    .await;
+}

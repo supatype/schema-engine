@@ -227,3 +227,35 @@ async fn the_constraint_helper_functions_are_recorded() {
     })
     .await;
 }
+
+/// What an upgrade finds: the `api` layer an older engine made, unstamped and unrecorded. Named
+/// only as the engine names it for the last push's model, it is the engine's, so the first push
+/// with no field rule left takes the view and its write trigger and function away.
+#[tokio::test]
+async fn an_older_engines_api_layer_goes_with_the_last_field_rule() {
+    common::with_integration_pool(|pool| async move {
+        if common::mask_extension_available(&pool).await {
+            // With the extension the rules are labels, and there is no `api` layer to leave.
+            return;
+        }
+        push(&pool, &schema(vec![employees(true)])).await.unwrap();
+        assert!(view_exists(&pool, "api", "employees").await);
+        common::as_an_older_engine_left_it(&pool).await.unwrap();
+
+        let outcome = push(&pool, &schema(vec![employees(false)])).await.unwrap();
+        assert!(applied(&outcome), "{outcome:?}");
+        assert!(
+            !view_exists(&pool, "api", "employees").await,
+            "the older engine's api view was left behind"
+        );
+        let functions: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = 'api'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(functions, 0, "its write trigger's function was left behind");
+    })
+    .await;
+}

@@ -276,6 +276,8 @@ fn test_rename_column_detected() {
             comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("body_text", "text")],
         }],
+        // The ledger records `body_text` as ours: only a column that is ours is renamed.
+        column_ownership: [(("posts".to_string(), "body_text".to_string()), true)].into(),
         ..DatabaseState::default()
     };
 
@@ -312,6 +314,63 @@ fn test_rename_column_detected() {
         add_of_new.is_empty(),
         "must not emit AddColumn for the renamed column"
     );
+}
+
+/// A column the ledger does not record is someone else's (D4), so it is never the source of a
+/// rename: `subtitel`, added by hand, is not renamed into the declared `subtitle`, which is added.
+/// With no ledger row at all (an upgraded database), the last push's schema declaring the column
+/// is what makes it ours.
+#[test]
+fn test_rename_column_needs_a_column_that_is_ours() {
+    let ast = |field: &str| {
+        parser::parse(&format!(
+            r#"{{ "astVersion": 2, "models": [{{ "name": "Post",
+                 "fields": {{
+                   "id": {{ "kind": "uuid", "primaryKey": true, "required": true,
+                            "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }} }},
+                   "{field}": {{ "kind": "text",
+                            "annotations": {{ "db": {{ "pgType": "TEXT", "unique": false }} }} }} }},
+                 "options": {{ "timestamps": false, "softDelete": false }},
+                 "annotations": {{ "db": {{ "tableName": "posts", "indexes": [] }},
+                                   "platform": {{ "access": {{}} }} }} }}] }}"#
+        ))
+        .unwrap()
+    };
+    let mut db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
+            columns: vec![col("id", "uuid"), col("subtitel", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+    let renames = |diff: &differ::DiffOutput| {
+        diff.operations
+            .iter()
+            .filter(|op| matches!(op, Operation::RenameColumn { .. }))
+            .count()
+    };
+    let adds_subtitle = |diff: &differ::DiffOutput| {
+        diff.operations
+            .iter()
+            .any(|op| matches!(op, Operation::AddColumn { column, .. } if column == "subtitle"))
+    };
+
+    let unowned = differ::diff(&ast("subtitle"), &db).unwrap();
+    assert_eq!(renames(&unowned), 0, "{:?}", unowned.operations);
+    assert!(adds_subtitle(&unowned), "{:?}", unowned.operations);
+
+    // An upgraded database: no row, but the last push declared it.
+    let previous = ast("subtitel");
+    let upgraded = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
+    assert_eq!(renames(&upgraded), 1, "{:?}", upgraded.operations);
+
+    // A row decides over the previous schema: released means not ours.
+    db.column_ownership = [(("posts".to_string(), "subtitel".to_string()), false)].into();
+    let released = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
+    assert_eq!(renames(&released), 0, "{:?}", released.operations);
+    assert!(adds_subtitle(&released), "{:?}", released.operations);
 }
 
 // ─── Scenario 5: FK already exists, a no-op ───────────────────────────────────

@@ -16,7 +16,7 @@
 //! merely leaves today's behaviour in place. `service_role` is never touched: it is
 //! the escape hatch that has to keep working when everything else is locked down.
 
-use crate::parser::accessors::{db_table_name, platform_access};
+use crate::parser::accessors::{column_names_for, db_table_name, platform_access};
 use crate::parser::ast::{AccessRule, MembershipSource, ModelAst, Operand, SchemaAst};
 
 /// Whether an unauthenticated caller could ever satisfy a rule.
@@ -104,6 +104,12 @@ pub struct TableGrant {
     /// Write privileges narrowed to columns: the operation, and the columns it may not touch. The
     /// operation is then not in `privileges`.
     pub narrowed: Vec<(&'static str, Vec<String>)>,
+    /// The columns the model declares, its options' included, in declaration order: what a
+    /// narrowed privilege is granted on, less the columns it may not touch. Part of the `CREATE`,
+    /// so a column added to or dropped from the schema changes what the push intends and the
+    /// grant is applied again, rather than leaving a new column unwritable for the role (or a
+    /// dropped one reading as privileges changed outside Supatype).
+    pub columns: Vec<String>,
 }
 
 impl TableGrant {
@@ -128,7 +134,13 @@ impl TableGrant {
             body.push_str(&format!("    EXECUTE '{}';\n", escape(&grant)));
         }
         for (op, excluded) in &self.narrowed {
-            body.push_str(&column_complement(schema, &self.table, op, role, excluded));
+            let writable: Vec<&str> = self
+                .columns
+                .iter()
+                .filter(|c| !excluded.contains(c))
+                .map(String::as_str)
+                .collect();
+            body.push_str(&column_grant(schema, &self.table, op, role, &writable));
         }
         let declare = if self.narrowed.is_empty() {
             ""
@@ -185,6 +197,7 @@ pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
                     role,
                     privileges: Vec::new(),
                     narrowed: Vec::new(),
+                    columns: Vec::new(),
                 }
             } else {
                 model_grant(model, role)
@@ -229,7 +242,26 @@ fn model_grant(model: &ModelAst, role: &'static str) -> TableGrant {
         role,
         privileges,
         narrowed,
+        columns: declared_columns(model),
     }
+}
+
+/// Every column `model` declares, by a field or an option, once each, in declaration order.
+fn declared_columns(model: &ModelAst) -> Vec<String> {
+    let mut columns: Vec<String> = Vec::new();
+    let fields = model
+        .fields
+        .iter()
+        .flat_map(|(name, field)| column_names_for(name, field));
+    let options = crate::generator::sql::migration::option_columns(model)
+        .into_iter()
+        .map(|(column, _)| column.to_string());
+    for column in fields.chain(options) {
+        if !column.is_empty() && !columns.contains(&column) {
+            columns.push(column);
+        }
+    }
+    columns
 }
 
 // ─── Column privileges for field write rules (defence in depth) ──────────────
@@ -333,21 +365,18 @@ fn write_satisfiable(op: &str, role: &str, write: &AccessRule) -> bool {
     true
 }
 
-/// Grant `op` on every column of the table except `excluded`, inside a block already guarded on
-/// the role.
+/// Grant `op` on `columns`, inside a block already guarded on the role: the declared columns the
+/// role may write.
 ///
-/// The complement is computed from `information_schema.columns` at apply time, not from the
-/// AST. A column this generator never saw (added out of band, or by a plugin) must still be
-/// granted, or the layer meant to be defence in depth silently becomes the thing that breaks
-/// writes.
-fn column_complement(
-    schema: &str,
-    table: &str,
-    op: &str,
-    role: &str,
-    excluded: &[String],
-) -> String {
-    let exclusion_list = excluded
+/// The list is the schema's, so it is part of what the push intends and a declared column added
+/// later is granted when it is added. A column someone added outside the schema is not Supatype's
+/// (D4) and gets no privilege from it. Each name is checked against `information_schema.columns`
+/// at apply time, so a declared column that is not there yet never aborts the migration.
+fn column_grant(schema: &str, table: &str, op: &str, role: &str, columns: &[&str]) -> String {
+    if columns.is_empty() {
+        return String::new();
+    }
+    let column_list = columns
         .iter()
         .map(|column| format!("'{}'", escape(column)))
         .collect::<Vec<_>>()
@@ -358,7 +387,7 @@ fn column_complement(
       FROM information_schema.columns
      WHERE table_schema = '{schema_literal}'
        AND table_name = '{table_literal}'
-       AND column_name NOT IN ({exclusion_list});
+       AND column_name IN ({column_list});
     IF granted IS NOT NULL THEN
       EXECUTE format('GRANT {op} (%s) ON {target} TO {role}', granted);
     END IF;

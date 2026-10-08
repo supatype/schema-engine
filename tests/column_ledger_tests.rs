@@ -168,7 +168,8 @@ async fn a_declared_column_the_schema_drops_is_dropped() {
 /// What an older engine left: its columns, and no rows. Until a push records them they are not
 /// provably the engine's, so the first push after an upgrade leaves a column the schema dropped in
 /// the same breath, and says so: the conservative direction, since a later push can drop it but
-/// nothing can bring the data back.
+/// nothing can bring the data back. The last push's schema declared it, though, so that push
+/// records it as ours, and the next one drops it.
 #[tokio::test]
 async fn an_upgrade_records_the_declared_columns_and_drops_nothing_unrecorded() {
     common::with_integration_pool(|pool| async move {
@@ -192,7 +193,162 @@ async fn an_upgrade_records_the_declared_columns_and_drops_nothing_unrecorded() 
         );
         assert_eq!(
             recorded(&pool).await,
+            ["created_at", "id", "summary", "title", "updated_at"]
+        );
+
+        common::push_with(&pool, &posts(json!({})), forced())
+            .await
+            .unwrap();
+        assert!(!live_columns(&pool).await.contains(&"summary".to_string()));
+        assert_eq!(
+            recorded(&pool).await,
             ["created_at", "id", "title", "updated_at"]
+        );
+    })
+    .await;
+}
+
+/// The same upgrade, but the column was never the engine's: nothing the last push's schema
+/// declared, so it is not recorded and no push ever drops it.
+#[tokio::test]
+async fn an_upgrade_records_no_column_no_schema_declared() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts(json!({}))).await.unwrap();
+        exec(
+            &pool,
+            "ALTER TABLE public.posts ADD COLUMN notes text;
+             DELETE FROM _supatype.managed_objects WHERE kind = 'column'",
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            common::push_with(&pool, &posts(json!({})), forced())
+                .await
+                .unwrap();
+            assert!(live_columns(&pool).await.contains(&"notes".to_string()));
+        }
+        assert!(!recorded(&pool).await.contains(&"notes".to_string()));
+    })
+    .await;
+}
+
+/// A column released with `adopt --release` is the user's again: removing it from the schema and
+/// forcing the push leaves it, as it leaves one Supatype never had.
+#[tokio::test]
+async fn a_released_column_is_never_dropped() {
+    common::with_integration_pool(|pool| async move {
+        let with_summary = posts(json!({ "summary": text() }));
+        push(&pool, &with_summary).await.unwrap();
+        let summary = ["column:posts.summary".to_string()];
+        supatype_engine::adopt::run(
+            &pool,
+            &with_summary,
+            "public",
+            supatype_engine::adopt::Request {
+                release: &summary,
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        common::push_with(&pool, &posts(json!({})), forced())
+            .await
+            .unwrap();
+        assert!(live_columns(&pool).await.contains(&"summary".to_string()));
+    })
+    .await;
+}
+
+/// `timestamps` turned on for a table that predates it: the option's columns are added, with the
+/// definition `CREATE TABLE` gives them, and recorded. One dropped by hand is put back the same way.
+#[tokio::test]
+async fn an_option_column_the_table_lacks_is_added() {
+    common::with_integration_pool(|pool| async move {
+        let mut plain = posts(json!({}));
+        plain.models[0].options.timestamps = false;
+        push(&pool, &plain).await.unwrap();
+        exec(
+            &pool,
+            "INSERT INTO public.posts (id, title) VALUES (1, 'a')",
+        )
+        .await
+        .unwrap();
+        assert_eq!(recorded(&pool).await, ["id", "title"]);
+
+        push(&pool, &posts(json!({}))).await.unwrap();
+        assert_eq!(
+            recorded(&pool).await,
+            ["created_at", "id", "title", "updated_at"]
+        );
+        let filled: bool = sqlx::query_scalar(
+            "SELECT created_at IS NOT NULL AND updated_at IS NOT NULL FROM public.posts",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(filled, "the existing row has no timestamps");
+        assert!(up_to_date(&push(&pool, &posts(json!({}))).await.unwrap()));
+
+        exec(&pool, "ALTER TABLE public.posts DROP COLUMN updated_at")
+            .await
+            .unwrap();
+        push(&pool, &posts(json!({}))).await.unwrap();
+        assert!(live_columns(&pool)
+            .await
+            .contains(&"updated_at".to_string()));
+        assert!(up_to_date(&push(&pool, &posts(json!({}))).await.unwrap()));
+    })
+    .await;
+}
+
+/// A rename is a similarity guess, so only a column that is ours may be its source: one someone
+/// added (`subtitel`) is not renamed into a declared one (`subtitle`), which is added beside it.
+#[tokio::test]
+async fn a_column_someone_added_is_never_renamed_into_a_declared_one() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts(json!({}))).await.unwrap();
+        exec(
+            &pool,
+            "ALTER TABLE public.posts ADD COLUMN subtitel text;
+             INSERT INTO public.posts (id, title, subtitel) VALUES (1, 'a', 'mine');",
+        )
+        .await
+        .unwrap();
+
+        let with_subtitle = posts(json!({ "subtitle": text() }));
+        let plan = push::prepare(&pool, &with_subtitle, "public")
+            .await
+            .unwrap();
+        assert!(
+            !plan
+                .diff
+                .operations
+                .iter()
+                .any(|op| matches!(op, supatype_engine::differ::Operation::RenameColumn { .. })),
+            "{:?}",
+            plan.diff.operations
+        );
+        push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
+            .unwrap();
+        let columns = live_columns(&pool).await;
+        assert!(columns.contains(&"subtitel".to_string()), "{columns:?}");
+        assert!(columns.contains(&"subtitle".to_string()), "{columns:?}");
+        assert!(!recorded(&pool).await.contains(&"subtitel".to_string()));
+
+        // One of ours is still renamed.
+        let renamed = posts(json!({ "sub_title": text() }));
+        let plan = push::prepare(&pool, &renamed, "public").await.unwrap();
+        assert!(
+            plan.diff.operations.iter().any(|op| matches!(
+                op,
+                supatype_engine::differ::Operation::RenameColumn { from, to, .. }
+                    if from == "subtitle" && to == "sub_title"
+            )),
+            "{:?}",
+            plan.diff.operations
         );
     })
     .await;

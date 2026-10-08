@@ -1602,10 +1602,12 @@ BEGIN
   END IF;
 
   -- Replaced rather than added to, so a push converges on one job per purpose instead of stacking a
-  -- new one every time.
-  PERFORM cron.unschedule(jobname)
+  -- new one every time. Only this database's: `cron.job` holds every database's jobs, and another
+  -- project on the cluster has jobs by the same names.
+  PERFORM cron.unschedule(jobid)
      FROM cron.job
-    WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions');
+    WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions')
+      AND database = current_database();
 
   -- Every minute: the smallest useful granularity for "publish at nine", and the job does nothing
   -- but one indexed scan per versioned model when there is nothing due.

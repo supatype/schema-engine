@@ -195,6 +195,7 @@ mod tests {
                 created_by_parent: &BTreeSet::new(),
                 dropped_tables: &BTreeSet::new(),
                 location: no_location,
+                named_by_the_engine: &BTreeSet::new(),
                 kinds: &[ObjectKind::Policy],
             })
         }
