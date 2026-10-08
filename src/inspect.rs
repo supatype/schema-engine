@@ -55,6 +55,7 @@ pub async fn rebaseline(
 ) -> Result<DoctorReport> {
     let mut tx = pool.begin().await?;
     // As a push does: these are ledger writes too.
+    push::take_engine_lock(&mut tx).await?;
     push::take_push_lock(&mut tx).await?;
     let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
     let mut report = doctor::report_of(ast, &state, &decision);

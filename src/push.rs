@@ -67,6 +67,27 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
 /// `packages/realtime`, `schema-push-lock`). Realtime skips WAL polls while this is held.
 const PUSH_LOCK_CLASS: i32 = 872014;
 const PUSH_LOCK_ID: i32 = 1;
+/// The engine's own mutual exclusion, on the same class and the next id: a push, a writing `adopt`
+/// and `doctor --rebaseline` each take it for their transaction and refuse while another holds it.
+/// Separate from [`PUSH_LOCK_ID`], which the CLI holds from another session around the push it
+/// runs, so refusing on that one would refuse every such push. Only this engine takes this key.
+const ENGINE_LOCK_ID: i32 = 2;
+
+/// Refused because another push, adopt or rebaseline holds [`ENGINE_LOCK_ID`]. A type, so a caller
+/// can tell it from a failed push and retry.
+#[derive(Debug)]
+pub struct EngineBusy;
+
+impl std::fmt::Display for EngineBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "another push, adopt or rebaseline is running on this database; try again. \
+             Nothing was applied.",
+        )
+    }
+}
+
+impl std::error::Error for EngineBusy {}
 
 /// What a push has read and decided, before anything is written.
 pub struct Plan<'a> {
@@ -598,6 +619,8 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
     let strict = opts.strict;
     let rendered = render(&plan, opts)?;
     let mut tx = pool.begin().await.context("begin migration transaction")?;
+    // Before anything is written, so a refusal records no failed migration.
+    take_engine_lock(&mut tx).await?;
     let applied = match within_transaction(&mut tx, &plan, strict, &rendered).await {
         Ok(applied) => applied,
         Err(e) => {
@@ -810,5 +833,20 @@ pub(crate) async fn take_push_lock(tx: &mut PgConnection) -> Result<()> {
         .fetch_one(&mut *tx)
         .await
         .context("try the schema-push advisory lock")?;
+    Ok(())
+}
+
+/// [`ENGINE_LOCK_ID`] for this transaction, or [`EngineBusy`] when another session holds it. Tried,
+/// never waited for: a second writer refuses at once rather than queueing behind the first.
+pub(crate) async fn take_engine_lock(tx: &mut PgConnection) -> Result<()> {
+    let taken = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock($1, $2)")
+        .bind(PUSH_LOCK_CLASS)
+        .bind(ENGINE_LOCK_ID)
+        .fetch_one(&mut *tx)
+        .await
+        .context("try the engine's advisory lock")?;
+    if !taken {
+        return Err(EngineBusy.into());
+    }
     Ok(())
 }

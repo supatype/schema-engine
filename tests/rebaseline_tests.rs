@@ -174,3 +174,73 @@ async fn drift_on_access_is_rebaselined_only_with_consent() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_push_adopt_or_rebaseline_refuses_while_another_holds_the_engine_lock() {
+    use sqlx::Connection;
+    use supatype_engine::{adopt, push::EngineBusy};
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        let indexed = posts(json!([{ "fields": ["title"], "name": "posts_title_idx",
+                                     "unique": false, "using": "btree" }]));
+        let busy = |e: anyhow::Error| {
+            assert!(e.downcast_ref::<EngineBusy>().is_some(), "{e:#}");
+            assert!(format!("{e:#}").contains("try again"), "{e:#}");
+        };
+
+        // Another session mid-push, mid-adopt or mid-rebaseline.
+        let mut other = sqlx::PgConnection::connect_with(&pool.connect_options())
+            .await
+            .unwrap();
+        sqlx::query("SELECT pg_advisory_lock(872014, 2)")
+            .execute(&mut other)
+            .await
+            .unwrap();
+        busy(
+            push(&pool, &indexed)
+                .await
+                .expect_err("pushed while another held the lock"),
+        );
+        busy(
+            adopt::run(
+                &pool,
+                &ast,
+                "public",
+                adopt::Request {
+                    apply: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("adopted while another held the lock"),
+        );
+        busy(
+            inspect::rebaseline(&pool, &ast, "public", false)
+                .await
+                .expect_err("rebaselined while another held the lock"),
+        );
+        // A preview writes nothing, so it does not need the lock.
+        adopt::run(&pool, &ast, "public", adopt::Request::default())
+            .await
+            .unwrap();
+        sqlx::query("SELECT pg_advisory_unlock(872014, 2)")
+            .execute(&mut other)
+            .await
+            .unwrap();
+
+        // The realtime signal the CLI holds around its own push is not a reason to refuse.
+        sqlx::query("SELECT pg_advisory_lock(872014, 1)")
+            .execute(&mut other)
+            .await
+            .unwrap();
+        push(&pool, &indexed)
+            .await
+            .expect("refused while only the realtime signal was held");
+        inspect::rebaseline(&pool, &indexed, "public", false)
+            .await
+            .unwrap();
+        other.close().await.unwrap();
+    })
+    .await;
+}

@@ -73,6 +73,7 @@ pub async fn run(
     let mut tx = pool.begin().await?;
     if request.apply {
         // As a push does: these are ledger writes too.
+        push::take_engine_lock(&mut tx).await?;
         push::take_push_lock(&mut tx).await?;
     }
     let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
