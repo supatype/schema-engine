@@ -336,6 +336,7 @@ fn previously_declared_columns(
             reason: reconcile::AdoptReason::PreviouslyDeclared,
             create_sql: d.create_sql,
             comment: None,
+            renamed_from: None,
             status: ledger::Status::Managed,
         })
         .collect()

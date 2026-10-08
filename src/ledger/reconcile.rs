@@ -201,6 +201,11 @@ pub enum Action {
         create_sql: String,
         /// The live comment, so the stamp can be removed and any user text kept.
         comment: Option<String>,
+        /// The name the object has now, when it is found under another than the one desired (a
+        /// unique constraint is matched by its columns until it has a row): it is renamed to the
+        /// desired name, so every later push matches it by name.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        renamed_from: Option<String>,
         status: Status,
     },
     /// No row, desired, present and not ours. The push refuses; `adopt` or a rename resolves it.
@@ -350,18 +355,25 @@ impl Action {
             } => vec![create_sql.clone()],
             Action::Adopt {
                 key,
-                reason: AdoptReason::Stamped,
+                reason,
                 comment,
+                renamed_from,
                 ..
-            } => key
-                .comment_sql(crate::managed::comment_without_stamp(comment.as_deref()).as_deref())
-                .into_iter()
-                .collect(),
+            } => {
+                let rename = renamed_from
+                    .as_deref()
+                    .map(|from| rename_constraint_sql(key, from, &key.name));
+                let unstamp = (*reason == AdoptReason::Stamped).then(|| {
+                    key.comment_sql(
+                        crate::managed::comment_without_stamp(comment.as_deref()).as_deref(),
+                    )
+                });
+                rename.into_iter().chain(unstamp.flatten()).collect()
+            }
             Action::Create { inline: true, .. }
             | Action::Recreate { inline: true, .. }
             | Action::Replace { inline: true, .. }
             | Action::Drift { inline: true, .. }
-            | Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Drop { .. }
             | Action::Keep { .. }
@@ -409,6 +421,12 @@ impl Action {
             | Action::Recreate { key, .. }
             | Action::Replace { key, .. }
             | Action::Drift { key, .. } => Some(drop_for(key)),
+            // An adoption under another name is undone by giving the object its name back.
+            Action::Adopt {
+                key,
+                renamed_from: Some(from),
+                ..
+            } => Some(rename_constraint_sql(key, &key.name, from)),
             Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Keep { .. }
@@ -513,6 +531,7 @@ impl Plan {
                         reason: AdoptReason::DeparsesEqual,
                         create_sql: std::mem::take(create_sql),
                         comment: None,
+                        renamed_from: None,
                         status: Status::Adopted,
                     };
                 }
@@ -541,6 +560,42 @@ fn structure_matches(desired: &DesiredObject, live: &ObjectFingerprint) -> bool 
         .all(|(label, want)| parts.get(*label) == Some(&want.as_str()))
 }
 
+/// `ALTER TABLE ... RENAME CONSTRAINT` for a constraint on `key`'s table, from `from` to `to`.
+fn rename_constraint_sql(key: &ObjectKey, from: &str, to: &str) -> String {
+    format!(
+        "ALTER TABLE \"{}\".\"{}\" RENAME CONSTRAINT \"{from}\" TO \"{to}\";",
+        key.schema, key.parent
+    )
+}
+
+/// A live unique constraint on the same table and columns as `d`, under another name, that no row
+/// records and nothing else desires: what an older engine (or the user) made for the same field.
+/// The differ this replaced matched a unique by its columns, so an older engine's constraint under
+/// a name of its own is the same object, and adding ours beside it would duplicate the index.
+/// Once the ledger has a row, a constraint is matched by name alone.
+fn unique_by_columns<'l>(
+    d: &DesiredObject,
+    live: &BTreeMap<ObjectKey, &'l ObjectFingerprint>,
+    ledger: &BTreeMap<&ObjectKey, &LedgerRow>,
+    desired: &BTreeMap<&ObjectKey, &DesiredObject>,
+    taken: &BTreeSet<ObjectKey>,
+) -> Option<(&'l ObjectFingerprint, ObjectKey)> {
+    if d.key.kind != ObjectKind::Unique {
+        return None;
+    }
+    live.iter()
+        .find(|(k, l)| {
+            k.kind == ObjectKind::Unique
+                && k.schema == d.key.schema
+                && k.parent == d.key.parent
+                && !ledger.contains_key(k)
+                && !desired.contains_key(k)
+                && !taken.contains(*k)
+                && structure_matches(d, l)
+        })
+        .map(|(k, l)| (*l, k.clone()))
+}
+
 fn drop_for(key: &ObjectKey) -> String {
     key.drop_sql()
         .unwrap_or_else(|| panic!("{key} is on the reconcile with no drop statement"))
@@ -565,6 +620,7 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         reason,
         create_sql: d.create_sql.clone(),
         comment: l.comment.clone(),
+        renamed_from: None,
         status,
     };
     if adopted_by_declaring(key.kind) {
@@ -697,13 +753,46 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         }
     }
 
+    // Live objects taken over under a desired name of their own (a unique constraint matched by
+    // its columns), which are therefore not dropped as no longer desired.
+    let mut renamed = BTreeSet::new();
     for (&key, d) in &desired {
         if ledger.contains_key(key) {
             continue;
         }
         let key = key.clone();
-        match live.get(&key) {
-            None => {
+        let found = live.get(&key).copied();
+        let by_columns = match found {
+            None => unique_by_columns(d, &live, &ledger, &desired, &renamed),
+            Some(_) => None,
+        };
+        match (found, by_columns) {
+            (Some(l), _) => changes.push(claim(&inputs, key, d, l)),
+            (None, Some((l, from))) => {
+                // A row under the same name on another table is this constraint before its table
+                // was renamed: a unique constraint's name is its index's, unique in the schema.
+                let recorded_elsewhere = ledger
+                    .keys()
+                    .any(|k| k.kind == from.kind && k.schema == from.schema && k.name == from.name);
+                let ours = recorded_elsewhere
+                    || (inputs.location)(&from) != Location::Neutral
+                    || inputs.named_by_the_engine.contains(&from);
+                let (reason, status) = match (l.stamped(), ours) {
+                    (true, _) => (AdoptReason::Stamped, Status::Managed),
+                    (false, true) => (AdoptReason::OwnedSchema, Status::Managed),
+                    (false, false) => (AdoptReason::StructureMatches, Status::Adopted),
+                };
+                changes.push(Action::Adopt {
+                    key,
+                    reason,
+                    create_sql: d.create_sql.clone(),
+                    comment: l.comment.clone(),
+                    renamed_from: Some(from.name.clone()),
+                    status,
+                });
+                renamed.insert(from);
+            }
+            (None, None) => {
                 let inline =
                     inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind);
                 changes.push(Action::Create {
@@ -713,7 +802,6 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                     status: Status::Managed,
                 });
             }
-            Some(l) => changes.push(claim(&inputs, key, d, l)),
         }
     }
 
@@ -727,6 +815,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             || inputs.named_by_the_engine.contains(key))
             || ledger.contains_key(key)
             || desired.contains_key(key)
+            || renamed.contains(key)
             || goes_with_its_table(key)
             // A stamped table nothing declares is the table differ's to drop, behind its gate.
             || altered_by_the_differ(key.kind)
@@ -1281,6 +1370,108 @@ mod tests {
         assert!(
             matches!(&function[..], [Action::Drift { inline: true, .. }]),
             "{function:?}"
+        );
+    }
+
+    fn unique(name: &str, columns: &str) -> (DesiredObject, ObjectFingerprint) {
+        let mut d = desired(name, "");
+        d.key.kind = ObjectKind::Unique;
+        d.structure.insert("columns", columns.into());
+        d.create_sql = format!(
+            "ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"{name}\" UNIQUE (\"{columns}\");"
+        );
+        d.drop_sql = d.key.drop_sql().unwrap();
+        let mut l = live(name, "");
+        l.kind = ObjectKind::Unique;
+        l.definition = format!("columns={columns}");
+        l.fingerprint = hash(ObjectKind::Unique, &[columns]);
+        (d, l)
+    }
+
+    fn run_uniques(
+        desired: &[DesiredObject],
+        ledger: &[LedgerRow],
+        live: &[ObjectFingerprint],
+    ) -> Vec<Action> {
+        let none = BTreeSet::new();
+        reconcile(Inputs {
+            desired,
+            ledger,
+            live,
+            created_by_parent: &none,
+            dropped_tables: &none,
+            location: no_location,
+            named_by_the_engine: &none,
+            kinds: &[ObjectKind::Unique],
+        })
+        .actions
+    }
+
+    /// With no row, a unique constraint is matched by its columns, as the differ it replaced
+    /// matched it: an older engine's under a name of its own is renamed to ours and recorded, not
+    /// dropped and made again; a user's on the same columns is adopted the same way rather than
+    /// duplicated. Once a row exists, the name alone decides.
+    #[test]
+    fn a_unique_with_no_row_is_matched_by_its_columns() {
+        let (d, _) = unique("posts_slug_key", "slug");
+        let (_, old) = unique("posts_slug_unique", "slug");
+        let rename =
+            "ALTER TABLE \"public\".\"posts\" RENAME CONSTRAINT \"posts_slug_unique\" TO \"posts_slug_key\";";
+
+        let stamped_old = stamped(old.clone());
+        let actions = run_uniques(std::slice::from_ref(&d), &[], &[stamped_old]);
+        match &actions[..] {
+            [a @ Action::Adopt {
+                reason: AdoptReason::Stamped,
+                status: Status::Managed,
+                renamed_from: Some(from),
+                ..
+            }] => {
+                assert_eq!(from, "posts_slug_unique");
+                assert_eq!(a.key(), &d.key);
+                let sql = a.sql();
+                assert_eq!(sql[0], rename);
+                assert!(
+                    sql[1].starts_with("COMMENT ON CONSTRAINT \"posts_slug_key\""),
+                    "{sql:?}"
+                );
+                assert_eq!(
+                    a.rollback_sql(),
+                    ["ALTER TABLE \"public\".\"posts\" RENAME CONSTRAINT \"posts_slug_key\" TO \"posts_slug_unique\";"]
+                );
+            }
+            other => panic!("no drop and re-create: {other:?}"),
+        }
+
+        let user = run_uniques(std::slice::from_ref(&d), &[], std::slice::from_ref(&old));
+        match &user[..] {
+            [a @ Action::Adopt {
+                reason: AdoptReason::StructureMatches,
+                status: Status::Adopted,
+                ..
+            }] => assert_eq!(a.sql(), [rename]),
+            other => panic!("no duplicate: {other:?}"),
+        }
+
+        // Other columns are another constraint.
+        let (_, other) = unique("posts_title_key", "title");
+        let created = run_uniques(std::slice::from_ref(&d), &[], &[other]);
+        assert!(
+            matches!(&created[..], [Action::Create { .. }]),
+            "{created:?}"
+        );
+
+        // A row decides by name: the recorded constraint is dropped, ours made under its name.
+        let (old_d, _) = unique("posts_slug_unique", "slug");
+        let r = row(&old_d, &old, Status::Managed);
+        let by_name = run_uniques(
+            std::slice::from_ref(&d),
+            std::slice::from_ref(&r),
+            std::slice::from_ref(&old),
+        );
+        assert!(
+            matches!(&by_name[..], [Action::Drop { .. }, Action::Create { .. }]),
+            "{by_name:?}"
         );
     }
 

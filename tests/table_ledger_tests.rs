@@ -324,6 +324,69 @@ async fn a_unique_an_older_engine_recorded_with_its_stamp_is_not_rebuilt() {
     .await;
 }
 
+/// With no row, a unique constraint is matched by its columns, as the differ it replaced matched
+/// it. An older engine's under a name of its own is renamed to ours and recorded, not dropped and
+/// built again; one someone added on the same column is adopted the same way, not duplicated.
+#[tokio::test]
+async fn a_unique_with_no_row_is_matched_by_its_columns_not_duplicated() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &schema(true, false)).await.unwrap();
+        let oid = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT oid::bigint FROM pg_constraint WHERE conname = 'posts_slug_key'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        let before = oid().await;
+        common::as_an_older_engine_left_it(&pool).await.unwrap();
+        exec(
+            &pool,
+            "ALTER TABLE public.posts RENAME CONSTRAINT posts_slug_key TO posts_slug_unique;
+             COMMENT ON CONSTRAINT posts_slug_unique ON public.posts
+               IS 'supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1';",
+        )
+        .await
+        .unwrap();
+
+        push(&pool, &schema(true, false)).await.unwrap();
+        assert_eq!(constraints_on_posts(&pool).await, ["posts_slug_key"]);
+        assert_eq!(
+            oid().await,
+            before,
+            "the constraint was dropped and added again"
+        );
+        assert_eq!(
+            recorded(&pool, ObjectKind::Unique).await,
+            ["posts.posts_slug_key managed"]
+        );
+        assert!(up_to_date(
+            &push(&pool, &schema(true, false)).await.unwrap()
+        ));
+
+        // Someone's own unique on the column, before the schema declares one.
+        push(&pool, &schema(false, false)).await.unwrap();
+        assert!(constraints_on_posts(&pool).await.is_empty());
+        exec(
+            &pool,
+            "ALTER TABLE public.posts ADD CONSTRAINT posts_slug_mine UNIQUE (slug)",
+        )
+        .await
+        .unwrap();
+        push(&pool, &schema(true, false)).await.unwrap();
+        assert_eq!(constraints_on_posts(&pool).await, ["posts_slug_key"]);
+        assert_eq!(
+            recorded(&pool, ObjectKind::Unique).await,
+            ["posts.posts_slug_key adopted"]
+        );
+        assert!(up_to_date(
+            &push(&pool, &schema(true, false)).await.unwrap()
+        ));
+    })
+    .await;
+}
+
 /// A model's affordance functions take its table's row type, so a function of the old name goes
 /// before the table is renamed: afterwards its drop names a type that no longer exists, is
 /// skipped, and leaves the function behind with its row removed.
