@@ -45,7 +45,8 @@ pub struct DbRequest {
     #[serde(default)]
     pub strict: bool,
     /// Put back access changed outside Supatype (plan 3.5). Without it, a push that would have to
-    /// refuses instead.
+    /// refuses instead. For `doctor` with `rebaseline`: record drift on access as the baseline too,
+    /// which is otherwise refused and listed.
     #[serde(default)]
     pub overwrite_drift: bool,
     #[serde(default)]

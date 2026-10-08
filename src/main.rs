@@ -171,6 +171,10 @@ enum Command {
         /// list each one (plan 3.2: after a Postgres upgrade reformats definitions).
         #[arg(long)]
         rebaseline: bool,
+        /// With `--rebaseline`: record drift on policies, grants, labels and RLS too, which is
+        /// otherwise refused and listed (plan 3.5).
+        #[arg(long, requires = "rebaseline")]
+        overwrite_drift: bool,
     },
     /// Apply a seed IR document to the database
     Seed {
@@ -550,10 +554,15 @@ async fn main() -> Result<()> {
             schema,
             strict,
             rebaseline,
+            overwrite_drift,
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let report = supatype_engine::inspect::doctor(&pool, &ast, &schema, rebaseline).await?;
+            let report = if rebaseline {
+                supatype_engine::inspect::rebaseline(&pool, &ast, &schema, overwrite_drift).await?
+            } else {
+                supatype_engine::inspect::doctor(&pool, &ast, &schema, false).await?
+            };
             println!("{}", serde_json::to_string_pretty(&report)?);
             if strict && supatype_engine::differ::doctor::has_strict_issues(&report) {
                 std::process::exit(1);

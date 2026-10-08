@@ -801,12 +801,13 @@ async fn record_ledger(
 /// A signal to realtime, which skips WAL polls while anyone holds this transaction-level lock;
 /// not mutual exclusion. The CLI may already hold it as a session lock from its own backend, so
 /// the lock is tried rather than waited for: free, this push holds it until commit; held, the
-/// holder is already keeping realtime away and this push proceeds.
-async fn take_push_lock(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+/// holder is already keeping realtime away and this push proceeds. `adopt` and
+/// `doctor --rebaseline` take it too, for their ledger writes.
+pub(crate) async fn take_push_lock(tx: &mut PgConnection) -> Result<()> {
     sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock($1, $2)")
         .bind(PUSH_LOCK_CLASS)
         .bind(PUSH_LOCK_ID)
-        .fetch_one(&mut **tx)
+        .fetch_one(&mut *tx)
         .await
         .context("try the schema-push advisory lock")?;
     Ok(())

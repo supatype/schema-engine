@@ -59,7 +59,9 @@ async fn rebaselining_accepts_the_drift_and_changes_nothing() {
             .await
             .unwrap();
 
-        let report = inspect::doctor(&pool, &ast, "public", true).await.unwrap();
+        let report = inspect::rebaseline(&pool, &ast, "public", true)
+            .await
+            .unwrap();
         assert_eq!(names(&report.rebaselined), ["rls_attributes posts.rls"]);
         let item = &report.rebaselined[0];
         assert_eq!(item.recorded.as_deref(), Some("enabled=t"));
@@ -92,7 +94,9 @@ async fn a_grant_revoked_to_nothing_is_rebaselined_too() {
             .await
             .unwrap();
 
-        let report = inspect::doctor(&pool, &ast, "public", true).await.unwrap();
+        let report = inspect::rebaseline(&pool, &ast, "public", true)
+            .await
+            .unwrap();
         assert!(
             names(&report.rebaselined).contains(&"table_grant posts.anon".to_string()),
             "{report:#?}"
@@ -116,6 +120,57 @@ async fn a_missing_object_is_left_to_a_push() {
         let report = inspect::doctor(&pool, &ast, "public", true).await.unwrap();
         assert!(report.rebaselined.is_empty(), "{:#?}", report.rebaselined);
         assert_eq!(names(&report.missing), ["index posts.posts_title_idx"]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn drift_on_access_is_rebaselined_only_with_consent() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([{ "fields": ["title"], "name": "posts_title_idx",
+                                 "unique": false, "using": "btree" }]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            "ALTER TABLE public.posts DISABLE ROW LEVEL SECURITY;
+             DROP INDEX public.posts_title_idx;
+             CREATE INDEX posts_title_idx ON public.posts USING hash (title);",
+        )
+        .await
+        .unwrap();
+
+        // Without consent: the index is rebaselined, the access rule is refused and still drift.
+        let report = inspect::doctor(&pool, &ast, "public", true).await.unwrap();
+        assert_eq!(names(&report.rebaselined), ["index posts.posts_title_idx"]);
+        assert_eq!(
+            names(&report.rebaseline_refused),
+            ["rls_attributes posts.rls"]
+        );
+        let refused = &report.rebaseline_refused[0];
+        assert!(refused.message.contains("--overwrite-drift"), "{refused:?}");
+        assert_eq!(refused.live.as_deref(), Some("enabled=f"));
+        assert_eq!(names(&report.drifted), ["rls_attributes posts.rls"]);
+        assert!(report.blocking);
+
+        // A push still asks before putting it back.
+        let refused = common::push_with(&pool, &ast, non_interactive())
+            .await
+            .expect_err("the access rule was taken as the baseline without consent");
+        assert!(
+            refused
+                .downcast_ref::<supatype_engine::ledger::drift::SecurityDrift>()
+                .is_some(),
+            "{refused:#}"
+        );
+
+        // With consent it is recorded too.
+        let report = inspect::rebaseline(&pool, &ast, "public", true)
+            .await
+            .unwrap();
+        assert_eq!(names(&report.rebaselined), ["rls_attributes posts.rls"]);
+        assert!(report.rebaseline_refused.is_empty());
+        let after = inspect::doctor(&pool, &ast, "public", false).await.unwrap();
+        assert!(!doctor::has_strict_issues(&after), "{after:#?}");
     })
     .await;
 }
