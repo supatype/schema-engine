@@ -39,6 +39,13 @@ pub struct Inputs<'a> {
     /// What an object's location says about whose it is, for a live object with no row (plan 3.4
     /// and section 5). The push knows the engine's schemas and names; the reconcile does not.
     pub location: fn(&ObjectKey) -> Location,
+    /// Objects an older engine made under a name only the engine gives (section 7, by naming): a
+    /// function, trigger or view in one of its own schemas, or an affordance function or trigger
+    /// in the project schema, named exactly as the engine names it for a model the last push's
+    /// schema declares. With no row and no stamp, such an object is ours: replaced when the
+    /// schema asks for it and its definition differs, dropped when it no longer does. Nothing else
+    /// is claimed this way.
+    pub named_by_the_engine: &'a BTreeSet<ObjectKey>,
     pub kinds: &'a [ObjectKind],
 }
 
@@ -544,7 +551,8 @@ fn drop_for(key: &ObjectKey) -> String {
 /// we would create; otherwise a conflict the push refuses. What is ours but made differently is
 /// replaced, with its live definition kept for the rollback.
 fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFingerprint) -> Action {
-    let ours_by_location = (inputs.location)(&key) != Location::Neutral;
+    let ours_by_location =
+        (inputs.location)(&key) != Location::Neutral || inputs.named_by_the_engine.contains(&key);
     let replace = |previous_sql: &str| Action::Replace {
         inline: inputs.created_by_parent.contains(&key) && remade_by_its_parent(key.kind),
         key: key.clone(),
@@ -714,7 +722,9 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
     // are dropped, as the stamp-reading differs and the sweeps dropped them. The live definition,
     // where the catalog renders one, is what a rollback restores.
     for (key, l) in &live {
-        if !(l.stamped() || (inputs.location)(key) == Location::Exclusive)
+        if !(l.stamped()
+            || (inputs.location)(key) == Location::Exclusive
+            || inputs.named_by_the_engine.contains(key))
             || ledger.contains_key(key)
             || desired.contains_key(key)
             || goes_with_its_table(key)
@@ -808,6 +818,7 @@ mod tests {
             created_by_parent: &created_by_parent.iter().cloned().collect(),
             dropped_tables: &BTreeSet::new(),
             location: no_location,
+            named_by_the_engine: &BTreeSet::new(),
             kinds: &[ObjectKind::Check],
         })
         .actions
@@ -916,6 +927,7 @@ mod tests {
             created_by_parent: &none,
             dropped_tables: &none,
             location: no_location,
+            named_by_the_engine: &none,
             kinds: &kinds,
         });
         assert!(
@@ -938,6 +950,7 @@ mod tests {
             created_by_parent: &none,
             dropped_tables: &none,
             location: no_location,
+            named_by_the_engine: &none,
             kinds: &kinds,
         });
         assert!(
@@ -1126,6 +1139,7 @@ mod tests {
             created_by_parent: &none,
             dropped_tables: &dropped,
             location: no_location,
+            named_by_the_engine: &none,
             kinds: &[ObjectKind::Check],
         });
         // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.
@@ -1167,6 +1181,7 @@ mod tests {
             created_by_parent: &BTreeSet::new(),
             dropped_tables: &BTreeSet::new(),
             location: no_location,
+            named_by_the_engine: &BTreeSet::new(),
             kinds: &[ObjectKind::RlsAttributes],
         });
         assert_eq!(plan.actions, [Action::Forget { key }]);
@@ -1206,6 +1221,7 @@ mod tests {
                 created_by_parent: &parent,
                 dropped_tables: &none,
                 location: no_location,
+                named_by_the_engine: &none,
                 kinds: &[ObjectKind::Index, ObjectKind::Function],
             })
             .actions
@@ -1258,12 +1274,88 @@ mod tests {
             created_by_parent: &fparent,
             dropped_tables: &none,
             location: no_location,
+            named_by_the_engine: &none,
             kinds: &[ObjectKind::Function],
         })
         .actions;
         assert!(
             matches!(&function[..], [Action::Drift { inline: true, .. }]),
             "{function:?}"
+        );
+    }
+
+    /// An older engine stamped nothing, so an object it made is known by its name alone: with no
+    /// row and no stamp, one named exactly as the engine names it is replaced when its definition
+    /// differs (not refused) and dropped when the schema no longer asks for it. A user's function
+    /// under any other name is never touched.
+    #[test]
+    fn an_object_named_by_the_engine_with_no_row_or_stamp_is_ours() {
+        let function = |name: &str, body: &str| {
+            let key = ObjectKey {
+                kind: ObjectKind::Function,
+                schema: "public".into(),
+                parent: String::new(),
+                name: format!("{name}(public.posts)"),
+            };
+            let create_sql = format!(
+                "CREATE OR REPLACE FUNCTION \"public\".\"{name}\"(\"posts\" \"public\".\"posts\") RETURNS boolean LANGUAGE sql STABLE AS $can$ SELECT {body} $can$;"
+            );
+            let d = DesiredObject {
+                key: key.clone(),
+                structure: BTreeMap::new(),
+                drop_sql: key.drop_sql().unwrap(),
+                create_sql: create_sql.clone(),
+                depends_on: Vec::new(),
+                security_relevant: true,
+            };
+            let l = ObjectFingerprint {
+                kind: key.kind,
+                schema: key.schema.clone(),
+                parent: String::new(),
+                name: key.name.clone(),
+                fingerprint: hash(ObjectKind::Function, &[body]),
+                definition: format!("body={body}"),
+                comment: None,
+                create_sql: Some(create_sql),
+            };
+            (d, l)
+        };
+        let (d, _) = function("can_read_posts", "TRUE");
+        let (_, old) = function("can_read_posts", "FALSE");
+        let (_, gone) = function("can_update_posts", "TRUE");
+        let (_, user) = function("can_do_things", "TRUE");
+        let named: BTreeSet<ObjectKey> = [d.key.clone(), gone.key()].into_iter().collect();
+        let none = BTreeSet::new();
+        let run = |named: &BTreeSet<ObjectKey>| {
+            reconcile(Inputs {
+                desired: std::slice::from_ref(&d),
+                ledger: &[],
+                live: &[old.clone(), gone.clone(), user.clone()],
+                created_by_parent: &none,
+                dropped_tables: &none,
+                location: no_location,
+                named_by_the_engine: named,
+                kinds: &[ObjectKind::Function],
+            })
+            .actions
+        };
+
+        // Without the naming rule: the differing body is a conflict, the stale one stays.
+        let before = run(&none);
+        assert!(
+            matches!(&before[..], [Action::Conflict { .. }]),
+            "{before:?}"
+        );
+
+        let actions = run(&named);
+        assert!(
+            matches!(&actions[..], [Action::Drop { key, .. }, Action::Replace { key: replaced, status: Status::Managed, .. }]
+                if *key == gone.key() && *replaced == d.key),
+            "{actions:?}"
+        );
+        assert!(
+            actions.iter().all(|a| *a.key() != user.key()),
+            "a user's function is left alone: {actions:?}"
         );
     }
 }

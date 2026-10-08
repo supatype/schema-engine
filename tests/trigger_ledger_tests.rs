@@ -432,3 +432,84 @@ async fn a_removed_model_takes_its_trigger_and_function_with_it() {
     })
     .await;
 }
+
+/// What an upgrade finds: the objects an older engine made, unstamped and unrecorded. The first
+/// push after it removes a slug field: the field's trigger and `_platform` function are named only
+/// as the engine names them for the last push's model, so they are the engine's, and go with the
+/// field. Left behind, the trigger would fail every insert once the column was dropped.
+#[tokio::test]
+async fn an_older_engines_slug_trigger_goes_with_its_field_in_the_first_push() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &schema(vec![posts(Some("title"), true)]))
+            .await
+            .unwrap();
+        common::as_an_older_engine_left_it(&pool).await.unwrap();
+
+        let without = schema(vec![posts(None, true)]);
+        force_push(&pool, &without).await;
+        assert!(!trigger_exists(&pool, "posts", "posts_slug_trigger").await);
+        assert!(platform_function_body(&pool, "set_posts_slug")
+            .await
+            .is_none());
+        assert!(trigger_exists(&pool, "posts", "posts_updated_at_trigger").await);
+
+        // The next push drops the column the older engine made, and a write still works.
+        force_push(&pool, &without).await;
+        exec(
+            &pool,
+            "INSERT INTO public.posts (id, title, subtitle) VALUES (2, 'Still writable', 's')",
+        )
+        .await
+        .expect("no trigger naming the dropped field is left behind");
+    })
+    .await;
+}
+
+/// The same upgrade with an affordance function whose body an older engine wrote differently: it is
+/// named exactly as the engine names it for the model, so it is brought up to date, not refused.
+/// A user's function that only looks like one (`can_do_things`) is left alone.
+#[tokio::test]
+async fn an_older_engines_affordance_function_is_brought_up_to_date_and_a_users_is_left() {
+    common::with_integration_pool(|pool| async move {
+        let ast = schema(vec![posts(None, false)]);
+        push(&pool, &ast).await.unwrap();
+        let body = |name: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT p.prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace \
+                     WHERE n.nspname = 'public' AND p.proname = $1",
+                )
+                .bind(name)
+                .fetch_optional(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let ours = body("can_read_posts")
+            .await
+            .expect("the affordance function");
+        common::as_an_older_engine_left_it(&pool).await.unwrap();
+        exec(
+            &pool,
+            "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts) RETURNS boolean
+               LANGUAGE sql STABLE AS $can$ SELECT TRUE OR FALSE $can$;
+             CREATE FUNCTION public.can_do_things(posts public.posts) RETURNS boolean
+               LANGUAGE sql STABLE AS $can$ SELECT TRUE $can$;
+             CREATE FUNCTION _platform.my_helper() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;",
+        )
+        .await
+        .unwrap();
+
+        let outcome = push(&pool, &ast).await.expect("not refused as a conflict");
+        assert!(applied(&outcome), "{outcome:?}");
+        assert_eq!(body("can_read_posts").await.unwrap(), ours);
+        assert!(body("can_do_things").await.is_some());
+        assert!(platform_function_body(&pool, "my_helper").await.is_some());
+
+        assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
+        assert!(body("can_do_things").await.is_some());
+        assert!(platform_function_body(&pool, "my_helper").await.is_some());
+    })
+    .await;
+}

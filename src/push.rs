@@ -281,7 +281,9 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     diff.keep_columns_not_ours(|table, column| state.db.column_owned(table, column) == Some(true));
     let desired = desired_here(&diff, &state.catalog, schema, ast)?;
     let live = with_grants_of_nothing(&state.fingerprints, state.ledger.iter().map(|r| &r.key));
-    let mut reconcile = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;
+    let named = named_by_the_engine(previous, &state.db, schema);
+    let mut reconcile =
+        reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast, &named)?;
     reconcile.actions.extend(previously_declared_columns(
         state, previous, &desired, schema,
     ));
@@ -379,7 +381,7 @@ fn reconcile_with(
 ) -> Result<reconcile::Plan> {
     let desired = desired_here(diff, catalog, schema, ast)?;
     let live = with_grants_of_nothing(live, ledger.iter().map(|r| &r.key));
-    reconcile_desired(diff, ledger, &live, &desired, schema, ast)
+    reconcile_desired(diff, ledger, &live, &desired, schema, ast, &BTreeSet::new())
 }
 
 /// What a push of `ast` desires on this database. What the database can hold decides it (plan
@@ -412,6 +414,7 @@ fn reconcile_desired(
     desired: &[crate::desired::DesiredObject],
     schema: &str,
     ast: &SchemaAst,
+    named_by_the_engine: &BTreeSet<ObjectKey>,
 ) -> Result<reconcile::Plan> {
     let created_by_parent = created_by_parent(diff, schema, ast)?;
     let dropped_tables = dropped_tables(diff, schema);
@@ -422,8 +425,45 @@ fn reconcile_desired(
         created_by_parent: &created_by_parent,
         dropped_tables: &dropped_tables,
         location,
+        named_by_the_engine,
         kinds: MOVED_KINDS,
     }))
+}
+
+/// Legacy ownership by engine naming (section 7): an older engine stamped nothing and the ledger
+/// has no row, so an object it made is known only by its name. The functions, triggers and views
+/// a push of the last push's schema would create, under either field enforcement, in the engine's
+/// own schemas; and in the project schema, the triggers and the `can_*` affordance functions,
+/// whose names the engine derives from a model's table. The last push's schema, not this one's:
+/// the engine made what that schema asked for, while a name only this schema asks for may be a
+/// user's object, which still refuses the push. A user's object under any other name
+/// (`can_do_things`, a `_platform` helper of their own) is never among them.
+fn named_by_the_engine(
+    previous: Option<&SchemaAst>,
+    db: &DatabaseState,
+    schema: &str,
+) -> BTreeSet<ObjectKey> {
+    let engine_named = |key: &ObjectKey| match key.kind {
+        ObjectKind::Function | ObjectKind::Trigger | ObjectKind::View
+            if catalog::OWNED_SCHEMAS.contains(&key.schema.as_str()) =>
+        {
+            true
+        }
+        ObjectKind::Trigger => key.schema == schema,
+        ObjectKind::Function => key.schema == schema && key.name.starts_with("can_"),
+        _ => false,
+    };
+    let mut named = BTreeSet::new();
+    let Some(previous) = previous else {
+        return named;
+    };
+    let plan = field_views::field_view_plan(previous, db);
+    for fields in [FieldEnforcement::Labels, FieldEnforcement::Views(&plan)] {
+        if let Ok(objects) = desired_objects_for(previous, schema, fields) {
+            named.extend(objects.into_iter().map(|d| d.key).filter(engine_named));
+        }
+    }
+    named
 }
 
 /// `live`, plus a fingerprint of "holds nothing" for every grant among `keys` the catalog has no
