@@ -901,12 +901,18 @@ async fn the_scheduler_is_wired_up_when_the_database_has_one() {
         // `pg_cron` needs shared_preload_libraries, so it is available in the supatype image and
         // absent almost everywhere else. Install it here and assert the push schedules the jobs;
         // the degrade path is the same code with the `pg_extension` check failing.
-        if sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS pg_cron")
+        if let Err(e) = sqlx::raw_sql("CREATE EXTENSION IF NOT EXISTS pg_cron")
             .execute(&mut *conn)
             .await
-            .is_err()
         {
-            eprintln!("SKIP scheduler wiring: this image cannot load pg_cron");
+            if common::force_integration_tests() {
+                panic!(
+                    "this image cannot load pg_cron ({e}); supatype/postgres preloads it. Point \
+                     INTEGRATION_POSTGRES_IMAGE at a current image, or unset \
+                     SUPATYPE_FORCE_INTEGRATION_TESTS to let this test skip."
+                );
+            }
+            eprintln!("SKIP scheduler wiring: this image cannot load pg_cron ({e})");
             return;
         }
 
