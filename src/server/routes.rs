@@ -317,7 +317,8 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     } else {
         crate::inspect::doctor(&pool, &ast, &req.schema, false).await
     }
-    .map_err(engine_error)?;
+    // A rebaseline takes the engine's lock, so it can be refused while another writer holds it.
+    .map_err(refusal_error)?;
     Ok(Json(serde_json::to_value(&report).map_err(engine_error)?))
 }
 
@@ -339,16 +340,29 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
     };
     let outcome = crate::adopt::run(&pool, &ast, &req.schema, request)
         .await
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
     Ok(Json(serde_json::to_value(&outcome).map_err(engine_error)?))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// A refused push, as 409 with the reason and what it is about when it is one a caller can act on.
+/// A refused push, adopt or rebaseline, as 409 with the reason and what it is about when it is one
+/// a caller can act on; anything else as [`engine_error`].
 fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
     use crate::generator::sql::migration::{UnmanagedModelTables, UNMANAGED_MODEL_TABLES};
     use crate::ledger::drift::{SecurityDrift, SECURITY_DRIFT};
+    use crate::push::{EngineBusy, ENGINE_BUSY};
+    if let Some(busy) = e.downcast_ref::<EngineBusy>() {
+        error!("refused: the engine is busy");
+        return (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: busy.to_string(),
+                reason: Some(ENGINE_BUSY),
+                ..Default::default()
+            }),
+        );
+    }
     if let Some(drift) = e.downcast_ref::<SecurityDrift>() {
         error!(
             objects = drift.objects.len(),
@@ -548,6 +562,22 @@ mod tests {
         let result = sanitize_schema_identifier("public_schema1");
         assert!(result.is_ok());
         assert_eq!(result.unwrap_or_default(), "\"public_schema1\"");
+    }
+
+    /// Another writer holding the engine's lock is a 409 a caller can retry on, told apart by its
+    /// reason, not the 422 of a push that failed; even under the context a caller adds to it.
+    #[test]
+    fn an_engine_busy_refusal_is_a_409_with_its_reason() {
+        use anyhow::Context;
+        let refused: anyhow::Result<()> = Err(crate::push::EngineBusy.into());
+        let (status, Json(body)) = super::refusal_error(refused.context("push").unwrap_err());
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body.reason, Some("engine_busy"));
+        assert!(body.error.contains("try again"), "{}", body.error);
+
+        let (status, Json(body)) = super::refusal_error(anyhow::anyhow!("failed"));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body.reason, None);
     }
 
     #[test]

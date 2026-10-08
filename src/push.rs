@@ -76,9 +76,13 @@ const PUSH_LOCK_ID: i32 = 1;
 const ENGINE_LOCK_ID: i32 = 2;
 
 /// Refused because another push, adopt or rebaseline holds [`ENGINE_LOCK_ID`]. A type, so a caller
-/// can tell it from a failed push and retry.
+/// can tell it from a failed push and retry: the HTTP server answers it with 409 and
+/// [`ENGINE_BUSY`].
 #[derive(Debug)]
 pub struct EngineBusy;
+
+/// The HTTP refusal reason for [`EngineBusy`].
+pub const ENGINE_BUSY: &str = "engine_busy";
 
 impl std::fmt::Display for EngineBusy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
