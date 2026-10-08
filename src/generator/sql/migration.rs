@@ -404,12 +404,14 @@ impl Migration {
         // cascades), then the operations, then the reconcile's additions, which may need a table
         // or column the operations create. A function nothing of the operations depends on waits
         // for them instead: the trigger that depends on it may sit on a table they drop, and goes
-        // with the table.
+        // with the table. A table they rename counts as one they drop: its old name, which an
+        // affordance function's identity names, is gone once they have run.
         let dropped_tables: Vec<String> = diff
             .operations
             .iter()
             .filter_map(|op| match op {
                 Operation::DropTable { table, .. } => Some(table.clone()),
+                Operation::RenameTable { from, .. } => Some(from.clone()),
                 _ => None,
             })
             .collect();
@@ -1889,5 +1891,51 @@ mod tests {
             !sql.contains("UUID NOT NULL REFERENCES"),
             "must not hardcode UUID for serial PKs:\n{sql}"
         );
+    }
+
+    /// Renaming `posts` to `post_items` drops the affordance function that takes the old row type
+    /// before the rename: afterwards `DROP FUNCTION IF EXISTS can_read_posts(public.posts)` finds no
+    /// type of that name, is skipped, and the function is orphaned while its row goes.
+    #[test]
+    fn a_renamed_tables_affordance_function_is_dropped_before_the_rename() {
+        let ast = parser::parse(
+            r#"{ "astVersion": 2, "models": [{ "name": "PostItem",
+                 "fields": { "id": { "kind": "integer", "primaryKey": true, "required": true,
+                     "annotations": { "db": { "pgType": "INTEGER", "unique": false } } } },
+                 "options": { "timestamps": false, "softDelete": false },
+                 "annotations": { "db": { "tableName": "post_items", "indexes": [] },
+                                  "platform": { "access": {} } } }] }"#,
+        )
+        .unwrap();
+        let operations = vec![Operation::RenameTable {
+            from: "posts".into(),
+            to: "post_items".into(),
+            risk: Risk::Cautious,
+        }];
+        let diff = DiffOutput {
+            summary: crate::differ::DiffSummary::of(&operations),
+            operations,
+            warnings: Vec::new(),
+            unmanaged_model_tables: Vec::new(),
+            field_masking: Default::default(),
+            field_view_plan: Vec::new(),
+        };
+        let function = crate::desired::ObjectKey {
+            kind: crate::introspector::fingerprint::ObjectKind::Function,
+            schema: "public".into(),
+            parent: String::new(),
+            name: "can_read_posts(public.posts)".into(),
+        };
+        let actions = [reconcile::Action::Drop {
+            key: function.clone(),
+            recorded_sql: None,
+        }];
+        let up = Migration::render(&diff, &actions, true, "public", &ast)
+            .unwrap()
+            .up();
+        let drop = function.drop_sql().unwrap();
+        let at_drop = up.find(&drop).unwrap_or_else(|| panic!("no drop:\n{up}"));
+        let at_rename = up.find("RENAME TO \"post_items\"").expect("the rename");
+        assert!(at_drop < at_rename, "the drop runs after the rename:\n{up}");
     }
 }

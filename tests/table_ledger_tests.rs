@@ -323,3 +323,33 @@ async fn a_unique_an_older_engine_recorded_with_its_stamp_is_not_rebuilt() {
     })
     .await;
 }
+
+/// A model's affordance functions take its table's row type, so a function of the old name goes
+/// before the table is renamed: afterwards its drop names a type that no longer exists, is
+/// skipped, and leaves the function behind with its row removed.
+#[tokio::test]
+async fn a_renamed_tables_affordance_functions_do_not_outlive_its_old_name() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &schema(true, false)).await.unwrap();
+        common::push_with(
+            &pool,
+            &schema_with_posts_in("posts_archive", true, false),
+            forced(),
+        )
+        .await
+        .unwrap();
+        let functions: Vec<String> = sqlx::query_scalar(
+            "SELECT p.proname::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.proname LIKE 'can\\_%' ORDER BY 1",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            functions.iter().all(|f| f.ends_with("_posts_archive")),
+            "an affordance function of the old name was orphaned: {functions:?}"
+        );
+        assert!(!functions.is_empty());
+    })
+    .await;
+}

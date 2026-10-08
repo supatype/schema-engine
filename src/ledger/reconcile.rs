@@ -365,8 +365,8 @@ impl Action {
     /// Whether the removal runs after the migration's operations rather than before. A function's
     /// does, because the trigger that depends on it may sit on a table the operations drop and
     /// goes with the table; unless the function's own identity names the row type of a table
-    /// being dropped (an affordance function takes its table), in which case the function must go
-    /// first or the table cannot.
+    /// being dropped or renamed (an affordance function takes its table), in which case the
+    /// function must go first: or the table cannot, or the drop no longer finds it by that name.
     pub fn removal_is_late(&self, dropped_tables: &[String]) -> bool {
         let key = self.key();
         key.kind == ObjectKind::Function
