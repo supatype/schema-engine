@@ -158,6 +158,10 @@ pub enum AdoptReason {
     /// A column the schema declares on a table the schema owns (D4): declaring it is what adopts
     /// it. The column differ brings it to the declared type; the reconcile only records it.
     Declared,
+    /// A column the schema no longer declares, on a table that is ours, that the last push's schema
+    /// declared and no row records (the first push after an upgrade): an older engine made it. The
+    /// push that removes it from the schema only records it, and the next push drops it.
+    PreviouslyDeclared,
 }
 
 /// What a push does about one object. Every variant that leaves a row carries what the row needs:

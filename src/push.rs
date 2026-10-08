@@ -281,12 +281,62 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     diff.keep_columns_not_ours(|table, column| state.db.column_owned(table, column) == Some(true));
     let desired = desired_here(&diff, &state.catalog, schema, ast)?;
     let live = with_grants_of_nothing(&state.fingerprints, state.ledger.iter().map(|r| &r.key));
-    let reconcile = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;
+    let mut reconcile = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;
+    reconcile.actions.extend(previously_declared_columns(
+        state, previous, &desired, schema,
+    ));
     Ok(Decision {
         diff,
         reconcile,
         desired,
     })
+}
+
+/// The columns an older engine made that the schema has stopped declaring in the first push after
+/// an upgrade: no row records them, so this push withholds their drop (D4), but the last push's
+/// schema declared them on a table that is ours, so they are recorded here, with the `CREATE` that
+/// schema asked for, and the next push drops them. A column no schema declared is never claimed.
+fn previously_declared_columns(
+    state: &State,
+    previous: Option<&SchemaAst>,
+    desired: &[crate::desired::DesiredObject],
+    schema: &str,
+) -> Vec<reconcile::Action> {
+    let Some(previous) = previous else {
+        return Vec::new();
+    };
+    let Ok(before) = desired_objects_for(previous, schema, FieldEnforcement::Labels) else {
+        return Vec::new();
+    };
+    let wanted: BTreeSet<&ObjectKey> = desired.iter().map(|d| &d.key).collect();
+    let live: BTreeSet<ObjectKey> = state
+        .fingerprints
+        .iter()
+        .filter(|f| f.kind == ObjectKind::Column)
+        .map(ObjectFingerprint::key)
+        .collect();
+    before
+        .into_iter()
+        .filter(|d| {
+            let key = &d.key;
+            key.kind == ObjectKind::Column
+                && live.contains(key)
+                && !wanted.contains(key)
+                && state.db.column_owned(&key.parent, &key.name).is_none()
+                && state
+                    .db
+                    .tables
+                    .iter()
+                    .any(|t| t.name == key.parent && state.db.owns_table(t))
+        })
+        .map(|d| reconcile::Action::Adopt {
+            key: d.key,
+            reason: reconcile::AdoptReason::PreviouslyDeclared,
+            create_sql: d.create_sql,
+            comment: None,
+            status: ledger::Status::Managed,
+        })
+        .collect()
 }
 
 /// Everything a push knows before it writes: [`read_state`] on `conn` (a transaction, for a caller

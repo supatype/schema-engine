@@ -168,7 +168,8 @@ async fn a_declared_column_the_schema_drops_is_dropped() {
 /// What an older engine left: its columns, and no rows. Until a push records them they are not
 /// provably the engine's, so the first push after an upgrade leaves a column the schema dropped in
 /// the same breath, and says so: the conservative direction, since a later push can drop it but
-/// nothing can bring the data back.
+/// nothing can bring the data back. The last push's schema declared it, though, so that push
+/// records it as ours, and the next one drops it.
 #[tokio::test]
 async fn an_upgrade_records_the_declared_columns_and_drops_nothing_unrecorded() {
     common::with_integration_pool(|pool| async move {
@@ -192,8 +193,41 @@ async fn an_upgrade_records_the_declared_columns_and_drops_nothing_unrecorded() 
         );
         assert_eq!(
             recorded(&pool).await,
+            ["created_at", "id", "summary", "title", "updated_at"]
+        );
+
+        common::push_with(&pool, &posts(json!({})), forced())
+            .await
+            .unwrap();
+        assert!(!live_columns(&pool).await.contains(&"summary".to_string()));
+        assert_eq!(
+            recorded(&pool).await,
             ["created_at", "id", "title", "updated_at"]
         );
+    })
+    .await;
+}
+
+/// The same upgrade, but the column was never the engine's: nothing the last push's schema
+/// declared, so it is not recorded and no push ever drops it.
+#[tokio::test]
+async fn an_upgrade_records_no_column_no_schema_declared() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts(json!({}))).await.unwrap();
+        exec(
+            &pool,
+            "ALTER TABLE public.posts ADD COLUMN notes text;
+             DELETE FROM _supatype.managed_objects WHERE kind = 'column'",
+        )
+        .await
+        .unwrap();
+        for _ in 0..2 {
+            common::push_with(&pool, &posts(json!({})), forced())
+                .await
+                .unwrap();
+            assert!(live_columns(&pool).await.contains(&"notes".to_string()));
+        }
+        assert!(!recorded(&pool).await.contains(&"notes".to_string()));
     })
     .await;
 }
