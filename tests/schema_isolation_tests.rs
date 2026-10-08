@@ -195,11 +195,9 @@ fn a_full_migration_script_never_mentions_public() {
     // What a push runs: the storage layer, then the migration with the reconcile's creations (the
     // triggers, policies and grants among them), so an object qualified with `public` anywhere a
     // push writes would fail this check.
-    let storage_sql =
-        supatype_engine::generator::sql::storage::generate(&ast).expect("storage sql renders");
     let sql = supatype_engine::push::fresh_migration(&ast, MANAGED, false)
         .expect("script renders")
-        .apply_body(&storage_sql);
+        .apply_body();
 
     // `public` legitimately appears in `GRANT USAGE ... TO PUBLIC` (the role) and in the realtime
     // drop's legacy-name cleanup, so match the qualified-identifier form only.
@@ -244,11 +242,9 @@ async fn a_push_into_a_non_public_schema_leaves_public_untouched() {
         let ast = ast_without_field_rules();
         // The migration a push applies, triggers included (the reconcile's since Phase 4.2):
         // triggers are one of the things that used to attach to `public`.
-        let storage_sql = supatype_engine::generator::sql::storage::generate(&ast)
-            .expect("storage sql renders");
         let body = supatype_engine::push::fresh_migration(&ast, MANAGED, false)
             .expect("script renders")
-            .apply_body(&storage_sql);
+            .apply_body();
         sqlx::raw_sql(&migration::batch_sql(&body))
             .execute(&pool)
             .await

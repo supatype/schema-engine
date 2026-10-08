@@ -560,8 +560,9 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
 struct Rendered {
     name: String,
     migration: Migration,
-    /// What runs inside the transaction `apply` owns: the migration between the re-asserted
-    /// layers.
+    /// What runs inside the transaction `apply` owns: the migration after the re-asserted storage
+    /// layer. What the history stores as `sql_up`, on success and on failure alike, so the record
+    /// holds the statement that failed.
     apply_body: String,
     sources: migration_history::AppliedMigrationSources,
 }
@@ -572,7 +573,7 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
     let name = opts
         .name
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
-    let apply_body = migration.apply_body(&storage::generate(plan.ast)?);
+    let apply_body = migration.apply_body();
     Ok(Rendered {
         name,
         apply_body,
@@ -597,7 +598,7 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
                 pool,
                 &rendered.name,
                 &rendered.migration.hash,
-                &rendered.migration.up(),
+                &rendered.apply_body,
                 &e.to_string(),
             )
             .await;
@@ -666,7 +667,7 @@ async fn within_transaction(
         &rendered.migration.hash,
         schema_snap.clone(),
         admin_cfg.clone(),
-        &rendered.migration.up(),
+        &rendered.apply_body,
         &rendered.sources,
     )
     .await

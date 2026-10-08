@@ -39,7 +39,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 /// `user-avatars` and `user_avatars` both name `storage_user_avatars_*`, and whichever renders
 /// second drops the first one's policies. The first bucket would then be refused everything while
 /// its warnings said it was covered.
-fn refuse_colliding_policy_labels(ast: &SchemaAst) -> Result<()> {
+pub fn refuse_colliding_policy_labels(ast: &SchemaAst) -> Result<()> {
     let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
     for bucket in &ast.storage_buckets {
         let label = storage_policy_label(&bucket.id);

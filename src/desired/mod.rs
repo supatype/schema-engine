@@ -293,7 +293,7 @@ pub fn desired_objects_for(
     b.versions_layer()?;
     b.affordance_functions();
     b.api_views();
-    b.bucket_policies();
+    b.bucket_policies()?;
     for junction in &ast.junction_tables {
         b.junction(junction)?;
         b.rls_enabled(&junction.name);
@@ -775,10 +775,15 @@ impl<'a> Builder<'a> {
 
     /// The policies on `storage.objects` the buckets' rules and the models storing into them ask
     /// for (Phase 4.7b): ours by the ledger, created by the reconcile after the storage layer.
-    fn bucket_policies(&mut self) {
+    /// Two buckets whose policies would share names are refused here, as the storage layer refuses
+    /// them, so a plan that never renders that layer (`diff`, `doctor`) cannot keep one bucket's
+    /// policies and silently lose the other's.
+    fn bucket_policies(&mut self) -> Result<()> {
+        crate::generator::sql::storage::refuse_colliding_policy_labels(self.ast)?;
         self.attributed_script(&crate::generator::sql::storage::bucket_policies_sql(
             self.ast,
         ));
+        Ok(())
     }
 
     /// The `api` field views and their write triggers (Phase 4.6), for the tables the push's plan
