@@ -15,6 +15,8 @@
 //!    state), then [`plan`].
 //! 3. [`apply`]: everything that writes, in one transaction, or nothing: the migration body, the
 //!    reconcile's statements, the history row, the ledger rows for every object of a moved kind.
+//!    It first re-reads the ledger and the live objects inside that transaction and refuses if
+//!    they are not what [`plan`] decided against.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -75,6 +77,72 @@ pub struct Plan<'a> {
     /// The CLI may edit this between `prepare` and `apply` (rename confirmations).
     pub diff: DiffOutput,
     pub reconcile: reconcile::Plan,
+    /// What `reconcile` was decided from, checked again inside the apply's transaction.
+    inputs: ReconcileInputs,
+}
+
+/// The ledger and the live objects a reconcile was decided from, each in key order.
+///
+/// The plan reads them on a pooled connection before the apply's transaction begins, and the CLI
+/// may wait on a confirmation between the two. A push or a hand edit landing in that gap would
+/// otherwise be overwritten by statements decided against a database that no longer exists: a
+/// drop of an object that has since become someone else's, a ledger row written over one just
+/// recorded. [`ReconcileInputs::assert_current`] compares them with a re-read inside the apply's
+/// transaction, once the push lock is taken, and refuses when they moved.
+struct ReconcileInputs {
+    ledger: Vec<LedgerRow>,
+    fingerprints: Vec<ObjectFingerprint>,
+}
+
+impl ReconcileInputs {
+    fn of(state: &State) -> ReconcileInputs {
+        let mut ledger = state.ledger.clone();
+        ledger.sort_by(|a, b| a.key.cmp(&b.key));
+        let mut fingerprints = state.fingerprints.clone();
+        fingerprints.sort();
+        ReconcileInputs {
+            ledger,
+            fingerprints,
+        }
+    }
+
+    /// Refuse when `now` is not what the plan was decided from, naming what moved.
+    fn assert_current(&self, now: &State) -> Result<()> {
+        let now = ReconcileInputs::of(now);
+        let mut moved: BTreeSet<String> = BTreeSet::new();
+        let ledger = |rows: &[LedgerRow]| -> BTreeMap<ObjectKey, LedgerRow> {
+            rows.iter().map(|r| (r.key.clone(), r.clone())).collect()
+        };
+        let (was, is) = (ledger(&self.ledger), ledger(&now.ledger));
+        for key in was.keys().chain(is.keys()) {
+            if was.get(key) != is.get(key) {
+                moved.insert(format!("{key} (ledger)"));
+            }
+        }
+        let live = |fps: &[ObjectFingerprint]| -> BTreeMap<ObjectKey, ObjectFingerprint> {
+            fps.iter().map(|f| (f.key(), f.clone())).collect()
+        };
+        let (was, is) = (live(&self.fingerprints), live(&now.fingerprints));
+        for key in was.keys().chain(is.keys()) {
+            if was.get(key) != is.get(key) {
+                moved.insert(key.to_string());
+            }
+        }
+        if moved.is_empty() {
+            return Ok(());
+        }
+        let shown: Vec<String> = moved.iter().take(10).cloned().collect();
+        bail!(
+            "The database changed after this push was planned, so nothing was applied: {}{}. \
+             Another push or a change outside Supatype landed in between. Run the push again to \
+             plan it against the database as it is now.",
+            shown.join(", "),
+            match moved.len() - shown.len() {
+                0 => String::new(),
+                more => format!(" and {more} more"),
+            }
+        )
+    }
 }
 
 impl Plan<'_> {
@@ -237,7 +305,7 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     // Which tables are ours is the ledger's to say (Phase 4.11), so the table and column differs
     // drop, rename and attach rules only where it does: `read_state` puts that in the state.
     let (
-        _,
+        state,
         Decision {
             diff, reconcile, ..
         },
@@ -253,6 +321,7 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
         schema: schema.to_string(),
         diff,
         reconcile,
+        inputs: ReconcileInputs::of(&state),
     })
 }
 
@@ -642,6 +711,12 @@ async fn within_transaction(
     rendered: &Rendered,
 ) -> Result<Applied> {
     take_push_lock(tx).await?;
+    // The reconcile's inputs, read again inside this transaction: what it decided is applied only
+    // to the database it decided it against.
+    let now = read_state(tx, &plan.schema)
+        .await
+        .context("Failed to re-read the database before applying")?;
+    plan.inputs.assert_current(&now)?;
 
     if let Err(e) = (&mut **tx)
         .execute(sqlx::raw_sql(&rendered.apply_body))
