@@ -45,7 +45,8 @@ pub struct DbRequest {
     #[serde(default)]
     pub strict: bool,
     /// Put back access changed outside Supatype (plan 3.5). Without it, a push that would have to
-    /// refuses instead.
+    /// refuses instead. For `doctor` with `rebaseline`: record drift on access as the baseline too,
+    /// which is otherwise refused and listed.
     #[serde(default)]
     pub overwrite_drift: bool,
     #[serde(default)]
@@ -56,6 +57,10 @@ pub struct DbRequest {
     /// For `adopt`: released objects to hand back to Supatype, named the same way.
     #[serde(default)]
     pub reclaim: Vec<String>,
+    /// For `adopt` with `yes`: the conflicts the preview listed, named the same way. Only these are
+    /// adopted, and nothing is if one is no longer a conflict. Absent, every conflict found is.
+    #[serde(default)]
+    pub keys: Option<Vec<String>>,
     /// For `doctor`: record the drift it finds as the new baseline (plan 3.2).
     #[serde(default)]
     pub rebaseline: bool,

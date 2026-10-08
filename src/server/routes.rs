@@ -310,9 +310,12 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    let report = crate::inspect::doctor(&pool, &ast, &req.schema, req.rebaseline)
-        .await
-        .map_err(engine_error)?;
+    let report = if req.rebaseline {
+        crate::inspect::rebaseline(&pool, &ast, &req.schema, req.overwrite_drift).await
+    } else {
+        crate::inspect::doctor(&pool, &ast, &req.schema, false).await
+    }
+    .map_err(engine_error)?;
     Ok(Json(serde_json::to_value(&report).map_err(engine_error)?))
 }
 
@@ -330,6 +333,7 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
         release: &req.release,
         reclaim: &req.reclaim,
         apply: req.yes,
+        keys: req.keys.as_deref(),
     };
     let outcome = crate::adopt::run(&pool, &ast, &req.schema, request)
         .await

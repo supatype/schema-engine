@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use sqlx::PgPool;
 
+use crate::desired::DesiredObject;
 use crate::differ::doctor::{self, DoctorItem, DoctorReport};
 use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKey, ObjectKind};
 use crate::ledger::{self, desired_fingerprint, reconcile, LedgerRow, Status};
@@ -48,6 +49,10 @@ pub struct Request<'a> {
     pub reclaim: &'a [String],
     /// Write the rows; without it, a preview.
     pub apply: bool,
+    /// The conflicts the preview showed, named the same way: only these are adopted, and if any
+    /// of them is no longer a conflict nothing is written, since the database is not the one
+    /// previewed. `None` adopts whatever conflicts there are when it runs.
+    pub keys: Option<&'a [String]>,
 }
 
 /// Reads, decides, and with `request.apply` writes the rows, in one transaction.
@@ -66,24 +71,30 @@ pub async fn run(
         .context("Failed to bootstrap _supatype internal state")?;
     migration_history::assert_project_schema(pool, schema).await?;
     let mut tx = pool.begin().await?;
+    if request.apply {
+        // As a push does: these are ledger writes too.
+        push::take_engine_lock(&mut tx).await?;
+        push::take_push_lock(&mut tx).await?;
+    }
     let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
-    let (outcome, changes) = choose(ast, &state, &decision, request)?;
+    let (outcome, changes, forgotten) = choose(ast, &state, &decision, request)?;
     if request.apply {
         ledger::upsert(&mut tx, &changes).await?;
+        ledger::delete(&mut tx, &forgotten).await?;
         tx.commit().await?;
     }
     Ok(outcome)
 }
 
-/// The rows adopting would write, and the outcome that says so. Releasing wins over adopting a
-/// conflict; an object named both to release and to reclaim is refused; one named twice is written
-/// once.
+/// The rows adopting would write and those it would remove, and the outcome that says so.
+/// Releasing wins over adopting a conflict; an object named both to release and to reclaim is
+/// refused; one named twice is written once.
 fn choose(
     ast: &SchemaAst,
     state: &State,
     decision: &Decision,
     request: Request<'_>,
-) -> Result<(Outcome, Vec<LedgerRow>)> {
+) -> Result<(Outcome, Vec<LedgerRow>, Vec<ObjectKey>)> {
     let plan = &decision.reconcile;
     let report = doctor::report_of(ast, state, decision);
     let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
@@ -91,7 +102,9 @@ fn choose(
     let released = rows_named(request.release, |spec| {
         released_row(spec, &state.ledger, &live, plan)
     })?;
-    let reclaimed = rows_named(request.reclaim, |spec| reclaimed_row(spec, &state.ledger))?;
+    let reclaimed = rows_named(request.reclaim, |spec| {
+        reclaimed_row(spec, &state.ledger, &live, &decision.desired)
+    })?;
     if let Some(both) = released
         .iter()
         .find(|r| reclaimed.iter().any(|c| c.key == r.key))
@@ -101,7 +114,7 @@ fn choose(
             both.key
         );
     }
-    let mut adopted = adopted_rows(plan, &live);
+    let mut adopted = adopted_rows(plan, &live, request.keys)?;
     adopted.retain(|a| !released.iter().any(|r| r.key == a.key));
     let outcome = Outcome {
         status: status(
@@ -122,7 +135,13 @@ fn choose(
         ),
         doctor: report,
     };
-    Ok((outcome, [adopted, released, reclaimed].concat()))
+    // A reclaimed row with no record of an object that is not there is no row: the next push
+    // creates the object, as it would one it never knew.
+    let (forgotten, reclaimed): (Vec<LedgerRow>, Vec<LedgerRow>) = reclaimed
+        .into_iter()
+        .partition(|r| records_nothing(r) && !live.contains_key(&r.key));
+    let forgotten = forgotten.into_iter().map(|r| r.key).collect();
+    Ok((outcome, [adopted, released, reclaimed].concat(), forgotten))
 }
 
 /// The row for each object `specs` names, each object once however often it is named.
@@ -137,10 +156,23 @@ fn rows_named(specs: &[String], row: impl Fn(&str) -> Result<LedgerRow>) -> Resu
     Ok(rows)
 }
 
-/// The released row `spec` names, handed back as `adopted`. Its record is kept, so the next push
-/// treats it as any object of Supatype's: puts back a hand edit (asking first for access rules), or
-/// replaces what it recorded with what the schema declares.
-fn reclaimed_row(spec: &str, rows: &[LedgerRow]) -> Result<LedgerRow> {
+/// The released row `spec` names, handed back as `adopted`. A row with a record keeps it, so the
+/// next push treats the object as any of Supatype's: puts back a hand edit made while it was
+/// released (asking first for access rules), or replaces what it recorded with what the schema
+/// declares.
+///
+/// A row released before the object existed records nothing. If the object is there now, it is
+/// recorded as it was found, as `adopt` records one, so a rollback of the next push puts it back:
+/// but with no live fingerprint, since Supatype never applied it, unless it already is what the
+/// schema declares. Whatever the push would do to it then reads as overwriting a change made
+/// outside Supatype, which for an access rule needs consent, rather than an ordinary replacement.
+/// If it is not there, the row records nothing still and is removed on apply.
+fn reclaimed_row(
+    spec: &str,
+    rows: &[LedgerRow],
+    live: &BTreeMap<ObjectKey, &ObjectFingerprint>,
+    desired: &[DesiredObject],
+) -> Result<LedgerRow> {
     let wanted = parse_object(spec)?;
     let released = rows.iter().filter(|r| r.status == Status::Released);
     let key = resolve(spec, &wanted, released.map(|r| &r.key), "released")?;
@@ -148,10 +180,35 @@ fn reclaimed_row(spec: &str, rows: &[LedgerRow]) -> Result<LedgerRow> {
         .iter()
         .find(|r| r.key == key)
         .expect("resolved from the ledger's own rows");
+    if !records_nothing(row) {
+        return Ok(LedgerRow {
+            status: Status::Adopted,
+            ..row.clone()
+        });
+    }
+    let Some(l) = live.get(&key) else {
+        return Ok(LedgerRow {
+            status: Status::Adopted,
+            ..row.clone()
+        });
+    };
+    let found = as_found(l, Status::Adopted);
+    let declared = desired
+        .iter()
+        .any(|d| d.key == key && found.intends(&d.create_sql));
     Ok(LedgerRow {
-        status: Status::Adopted,
-        ..row.clone()
+        live_fp: if declared {
+            found.live_fp.clone()
+        } else {
+            String::new()
+        },
+        ..found
     })
+}
+
+/// A row released before its object existed: it says only that the object is released.
+fn records_nothing(row: &LedgerRow) -> bool {
+    row.desired_sql.is_empty() && row.live_fp.is_empty()
 }
 
 fn status(apply: bool, changes: usize) -> &'static str {
@@ -168,20 +225,40 @@ fn items(rows: &[LedgerRow], consequence: &str) -> Vec<DoctorItem> {
         .collect()
 }
 
-/// A row for each conflict: the object under a name the schema needs, recorded as it is.
+/// A row for each conflict: the object under a name the schema needs, recorded as it is. With
+/// `keys`, only the conflicts they name, and none at all if one of them is not a conflict now.
 fn adopted_rows(
     plan: &reconcile::Plan,
     live: &BTreeMap<ObjectKey, &ObjectFingerprint>,
-) -> Vec<LedgerRow> {
-    plan.actions
-        .iter()
-        .filter_map(|action| match action {
-            reconcile::Action::Conflict { key, .. } => {
-                live.get(key).map(|l| as_found(l, Status::Adopted))
+    keys: Option<&[String]>,
+) -> Result<Vec<LedgerRow>> {
+    let conflicts = plan.conflicts().map(reconcile::Action::key);
+    let chosen: Vec<ObjectKey> = match keys {
+        None => conflicts.cloned().collect(),
+        Some(specs) => {
+            let conflicts: Vec<&ObjectKey> = conflicts.collect();
+            let mut chosen = Vec::new();
+            for spec in specs {
+                let wanted = parse_object(spec)?;
+                let key = resolve(spec, &wanted, conflicts.iter().copied(), "conflicting")
+                    .with_context(|| {
+                        format!(
+                            "{spec} was to be adopted but is not a conflict now: the database \
+                             changed since the preview. Nothing was written; run `supatype adopt` \
+                             again to see what it would adopt now"
+                        )
+                    })?;
+                if !chosen.contains(&key) {
+                    chosen.push(key);
+                }
             }
-            _ => None,
-        })
-        .collect()
+            chosen
+        }
+    };
+    Ok(chosen
+        .iter()
+        .filter_map(|key| live.get(key).map(|l| as_found(l, Status::Adopted)))
+        .collect())
 }
 
 /// `live` as it is, as what was intended: its own definition, so the next push replaces it with the

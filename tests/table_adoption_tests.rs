@@ -428,6 +428,7 @@ async fn a_reclaimed_object_is_supatypes_again() {
             release: &widget,
             reclaim: &widget,
             apply: true,
+            ..Default::default()
         };
         let refused = adopt::run(&pool, &ast, "public", both).await.unwrap_err();
         assert!(format!("{refused:#}").contains("both to release and to reclaim"));
@@ -522,6 +523,69 @@ async fn adoption_refuses_a_database_that_holds_another_project_schema() {
             refused.expect_err("adopt into another project's database")
         );
         assert!(message.contains("tenant_other"), "{message}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn adopting_with_keys_takes_only_what_was_previewed() {
+    common::with_integration_pool(|pool| async move {
+        sqlx::raw_sql("CREATE TABLE public.widget (id int primary key, name text);")
+            .execute(&pool)
+            .await
+            .expect("fixture applies");
+        let ast = parser::parse(ONE_MODEL).expect("fixture parses");
+        let preview = adopt::run(&pool, &ast, "public", adopt::Request::default())
+            .await
+            .unwrap();
+        assert!(preview
+            .adopt
+            .iter()
+            .any(|i| i.kind == "table" && i.name == "widget"));
+        let keys = ["table:widget".to_string()];
+
+        // The database changed after the preview: the previewed conflict is gone (and back as a
+        // different table would be just as wrong to take). Nothing is written.
+        sqlx::raw_sql("DROP TABLE public.widget;")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let refused = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                apply: true,
+                keys: Some(&keys),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("adopted something other than what was previewed");
+        let message = format!("{refused:#}");
+        assert!(message.contains("table:widget"), "{message}");
+        assert!(message.contains("since the preview"), "{message}");
+        assert!(recorded_tables(&pool).await.is_empty());
+
+        // As previewed: adopted.
+        sqlx::raw_sql("CREATE TABLE public.widget (id int primary key, name text);")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let applied = adopt::run(
+            &pool,
+            &ast,
+            "public",
+            adopt::Request {
+                apply: true,
+                keys: Some(&keys),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(applied.status, "adopted");
+        assert_eq!(recorded_tables(&pool).await, ["widget adopted"]);
     })
     .await;
 }

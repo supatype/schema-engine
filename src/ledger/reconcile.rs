@@ -205,6 +205,10 @@ pub enum Action {
         previous_sql: String,
         inline: bool,
         status: Status,
+        /// The object was also changed outside Supatype since the last apply: replacing it
+        /// overwrites that change, so where it decides access a push asks first (plan 3.5).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drifted: Option<HandEdit>,
     },
     /// Owned, desired, present, and the catalog no longer matches what was recorded after the last
     /// apply: changed outside Supatype. Shown as a diff, then re-asserted (O1, subject to 3.5).
@@ -237,6 +241,16 @@ pub enum Action {
     Forget { key: ObjectKey },
     /// `released`: the user took it back. Left alone whatever the schema says.
     Released { key: ObjectKey },
+}
+
+/// A change made outside Supatype to an object this push replaces anyway: what was recorded after
+/// the last apply, beside what the catalog holds now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HandEdit {
+    pub recorded_def: String,
+    pub live_def: String,
+    /// The live fingerprint, which `doctor --rebaseline` records as the new baseline.
+    pub live_fp: String,
 }
 
 /// What an action leaves in the ledger once applied.
@@ -374,9 +388,17 @@ impl Action {
     /// Undoes the addition: drops what this action created. An inline `Create` has one too; its
     /// parent's rollback covers it, and the explicit drop is `IF EXISTS`. A replacement in place
     /// is undone by the previous definition alone ([`Action::undo_removal`]). Row-level security
-    /// is never turned off, by a rollback either (D9).
+    /// is never turned off, by a rollback either (D9). Taking over a stamped object is undone by
+    /// putting its comment back, stamp and all: the rollback removes the row, and without the
+    /// stamp the object would read as someone else's and the next push would refuse it.
     pub fn undo_addition(&self) -> Option<String> {
         match self {
+            Action::Adopt {
+                key,
+                reason: AdoptReason::Stamped,
+                comment,
+                ..
+            } => key.comment_sql(comment.as_deref()),
             action if never_removed(action.key().kind) => None,
             // The differ's rollback undoes what the differ did.
             action if altered_by_the_differ(action.key().kind) => None,
@@ -538,6 +560,7 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         create_sql: d.create_sql.clone(),
         previous_sql: previous_sql.to_string(),
         status: Status::Managed,
+        drifted: None,
     };
     let adopt = |reason, status| Action::Adopt {
         key: key.clone(),
@@ -634,12 +657,20 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             }),
             (Some(d), Some(l)) => {
                 if !row.intends(&d.create_sql) {
+                    // Decided before drift, since the schema changed too; but a hand edit it would
+                    // overwrite is still one, and must not escape the consent drift needs.
+                    let drifted = (l.fingerprint != row.live_fp).then(|| HandEdit {
+                        recorded_def: row.live_def.clone(),
+                        live_def: l.definition.clone(),
+                        live_fp: l.fingerprint.clone(),
+                    });
                     changes.push(Action::Replace {
                         key,
                         create_sql: d.create_sql.clone(),
                         previous_sql: row.desired_sql.clone(),
                         inline,
                         status,
+                        drifted,
                     });
                 } else if l.fingerprint != row.live_fp {
                     changes.push(Action::Drift {
@@ -863,6 +894,13 @@ mod tests {
                 assert_eq!(
                     with_stamp[0].sql(),
                     ["COMMENT ON CONSTRAINT \"posts_title_check\" ON \"public\".\"posts\" IS NULL;"]
+                );
+                // And a rollback puts the stamp back, so the object is still recognisably ours.
+                let rollback = with_stamp[0].rollback_sql();
+                assert_eq!(rollback.len(), 1, "{rollback:?}");
+                assert!(
+                    rollback[0].contains("'supatype:managed;kind=check"),
+                    "{rollback:?}"
                 );
             }
             other => panic!("{other:?}"),
