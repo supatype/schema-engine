@@ -501,3 +501,37 @@ fn draft_views_are_dropped_before_column_changes() {
     );
     let _ = ast;
 }
+
+// ─── Cron jobs ───────────────────────────────────────────────────────────────
+
+/// `cron.job` is the cluster's, and every project on it names its jobs the same. Unscheduling by
+/// name alone took another database's jobs with ours, both when the layer replaces its jobs and
+/// when a push drops one; introspection already reads only this database's.
+#[test]
+fn unscheduling_a_job_touches_only_this_databases() {
+    let ast = versioned_ast();
+    let layer = versions::render_versions_layer(&ast, "public").unwrap();
+    let unschedule = layer
+        .split("PERFORM cron.unschedule(")
+        .nth(1)
+        .expect("the layer replaces its jobs");
+    let statement = &unschedule[..unschedule.find(';').unwrap()];
+    assert!(
+        statement.contains("AND database = current_database()"),
+        "{statement}"
+    );
+
+    let job = supatype_engine::desired::ObjectKey {
+        kind: supatype_engine::introspector::fingerprint::ObjectKind::CronJob,
+        schema: String::new(),
+        parent: String::new(),
+        name: "supatype-prune-versions".into(),
+    };
+    let drop = job.drop_sql().unwrap();
+    assert!(
+        drop.contains(
+            "WHERE jobname = 'supatype-prune-versions' AND database = current_database()"
+        ),
+        "{drop}"
+    );
+}
