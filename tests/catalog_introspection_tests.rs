@@ -71,7 +71,9 @@ async fn functions_carry_their_identity_body_and_properties() {
              COMMENT ON FUNCTION public.whoami() IS 'definer';
              CREATE TABLE public.things (id int);
              CREATE FUNCTION public.describe(t public.things, at timestamptz, tags text[])
-               RETURNS text LANGUAGE sql AS $$ SELECT '' $$;",
+               RETURNS text LANGUAGE sql AS $$ SELECT '' $$;
+             CREATE FUNCTION public.count_all(rows public.things[], at timestamp(3) with time zone)
+               RETURNS int LANGUAGE sql AS $$ SELECT 0 $$;",
         )
         .await;
 
@@ -116,6 +118,24 @@ async fn functions_carry_their_identity_body_and_properties() {
             ),
             format!("describe({})", describe.identity_types)
         );
+        // An array of a project type is its element type with brackets, not `public._things`,
+        // and a modifier does not change the type it modifies: both as the declaration keys them.
+        let count_all = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "count_all")
+            .unwrap();
+        assert_eq!(
+            count_all.identity_types,
+            "public.things[], timestamp with time zone"
+        );
+        assert_eq!(
+            supatype_engine::desired::identity::function_key(
+                "count_all",
+                "rows public.things[], at timestamp(3) with time zone"
+            ),
+            format!("count_all({})", count_all.identity_types)
+        );
         assert!(twice
             .iter()
             .all(|f| f.volatility == "i" && f.language == "sql"));
@@ -133,6 +153,33 @@ async fn functions_carry_their_identity_body_and_properties() {
     .await;
 }
 
+/// `pg_get_function_result` is NULL for a procedure. Decoded into a `String`, one `CREATE
+/// PROCEDURE` anywhere in a swept schema failed the whole catalog read, and with it every push.
+#[tokio::test]
+async fn a_procedure_is_read_with_an_empty_return_type() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE TABLE public.log (msg text);
+             CREATE PROCEDURE public.note(m text) LANGUAGE sql
+               AS $$ INSERT INTO public.log VALUES (m) $$;",
+        )
+        .await;
+
+        let catalog = introspector::introspect_catalog(&pool, "public")
+            .await
+            .expect("a procedure does not fail the catalog read");
+        let note = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "note")
+            .expect("procedure read");
+        assert_eq!(note.return_type, "");
+        assert_eq!(note.identity_types, "text");
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn views_schemas_sequences_and_enum_types_are_read_with_comments() {
     common::with_integration_pool(|pool| async move {
@@ -140,6 +187,7 @@ async fn views_schemas_sequences_and_enum_types_are_read_with_comments() {
             &pool,
             "CREATE TYPE public.mood AS ENUM ('ok'); COMMENT ON TYPE public.mood IS 'feelings';
              CREATE TABLE public.items (id serial PRIMARY KEY, name text);
+             CREATE TABLE public.tickets (id int GENERATED ALWAYS AS IDENTITY, n int);
              CREATE SEQUENCE public.loose_seq; COMMENT ON SEQUENCE public.loose_seq IS 'free';
              CREATE VIEW public.item_names AS SELECT name FROM public.items;
              COMMENT ON VIEW public.item_names IS 'names only';
@@ -178,6 +226,14 @@ async fn views_schemas_sequences_and_enum_types_are_read_with_comments() {
             .find(|s| s.name == "items_id_seq")
             .unwrap();
         assert_eq!(owned.owned_by.as_deref(), Some("items.id"));
+        // An identity column's sequence depends on it internally (`deptype = 'i'`), not as `SERIAL`'s
+        // does, and is still the column's.
+        let identity = catalog
+            .sequences
+            .iter()
+            .find(|s| s.name == "tickets_id_seq")
+            .unwrap();
+        assert_eq!(identity.owned_by.as_deref(), Some("tickets.id"));
         let loose = catalog
             .sequences
             .iter()
@@ -301,6 +357,42 @@ async fn an_extensions_objects_are_not_reported() {
                 .iter()
                 .any(|a| a.table == "spatial_ref_sys"),
             "an extension's table leaked in"
+        );
+    })
+    .await;
+}
+
+/// A column grant on a table an extension owns is the extension's, as the table grant beside it
+/// already was: the column reader had no `deptype = 'e'` exclusion of its own.
+#[tokio::test]
+async fn an_extensions_column_grants_are_not_reported() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE EXTENSION IF NOT EXISTS pg_trgm;
+             CREATE TABLE public.ext_owned (id int, secret text);
+             GRANT SELECT ON public.ext_owned TO PUBLIC;
+             GRANT UPDATE (secret) ON public.ext_owned TO PUBLIC;
+             ALTER EXTENSION pg_trgm ADD TABLE public.ext_owned;
+             CREATE TABLE public.mine (id int, secret text);
+             GRANT UPDATE (secret) ON public.mine TO PUBLIC;",
+        )
+        .await;
+        let catalog = introspector::introspect_catalog(&pool, "public")
+            .await
+            .unwrap();
+        assert!(
+            !catalog.column_grants.iter().any(|g| g.table == "ext_owned"),
+            "an extension's column grant leaked in: {:?}",
+            catalog.column_grants
+        );
+        assert!(!catalog.table_grants.iter().any(|g| g.table == "ext_owned"));
+        assert!(
+            catalog
+                .column_grants
+                .iter()
+                .any(|g| g.table == "mine" && g.column == "secret"),
+            "a user's own column grant is still read"
         );
     })
     .await;

@@ -45,6 +45,7 @@ fn fk(table: &str, col_name: &str, ftable: &str) -> DbConstraint {
         foreign_columns: Some(vec!["id".into()]),
         check_expression: None,
         on_delete: Some("RESTRICT".into()),
+        definition: None,
         comment: None,
     }
 }
@@ -5424,6 +5425,7 @@ fn managed_unique_constraint(table: &str, column: &str) -> DbConstraint {
         foreign_columns: None,
         check_expression: None,
         on_delete: None,
+        definition: None,
         comment: Some(format!(
             "supatype:managed;kind=unique_constraint;table={table};fields={column};v=1"
         )),
@@ -5484,6 +5486,7 @@ fn test_drop_managed_slug_unique_when_removed_from_ast() {
             comment: Some(
                 "supatype:managed;kind=unique_index;table=album;fields=owner_id,slug;v=1".into(),
             ),
+            ..Default::default()
         }],
         ..DatabaseState::default()
     };
@@ -6477,6 +6480,7 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
                 foreign_columns: None,
                 check_expression: Some("CHECK ((length(excerpt) <= 80))".into()),
                 on_delete: None,
+                definition: None,
                 comment: None,
             },
             // A NOT NULL is a column property, not a rule anyone declared. Reporting it would bury
@@ -6491,6 +6495,7 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
                 foreign_columns: None,
                 check_expression: Some("CHECK ((id IS NOT NULL))".into()),
                 on_delete: None,
+                definition: None,
                 comment: None,
             },
         ],
@@ -6578,6 +6583,7 @@ fn test_doctor_leaves_supatype_owned_checks_alone() {
             foreign_columns: None,
             check_expression: Some("CHECK ((char_length(excerpt) <= 80))".into()),
             on_delete: None,
+            definition: None,
             comment: Some(
                 "supatype:managed;kind=check;table=posts;fields=excerpt;v=1;bounds=abc".into(),
             ),

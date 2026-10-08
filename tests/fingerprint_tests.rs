@@ -207,3 +207,136 @@ async fn column_order_does_not_enter_a_table_fingerprint() {
     })
     .await;
 }
+
+/// Taking the pinned `search_path` off a security definer function, or making it non-strict, is a
+/// hand edit like any other; and a `BEGIN ATOMIC` body, whose `prosrc` is empty, is still a body.
+/// The statement a rollback runs to put the function back is the catalog's own, pin and all.
+#[tokio::test]
+async fn a_functions_settings_and_atomic_body_enter_its_fingerprint() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE FUNCTION public.whoami() RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+               SET search_path = '' AS $$ SELECT current_user::text $$;
+             CREATE FUNCTION public.strict_one(n int) RETURNS int LANGUAGE sql STRICT
+               AS $$ SELECT n $$;
+             CREATE FUNCTION public.atomic_answer() RETURNS int LANGUAGE sql
+               BEGIN ATOMIC SELECT 41; END;",
+        )
+        .await;
+        let catalog = introspector::introspect_catalog(&pool, "public")
+            .await
+            .unwrap();
+        let whoami = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "whoami")
+            .unwrap();
+        assert_eq!(whoami.config, vec!["search_path=\"\"".to_string()]);
+        let atomic = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "atomic_answer")
+            .unwrap();
+        assert!(atomic.body.contains("41"), "{:?}", atomic.body);
+
+        let db = introspector::introspect(&pool, "public").await.unwrap();
+        let fps = fingerprints(&db, &catalog);
+        let whoami_fp = fps
+            .iter()
+            .find(|f| f.kind == ObjectKind::Function && f.name == "whoami()")
+            .unwrap();
+        let rollback = whoami_fp.create_sql.as_deref().unwrap();
+        assert!(rollback.contains("SET search_path TO ''"), "{rollback}");
+        assert!(rollback.contains("SECURITY DEFINER"), "{rollback}");
+        let before = snapshot(&pool).await;
+
+        exec(
+            &pool,
+            "ALTER FUNCTION public.whoami() RESET search_path;
+             ALTER FUNCTION public.strict_one(int) CALLED ON NULL INPUT;
+             CREATE OR REPLACE FUNCTION public.atomic_answer() RETURNS int LANGUAGE sql
+               BEGIN ATOMIC SELECT 42; END;",
+        )
+        .await;
+        let after = snapshot(&pool).await;
+        let mut diff = moved(&before, &after);
+        diff.sort();
+        assert_eq!(diff.len(), 3, "{diff:?}");
+        for name in ["atomic_answer()", "strict_one(integer)", "whoami()"] {
+            assert!(diff.iter().any(|d| d.contains(name)), "{name}: {diff:?}");
+        }
+
+        // The rollback statement restores the pin.
+        sqlx::raw_sql(rollback).execute(&pool).await.unwrap();
+        let restored = snapshot(&pool).await;
+        let key = (
+            ObjectKind::Function,
+            "public".to_string(),
+            String::new(),
+            "whoami()".to_string(),
+        );
+        assert_eq!(restored[&key], before[&key]);
+    })
+    .await;
+}
+
+/// Deparsed text names an object bare when its schema is on the session's `search_path` and
+/// qualified otherwise. Read with the session's path, a push from a session with `app` on its
+/// path and one without fingerprinted the same objects differently and reported drift that was
+/// never made. Every read that feeds a fingerprint now runs under one pinned path, and the
+/// session's own is put back after.
+#[tokio::test]
+async fn fingerprints_do_not_depend_on_the_sessions_search_path() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE SCHEMA app;
+             CREATE TYPE app.mood AS ENUM ('ok', 'meh');
+             CREATE TABLE app.notes (id serial PRIMARY KEY, mood app.mood,
+               CONSTRAINT notes_mood_check CHECK (mood <> 'meh'::app.mood));
+             CREATE INDEX notes_mood_idx ON app.notes (mood) WHERE mood = 'ok'::app.mood;
+             CREATE FUNCTION app.cheer(m app.mood DEFAULT 'ok'::app.mood) RETURNS app.mood
+               LANGUAGE sql AS $$ SELECT m $$;",
+        )
+        .await;
+
+        let read = |path: &'static str| {
+            let pool = pool.clone();
+            async move {
+                let mut conn = pool.acquire().await.unwrap();
+                sqlx::query(&format!("SET search_path = {path}"))
+                    .execute(&mut *conn)
+                    .await
+                    .unwrap();
+                let state = supatype_engine::push::read_state(&mut conn, "app")
+                    .await
+                    .unwrap();
+                let after: String = sqlx::query_scalar("SHOW search_path")
+                    .fetch_one(&mut *conn)
+                    .await
+                    .unwrap();
+                (state.fingerprints, after)
+            }
+        };
+        let (outside, path_after) = read("public").await;
+        let (inside, _) = read("app, public").await;
+        assert_eq!(
+            path_after, "public",
+            "the session's search_path is put back"
+        );
+        assert!(
+            outside.iter().any(|f| f.name == "notes_mood_idx"),
+            "{outside:#?}"
+        );
+        let differ: Vec<_> = outside
+            .iter()
+            .zip(&inside)
+            .filter(|(a, b)| a != b)
+            .map(|(a, b)| format!("{}\n  {}\n  {}", a.key(), a.definition, b.definition))
+            .collect();
+        assert_eq!(outside.len(), inside.len());
+        assert!(differ.is_empty(), "{}", differ.join("\n"));
+    })
+    .await;
+}

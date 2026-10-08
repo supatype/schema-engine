@@ -226,7 +226,18 @@ struct Live {
     fingerprints: Vec<ObjectFingerprint>,
 }
 
+/// Read under a pinned `search_path` (`introspector::pin_search_path`), so a fingerprint does not
+/// depend on the session's, and with the session's put back after, error or not.
 async fn live(conn: &mut PgConnection, schema: &str) -> Result<Live> {
+    let saved = introspector::pin_search_path(conn).await?;
+    let read = read_live(conn, schema).await;
+    let restored = introspector::restore_search_path(conn, &saved).await;
+    let live = read?;
+    restored?;
+    Ok(live)
+}
+
+async fn read_live(conn: &mut PgConnection, schema: &str) -> Result<Live> {
     let db = introspector::introspect_connection(conn, schema).await?;
     let catalog = catalog::read(conn, schema).await?;
     let fingerprints = fingerprints(&db, &catalog);

@@ -340,3 +340,96 @@ async fn a_same_named_index_of_the_users_over_other_columns_refuses_the_push() {
     })
     .await;
 }
+
+/// A partial index of the user's under the name of one we declare is not ours: the desired index
+/// predicts an empty predicate, and adoption compares every part it predicts. Before, the desired
+/// index had no `predicate` part and this one was adopted as the declared full unique index.
+#[tokio::test]
+async fn a_same_named_partial_index_of_the_users_refuses_the_push() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &schema(vec![posts(false, vec![], false, false)]))
+            .await
+            .unwrap();
+        exec(
+            &pool,
+            "CREATE UNIQUE INDEX posts_body_idx ON public.posts (body) WHERE body <> ''",
+        )
+        .await
+        .unwrap();
+
+        let refused = push(
+            &pool,
+            &schema(vec![posts(
+                false,
+                vec![declared(&["body"], true)],
+                false,
+                false,
+            )]),
+        )
+        .await
+        .expect_err("a partial index is not the full unique index we declare");
+        let message = format!("{refused:#}");
+        assert!(message.contains("posts_body_idx"), "{message}");
+        let (definition, _) = live_index(&pool, "posts_body_idx").await.unwrap();
+        assert!(definition.contains("WHERE"), "left alone: {definition}");
+    })
+    .await;
+}
+
+/// Every index a push creates (declared, implicit, the singleton's expression, the versions
+/// table's `version DESC`) is, live, exactly what its desired object predicts, part for part: the
+/// fingerprint now reads key options, `INCLUDE` and the whole definition, and none of that may
+/// make an index the engine made read as someone else's.
+#[tokio::test]
+async fn every_index_a_push_creates_matches_what_it_predicts() {
+    common::with_integration_pool(|pool| async move {
+        let mut model = posts(true, vec![declared(&["body", "title"], true)], true, true);
+        model["options"]["versions"] = json!({ "drafts": true, "keep": 5 });
+        let ast = schema(vec![model]);
+        assert!(applied(&push(&pool, &ast).await.unwrap()));
+
+        let mut conn = pool.acquire().await.unwrap();
+        let state = push::read_state(&mut conn, "public").await.unwrap();
+        drop(conn);
+        let desired = supatype_engine::desired::desired_objects(&ast, "public").unwrap();
+        let indexes: Vec<_> = desired
+            .iter()
+            .filter(|o| o.key.kind == ObjectKind::Index)
+            .collect();
+        assert!(
+            indexes
+                .iter()
+                .any(|o| o.structure.get("options").map(String::as_str) == Some("2 DESC")),
+            "the versions index is among them: {indexes:#?}"
+        );
+        let mut problems = Vec::new();
+        for o in &indexes {
+            let Some(live) = state.fingerprints.iter().find(|f| f.key() == o.key) else {
+                problems.push(format!("{}: not live", o.key));
+                continue;
+            };
+            let parts = supatype_engine::ledger::reconcile::parse_definition(&live.definition);
+            // In the project schema, where a same-named index may be the user's, every part is
+            // predicted. The engine's own schemas are ours by location, and a partial index there
+            // (`preview_links_live_for_record`) predicts only what its statement says plainly.
+            for label in ["columns", "expressions", "predicate", "include", "options"] {
+                if o.key.schema == "public" && !o.structure.contains_key(label) {
+                    problems.push(format!("{}: predicts no {label}", o.key));
+                }
+            }
+            for (label, want) in &o.structure {
+                if parts.get(label) != Some(&want.as_str()) {
+                    problems.push(format!(
+                        "{}: {label} predicted {want:?}, live {:?}",
+                        o.key,
+                        parts.get(label)
+                    ));
+                }
+            }
+        }
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+
+        assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
+    })
+    .await;
+}

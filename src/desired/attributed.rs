@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::introspector::fingerprint::{normalise_sql, ObjectKind};
+use crate::introspector::fingerprint::{definition_value, normalise_sql, ObjectKind};
 
 use super::statements::{attribute_all, head, split_statements};
 use super::{DesiredObject, ObjectKey};
@@ -160,7 +160,7 @@ fn function_structure(sql: &str) -> BTreeMap<&'static str, String> {
     out.insert("volatility", volatility.to_string());
     out.insert("security_definer", flag(upper.contains("SECURITY DEFINER")));
     if let Some(body) = dollar_quoted_body(sql) {
-        out.insert("body", normalise_sql(body));
+        out.insert("body", definition_value(&normalise_sql(body)));
     }
     out
 }
@@ -213,7 +213,10 @@ fn trigger_structure(sql: &str, schema: &str) -> BTreeMap<&'static str, String> 
     out
 }
 
-/// `columns` (when every key is a column), `method`, `unique`, `primary`.
+/// `columns` (when every key is a column), `method`, `unique`, `primary`; and when the statement
+/// has no `WHERE` or `INCLUDE` and every key is a column with at most a direction and a `NULLS`
+/// order, the empty `expressions`, `predicate` and `include` and the `options` that says so, as
+/// `DbIndex::options` spells them.
 fn index_structure(sql: &str) -> BTreeMap<&'static str, String> {
     let mut out = BTreeMap::new();
     let upper = sql.to_ascii_uppercase();
@@ -228,7 +231,11 @@ fn index_structure(sql: &str) -> BTreeMap<&'static str, String> {
         // The key list is the last parenthesised group; `USING btree (...)` puts it after `USING`.
         let keys_open = sql[..close].rfind('(').unwrap_or(open);
         let inner = &sql[keys_open + 1..close];
-        if !inner.contains('(') {
+        // With a `WHERE` or an `INCLUDE` the last group is not the key list, so nothing is read
+        // from it. Over-cautious on purpose: a column that merely contains either word goes
+        // unpredicted, which only leaves labels out.
+        let plain = !upper.contains("WHERE") && !upper.contains("INCLUDE");
+        if plain && !inner.contains('(') {
             let columns: Vec<String> = inner
                 .split(',')
                 .map(|c| c.trim().trim_matches('"').to_string())
@@ -236,9 +243,65 @@ fn index_structure(sql: &str) -> BTreeMap<&'static str, String> {
             if columns.iter().all(|c| !c.contains(' ')) {
                 out.insert("columns", columns.join(","));
             }
+            if let Some((columns, options)) = ordered_keys(inner) {
+                out.insert("columns", columns);
+                out.insert("options", options);
+                out.insert("expressions", String::new());
+                out.insert("predicate", String::new());
+                out.insert("include", String::new());
+            }
         }
     }
     out
+}
+
+/// `"a", "b" DESC` as its columns (`a,b`) and the options of the keys that have any (`2 DESC`),
+/// or None when a key is anything but a column with an optional direction and `NULLS` order.
+fn ordered_keys(inner: &str) -> Option<(String, String)> {
+    let mut columns = Vec::new();
+    let mut options = Vec::new();
+    for (i, key) in inner.split(',').enumerate() {
+        let key = key.trim();
+        let (column, rest) = match key.strip_prefix('"') {
+            Some(quoted) => {
+                let end = quoted.find('"')?;
+                (quoted[..end].to_string(), &quoted[end + 1..])
+            }
+            None => {
+                let end = key.find(char::is_whitespace).unwrap_or(key.len());
+                (key[..end].to_string(), &key[end..])
+            }
+        };
+        if column.is_empty() {
+            return None;
+        }
+        let words: Vec<String> = rest
+            .split_whitespace()
+            .map(str::to_ascii_uppercase)
+            .collect();
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        let (desc, nulls) = match words.as_slice() {
+            [] | ["ASC"] => (false, None),
+            ["DESC"] => (true, None),
+            ["NULLS", n] | ["ASC", "NULLS", n] => (false, Some(*n)),
+            ["DESC", "NULLS", n] => (true, Some(*n)),
+            _ => return None,
+        };
+        // Only what differs from the direction's default is reported: ASC sorts nulls last and
+        // DESC first.
+        let nulls = match (desc, nulls) {
+            (false, Some("FIRST")) => Some("NULLS FIRST"),
+            (true, Some("LAST")) => Some("NULLS LAST"),
+            (_, Some("FIRST" | "LAST")) | (_, None) => None,
+            _ => return None,
+        };
+        let said: Vec<&str> = desc.then_some("DESC").into_iter().chain(nulls).collect();
+        if !said.is_empty() {
+            options.push(format!("{} {}", i + 1, said.join(" ")));
+        }
+        columns.push(column);
+    }
+    Some((columns.join(","), options.join(",")))
 }
 
 /// `command` as `pg_policy.polcmd` spells it, `permissive`, `roles` (sorted, `public` when none).
@@ -346,6 +409,9 @@ mod tests {
         assert!(policy.security_relevant);
         let index = by_kind(ObjectKind::Index);
         assert_eq!(index.structure["columns"], "a,b");
+        assert_eq!(index.structure["options"], "");
+        assert_eq!(index.structure["predicate"], "");
+        assert_eq!(index.structure["expressions"], "");
         assert_eq!(index.structure["method"], "btree");
         assert_eq!(index.structure["unique"], "f");
         let cron = by_kind(ObjectKind::CronJob);
@@ -356,5 +422,84 @@ mod tests {
             "SELECT _supatype.prune_versions()"
         );
         assert_eq!(cron.structure["active"], "t");
+    }
+
+    /// A body whose string literal spans lines keeps those line breaks through normalising, and the
+    /// live definition (one `label=value` line per part) must still carry the whole body for the
+    /// desired one to compare with: written raw, the body ended at the literal's first line break.
+    #[test]
+    fn a_body_with_a_multi_line_literal_matches_its_live_definition() {
+        use crate::introspector::catalog::{CatalogState, DbFunction};
+        use crate::introspector::fingerprint::fingerprints;
+        use crate::ledger::reconcile::parse_definition;
+
+        let body = "\n  BEGIN\n    EXECUTE format('DELETE FROM %I\n      WHERE x = ''a\\b''', t);\n  END\n";
+        let sql = format!(
+            "CREATE OR REPLACE FUNCTION \"_supatype\".\"prune\"(t text) RETURNS void LANGUAGE plpgsql AS $fn${body}$fn$;"
+        );
+        let desired = function_structure(&sql);
+        let catalog = CatalogState {
+            functions: vec![DbFunction {
+                schema: "_supatype".into(),
+                name: "prune".into(),
+                identity_arguments: "t text".into(),
+                identity_types: "text".into(),
+                return_type: "void".into(),
+                language: "plpgsql".into(),
+                volatility: "v".into(),
+                security_definer: false,
+                body: body.into(),
+                comment: None,
+                arguments: "t text".into(),
+                config: Vec::new(),
+                strict: false,
+                leakproof: false,
+                parallel: "u".into(),
+                cost: "100".into(),
+                rows: "0".into(),
+                definition: String::new(),
+            }],
+            ..Default::default()
+        };
+        let live = fingerprints(&Default::default(), &catalog).remove(0);
+        assert_eq!(
+            live.definition.lines().count(),
+            ObjectKind::Function.labels().len(),
+            "{}",
+            live.definition
+        );
+        let parts = parse_definition(&live.definition);
+        assert!(parts["body"].contains("WHERE x"), "{}", parts["body"]);
+        assert_eq!(parts["body"], desired["body"]);
+    }
+
+    #[test]
+    fn an_index_statement_predicts_its_key_options_and_nothing_it_cannot_read() {
+        let s = index_structure(
+            "CREATE INDEX IF NOT EXISTS \"v_idx\" ON \"public\".\"v\" (\"record_id\", \"version\" DESC);",
+        );
+        assert_eq!(s["columns"], "record_id,version");
+        assert_eq!(s["options"], "2 DESC");
+        assert_eq!(s["predicate"], "");
+        assert_eq!(s["include"], "");
+        let s = index_structure(
+            "CREATE INDEX i ON t (a ASC NULLS FIRST, b DESC NULLS FIRST, c DESC NULLS LAST);",
+        );
+        assert_eq!(s["columns"], "a,b,c");
+        assert_eq!(s["options"], "1 NULLS FIRST,2 DESC,3 DESC NULLS LAST");
+        // A partial index, or one with an included column, says nothing about its keys: the last
+        // parenthesised group is not the key list.
+        for sql in [
+            "CREATE INDEX i ON t (a) WHERE (active);",
+            "CREATE INDEX i ON t (a) INCLUDE (b);",
+        ] {
+            let s = index_structure(sql);
+            assert!(
+                !s.contains_key("columns") && !s.contains_key("predicate"),
+                "{sql}: {s:?}"
+            );
+        }
+        let s = index_structure("CREATE INDEX i ON t (a text_pattern_ops);");
+        assert!(!s.contains_key("options"), "{s:?}");
     }
 }

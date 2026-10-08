@@ -136,7 +136,9 @@ pub struct ObjectFingerprint {
     pub name: String,
     pub fingerprint: String,
     /// What was hashed, one `label=value` line per part, so a ledger can show a drifted object's
-    /// recorded definition against its live one without a renderer per kind.
+    /// recorded definition against its live one without a renderer per kind. Each value is
+    /// written with [`definition_value`], so a line break inside one (a multi-line string literal
+    /// in a function body) cannot end its line.
     pub definition: String,
     /// The object's `COMMENT`, for the kinds that carry one. Never hashed: comments are the
     /// user's (D1). Read so an older engine's `supatype:managed` stamp can be recognised and
@@ -173,9 +175,131 @@ impl ObjectFingerprint {
 
 /// Whitespace collapsed to single spaces, trimmed, no trailing semicolon. Case is kept: deparsed
 /// SQL quotes identifiers that need it, so folding case would conflate `"A"` with `a`.
+///
+/// Quoted text is kept byte for byte: a string literal (`'a  b'`, with `''` and, in an `E''`
+/// string, `\'` escapes), a quoted identifier (`"a  b"`) and a dollar-quoted body (`$fn$...$fn$`).
+/// Whitespace inside those is the value, so `'a  b'` and `'a b'` are different objects. A `--` or
+/// `/* */` comment is collapsed like code, and a quote inside one opens nothing.
 pub fn normalise_sql(sql: &str) -> String {
-    let collapsed = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.trim_end_matches(';').trim().to_string()
+    let bytes = sql.as_bytes();
+    let n = bytes.len();
+    let mut out = String::with_capacity(n);
+    // Whether whitespace has been seen since the last token, so a run of it becomes one space.
+    let mut gap = false;
+    let mut i = 0;
+    fn push(out: &mut String, text: &str, gap: &mut bool) {
+        if *gap && !out.is_empty() {
+            out.push(' ');
+        }
+        *gap = false;
+        out.push_str(text);
+    }
+    while i < n {
+        let c = bytes[i];
+        let start = i;
+        if c.is_ascii_whitespace() {
+            gap = true;
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' => {
+                // An `E'...'` string also escapes with a backslash.
+                let escapes = i > 0
+                    && matches!(bytes[i - 1], b'E' | b'e')
+                    && (i < 2 || !(bytes[i - 2].is_ascii_alphanumeric() || bytes[i - 2] == b'_'));
+                i += 1;
+                while i < n {
+                    match bytes[i] {
+                        b'\\' if escapes => i += 2,
+                        b'\'' if i + 1 < n && bytes[i + 1] == b'\'' => i += 2,
+                        b'\'' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < n {
+                    if bytes[i] == b'"' {
+                        if i + 1 < n && bytes[i + 1] == b'"' {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'$' => {
+                // `$tag$` where the tag is empty or an identifier; `$1` is a parameter, and a `$`
+                // inside an identifier (`a$b`) is part of it.
+                let in_word =
+                    i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+                let mut j = i + 1;
+                while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                let tagged = !in_word
+                    && j < n
+                    && bytes[j] == b'$'
+                    && !(j > i + 1 && bytes[i + 1].is_ascii_digit());
+                if tagged {
+                    let tag = &sql[i..=j];
+                    i = match sql[j + 1..].find(tag) {
+                        Some(off) => j + 1 + off + tag.len(),
+                        None => n,
+                    };
+                } else {
+                    i += 1;
+                }
+            }
+            b'-' if i + 1 < n && bytes[i + 1] == b'-' => {
+                // A line comment: its words collapse like code, its quotes open nothing.
+                let end = sql[i..].find('\n').map(|o| i + o).unwrap_or(n);
+                for word in sql[i..end].split_whitespace() {
+                    push(&mut out, word, &mut gap);
+                    gap = true;
+                }
+                i = end;
+                continue;
+            }
+            b'/' if i + 1 < n && bytes[i + 1] == b'*' => {
+                let end = sql[i + 2..].find("*/").map(|o| i + 2 + o + 2).unwrap_or(n);
+                for word in sql[i..end].split_whitespace() {
+                    push(&mut out, word, &mut gap);
+                    gap = true;
+                }
+                gap = false;
+                i = end;
+                continue;
+            }
+            _ => {
+                // Plain text up to the next whitespace or the next character that may open a
+                // quoted region or a comment.
+                i += 1;
+                while i < n
+                    && !bytes[i].is_ascii_whitespace()
+                    && !matches!(bytes[i], b'\'' | b'"' | b'$' | b'-' | b'/')
+                {
+                    i += 1;
+                }
+            }
+        }
+        i = i.min(n);
+        push(&mut out, &sql[start..i], &mut gap);
+    }
+    // A trailing `;` (or several) goes, with the whitespace before it.
+    while out.ends_with(';') {
+        out.pop();
+        let trimmed = out.trim_end().len();
+        out.truncate(trimmed);
+    }
+    out
 }
 
 /// Sixteen hex characters of SHA-256 over the kind and the parts, separated so that no two part
@@ -222,7 +346,13 @@ impl ObjectKind {
             ObjectKind::Schema | ObjectKind::Table => &[],
             ObjectKind::Column => &["type", "udt", "nullable", "default", "precision", "scale"],
             ObjectKind::PrimaryKey | ObjectKind::Unique => &["columns"],
-            ObjectKind::ForeignKey => &["columns", "references", "referenced_columns", "on_delete"],
+            ObjectKind::ForeignKey => &[
+                "columns",
+                "references",
+                "referenced_columns",
+                "on_delete",
+                "definition",
+            ],
             ObjectKind::Check => &["expression"],
             ObjectKind::Index => &[
                 "columns",
@@ -231,6 +361,9 @@ impl ObjectKind {
                 "method",
                 "unique",
                 "primary",
+                "include",
+                "options",
+                "definition",
             ],
             ObjectKind::Trigger => &[
                 "timing",
@@ -247,6 +380,13 @@ impl ObjectKind {
                 "volatility",
                 "security_definer",
                 "body",
+                "arguments",
+                "config",
+                "strict",
+                "leakproof",
+                "parallel",
+                "cost",
+                "rows",
             ],
             ObjectKind::View => &["materialized", "definition"],
             ObjectKind::Policy => &["command", "permissive", "roles", "using", "with_check"],
@@ -258,6 +398,19 @@ impl ObjectKind {
             ObjectKind::CronJob => &["schedule", "command", "active"],
         }
     }
+}
+
+/// A part as it is written into a definition line: backslashes doubled and line breaks written
+/// `\n` and `\r`, so every part stays on its own line and the line reads back to exactly one
+/// value. [`normalise_sql`] keeps a string literal's line breaks, which are its value. A desired
+/// object's structure value that can hold one is written this way too, so the two compare.
+pub fn definition_value(part: &str) -> String {
+    if !part.contains(['\\', '\n', '\r']) {
+        return part.to_string();
+    }
+    part.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 /// The hashed parts rendered for a person: `label=value` lines where the kind has labels, the bare
@@ -275,7 +428,7 @@ fn render_definition(kind: ObjectKind, parts: &[&str]) -> String {
     labels
         .iter()
         .zip(parts)
-        .map(|(label, value)| format!("{label}={value}"))
+        .map(|(label, value)| format!("{label}={}", definition_value(value)))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -301,7 +454,17 @@ fn entry(
 
 /// `CREATE OR REPLACE FUNCTION` for a function as the catalog reports it: the O1 definition
 /// renderer for this kind, and what a rollback runs to restore one the push replaced.
+///
+/// `pg_get_functiondef`'s own statement, which carries everything the function is: its `SET
+/// search_path`, `STRICT`, `LEAKPROOF`, `PARALLEL`, `COST`, `ROWS`, argument names and defaults,
+/// and a procedure as a procedure. Rebuilt from parts, a rollback put a `SECURITY DEFINER`
+/// function back without the `search_path` it pinned. The parts are the fallback only for a
+/// catalog serialised before the definition was read.
 fn function_create_sql(f: &DbFunction) -> String {
+    let definition = f.definition.trim();
+    if !definition.is_empty() {
+        return format!("{};", definition.trim_end_matches(';'));
+    }
     let volatility = match f.volatility.as_str() {
         "i" => "IMMUTABLE",
         "s" => "STABLE",
@@ -607,6 +770,19 @@ fn relation_entries<'a>(
                     .as_ref()
                     .map(|v| v.join(","))
                     .unwrap_or_default();
+                // Schema-qualified: a key to `auth.users` is not a key to `public.users`.
+                let references = format!(
+                    "{}.{}",
+                    c.foreign_schema.as_deref().unwrap_or(schema),
+                    c.foreign_table.as_deref().unwrap_or("")
+                );
+                // The whole deparsed constraint carries `ON UPDATE`, `MATCH`, `DEFERRABLE` and
+                // `NOT VALID`, which the parts before it do not.
+                let definition = c
+                    .definition
+                    .as_deref()
+                    .map(normalise_sql)
+                    .unwrap_or_default();
                 entry(
                     ObjectKind::ForeignKey,
                     schema,
@@ -614,9 +790,10 @@ fn relation_entries<'a>(
                     &c.name,
                     &[
                         columns.as_str(),
-                        c.foreign_table.as_deref().unwrap_or(""),
+                        references.as_str(),
                         foreign_columns.as_str(),
                         c.on_delete.as_deref().unwrap_or(""),
+                        definition.as_str(),
                     ],
                 )
             }
@@ -650,6 +827,15 @@ fn relation_entries<'a>(
             .as_deref()
             .map(normalise_sql)
             .unwrap_or_default();
+        let include = i.include.join(",");
+        // `pg_get_indexdef` from the method on (`btree (a, b DESC) INCLUDE (c) WHERE ...`): the
+        // name is the key and the table the parent, and what follows carries whatever the parts
+        // before it do not (an expression's collation, storage parameters, `NULLS NOT DISTINCT`).
+        let definition = i
+            .definition
+            .as_deref()
+            .and_then(|d| d.split_once(" USING ").map(|(_, rest)| normalise_sql(rest)))
+            .unwrap_or_default();
         out.push(
             entry(
                 ObjectKind::Index,
@@ -663,6 +849,9 @@ fn relation_entries<'a>(
                     i.method.as_str(),
                     flag(i.unique),
                     flag(i.is_primary),
+                    include.as_str(),
+                    i.options.as_str(),
+                    definition.as_str(),
                 ],
             )
             .commented(i.comment.as_deref()),
@@ -747,6 +936,10 @@ fn policy_and_catalog_entries(
     for f in &catalog.functions {
         let name = format!("{}({})", f.name, f.identity_types);
         let body = normalise_sql(&f.body);
+        let arguments = normalise_sql(&f.arguments);
+        // One `SET` per entry, as `proconfig` holds them; a value may itself hold a comma
+        // (`search_path=a, b`), so entries are joined on what no setting contains.
+        let config = f.config.join("\u{1f}");
         let mut fingerprint = entry(
             ObjectKind::Function,
             &f.schema,
@@ -758,6 +951,13 @@ fn policy_and_catalog_entries(
                 f.volatility.as_str(),
                 flag(f.security_definer),
                 body.as_str(),
+                arguments.as_str(),
+                config.as_str(),
+                flag(f.strict),
+                flag(f.leakproof),
+                f.parallel.as_str(),
+                f.cost.as_str(),
+                f.rows.as_str(),
             ],
         )
         .commented(f.comment.as_deref());
@@ -856,6 +1056,7 @@ mod tests {
                 foreign_columns: None,
                 check_expression: Some(expression.into()),
                 on_delete: None,
+                definition: None,
                 comment: None,
             }],
             ..Default::default()
@@ -887,6 +1088,175 @@ mod tests {
         assert_eq!(stamped[0].definition, bare[0].definition);
         // The comment travels beside the fingerprint, where the reconcile reads the stamp.
         assert!(stamped[0].stamped() && !bare[0].stamped());
+    }
+
+    #[test]
+    fn whitespace_inside_quoted_text_is_kept() {
+        // Outside quotes: collapsed, as before.
+        assert_eq!(normalise_sql("  SELECT\n  1 ,\t2 ;\n"), "SELECT 1 , 2");
+        // Inside a literal, a quoted identifier or a dollar-quoted body the whitespace is the
+        // value, and two values that differ only there are different objects.
+        assert_eq!(
+            normalise_sql("CHECK ((x = 'a  b'))"),
+            "CHECK ((x = 'a  b'))"
+        );
+        assert_ne!(normalise_sql("x = 'a  b'"), normalise_sql("x = 'a b'"));
+        assert_eq!(
+            normalise_sql("SELECT  \"my  col\"  FROM t"),
+            "SELECT \"my  col\" FROM t"
+        );
+        assert_eq!(
+            normalise_sql("AS $fn$\n  SELECT  1\n$fn$ ;"),
+            "AS $fn$\n  SELECT  1\n$fn$"
+        );
+        assert_eq!(normalise_sql("AS $$ a   b $$"), "AS $$ a   b $$");
+        // Escaped quotes do not end the literal early.
+        assert_eq!(normalise_sql("'it''s   x'   y"), "'it''s   x' y");
+        assert_eq!(normalise_sql("E'it\\'s   x'   y"), "E'it\\'s   x' y");
+        assert_eq!(normalise_sql("\"a\"\"b   c\"   d"), "\"a\"\"b   c\" d");
+        // A parameter and a `$` inside an identifier are not dollar quotes.
+        assert_eq!(normalise_sql("f($1,   $2)  a$b   c"), "f($1, $2) a$b c");
+        // A quote in a comment opens nothing.
+        assert_eq!(
+            normalise_sql("-- don't\nSELECT   1"),
+            normalise_sql("-- don't\n  SELECT 1")
+        );
+        // Text with no quotes normalises exactly as a plain whitespace split did.
+        let plain = "CREATE  INDEX i\n ON t USING btree (a, b)  WHERE (x > 1);";
+        assert_eq!(
+            normalise_sql(plain),
+            plain
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim_end_matches(';')
+                .to_string()
+        );
+        // Unterminated quotes run to the end without panicking.
+        assert_eq!(normalise_sql("'abc  "), "'abc  ");
+        assert_eq!(normalise_sql("E'ab\\"), "E'ab\\");
+    }
+
+    fn definer(config: &[&str]) -> CatalogState {
+        let set = config
+            .iter()
+            .map(|c| {
+                let (k, v) = c.split_once('=').unwrap();
+                format!(" SET {k} TO '{v}'\n")
+            })
+            .collect::<String>();
+        CatalogState {
+            functions: vec![DbFunction {
+                schema: "_supatype".into(),
+                name: "whoami".into(),
+                identity_arguments: String::new(),
+                identity_types: String::new(),
+                return_type: "text".into(),
+                language: "sql".into(),
+                volatility: "s".into(),
+                security_definer: true,
+                body: " SELECT current_user ".into(),
+                comment: None,
+                arguments: String::new(),
+                config: config.iter().map(|c| c.to_string()).collect(),
+                strict: false,
+                leakproof: false,
+                parallel: "u".into(),
+                cost: "100".into(),
+                rows: "0".into(),
+                definition: format!(
+                    "CREATE OR REPLACE FUNCTION _supatype.whoami()\n RETURNS text\n LANGUAGE sql\n \
+                     STABLE SECURITY DEFINER\n{set}AS $function$ SELECT current_user $function$\n"
+                ),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// A security definer function whose pinned `search_path` was taken off is a different
+    /// function: the fingerprint has to say so, and the statement a rollback runs has to put
+    /// the pin back.
+    #[test]
+    fn a_function_differing_only_in_its_settings_is_a_different_function() {
+        let db = DatabaseState::default();
+        let pinned = fingerprints(&db, &definer(&["search_path="]));
+        let bare = fingerprints(&db, &definer(&[]));
+        assert_ne!(pinned[0].fingerprint, bare[0].fingerprint);
+        assert!(pinned[0].definition.contains("config=search_path="));
+
+        let sql = pinned[0].create_sql.as_deref().unwrap();
+        assert!(sql.contains("SET search_path TO ''"), "{sql}");
+        assert!(sql.ends_with("$function$;"), "{sql}");
+
+        let mut strict = definer(&["search_path="]);
+        strict.functions[0].strict = true;
+        assert_ne!(
+            fingerprints(&db, &strict)[0].fingerprint,
+            pinned[0].fingerprint
+        );
+        let mut parallel = definer(&["search_path="]);
+        parallel.functions[0].parallel = "s".into();
+        assert_ne!(
+            fingerprints(&db, &parallel)[0].fingerprint,
+            pinned[0].fingerprint
+        );
+        let mut defaults = definer(&["search_path="]);
+        defaults.functions[0].arguments = "n integer DEFAULT 1".into();
+        assert_ne!(
+            fingerprints(&db, &defaults)[0].fingerprint,
+            pinned[0].fingerprint
+        );
+    }
+
+    fn foreign_key(schema: &str, definition: &str) -> DatabaseState {
+        DatabaseState {
+            schema: "public".into(),
+            constraints: vec![DbConstraint {
+                table: "ticket".into(),
+                name: "ticket_user_id_fkey".into(),
+                constraint_type: DbConstraintType::ForeignKey,
+                columns: vec!["user_id".into()],
+                foreign_table: Some("users".into()),
+                foreign_schema: Some(schema.into()),
+                foreign_columns: Some(vec!["id".into()]),
+                check_expression: None,
+                on_delete: Some("CASCADE".into()),
+                definition: Some(definition.into()),
+                comment: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// A key to `auth.users` is not a key to a `users` model, and `ON UPDATE`, `DEFERRABLE` and
+    /// `NOT VALID` change what a key does.
+    #[test]
+    fn a_foreign_key_is_fingerprinted_with_its_schema_and_its_whole_definition() {
+        let catalog = CatalogState::default();
+        let def = "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE";
+        let auth = fingerprints(&foreign_key("auth", def), &catalog);
+        let public = fingerprints(
+            &foreign_key(
+                "public",
+                "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+            ),
+            &catalog,
+        );
+        assert_ne!(auth[0].fingerprint, public[0].fingerprint);
+        assert!(auth[0].definition.contains("references=auth.users\n"));
+        assert!(public[0].definition.contains("references=public.users\n"));
+        for changed in [
+            format!("{def} ON UPDATE CASCADE"),
+            format!("{def} DEFERRABLE INITIALLY DEFERRED"),
+            format!("{def} NOT VALID"),
+            def.replace("REFERENCES", "MATCH FULL REFERENCES"),
+        ] {
+            assert_ne!(
+                fingerprints(&foreign_key("auth", &changed), &catalog)[0].fingerprint,
+                auth[0].fingerprint,
+                "{changed}"
+            );
+        }
     }
 
     #[test]
