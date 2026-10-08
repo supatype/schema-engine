@@ -8,6 +8,13 @@
 //! after the fact, which keeps every blob byte-identical, and the test proves that joining the
 //! statements reproduces the blob and that no statement is left unattributed.
 //!
+//! What that proof covers is the statements a push renders against an empty database
+//! (`statement_attribution_tests`, every fixture): the creations and the re-asserted layers. The
+//! incremental statements a later push renders from the differ's operations (`ALTER COLUMN`,
+//! `RENAME`, a backfill `UPDATE`) are not all recognised, and one that is not reads as
+//! [`Attribution::Unknown`], naming no object. `push::created_by_parent` reads every operation
+//! through this, but only for the objects a statement creates inline.
+//!
 //! The split is honest about SQL: a `;` inside a string, a quoted identifier, a line comment or a
 //! dollar-quoted body does not end a statement. Everything else is kept verbatim, so each segment
 //! is a slice of the original and the concatenation is the original.
@@ -127,7 +134,8 @@ pub struct Context {
     constraint_kind: HashMap<(String, String), ObjectKind>,
 }
 
-/// Attribute every statement of a push, in order.
+/// Attribute every statement of `statements`, in order; [`Attribution::Unknown`] for a head this
+/// module does not recognise (see the module docs for which statements it is proved on).
 ///
 /// A push drops an index before it creates it, so which table an index belongs to is learned
 /// from every `CREATE INDEX` first, then the statements are attributed in order.
@@ -622,10 +630,34 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
         return Attribution::Object(key(ObjectKind::SecurityLabel, &s, &parent, &provider));
     }
     if starts("GRANT ") || starts("REVOKE ") {
-        // Table and view privileges: `GRANT ... ON s.t TO r1, r2` / `REVOKE ... ON s.t FROM r`.
+        // Table and view privileges: `GRANT ... ON [TABLE] s.t TO r1, r2` / `REVOKE ... ON s.t
+        // FROM r`. Any other object type, and the `ALL ... IN SCHEMA` forms, name no one table:
+        // read as one, their keyword became the table's name.
         let Some(on) = after_keyword(h, "ON") else {
             return Attribution::Unknown;
         };
+        let on = strip_keyword(on, "TABLE").unwrap_or(on);
+        if [
+            "ALL",
+            "SEQUENCE",
+            "FUNCTION",
+            "PROCEDURE",
+            "ROUTINE",
+            "SCHEMA",
+            "DATABASE",
+            "DOMAIN",
+            "TYPE",
+            "LANGUAGE",
+            "LARGE",
+            "FOREIGN",
+            "TABLESPACE",
+            "PARAMETER",
+        ]
+        .iter()
+        .any(|object_type| strip_keyword(on, object_type).is_some())
+        {
+            return Attribution::Unknown;
+        }
         let (parts, _) = match qualified_name(on) {
             Some(x) => x,
             None => return Attribution::Unknown,
@@ -767,6 +799,8 @@ mod tests {
             ("CREATE VIEW \"draft\".\"posts\" WITH (security_invoker = true) AS SELECT 1;", ObjectKind::View, "draft", "", "posts"),
             ("SECURITY LABEL FOR supatype ON COLUMN \"public\".\"posts\".\"salary\" IS 'MASK READ x';", ObjectKind::SecurityLabel, "public", "posts.salary", "supatype"),
             ("GRANT SELECT ON \"draft\".\"posts\" TO authenticated;", ObjectKind::TableGrant, "draft", "posts", "authenticated"),
+            ("GRANT SELECT ON TABLE \"draft\".\"posts\" TO authenticated;", ObjectKind::TableGrant, "draft", "posts", "authenticated"),
+            ("REVOKE ALL ON TABLE public.posts FROM anon;", ObjectKind::TableGrant, "public", "posts", "anon"),
             ("SECURITY LABEL FOR supatype ON TABLE \"public\".\"posts\" IS NULL;", ObjectKind::SecurityLabel, "public", "posts", "supatype"),
         ];
         for (sql, kind, schema, parent, name) in cases {
@@ -785,6 +819,24 @@ mod tests {
                 }
                 other => panic!("{sql}: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn a_grant_on_no_one_table_is_not_read_as_a_table_grant() {
+        // The object-type keyword used to be taken as the table's name.
+        for sql in [
+            "GRANT ALL ON ALL TABLES IN SCHEMA public TO anon;",
+            "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO anon;",
+            "REVOKE EXECUTE ON FUNCTION public.f(integer) FROM anon;",
+            "GRANT USAGE ON SEQUENCE public.s TO anon;",
+            "GRANT USAGE ON TYPE public.mood TO anon;",
+        ] {
+            assert_eq!(
+                attribute("public", sql, &mut Context::default()),
+                Attribution::Unknown,
+                "{sql}"
+            );
         }
     }
 

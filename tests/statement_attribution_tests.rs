@@ -1,4 +1,6 @@
-//! Phase 2c of the managed-object ownership plan: every statement of a push belongs to an object.
+//! Phase 2c of the managed-object ownership plan: every statement of a push against an empty
+//! database belongs to an object. (The incremental statements of a later push are not covered;
+//! see `desired::statements`.)
 //!
 //! The generator renders a push as blobs. `desired::statements` splits them and attributes each
 //! statement to the object key it creates, drops, comments on or grants on. Three things are
