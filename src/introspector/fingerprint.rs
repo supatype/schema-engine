@@ -136,7 +136,9 @@ pub struct ObjectFingerprint {
     pub name: String,
     pub fingerprint: String,
     /// What was hashed, one `label=value` line per part, so a ledger can show a drifted object's
-    /// recorded definition against its live one without a renderer per kind.
+    /// recorded definition against its live one without a renderer per kind. Each value is
+    /// written with [`definition_value`], so a line break inside one (a multi-line string literal
+    /// in a function body) cannot end its line.
     pub definition: String,
     /// The object's `COMMENT`, for the kinds that carry one. Never hashed: comments are the
     /// user's (D1). Read so an older engine's `supatype:managed` stamp can be recognised and
@@ -398,6 +400,19 @@ impl ObjectKind {
     }
 }
 
+/// A part as it is written into a definition line: backslashes doubled and line breaks written
+/// `\n` and `\r`, so every part stays on its own line and the line reads back to exactly one
+/// value. [`normalise_sql`] keeps a string literal's line breaks, which are its value. A desired
+/// object's structure value that can hold one is written this way too, so the two compare.
+pub fn definition_value(part: &str) -> String {
+    if !part.contains(['\\', '\n', '\r']) {
+        return part.to_string();
+    }
+    part.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 /// The hashed parts rendered for a person: `label=value` lines where the kind has labels, the bare
 /// parts otherwise.
 fn render_definition(kind: ObjectKind, parts: &[&str]) -> String {
@@ -413,7 +428,7 @@ fn render_definition(kind: ObjectKind, parts: &[&str]) -> String {
     labels
         .iter()
         .zip(parts)
-        .map(|(label, value)| format!("{label}={value}"))
+        .map(|(label, value)| format!("{label}={}", definition_value(value)))
         .collect::<Vec<_>>()
         .join("\n")
 }

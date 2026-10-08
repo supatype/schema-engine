@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::introspector::fingerprint::{normalise_sql, ObjectKind};
+use crate::introspector::fingerprint::{definition_value, normalise_sql, ObjectKind};
 
 use super::statements::{attribute_all, head, split_statements};
 use super::{DesiredObject, ObjectKey};
@@ -160,7 +160,7 @@ fn function_structure(sql: &str) -> BTreeMap<&'static str, String> {
     out.insert("volatility", volatility.to_string());
     out.insert("security_definer", flag(upper.contains("SECURITY DEFINER")));
     if let Some(body) = dollar_quoted_body(sql) {
-        out.insert("body", normalise_sql(body));
+        out.insert("body", definition_value(&normalise_sql(body)));
     }
     out
 }
@@ -422,6 +422,55 @@ mod tests {
             "SELECT _supatype.prune_versions()"
         );
         assert_eq!(cron.structure["active"], "t");
+    }
+
+    /// A body whose string literal spans lines keeps those line breaks through normalising, and the
+    /// live definition (one `label=value` line per part) must still carry the whole body for the
+    /// desired one to compare with: written raw, the body ended at the literal's first line break.
+    #[test]
+    fn a_body_with_a_multi_line_literal_matches_its_live_definition() {
+        use crate::introspector::catalog::{CatalogState, DbFunction};
+        use crate::introspector::fingerprint::fingerprints;
+        use crate::ledger::reconcile::parse_definition;
+
+        let body = "\n  BEGIN\n    EXECUTE format('DELETE FROM %I\n      WHERE x = ''a\\b''', t);\n  END\n";
+        let sql = format!(
+            "CREATE OR REPLACE FUNCTION \"_supatype\".\"prune\"(t text) RETURNS void LANGUAGE plpgsql AS $fn${body}$fn$;"
+        );
+        let desired = function_structure(&sql);
+        let catalog = CatalogState {
+            functions: vec![DbFunction {
+                schema: "_supatype".into(),
+                name: "prune".into(),
+                identity_arguments: "t text".into(),
+                identity_types: "text".into(),
+                return_type: "void".into(),
+                language: "plpgsql".into(),
+                volatility: "v".into(),
+                security_definer: false,
+                body: body.into(),
+                comment: None,
+                arguments: "t text".into(),
+                config: Vec::new(),
+                strict: false,
+                leakproof: false,
+                parallel: "u".into(),
+                cost: "100".into(),
+                rows: "0".into(),
+                definition: String::new(),
+            }],
+            ..Default::default()
+        };
+        let live = fingerprints(&Default::default(), &catalog).remove(0);
+        assert_eq!(
+            live.definition.lines().count(),
+            ObjectKind::Function.labels().len(),
+            "{}",
+            live.definition
+        );
+        let parts = parse_definition(&live.definition);
+        assert!(parts["body"].contains("WHERE x"), "{}", parts["body"]);
+        assert_eq!(parts["body"], desired["body"]);
     }
 
     #[test]

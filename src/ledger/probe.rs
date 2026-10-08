@@ -20,7 +20,7 @@ use sqlx::{Connection, PgConnection};
 
 use crate::desired::statements::check_expression;
 use crate::desired::ObjectKey;
-use crate::introspector::fingerprint::{normalise_sql, ObjectKind};
+use crate::introspector::fingerprint::{definition_value, normalise_sql, ObjectKind};
 use crate::ledger::reconcile::{parse_definition, Action, Plan};
 
 /// The conflicts of `plan` whose live object the database deparses to the declared definition.
@@ -112,7 +112,7 @@ async fn probe_all(
             continue;
         };
         let (key, _, live) = &candidates[i];
-        if normalise_sql(&definition) == *live {
+        if definition_value(&normalise_sql(&definition)) == *live {
             proven.insert(key.clone());
         }
     }

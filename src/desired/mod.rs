@@ -44,7 +44,9 @@ use crate::generator::sql::{
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql},
 };
-use crate::introspector::fingerprint::{normalise_sql, rls_enable_sql, ObjectKind};
+use crate::introspector::fingerprint::{
+    definition_value, normalise_sql, rls_enable_sql, ObjectKind,
+};
 use crate::managed::{
     comment_on_constraint, comment_on_index, comment_on_table, comment_value,
     expected_check_constraint_name, expected_model_constraint_name, expected_model_index_name,
@@ -925,7 +927,7 @@ impl<'a> Builder<'a> {
         structure.insert("language", "plpgsql".to_string());
         structure.insert("volatility", function.volatility.to_string());
         structure.insert("security_definer", flag(false));
-        structure.insert("body", normalise_sql(&function.body));
+        structure.insert("body", definition_value(&normalise_sql(&function.body)));
         self.push(
             Self::platform_function_key(&function.key_name()),
             structure,
