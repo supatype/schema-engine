@@ -422,15 +422,30 @@ impl Action {
     /// is undone by the previous definition alone ([`Action::undo_removal`]). Row-level security
     /// is never turned off, by a rollback either (D9). Taking over a stamped object is undone by
     /// putting its comment back, stamp and all: the rollback removes the row, and without the
-    /// stamp the object would read as someone else's and the next push would refuse it.
+    /// stamp the object would read as someone else's and the next push would refuse it. One taken
+    /// over under another name gets that name back first, and its comment under it.
     pub fn undo_addition(&self) -> Option<String> {
         match self {
             Action::Adopt {
                 key,
                 reason: AdoptReason::Stamped,
                 comment,
+                renamed_from,
                 ..
-            } => key.comment_sql(comment.as_deref()),
+            } => match renamed_from {
+                Some(from) => {
+                    let old = ObjectKey {
+                        name: from.clone(),
+                        ..key.clone()
+                    };
+                    let rename = rename_constraint_sql(key, &key.name, from);
+                    Some(match old.comment_sql(comment.as_deref()) {
+                        Some(comment) => format!("{rename}\n{comment}"),
+                        None => rename,
+                    })
+                }
+                None => key.comment_sql(comment.as_deref()),
+            },
             action if never_removed(action.key().kind) => None,
             // The differ's rollback undoes what the differ did.
             action if altered_by_the_differ(action.key().kind) => None,
@@ -1473,9 +1488,17 @@ mod tests {
                     sql[1].starts_with("COMMENT ON CONSTRAINT \"posts_slug_key\""),
                     "{sql:?}"
                 );
+                // Its name back, then its stamp under that name.
+                let rollback = a.rollback_sql();
+                assert_eq!(rollback.len(), 1, "{rollback:?}");
+                let (back, stamp) = rollback[0].split_once('\n').expect("two statements");
                 assert_eq!(
-                    a.rollback_sql(),
-                    ["ALTER TABLE \"public\".\"posts\" RENAME CONSTRAINT \"posts_slug_key\" TO \"posts_slug_unique\";"]
+                    back,
+                    "ALTER TABLE \"public\".\"posts\" RENAME CONSTRAINT \"posts_slug_key\" TO \"posts_slug_unique\";"
+                );
+                assert!(
+                    stamp.starts_with("COMMENT ON CONSTRAINT \"posts_slug_unique\""),
+                    "{stamp}"
                 );
             }
             other => panic!("no drop and re-create: {other:?}"),
