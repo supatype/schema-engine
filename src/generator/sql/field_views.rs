@@ -119,10 +119,11 @@ fn ast_primary_key(model: &ModelAst) -> Vec<String> {
 /// NULLs, and every masked write was permitted and written as NULL. Nothing failed loudly — the
 /// contract's requirement 5 kept passing for an unrelated reason.
 fn primary_key_columns(db: &DatabaseState, table: &str) -> Vec<String> {
-    // From the backing index, not from `db.constraints`: the constraint reader only emits foreign
-    // keys, so `DbConstraintType::PrimaryKey` is a variant nothing ever produces. Reading it there
-    // returned "no key" for every table, which skipped the trigger and left the view read-only —
-    // failing with `cannot update column "salary" of view` rather than anything about keys.
+    // From the backing index. When this was written the constraint reader emitted only foreign
+    // keys, so reading `db.constraints` returned "no key" for every table, which skipped the
+    // trigger and left the view read-only — failing with `cannot update column "salary" of view`
+    // rather than anything about keys. The reader reports primary keys now; the index is kept as
+    // the source because it is what identifies the row, and is read the same way either way.
     db.indexes
         .iter()
         .find(|i| i.table == table && i.is_primary)

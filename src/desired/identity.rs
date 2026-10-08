@@ -132,6 +132,11 @@ fn split_identifier(s: &str) -> Vec<String> {
 /// Every keyword `quote_ident` quotes: the ones Postgres does not class as unreserved
 /// (`select word from pg_get_keywords() where catcode <> 'U'` on Postgres 17), sorted for
 /// binary search.
+///
+/// This list is Postgres 17's, the baseline `supatype/postgres` image. Postgres adds keywords
+/// between majors, and a function keyed on a type named by a new one would no longer match the
+/// catalog's `identity_types`: re-run that query and update this list whenever the baseline
+/// Postgres version moves.
 const QUOTED_KEYWORDS: &[&str] = &[
     "all",
     "analyse",
