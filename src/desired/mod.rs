@@ -928,8 +928,8 @@ impl<'a> Builder<'a> {
 
     /// One `_platform` function, with the parts the catalog reports (`DbFunction`): the return
     /// type as `pg_get_function_result` spells it, the language, the volatility code, whether it
-    /// is security definer, and the body between the dollar quotes, whitespace-normalised as the
-    /// fingerprint normalises it.
+    /// is security definer, the body between the dollar quotes, whitespace-normalised as the
+    /// fingerprint normalises it, and the options its statement declares.
     fn platform_function(&mut self, function: &triggers::TriggerFunction) {
         let mut structure = BTreeMap::new();
         structure.insert("returns", function.returns.to_string());
@@ -937,6 +937,8 @@ impl<'a> Builder<'a> {
         structure.insert("volatility", function.volatility.to_string());
         structure.insert("security_definer", flag(false));
         structure.insert("body", definition_value(&normalise_sql(&function.body)));
+        // `SET`, `STRICT`, `PARALLEL`, cost and rows, as its statement declares them.
+        structure.extend(attributed::function_options(&function.create_sql()));
         self.push(
             Self::platform_function_key(&function.key_name()),
             structure,

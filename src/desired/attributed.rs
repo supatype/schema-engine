@@ -162,7 +162,203 @@ fn function_structure(sql: &str) -> BTreeMap<&'static str, String> {
     if let Some(body) = dollar_quoted_body(sql) {
         out.insert("body", definition_value(&normalise_sql(body)));
     }
+    out.extend(function_options(sql));
     out
+}
+
+/// A word, a quoted name or a string literal of a function's clauses, or one punctuation mark.
+#[derive(Debug, PartialEq)]
+enum Token {
+    Word(String),
+    Quoted(String),
+    Literal(String),
+    Mark(char),
+}
+
+/// `s` as [`Token`]s. Text between dollar quotes (the body) is left out.
+fn tokens(s: &str) -> Vec<Token> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    let quoted = |i: &mut usize, close: char| {
+        let mut text = String::new();
+        *i += 1;
+        while *i < chars.len() {
+            if chars[*i] == close {
+                if chars.get(*i + 1) == Some(&close) {
+                    text.push(close);
+                    *i += 2;
+                    continue;
+                }
+                *i += 1;
+                break;
+            }
+            text.push(chars[*i]);
+            *i += 1;
+        }
+        text
+    };
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '\'' {
+            out.push(Token::Literal(quoted(&mut i, '\'')));
+        } else if c == '"' {
+            out.push(Token::Quoted(quoted(&mut i, '"')));
+        } else if c == '$' {
+            // `$tag$ ... $tag$`: skip to the closing tag.
+            let tag_end = chars[i + 1..]
+                .iter()
+                .position(|&c| c == '$')
+                .map(|p| i + 1 + p + 1)
+                .unwrap_or(chars.len());
+            let tag: String = chars[i..tag_end].iter().collect();
+            let rest: String = chars[tag_end..].iter().collect();
+            i = match rest.find(&tag) {
+                Some(at) => tag_end + rest[..at].chars().count() + tag.chars().count(),
+                None => chars.len(),
+            };
+        } else if c.is_alphanumeric() || c == '_' || c == '.' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || matches!(chars[i], '_' | '.')) {
+                i += 1;
+            }
+            out.push(Token::Word(chars[start..i].iter().collect()));
+        } else {
+            out.push(Token::Mark(c));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// One element of a list setting as `proconfig` stores it: a name that needs no quotes bare, any
+/// other in double quotes (`''` is `""`).
+fn list_element(value: &str) -> String {
+    let plain = value
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '$'));
+    if plain {
+        value.to_string()
+    } else {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    }
+}
+
+/// `config`, `strict`, `leakproof`, `parallel`, `cost` and `rows`, as `pg_proc` will hold them for
+/// the `CREATE FUNCTION` in `sql`: every `SET` as a `proconfig` entry, and each property at
+/// Postgres's default when the statement leaves it out (a cost of 100 for SQL and PL/pgSQL, 1
+/// otherwise; 1000 rows for a set-returning function, 0 for any other). Clauses are read on
+/// either side of the body, and inside no parentheses, so an argument or a returned column cannot
+/// be taken for one.
+pub(super) fn function_options(sql: &str) -> BTreeMap<&'static str, String> {
+    let all = tokens(sql);
+    // From `RETURNS` on: the clauses, not the name or the arguments.
+    let start = all
+        .iter()
+        .position(|t| matches!(t, Token::Word(w) if w.eq_ignore_ascii_case("RETURNS")))
+        .unwrap_or(all.len());
+    let mut depth = 0usize;
+    let mut words: Vec<&Token> = Vec::new();
+    for t in &all[start..] {
+        match t {
+            Token::Mark('(') => depth += 1,
+            Token::Mark(')') => depth = depth.saturating_sub(1),
+            Token::Mark(';') => break,
+            _ if depth == 0 => words.push(t),
+            _ => {}
+        }
+    }
+    let is = |i: usize, word: &str| matches!(words.get(i), Some(Token::Word(w)) if w.eq_ignore_ascii_case(word));
+    let mut config: Vec<String> = Vec::new();
+    let mut strict = false;
+    let mut leakproof = false;
+    let mut parallel = "u";
+    let mut cost: Option<String> = None;
+    let mut rows: Option<String> = None;
+    let mut language = String::new();
+    let set_returning = is(1, "SETOF") || is(1, "TABLE");
+    let number = |t: Option<&&Token>| match t {
+        Some(Token::Word(n)) => n.parse::<f64>().ok().map(|n| n.to_string()),
+        _ => None,
+    };
+    let mut i = 0;
+    while i < words.len() {
+        if is(i, "STRICT") || (is(i, "RETURNS") && is(i + 1, "NULL") && is(i + 2, "ON")) {
+            strict = true;
+        } else if is(i, "CALLED") && is(i + 1, "ON") {
+            strict = false;
+        } else if is(i, "LEAKPROOF") {
+            leakproof = !(i > 0 && is(i - 1, "NOT"));
+        } else if is(i, "PARALLEL") {
+            parallel = if is(i + 1, "SAFE") {
+                "s"
+            } else if is(i + 1, "RESTRICTED") {
+                "r"
+            } else {
+                "u"
+            };
+        } else if is(i, "COST") {
+            cost = number(words.get(i + 1));
+        } else if is(i, "ROWS") {
+            rows = number(words.get(i + 1));
+        } else if is(i, "LANGUAGE") {
+            if let Some(Token::Word(l)) = words.get(i + 1) {
+                language = l.to_ascii_lowercase();
+            }
+        } else if is(i, "SET") {
+            if let Some(Token::Word(name)) = words.get(i + 1) {
+                let name = name.to_ascii_lowercase();
+                let mut j = i + 2;
+                if matches!(words.get(j), Some(Token::Mark('='))) || is(j, "TO") {
+                    j += 1;
+                }
+                let mut values = Vec::new();
+                while let Some(t) = words.get(j) {
+                    let value = match t {
+                        Token::Literal(v) | Token::Quoted(v) => v.clone(),
+                        Token::Word(w) => w.to_ascii_lowercase(),
+                        Token::Mark(_) => break,
+                    };
+                    values.push(if name == "search_path" {
+                        list_element(&value)
+                    } else {
+                        value
+                    });
+                    j += 1;
+                    if !matches!(words.get(j), Some(Token::Mark(','))) {
+                        break;
+                    }
+                    j += 1;
+                }
+                config.push(format!("{name}={}", values.join(", ")));
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    let default_cost = if matches!(language.as_str(), "sql" | "plpgsql") {
+        "100"
+    } else {
+        "1"
+    };
+    BTreeMap::from([
+        ("config", definition_value(&config.join("\u{1f}"))),
+        ("strict", flag(strict)),
+        ("leakproof", flag(leakproof)),
+        ("parallel", parallel.to_string()),
+        ("cost", cost.unwrap_or_else(|| default_cost.to_string())),
+        (
+            "rows",
+            rows.unwrap_or_else(|| if set_returning { "1000" } else { "0" }.to_string()),
+        ),
+    ])
 }
 
 /// `timing`, `events`, `columns`, `for_each_row`, `function`, `enabled`, with the events in the
@@ -471,6 +667,117 @@ mod tests {
         let parts = parse_definition(&live.definition);
         assert!(parts["body"].contains("WHERE x"), "{}", parts["body"]);
         assert_eq!(parts["body"], desired["body"]);
+    }
+
+    /// Every option `pg_proc` holds is predicted from the statement, each at Postgres's default
+    /// when left out, spelled as the catalog read spells it.
+    #[test]
+    fn a_function_statement_predicts_its_options() {
+        let pinned = function_options(
+            "CREATE OR REPLACE FUNCTION \"_supatype\".\"f\"(\"strict\" text) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$ SELECT TRUE $fn$;",
+        );
+        assert_eq!(pinned["config"], "search_path=\"\"");
+        assert_eq!(
+            pinned["strict"], "f",
+            "an argument named strict is not STRICT"
+        );
+        assert_eq!(pinned["leakproof"], "f");
+        assert_eq!(pinned["parallel"], "u");
+        assert_eq!(pinned["cost"], "100");
+        assert_eq!(pinned["rows"], "0");
+
+        let listed = function_options(
+            "CREATE FUNCTION s.g(a int) RETURNS SETOF text LANGUAGE plpgsql SET search_path = pg_catalog, \"My\", public SET work_mem = '64MB' AS $$ BEGIN END $$;",
+        );
+        assert_eq!(
+            listed["config"],
+            "search_path=pg_catalog, \"My\", public\u{1f}work_mem=64MB"
+        );
+        assert_eq!(listed["rows"], "1000");
+
+        let helper = function_options(
+            "CREATE FUNCTION s.h(v jsonb) RETURNS text LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT LEAKPROOF COST 5 AS $fn$ SELECT '' $fn$;",
+        );
+        assert_eq!(
+            (
+                helper["strict"].as_str(),
+                helper["parallel"].as_str(),
+                helper["leakproof"].as_str(),
+                helper["cost"].as_str(),
+            ),
+            ("t", "s", "t", "5")
+        );
+
+        // Clauses after the body count too, as the `_platform` functions write them.
+        let after = function_options(
+            "CREATE FUNCTION s.t() RETURNS TRIGGER AS $$ BEGIN END $$ LANGUAGE plpgsql STRICT;",
+        );
+        assert_eq!(
+            (after["strict"].as_str(), after["cost"].as_str()),
+            ("t", "100")
+        );
+    }
+
+    /// A same-named function that differs from ours only in its options is not taken for ours: one
+    /// missing our `SET search_path` resolves names through its caller's path. With no row and a
+    /// neutral location it is a conflict, where the same function with the `SET` is adopted.
+    #[test]
+    fn a_function_missing_our_search_path_is_a_conflict() {
+        use crate::introspector::catalog::{CatalogState, DbFunction};
+        use crate::introspector::fingerprint::fingerprints;
+        use crate::ledger::reconcile::{reconcile, Action, Inputs, Location};
+        use std::collections::BTreeSet;
+
+        let sql = "CREATE OR REPLACE FUNCTION \"public\".\"who\"() RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$ SELECT auth.uid() $fn$;";
+        let desired = objects(sql, "public");
+        assert_eq!(desired.len(), 1);
+        let live = |config: Vec<String>| {
+            let catalog = CatalogState {
+                functions: vec![DbFunction {
+                    schema: "public".into(),
+                    name: "who".into(),
+                    identity_arguments: String::new(),
+                    identity_types: String::new(),
+                    return_type: "uuid".into(),
+                    language: "sql".into(),
+                    volatility: "s".into(),
+                    security_definer: true,
+                    body: " SELECT auth.uid() ".into(),
+                    comment: None,
+                    arguments: String::new(),
+                    config,
+                    strict: false,
+                    leakproof: false,
+                    parallel: "u".into(),
+                    cost: "100".into(),
+                    rows: "0".into(),
+                    definition: String::new(),
+                }],
+                ..Default::default()
+            };
+            fingerprints(&Default::default(), &catalog)
+        };
+        let plan = |live: &[crate::introspector::fingerprint::ObjectFingerprint]| {
+            let none = BTreeSet::new();
+            reconcile(Inputs {
+                desired: &desired,
+                ledger: &[],
+                live,
+                created_by_parent: &none,
+                dropped_tables: &none,
+                location: |_| Location::Neutral,
+                named_by_the_engine: &none,
+                kinds: &[ObjectKind::Function],
+            })
+            .actions
+        };
+        let ours = plan(&live(vec!["search_path=\"\"".into()]));
+        assert!(matches!(&ours[..], [Action::Adopt { .. }]), "{ours:?}");
+        let unpinned = plan(&live(Vec::new()));
+        assert!(
+            matches!(&unpinned[..], [Action::Conflict { .. }]),
+            "{unpinned:?}"
+        );
     }
 
     #[test]

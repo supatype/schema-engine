@@ -274,7 +274,54 @@ async fn every_function_and_foreign_key_a_push_creates_matches_its_prediction() 
                 desired.iter().any(|o| kinds.contains(&o.key.kind)),
                 "{name}: nothing to compare"
             );
+            if name == "versioned_blog" {
+                // The options were compared, not left out: the versions layer pins its path.
+                assert!(
+                    desired.iter().any(|o| o.key.kind == ObjectKind::Function
+                        && o.structure
+                            .get("config")
+                            .is_some_and(|c| c == "search_path=\"\"")),
+                    "no function predicted SET search_path = ''"
+                );
+            }
         })
         .await;
     }
+}
+
+/// With no record that the engine made it (no row, no previous schema naming it), a function in
+/// the project schema is ours only if it is exactly what we would create. Ours, untouched, is
+/// adopted; the same function with a `SET search_path` of its own is the user's, and the push
+/// refuses and names it.
+#[tokio::test]
+async fn a_function_differing_from_ours_only_in_its_search_path_refuses_the_push() {
+    common::with_integration_pool(|pool| async move {
+        let ast = fixture("five_model_blog");
+        auth_users(&pool).await;
+        common::push(&pool, &ast).await.unwrap();
+        let forget = "DELETE FROM _supatype.managed_objects WHERE kind = 'function';
+                      UPDATE _supatype.migrations SET schema_snapshot = NULL;
+                      UPDATE _supatype.schema_state SET ast_snapshot = NULL;";
+
+        sqlx::raw_sql(forget).execute(&pool).await.unwrap();
+        common::push(&pool, &ast)
+            .await
+            .expect("every function of ours matches its prediction, so it is adopted");
+
+        sqlx::raw_sql(&format!(
+            "ALTER FUNCTION public.can_read_posts(public.posts) SET search_path = public; {forget}"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let refused = common::push(&pool, &ast)
+            .await
+            .expect_err("a function with a search_path of its own is not adopted");
+        let message = format!("{refused:#}");
+        assert!(
+            message.contains("can_read_posts") && message.contains("supatype adopt"),
+            "{message}"
+        );
+    })
+    .await;
 }
