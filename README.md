@@ -421,7 +421,8 @@ choosing which: the unit job has no database, the integration job does.
 
 ## CI / CD
 
-**CI** (`.github/workflows/ci.yml`), on every push and PR to `main`:
+**CI** (`.github/workflows/ci.yml`), on every push to `main` and every pull request, whatever
+its base branch:
 
 | Job | What it runs |
 |---|---|

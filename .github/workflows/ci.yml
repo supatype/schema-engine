@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, whatever its base: a PR stacked on another PR's branch merges into main
+  # through that branch, so checking only PRs into main left the stacked ones unchecked.
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
