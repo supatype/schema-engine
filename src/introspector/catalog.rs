@@ -176,7 +176,9 @@ pub struct DbSchema {
 pub struct DbSequence {
     pub schema: String,
     pub name: String,
-    /// `table.column` when the sequence is owned by a column (`SERIAL`, identity).
+    /// `table.column` when the sequence is owned by a column: `SERIAL` and `OWNED BY` record that
+    /// as an auto dependency (`pg_depend.deptype = 'a'`), an identity column as an internal one
+    /// (`'i'`).
     pub owned_by: Option<String>,
     pub comment: Option<String>,
 }
@@ -560,7 +562,8 @@ async fn read_sequences(conn: &mut PgConnection, schemas: &[String]) -> Result<V
                    FROM pg_depend d
                    JOIN pg_class t ON t.oid = d.refobjid
                    JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
-                  WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'a'
+                  WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                    AND d.deptype IN ('a', 'i')
                   LIMIT 1),
                 obj_description(c.oid, 'pg_class')
          FROM pg_class c

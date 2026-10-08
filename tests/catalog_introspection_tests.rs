@@ -167,6 +167,7 @@ async fn views_schemas_sequences_and_enum_types_are_read_with_comments() {
             &pool,
             "CREATE TYPE public.mood AS ENUM ('ok'); COMMENT ON TYPE public.mood IS 'feelings';
              CREATE TABLE public.items (id serial PRIMARY KEY, name text);
+             CREATE TABLE public.tickets (id int GENERATED ALWAYS AS IDENTITY, n int);
              CREATE SEQUENCE public.loose_seq; COMMENT ON SEQUENCE public.loose_seq IS 'free';
              CREATE VIEW public.item_names AS SELECT name FROM public.items;
              COMMENT ON VIEW public.item_names IS 'names only';
@@ -205,6 +206,14 @@ async fn views_schemas_sequences_and_enum_types_are_read_with_comments() {
             .find(|s| s.name == "items_id_seq")
             .unwrap();
         assert_eq!(owned.owned_by.as_deref(), Some("items.id"));
+        // An identity column's sequence depends on it internally (`deptype = 'i'`), not as `SERIAL`'s
+        // does, and is still the column's.
+        let identity = catalog
+            .sequences
+            .iter()
+            .find(|s| s.name == "tickets_id_seq")
+            .unwrap();
+        assert_eq!(identity.owned_by.as_deref(), Some("tickets.id"));
         let loose = catalog
             .sequences
             .iter()
