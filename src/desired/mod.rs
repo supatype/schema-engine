@@ -637,6 +637,7 @@ impl<'a> Builder<'a> {
 
     // --- indexes ------------------------------------------------------------------------------
 
+    /// An index of plain column keys.
     fn index(
         &mut self,
         table: &str,
@@ -646,11 +647,29 @@ impl<'a> Builder<'a> {
         unique: bool,
         create: String,
     ) {
-        let mut structure = BTreeMap::new();
-        structure.insert("columns", columns.join(","));
-        structure.insert("method", method.to_string());
-        structure.insert("unique", flag(unique));
-        structure.insert("primary", flag(false));
+        let structure = index_structure(columns, method, unique, "");
+        self.push(
+            self.key(ObjectKind::Index, table, name),
+            structure,
+            create,
+            vec![self.table_key(table)],
+        );
+    }
+
+    /// An index of column keys some of which say more than their column (`version DESC`), as
+    /// `options` in the form the live side reports (`DbIndex::options`).
+    #[allow(clippy::too_many_arguments)]
+    fn index_with_options(
+        &mut self,
+        table: &str,
+        name: &str,
+        columns: &[String],
+        method: &str,
+        unique: bool,
+        options: &str,
+        create: String,
+    ) {
+        let structure = index_structure(columns, method, unique, options);
         self.push(
             self.key(ObjectKind::Index, table, name),
             structure,
@@ -691,11 +710,9 @@ impl<'a> Builder<'a> {
                 "CREATE UNIQUE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{table}\" ((TRUE));",
                 self.schema
             );
-            // No column key: its structure is the expression, which is not predictable text.
-            let mut structure = BTreeMap::new();
-            structure.insert("method", "btree".to_string());
-            structure.insert("unique", flag(true));
-            structure.insert("primary", flag(false));
+            // No column key, and one expression, which Postgres deparses as `true`.
+            let mut structure = index_structure(&[], "btree", true, "");
+            structure.insert("expressions", "true".to_string());
             self.push(
                 self.key(ObjectKind::Index, table, &name),
                 structure,
@@ -1014,12 +1031,13 @@ impl<'a> Builder<'a> {
 
         let idx = versions_record_index_name(&vt);
         let idx_create = versions_record_index_sql(self.schema, &vt);
-        self.index(
+        self.index_with_options(
             &vt,
             &idx,
             &["record_id".to_string(), "version".to_string()],
             "btree",
             false,
+            "2 DESC",
             idx_create,
         );
         Ok(())
@@ -1078,6 +1096,28 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// What an index the engine creates is, in the labels the live fingerprint uses. Every part is
+/// predicted, the empty ones included: a same-named index with a `WHERE`, an expression, an
+/// `INCLUDE` or a `DESC` the engine never asked for is not the one it would create, and must not
+/// be adopted as it (D2 compares only the labels the desired object has).
+fn index_structure(
+    columns: &[String],
+    method: &str,
+    unique: bool,
+    options: &str,
+) -> BTreeMap<&'static str, String> {
+    BTreeMap::from([
+        ("columns", columns.join(",")),
+        ("expressions", String::new()),
+        ("predicate", String::new()),
+        ("method", method.to_string()),
+        ("unique", flag(unique)),
+        ("primary", flag(false)),
+        ("include", String::new()),
+        ("options", options.to_string()),
+    ])
+}
+
 /// Where a foreign key points, and what happens on delete.
 struct ForeignKeyRef<'a> {
     column: &'a str,
@@ -1131,5 +1171,73 @@ mod tests {
         };
         assert_eq!(references("ticket_owner_id_fkey"), "auth.users");
         assert_eq!(references("ticket_venue_id_fkey"), "public.venue");
+    }
+
+    /// Every desired index predicts every part a same-named live index could differ in, the empty
+    /// ones included, so adoption (which compares only the parts predicted) cannot take a partial
+    /// or expression index of the user's for ours. The singleton's has an empty `columns` too.
+    #[test]
+    fn a_desired_index_predicts_empty_expressions_predicate_and_include() {
+        use crate::introspector::{
+            catalog::CatalogState, fingerprint::fingerprints, indexes::DbIndex,
+        };
+        use crate::ledger::reconcile::parse_definition;
+        use crate::state::database_state::DatabaseState;
+
+        let ast = ast(r#"{"astVersion":2,"models":[
+              {"name":"Post","fields":{
+                "id":{"kind":"integer","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}},
+                "slug":{"kind":"text","required":false,"annotations":{"db":{"pgType":"TEXT","unique":false}}}
+              },"options":{"singleton":true},"annotations":{"db":{"tableName":"posts","indexes":[
+                {"fields":["slug"],"unique":true,"using":"btree"}
+              ]}}}
+            ]}"#);
+        let set = desired_objects(&ast, "public").unwrap();
+        let index = |name: &str| {
+            set.iter()
+                .find(|o| o.key.kind == ObjectKind::Index && o.key.name == name)
+                .unwrap_or_else(|| panic!("{name} desired"))
+        };
+        let slug = index("posts_slug_idx");
+        for (label, want) in [
+            ("columns", "slug"),
+            ("expressions", ""),
+            ("predicate", ""),
+            ("include", ""),
+            ("options", ""),
+            ("unique", "t"),
+        ] {
+            assert_eq!(slug.structure[label], want, "{label}");
+        }
+        let singleton = index("posts_singleton_idx");
+        assert_eq!(singleton.structure["columns"], "");
+        assert_eq!(singleton.structure["expressions"], "true");
+        assert_eq!(singleton.structure["predicate"], "");
+
+        // The same index live matches part for part; a partial one of the same name does not.
+        let live = |predicate: Option<&str>| {
+            let db = DatabaseState {
+                schema: "public".into(),
+                indexes: vec![DbIndex {
+                    table: "posts".into(),
+                    name: "posts_slug_idx".into(),
+                    columns: vec!["slug".into()],
+                    unique: true,
+                    method: "btree".into(),
+                    predicate: predicate.map(str::to_string),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            fingerprints(&db, &CatalogState::default()).remove(0)
+        };
+        let matches = |live: &crate::introspector::fingerprint::ObjectFingerprint| {
+            let parts = parse_definition(&live.definition);
+            slug.structure
+                .iter()
+                .all(|(label, want)| parts.get(label) == Some(&want.as_str()))
+        };
+        assert!(matches(&live(None)));
+        assert!(!matches(&live(Some("(slug <> ''::text)"))));
     }
 }

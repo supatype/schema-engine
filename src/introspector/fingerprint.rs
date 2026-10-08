@@ -359,6 +359,9 @@ impl ObjectKind {
                 "method",
                 "unique",
                 "primary",
+                "include",
+                "options",
+                "definition",
             ],
             ObjectKind::Trigger => &[
                 "timing",
@@ -809,6 +812,15 @@ fn relation_entries<'a>(
             .as_deref()
             .map(normalise_sql)
             .unwrap_or_default();
+        let include = i.include.join(",");
+        // `pg_get_indexdef` from the method on (`btree (a, b DESC) INCLUDE (c) WHERE ...`): the
+        // name is the key and the table the parent, and what follows carries whatever the parts
+        // before it do not (an expression's collation, storage parameters, `NULLS NOT DISTINCT`).
+        let definition = i
+            .definition
+            .as_deref()
+            .and_then(|d| d.split_once(" USING ").map(|(_, rest)| normalise_sql(rest)))
+            .unwrap_or_default();
         out.push(
             entry(
                 ObjectKind::Index,
@@ -822,6 +834,9 @@ fn relation_entries<'a>(
                     i.method.as_str(),
                     flag(i.unique),
                     flag(i.is_primary),
+                    include.as_str(),
+                    i.options.as_str(),
+                    definition.as_str(),
                 ],
             )
             .commented(i.comment.as_deref()),

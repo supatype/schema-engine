@@ -213,7 +213,10 @@ fn trigger_structure(sql: &str, schema: &str) -> BTreeMap<&'static str, String> 
     out
 }
 
-/// `columns` (when every key is a column), `method`, `unique`, `primary`.
+/// `columns` (when every key is a column), `method`, `unique`, `primary`; and when the statement
+/// has no `WHERE` or `INCLUDE` and every key is a column with at most a direction and a `NULLS`
+/// order, the empty `expressions`, `predicate` and `include` and the `options` that says so, as
+/// `DbIndex::options` spells them.
 fn index_structure(sql: &str) -> BTreeMap<&'static str, String> {
     let mut out = BTreeMap::new();
     let upper = sql.to_ascii_uppercase();
@@ -228,7 +231,11 @@ fn index_structure(sql: &str) -> BTreeMap<&'static str, String> {
         // The key list is the last parenthesised group; `USING btree (...)` puts it after `USING`.
         let keys_open = sql[..close].rfind('(').unwrap_or(open);
         let inner = &sql[keys_open + 1..close];
-        if !inner.contains('(') {
+        // With a `WHERE` or an `INCLUDE` the last group is not the key list, so nothing is read
+        // from it. Over-cautious on purpose: a column that merely contains either word goes
+        // unpredicted, which only leaves labels out.
+        let plain = !upper.contains("WHERE") && !upper.contains("INCLUDE");
+        if plain && !inner.contains('(') {
             let columns: Vec<String> = inner
                 .split(',')
                 .map(|c| c.trim().trim_matches('"').to_string())
@@ -236,9 +243,65 @@ fn index_structure(sql: &str) -> BTreeMap<&'static str, String> {
             if columns.iter().all(|c| !c.contains(' ')) {
                 out.insert("columns", columns.join(","));
             }
+            if let Some((columns, options)) = ordered_keys(inner) {
+                out.insert("columns", columns);
+                out.insert("options", options);
+                out.insert("expressions", String::new());
+                out.insert("predicate", String::new());
+                out.insert("include", String::new());
+            }
         }
     }
     out
+}
+
+/// `"a", "b" DESC` as its columns (`a,b`) and the options of the keys that have any (`2 DESC`),
+/// or None when a key is anything but a column with an optional direction and `NULLS` order.
+fn ordered_keys(inner: &str) -> Option<(String, String)> {
+    let mut columns = Vec::new();
+    let mut options = Vec::new();
+    for (i, key) in inner.split(',').enumerate() {
+        let key = key.trim();
+        let (column, rest) = match key.strip_prefix('"') {
+            Some(quoted) => {
+                let end = quoted.find('"')?;
+                (quoted[..end].to_string(), &quoted[end + 1..])
+            }
+            None => {
+                let end = key.find(char::is_whitespace).unwrap_or(key.len());
+                (key[..end].to_string(), &key[end..])
+            }
+        };
+        if column.is_empty() {
+            return None;
+        }
+        let words: Vec<String> = rest
+            .split_whitespace()
+            .map(str::to_ascii_uppercase)
+            .collect();
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        let (desc, nulls) = match words.as_slice() {
+            [] | ["ASC"] => (false, None),
+            ["DESC"] => (true, None),
+            ["NULLS", n] | ["ASC", "NULLS", n] => (false, Some(*n)),
+            ["DESC", "NULLS", n] => (true, Some(*n)),
+            _ => return None,
+        };
+        // Only what differs from the direction's default is reported: ASC sorts nulls last and
+        // DESC first.
+        let nulls = match (desc, nulls) {
+            (false, Some("FIRST")) => Some("NULLS FIRST"),
+            (true, Some("LAST")) => Some("NULLS LAST"),
+            (_, Some("FIRST" | "LAST")) | (_, None) => None,
+            _ => return None,
+        };
+        let said: Vec<&str> = desc.then_some("DESC").into_iter().chain(nulls).collect();
+        if !said.is_empty() {
+            options.push(format!("{} {}", i + 1, said.join(" ")));
+        }
+        columns.push(column);
+    }
+    Some((columns.join(","), options.join(",")))
 }
 
 /// `command` as `pg_policy.polcmd` spells it, `permissive`, `roles` (sorted, `public` when none).
@@ -346,6 +409,9 @@ mod tests {
         assert!(policy.security_relevant);
         let index = by_kind(ObjectKind::Index);
         assert_eq!(index.structure["columns"], "a,b");
+        assert_eq!(index.structure["options"], "");
+        assert_eq!(index.structure["predicate"], "");
+        assert_eq!(index.structure["expressions"], "");
         assert_eq!(index.structure["method"], "btree");
         assert_eq!(index.structure["unique"], "f");
         let cron = by_kind(ObjectKind::CronJob);
@@ -356,5 +422,35 @@ mod tests {
             "SELECT _supatype.prune_versions()"
         );
         assert_eq!(cron.structure["active"], "t");
+    }
+
+    #[test]
+    fn an_index_statement_predicts_its_key_options_and_nothing_it_cannot_read() {
+        let s = index_structure(
+            "CREATE INDEX IF NOT EXISTS \"v_idx\" ON \"public\".\"v\" (\"record_id\", \"version\" DESC);",
+        );
+        assert_eq!(s["columns"], "record_id,version");
+        assert_eq!(s["options"], "2 DESC");
+        assert_eq!(s["predicate"], "");
+        assert_eq!(s["include"], "");
+        let s = index_structure(
+            "CREATE INDEX i ON t (a ASC NULLS FIRST, b DESC NULLS FIRST, c DESC NULLS LAST);",
+        );
+        assert_eq!(s["columns"], "a,b,c");
+        assert_eq!(s["options"], "1 NULLS FIRST,2 DESC,3 DESC NULLS LAST");
+        // A partial index, or one with an included column, says nothing about its keys: the last
+        // parenthesised group is not the key list.
+        for sql in [
+            "CREATE INDEX i ON t (a) WHERE (active);",
+            "CREATE INDEX i ON t (a) INCLUDE (b);",
+        ] {
+            let s = index_structure(sql);
+            assert!(
+                !s.contains_key("columns") && !s.contains_key("predicate"),
+                "{sql}: {s:?}"
+            );
+        }
+        let s = index_structure("CREATE INDEX i ON t (a text_pattern_ops);");
+        assert!(!s.contains_key("options"), "{s:?}");
     }
 }

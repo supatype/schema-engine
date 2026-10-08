@@ -7,7 +7,8 @@ use sqlx::PgConnection;
 pub struct DbIndex {
     pub table: String,
     pub name: String,
-    /// The column keys, in key order. Empty for an index made only of expressions.
+    /// The column keys, in key order. Empty for an index made only of expressions. `INCLUDE`
+    /// columns are not keys and are in [`Self::include`].
     pub columns: Vec<String>,
     pub unique: bool,
     pub method: String,
@@ -24,6 +25,16 @@ pub struct DbIndex {
     /// The whole `CREATE INDEX` statement, from `pg_get_indexdef`.
     #[serde(default)]
     pub definition: Option<String>,
+    /// The `INCLUDE` columns, in order.
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// What each key does beyond naming its column or expression, for the keys that do anything:
+    /// `{position} {options}`, comma-separated, where the options are any of a collation other
+    /// than the column's (an expression's: its type's), an operator class that is not the type's
+    /// default (both schema-qualified), `DESC`, and a `NULLS` order other than the direction's
+    /// default. Empty for an index of plain keys. `2 DESC` for `(record_id, version DESC)`.
+    #[serde(default)]
+    pub options: String,
 }
 
 /// Every index in `schema`, split by whether it has a column key.
@@ -50,6 +61,8 @@ type IndexRow = (
     Option<String>,
     Option<String>,
     String,
+    Option<Vec<String>>,
+    Option<String>,
 );
 
 pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes> {
@@ -58,12 +71,42 @@ pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes
                 (SELECT array_agg(a.attname::text ORDER BY k.ord)
                    FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
                    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
-                  WHERE k.attnum <> 0),
+                  WHERE k.attnum <> 0 AND k.ord <= ix.indnkeyatts),
                 ix.indisunique, am.amname::text, ix.indisprimary,
                 pg_catalog.obj_description(i.oid, 'pg_class'),
                 pg_get_expr(ix.indexprs, ix.indrelid),
                 pg_get_expr(ix.indpred, ix.indrelid),
-                pg_get_indexdef(i.oid)
+                pg_get_indexdef(i.oid),
+                (SELECT array_agg(a.attname::text ORDER BY k.ord)
+                   FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
+                   JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+                  WHERE k.ord > ix.indnkeyatts),
+                -- `indoption` bit 0 is DESC, bit 1 NULLS FIRST; ASC defaults to NULLS LAST and
+                -- DESC to NULLS FIRST. A key's collation is its own when it is the column's (or,
+                -- for an expression, its type's).
+                (SELECT string_agg(k.ord || ' ' || concat_ws(' ',
+                            CASE WHEN k.coll <> 0 AND k.coll <> COALESCE(ta.attcollation, kt.typcollation)
+                                 THEN 'COLLATE ' || quote_ident(cn.nspname) || '.' || quote_ident(co.collname) END,
+                            CASE WHEN NOT oc.opcdefault
+                                 THEN quote_ident(ocn.nspname) || '.' || quote_ident(oc.opcname) END,
+                            CASE WHEN k.opt & 1 <> 0 THEN 'DESC' END,
+                            CASE WHEN k.opt & 1 = 0 AND k.opt & 2 <> 0 THEN 'NULLS FIRST'
+                                 WHEN k.opt & 1 <> 0 AND k.opt & 2 = 0 THEN 'NULLS LAST' END),
+                          ',' ORDER BY k.ord)
+                   FROM unnest(ix.indkey::int2[], ix.indclass::oid[], ix.indcollation::oid[],
+                               ix.indoption::int2[])
+                        WITH ORDINALITY AS k(attnum, opclass, coll, opt, ord)
+                   JOIN pg_attribute ka ON ka.attrelid = i.oid AND ka.attnum = k.ord
+                   LEFT JOIN pg_attribute ta ON ta.attrelid = t.oid AND ta.attnum = k.attnum
+                                            AND k.attnum <> 0
+                   JOIN pg_type kt ON kt.oid = ka.atttypid
+                   JOIN pg_opclass oc ON oc.oid = k.opclass
+                   JOIN pg_namespace ocn ON ocn.oid = oc.opcnamespace
+                   LEFT JOIN pg_collation co ON co.oid = k.coll
+                   LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
+                  WHERE (k.coll <> 0 AND k.coll <> COALESCE(ta.attcollation, kt.typcollation))
+                     OR NOT oc.opcdefault
+                     OR k.opt & 3 <> 0)
          FROM pg_class t
          JOIN pg_index ix ON t.oid = ix.indrelid
          JOIN pg_class i ON i.oid = ix.indexrelid
@@ -89,6 +132,8 @@ pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes
         expressions,
         predicate,
         definition,
+        include,
+        options,
     ) in rows
     {
         let index = DbIndex {
@@ -102,6 +147,8 @@ pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes
             expressions,
             predicate,
             definition: Some(definition),
+            include: include.unwrap_or_default(),
+            options: options.unwrap_or_default(),
         };
         if index.columns.is_empty() {
             expression_only.push(index);

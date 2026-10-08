@@ -5486,6 +5486,7 @@ fn test_drop_managed_slug_unique_when_removed_from_ast() {
             comment: Some(
                 "supatype:managed;kind=unique_index;table=album;fields=owner_id,slug;v=1".into(),
             ),
+            ..Default::default()
         }],
         ..DatabaseState::default()
     };
