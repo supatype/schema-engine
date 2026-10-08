@@ -5,7 +5,7 @@ use crate::introspector::{
 };
 use crate::ledger::{LedgerRow, Status};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +28,10 @@ pub struct DatabaseState {
     /// false when released. Filled by the caller that read the ledger; never part of a snapshot.
     #[serde(skip)]
     pub table_ownership: BTreeMap<String, bool>,
+    /// The `(table, policy)` pairs of this schema the ledger records as Supatype's (not released):
+    /// the reconcile's to keep or drop. Filled with `table_ownership`; never part of a snapshot.
+    #[serde(skip)]
+    pub owned_policies: BTreeSet<(String, String)>,
 }
 
 impl DatabaseState {
@@ -41,12 +45,31 @@ impl DatabaseState {
             .unwrap_or_else(|| crate::managed::is_managed_comment(table.comment.as_deref()))
     }
 
-    /// Takes each table's ownership from the ledger rows of `schema`.
+    /// Takes each table's ownership, and which policies are ours, from the ledger rows of `schema`.
     pub fn set_table_ownership(&mut self, ledger: &[LedgerRow]) {
         self.table_ownership = ledger
             .iter()
             .filter(|r| r.key.kind == ObjectKind::Table && r.key.schema == self.schema)
             .map(|r| (r.key.name.clone(), r.status != Status::Released))
             .collect();
+        self.owned_policies = ledger
+            .iter()
+            .filter(|r| {
+                r.key.kind == ObjectKind::Policy
+                    && r.key.schema == self.schema
+                    && r.status != Status::Released
+            })
+            .map(|r| (r.key.parent.clone(), r.key.name.clone()))
+            .collect();
+    }
+
+    /// Whether a policy is Supatype's: the ledger records it, or it carries the stamp an older
+    /// engine wrote. One that is, but that the schema no longer declares, is the reconcile's to
+    /// drop, not a hand-written policy.
+    pub fn owns_policy(&self, policy: &DbRlsPolicy) -> bool {
+        policy.managed
+            || self
+                .owned_policies
+                .contains(&(policy.table.clone(), policy.name.clone()))
     }
 }

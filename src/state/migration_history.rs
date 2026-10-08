@@ -369,6 +369,16 @@ pub fn ensure_schema_state_project_schema_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS project_schema TEXT")
 }
 
+/// Record the project schema of a `schema_state` row an engine from before the column wrote, from
+/// the schema its own snapshot names. Without it such a row passed [`assert_project_schema`] for
+/// any schema, and the first push to arrive, whichever project it was for, claimed the database.
+pub fn backfill_schema_state_project_schema_sql() -> String {
+    format!(
+        "UPDATE {SCHEMA}.schema_state SET project_schema = db_state->>'schema' \
+         WHERE project_schema IS NULL AND COALESCE(db_state->>'schema', '') <> ''"
+    )
+}
+
 /// Refuse to push a second project into a database that already holds one.
 ///
 /// `_supatype.migrations` has no project column, `schema_state` is one row, and the publishing cron
@@ -377,8 +387,9 @@ pub fn ensure_schema_state_project_schema_column_sql() -> String {
 /// it. Cloud runs one Postgres per project; this makes the same shape explicit for self-host rather
 /// than letting it fail in a way that names nothing.
 ///
-/// A database with no recorded schema (a fresh one, or one written by an engine from before this
-/// column) passes, and [`save_schema_state`] records the schema at the end of that push.
+/// A database with no recorded schema (a fresh one) passes, and [`save_schema_state`] records the
+/// schema at the end of that push. One written by an engine from before this column has its schema
+/// recorded from its snapshot by the bootstrap ([`backfill_schema_state_project_schema_sql`]).
 pub async fn assert_project_schema(pool: &PgPool, schema: &str) -> Result<()> {
     let sql = format!("SELECT project_schema FROM {SCHEMA}.schema_state WHERE id = 1");
     let recorded: Option<Option<String>> = sqlx::query_scalar(&sql).fetch_optional(pool).await?;
@@ -881,6 +892,37 @@ async fn load_prior_applied_migration(
     ))
 }
 
+/// `sql` without its top-level `BEGIN`/`COMMIT` statements. An engine from before Phase 4.0 stored
+/// `sql_down` as a script of its own, wrapped in `BEGIN;`…`COMMIT;`; run inside the rollback's
+/// transaction, that `COMMIT` ended it early, so the history and ledger updates after it ran
+/// outside any transaction and a failure there left the objects rolled back and the record not.
+/// Statements inside a function body or a `DO` block are not top-level and are kept.
+fn without_transaction_control(sql: &str) -> String {
+    crate::desired::statements::split_statements(sql)
+        .into_iter()
+        .filter(|statement| {
+            let head = crate::desired::statements::head(statement)
+                .trim_end()
+                .trim_end_matches(';')
+                .trim_end()
+                .to_ascii_uppercase();
+            let head = head.split_whitespace().collect::<Vec<_>>().join(" ");
+            !matches!(
+                head.as_str(),
+                "BEGIN"
+                    | "BEGIN TRANSACTION"
+                    | "BEGIN WORK"
+                    | "START TRANSACTION"
+                    | "COMMIT"
+                    | "COMMIT TRANSACTION"
+                    | "COMMIT WORK"
+                    | "END"
+                    | "END TRANSACTION"
+            )
+        })
+        .collect()
+}
+
 pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResult> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
@@ -895,12 +937,24 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
             anyhow::anyhow!("no_rollback_sql: Migration has no rollback SQL (metadata-only push?)")
         })?;
 
+    // The history is one project's; rolling it back from another would undo that project's
+    // migration and record this schema as the database's. Asserted as a push asserts it, with the
+    // schema an older engine left unrecorded taken from its snapshot first.
+    for sql in [
+        create_schema_state_table_sql(),
+        ensure_schema_state_project_schema_column_sql(),
+        backfill_schema_state_project_schema_sql(),
+    ] {
+        sqlx::raw_sql(&sql).execute(pool).await?;
+    }
+    assert_project_schema(pool, schema).await?;
+
     let prior = load_prior_applied_migration(pool, latest.id).await?;
 
     let mut tx = pool.begin().await?;
 
     (&mut *tx)
-        .execute(sqlx::raw_sql(&sql_down))
+        .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
 
@@ -1057,6 +1111,9 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     sqlx::raw_sql(&ensure_schema_state_project_schema_column_sql())
         .execute(pool)
         .await?;
+    sqlx::raw_sql(&backfill_schema_state_project_schema_sql())
+        .execute(pool)
+        .await?;
 
     for sql in ensure_all_migration_columns_sql() {
         sqlx::raw_sql(&sql).execute(pool).await?;
@@ -1075,4 +1132,38 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
         eprintln!("Warning: failed to reapply auth helper functions: {e}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_transaction_control;
+
+    #[test]
+    fn a_legacy_rollback_script_loses_its_own_transaction() {
+        let legacy = "-- ============================================================\n\
+                      -- ROLLBACK MIGRATION\n\
+                      -- ============================================================\n\n\
+                      BEGIN;\n\n\
+                      ALTER TABLE \"public\".\"t\" DROP COLUMN IF EXISTS \"c\";\n\
+                      COMMIT;\n";
+        let sql = without_transaction_control(legacy);
+        assert!(!sql.contains("BEGIN;"), "{sql}");
+        assert!(!sql.contains("COMMIT;"), "{sql}");
+        assert!(sql.contains("DROP COLUMN IF EXISTS \"c\";"), "{sql}");
+    }
+
+    #[test]
+    fn transaction_words_inside_a_body_or_a_statement_are_kept() {
+        let sql = "DO $x$\nBEGIN\n  PERFORM 1;\nEND;\n$x$;\n\
+                   CREATE OR REPLACE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$\n\
+                   BEGIN\n  COMMIT;\nEND;\n$$;\n\
+                   DROP TABLE IF EXISTS \"begin\";";
+        assert_eq!(without_transaction_control(sql), sql);
+    }
+
+    #[test]
+    fn a_rollback_from_this_engine_is_unchanged() {
+        let sql = "-- reconciled objects\nALTER TABLE \"public\".\"t\" DROP CONSTRAINT IF EXISTS \"c\";\n";
+        assert_eq!(without_transaction_control(sql), sql);
+    }
 }

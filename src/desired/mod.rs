@@ -40,7 +40,10 @@ use crate::generator::sql::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, option_columns,
         render_operation,
     },
-    rls::{drop_field_label_sql, field_labels, membership_index_targets, MASK_PROVIDER},
+    rls::{
+        drop_field_label_sql, drop_table_label_sql, field_labels, membership_index_targets,
+        MASK_PROVIDER,
+    },
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql},
 };
@@ -142,11 +145,12 @@ impl ObjectKey {
             ObjectKind::CronJob => format!(
                 "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}';\n  END IF;\nEND;\n$cron$;"
             ),
-            // The parent is `table.column`; only our own provider's labels are ever desired.
-            ObjectKind::SecurityLabel => {
-                let (table, column) = parent.split_once('.')?;
-                drop_field_label_sql(schema, table, column)
-            }
+            // The parent is `table.column`, or the table for a label on the table itself; only our
+            // own provider's labels are ever desired or dropped.
+            ObjectKind::SecurityLabel => match parent.split_once('.') {
+                Some((table, column)) => drop_field_label_sql(schema, table, column),
+                None => drop_table_label_sql(schema, parent),
+            },
             // The parent is the table and the name the role: everything it holds there goes.
             ObjectKind::TableGrant => revoke_all_sql(schema, parent, name),
             ObjectKind::Schema
@@ -293,7 +297,7 @@ pub fn desired_objects_for(
     b.versions_layer()?;
     b.affordance_functions();
     b.api_views();
-    b.bucket_policies();
+    b.bucket_policies()?;
     for junction in &ast.junction_tables {
         b.junction(junction)?;
         b.rls_enabled(&junction.name);
@@ -775,10 +779,15 @@ impl<'a> Builder<'a> {
 
     /// The policies on `storage.objects` the buckets' rules and the models storing into them ask
     /// for (Phase 4.7b): ours by the ledger, created by the reconcile after the storage layer.
-    fn bucket_policies(&mut self) {
+    /// Two buckets whose policies would share names are refused here, as the storage layer refuses
+    /// them, so a plan that never renders that layer (`diff`, `doctor`) cannot keep one bucket's
+    /// policies and silently lose the other's.
+    fn bucket_policies(&mut self) -> Result<()> {
+        crate::generator::sql::storage::refuse_colliding_policy_labels(self.ast)?;
         self.attributed_script(&crate::generator::sql::storage::bucket_policies_sql(
             self.ast,
         ));
+        Ok(())
     }
 
     /// The `api` field views and their write triggers (Phase 4.6), for the tables the push's plan

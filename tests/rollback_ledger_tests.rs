@@ -110,3 +110,51 @@ async fn a_migration_with_nothing_recorded_rolls_back_and_leaves_the_ledger_alon
     })
     .await;
 }
+
+/// An engine from before Phase 4.0 stored `sql_down` as a script with its own `BEGIN`/`COMMIT`.
+/// Run inside the rollback's transaction, its `COMMIT` ended that transaction after the objects
+/// came back and before the history and the ledger were updated.
+#[tokio::test]
+async fn a_legacy_rollback_script_runs_inside_the_rollbacks_transaction() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        push(&pool, &posts("body")).await.unwrap();
+        exec(
+            &pool,
+            "UPDATE _supatype.migrations
+                SET sql_down = E'-- ROLLBACK MIGRATION\\nBEGIN;\\n' || sql_down || E'\\nCOMMIT;\\n'
+              WHERE id = (SELECT max(id) FROM _supatype.migrations)",
+        )
+        .await
+        .unwrap();
+        // The rollback's last step fails, after the legacy script's `COMMIT` would have run.
+        exec(
+            &pool,
+            "CREATE FUNCTION public.refuse() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'refused'; END; $$;
+             CREATE TRIGGER refuse BEFORE UPDATE ON _supatype.migrations
+               FOR EACH ROW EXECUTE FUNCTION public.refuse();",
+        )
+        .await
+        .unwrap();
+
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect_err("the history update is refused");
+        assert!(
+            index_exists(&pool, "posts_body_idx").await,
+            "the objects' rollback went back with the failed history update"
+        );
+        assert!(!index_exists(&pool, "posts_title_idx").await);
+
+        exec(&pool, "DROP TRIGGER refuse ON _supatype.migrations")
+            .await
+            .unwrap();
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("the legacy script rolls back");
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        assert!(!index_exists(&pool, "posts_body_idx").await);
+    })
+    .await;
+}

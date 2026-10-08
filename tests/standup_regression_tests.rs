@@ -96,7 +96,7 @@ fn push_apply_body_includes_slug_trigger() {
     // creations since Phase 4.2, so a diff alone no longer carries them.
     let body = supatype_engine::push::fresh_migration(&ast, "public", false)
         .unwrap()
-        .apply_body("-- storage\n");
+        .apply_body();
     assert!(
         body.contains("CREATE SCHEMA IF NOT EXISTS _platform"),
         "push apply body must ensure the _platform schema"

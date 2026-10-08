@@ -142,3 +142,56 @@ async fn a_push_that_fails_mid_apply_leaves_the_database_as_it_was_and_records_t
     })
     .await;
 }
+
+/// The reconcile is decided from the ledger and the live objects, read before the apply's
+/// transaction begins (and, for the CLI, before it asks for confirmation). A change landing in
+/// between would have the push apply statements decided against a database that no longer
+/// exists, so the apply re-reads them inside its transaction and refuses.
+#[tokio::test]
+async fn a_database_changed_between_plan_and_apply_is_refused_not_overwritten() {
+    common::with_integration_pool(|pool| async move {
+        create_auth_users(&pool).await;
+        let ast = fixture();
+        push(&pool, &ast).await.unwrap();
+        let before = migrations(&pool).await;
+
+        let short = fixture_with_short_titles();
+        let plan = push::prepare(&pool, &short, "public").await.unwrap();
+        // Someone's own index on a model table, made after the plan was read.
+        sqlx::raw_sql("CREATE INDEX their_index ON public.posts (id)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let err = push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
+            .expect_err("a plan for a database that has moved must not apply");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("changed after this push was planned"),
+            "{message}"
+        );
+        assert!(message.contains("their_index"), "{message}");
+        let bound: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_constraint WHERE pg_get_constraintdef(oid) LIKE '%<= 10%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(bound, 0, "nothing of the stale plan was applied");
+        assert_eq!(
+            migrations(&pool)
+                .await
+                .iter()
+                .filter(|(_, s)| s == "applied")
+                .count(),
+            before.len()
+        );
+
+        // Planned again, against the database as it is now, the same push applies.
+        let plan = push::prepare(&pool, &short, "public").await.unwrap();
+        push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
+            .expect("a fresh plan applies");
+    })
+    .await;
+}

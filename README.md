@@ -344,19 +344,17 @@ src/
 ├── introspector/          Postgres to DatabaseState (tables, columns, indexes,
 │                          constraints, enums, RLS, triggers, extensions)
 ├── differ/                SchemaAst x DatabaseState to DiffOutput
-│   ├── table_diff.rs         Create and drop tables
+│   ├── table_diff.rs         Create, rename and drop tables
 │   ├── column_diff.rs        Add, drop, rename, retype columns
-│   ├── enum_diff.rs          Enum type changes
-│   ├── index_diff.rs         Index changes
-│   ├── constraint_diff.rs    Constraint changes
-│   ├── check_diff.rs         Field bound and model constraint changes
-│   ├── rls_diff.rs           RLS policy changes
+│   ├── constraint_diff.rs    Declared single-column unique constraints
+│   ├── rls_diff.rs           Warnings: deny-all tables, hand-written policies, junctions
 │   ├── field_access_diff.rs  Unwritable required columns
-│   ├── trigger_diff.rs       Trigger changes
 │   ├── ordering.rs           Topological sort (petgraph)
-│   ├── risk_analyser.rs      Pre-flight safety validation
 │   ├── doctor.rs             Drift report: missing, stale managed, unmanaged
 │   └── integrity.rs          Post-push drift warnings
+├── desired/               The objects a schema asks for; rendered SQL attributed to them
+├── ledger/                Managed-object ledger and the reconcile (indexes, checks,
+│                          foreign keys, triggers, policies, grants, labels, …)
 ├── generator/
 │   ├── sql/               Migration DDL, RLS, grants, constraints, triggers, storage,
 │   │                      auth functions, SSO, field views, versions, rollback,
@@ -421,7 +419,8 @@ choosing which: the unit job has no database, the integration job does.
 
 ## CI / CD
 
-**CI** (`.github/workflows/ci.yml`), on every push and PR to `main`:
+**CI** (`.github/workflows/ci.yml`), on every push to `main` and every pull request, whatever
+its base branch:
 
 | Job | What it runs |
 |---|---|

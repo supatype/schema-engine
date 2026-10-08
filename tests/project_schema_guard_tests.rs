@@ -90,3 +90,66 @@ async fn a_database_from_before_the_guard_is_claimed_by_its_next_push() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_legacy_row_is_claimed_by_the_schema_its_snapshot_names_not_by_the_next_push() {
+    common::with_integration_pool(|pool| async move {
+        migration_history::bootstrap_internal_state(&pool)
+            .await
+            .unwrap();
+        let state = introspector::introspect(&pool, "public").await.unwrap();
+        migration_history::save_schema_state(&pool, &state)
+            .await
+            .unwrap();
+        // What an older engine left behind: a snapshot of `public`, no project schema.
+        sqlx::raw_sql("UPDATE _supatype.schema_state SET project_schema = NULL WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Every push bootstraps before it checks.
+        migration_history::bootstrap_internal_state(&pool)
+            .await
+            .unwrap();
+        let err = migration_history::assert_project_schema(&pool, "tenant_b")
+            .await
+            .expect_err("the snapshot says this database is public's");
+        assert!(err.to_string().contains("tenant_b"), "{err}");
+        migration_history::assert_project_schema(&pool, "public")
+            .await
+            .expect("the project the snapshot names");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_rollback_for_a_different_schema_is_refused() {
+    common::with_integration_pool(|pool| async move {
+        migration_history::bootstrap_internal_state(&pool)
+            .await
+            .unwrap();
+        let state = introspector::introspect(&pool, "public").await.unwrap();
+        migration_history::save_schema_state(&pool, &state)
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO _supatype.migrations (name, hash, engine_version, sql_up, sql_down)
+             VALUES ('m1', 'sha256:x', 'test', 'SELECT 1;', 'SELECT 1;')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let err = migration_history::apply_rollback(&pool, "tenant_b")
+            .await
+            .expect_err("another project's history is not this one's to roll back");
+        assert!(err.to_string().contains("tenant_b"), "{err}");
+        let rolled_back: bool =
+            sqlx::query_scalar("SELECT rolled_back FROM _supatype.migrations WHERE name = 'm1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!rolled_back);
+    })
+    .await;
+}

@@ -87,7 +87,7 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, warnings: &mut Vec<String>) -> 
 
         let ours = engine_policy_names(model);
         for db_pol in db_policies_by_table.get(table).into_iter().flatten() {
-            if !db_pol.managed && !ours.contains(&db_pol.name) {
+            if !db.owns_policy(db_pol) && !ours.contains(&db_pol.name) {
                 unmanaged.push(format!("{table}.{}", db_pol.name));
             }
         }
