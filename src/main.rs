@@ -224,6 +224,10 @@ enum Command {
         /// `--yes` adopts every conflict found when it runs.
         #[arg(long = "key")]
         keys: Vec<String>,
+        /// With `--yes`: adopt no conflict at all, only `--release` and `--reclaim`. The binary's
+        /// spelling of an empty `keys` list, which a repeated `--key` cannot express.
+        #[arg(long, conflicts_with = "keys")]
+        adopt_none: bool,
         /// No longer does anything: the database is always read live. Accepted for one release so
         /// scripts that pass it keep working, and says so.
         #[arg(long, hide = true)]
@@ -580,6 +584,7 @@ async fn main() -> Result<()> {
             release,
             reclaim,
             keys,
+            adopt_none,
             no_cache,
         } => {
             use supatype_engine::state::migration_history;
@@ -592,7 +597,9 @@ async fn main() -> Result<()> {
                 release: &release,
                 reclaim: &reclaim,
                 apply: yes,
-                keys: (!keys.is_empty()).then_some(keys.as_slice()),
+                // `--adopt-none` is an empty list, as HTTP `keys: []` is; no `--key` at all is
+                // every conflict.
+                keys: (adopt_none || !keys.is_empty()).then_some(keys.as_slice()),
             };
             let outcome = supatype_engine::adopt::run(&pool, &ast, &schema, request).await?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);

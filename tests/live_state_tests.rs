@@ -144,6 +144,66 @@ async fn adopt_offers_to_take_the_table_push_refuses() {
     .await;
 }
 
+/// `--adopt-none` adopts no conflict while still releasing what `--release` names, as HTTP
+/// `keys: []` does; with no `--key` at all every conflict is adopted. It cannot be combined with
+/// `--key`.
+#[tokio::test]
+async fn adopt_none_releases_without_adopting_any_conflict() {
+    common::with_integration_url(|url| async move {
+        assert!(push(&url).ok);
+        sql(
+            &url,
+            "DELETE FROM _supatype.managed_objects WHERE kind = 'table' AND name = 'widget';
+             COMMENT ON TABLE public.widget IS NULL;
+             CREATE INDEX widget_name_mine ON public.widget (name);",
+        )
+        .await;
+
+        let both = engine(
+            &url,
+            &["adopt", "--yes", "--adopt-none", "--key", "table:widget"],
+        );
+        assert!(!both.ok, "--adopt-none with --key must be refused");
+
+        let none = engine(
+            &url,
+            &[
+                "adopt",
+                "--yes",
+                "--adopt-none",
+                "--release",
+                "index:widget.widget_name_mine",
+            ],
+        );
+        assert!(none.ok, "{}", none.stderr);
+        let outcome: serde_json::Value = serde_json::from_str(&none.stdout).unwrap();
+        assert_eq!(outcome["adopt"], serde_json::json!([]), "{}", none.stdout);
+        assert_eq!(outcome["release"].as_array().map(Vec::len), Some(1));
+        let status = |name: &'static str| {
+            let url = url.clone();
+            async move {
+                let pool = sqlx::PgPool::connect(&url).await.unwrap();
+                let status: Option<String> = sqlx::query_scalar(
+                    "SELECT status FROM _supatype.managed_objects WHERE name = $1",
+                )
+                .bind(name)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+                pool.close().await;
+                status
+            }
+        };
+        assert_eq!(
+            status("widget_name_mine").await.as_deref(),
+            Some("released")
+        );
+        assert_eq!(status("widget").await, None, "the table was adopted");
+        assert!(!push(&url).ok, "the table is still a conflict");
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn push_restores_a_column_dropped_outside_supatype() {
     common::with_integration_url(|url| async move {
