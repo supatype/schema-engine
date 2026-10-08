@@ -227,6 +227,48 @@ async fn a_released_column_is_never_dropped() {
     .await;
 }
 
+/// `timestamps` turned on for a table that predates it: the option's columns are added, with the
+/// definition `CREATE TABLE` gives them, and recorded. One dropped by hand is put back the same way.
+#[tokio::test]
+async fn an_option_column_the_table_lacks_is_added() {
+    common::with_integration_pool(|pool| async move {
+        let mut plain = posts(json!({}));
+        plain.models[0].options.timestamps = false;
+        push(&pool, &plain).await.unwrap();
+        exec(
+            &pool,
+            "INSERT INTO public.posts (id, title) VALUES (1, 'a')",
+        )
+        .await
+        .unwrap();
+        assert_eq!(recorded(&pool).await, ["id", "title"]);
+
+        push(&pool, &posts(json!({}))).await.unwrap();
+        assert_eq!(
+            recorded(&pool).await,
+            ["created_at", "id", "title", "updated_at"]
+        );
+        let filled: bool = sqlx::query_scalar(
+            "SELECT created_at IS NOT NULL AND updated_at IS NOT NULL FROM public.posts",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(filled, "the existing row has no timestamps");
+        assert!(up_to_date(&push(&pool, &posts(json!({}))).await.unwrap()));
+
+        exec(&pool, "ALTER TABLE public.posts DROP COLUMN updated_at")
+            .await
+            .unwrap();
+        push(&pool, &posts(json!({}))).await.unwrap();
+        assert!(live_columns(&pool)
+            .await
+            .contains(&"updated_at".to_string()));
+        assert!(up_to_date(&push(&pool, &posts(json!({}))).await.unwrap()));
+    })
+    .await;
+}
+
 /// A rename is a similarity guess, so only a column that is ours may be its source: one someone
 /// added (`subtitel`) is not renamed into a declared one (`subtitle`), which is added beside it.
 #[tokio::test]

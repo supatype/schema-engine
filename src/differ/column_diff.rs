@@ -797,6 +797,27 @@ pub fn diff(
         }
     }
 
+    // The columns the model's options add, which `CREATE TABLE` writes beside the fields. A table
+    // that predates the option (`timestamps` turned on later), or one whose column was dropped by
+    // hand, gets it here, with the definition `CREATE TABLE` would have given it: the composite
+    // field the option stands for renders exactly that.
+    for (column, _) in crate::generator::sql::migration::option_columns(model) {
+        if db_col_names.contains(column) {
+            continue;
+        }
+        let field = if column == "deleted_at" {
+            FieldAst::SoftDelete
+        } else {
+            FieldAst::Timestamps
+        };
+        ops.push(Operation::AddColumn {
+            table: model.table_name().to_string(),
+            column: column.to_string(),
+            field: Box::new(field),
+            risk: Risk::Safe,
+        });
+    }
+
     // Dropping a column from a table Supatype did not create is the same class of data loss as
     // dropping the table: smaller, and easier to miss. Gated on the table being ours, and
     // reported rather than skipped quietly. Additive changes are deliberately still allowed: a
