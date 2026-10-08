@@ -369,6 +369,16 @@ pub fn ensure_schema_state_project_schema_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS project_schema TEXT")
 }
 
+/// Record the project schema of a `schema_state` row an engine from before the column wrote, from
+/// the schema its own snapshot names. Without it such a row passed [`assert_project_schema`] for
+/// any schema, and the first push to arrive, whichever project it was for, claimed the database.
+pub fn backfill_schema_state_project_schema_sql() -> String {
+    format!(
+        "UPDATE {SCHEMA}.schema_state SET project_schema = db_state->>'schema' \
+         WHERE project_schema IS NULL AND COALESCE(db_state->>'schema', '') <> ''"
+    )
+}
+
 /// Refuse to push a second project into a database that already holds one.
 ///
 /// `_supatype.migrations` has no project column, `schema_state` is one row, and the publishing cron
@@ -377,8 +387,9 @@ pub fn ensure_schema_state_project_schema_column_sql() -> String {
 /// it. Cloud runs one Postgres per project; this makes the same shape explicit for self-host rather
 /// than letting it fail in a way that names nothing.
 ///
-/// A database with no recorded schema (a fresh one, or one written by an engine from before this
-/// column) passes, and [`save_schema_state`] records the schema at the end of that push.
+/// A database with no recorded schema (a fresh one) passes, and [`save_schema_state`] records the
+/// schema at the end of that push. One written by an engine from before this column has its schema
+/// recorded from its snapshot by the bootstrap ([`backfill_schema_state_project_schema_sql`]).
 pub async fn assert_project_schema(pool: &PgPool, schema: &str) -> Result<()> {
     let sql = format!("SELECT project_schema FROM {SCHEMA}.schema_state WHERE id = 1");
     let recorded: Option<Option<String>> = sqlx::query_scalar(&sql).fetch_optional(pool).await?;
@@ -895,6 +906,18 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
             anyhow::anyhow!("no_rollback_sql: Migration has no rollback SQL (metadata-only push?)")
         })?;
 
+    // The history is one project's; rolling it back from another would undo that project's
+    // migration and record this schema as the database's. Asserted as a push asserts it, with the
+    // schema an older engine left unrecorded taken from its snapshot first.
+    for sql in [
+        create_schema_state_table_sql(),
+        ensure_schema_state_project_schema_column_sql(),
+        backfill_schema_state_project_schema_sql(),
+    ] {
+        sqlx::raw_sql(&sql).execute(pool).await?;
+    }
+    assert_project_schema(pool, schema).await?;
+
     let prior = load_prior_applied_migration(pool, latest.id).await?;
 
     let mut tx = pool.begin().await?;
@@ -1055,6 +1078,9 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
     sqlx::raw_sql(&ensure_schema_state_project_schema_column_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&backfill_schema_state_project_schema_sql())
         .execute(pool)
         .await?;
 
