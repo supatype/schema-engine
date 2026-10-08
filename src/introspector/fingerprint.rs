@@ -173,9 +173,130 @@ impl ObjectFingerprint {
 
 /// Whitespace collapsed to single spaces, trimmed, no trailing semicolon. Case is kept: deparsed
 /// SQL quotes identifiers that need it, so folding case would conflate `"A"` with `a`.
+///
+/// Quoted text is kept byte for byte: a string literal (`'a  b'`, with `''` and, in an `E''`
+/// string, `\'` escapes), a quoted identifier (`"a  b"`) and a dollar-quoted body (`$fn$...$fn$`).
+/// Whitespace inside those is the value, so `'a  b'` and `'a b'` are different objects. A `--` or
+/// `/* */` comment is collapsed like code, and a quote inside one opens nothing.
 pub fn normalise_sql(sql: &str) -> String {
-    let collapsed = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapsed.trim_end_matches(';').trim().to_string()
+    let bytes = sql.as_bytes();
+    let n = bytes.len();
+    let mut out = String::with_capacity(n);
+    // Whether whitespace has been seen since the last token, so a run of it becomes one space.
+    let mut gap = false;
+    let mut i = 0;
+    fn push(out: &mut String, text: &str, gap: &mut bool) {
+        if *gap && !out.is_empty() {
+            out.push(' ');
+        }
+        *gap = false;
+        out.push_str(text);
+    }
+    while i < n {
+        let c = bytes[i];
+        let start = i;
+        if c.is_ascii_whitespace() {
+            gap = true;
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' => {
+                // An `E'...'` string also escapes with a backslash.
+                let escapes = i > 0
+                    && matches!(bytes[i - 1], b'E' | b'e')
+                    && (i < 2 || !(bytes[i - 2].is_ascii_alphanumeric() || bytes[i - 2] == b'_'));
+                i += 1;
+                while i < n {
+                    match bytes[i] {
+                        b'\\' if escapes => i += 2,
+                        b'\'' if i + 1 < n && bytes[i + 1] == b'\'' => i += 2,
+                        b'\'' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < n {
+                    if bytes[i] == b'"' {
+                        if i + 1 < n && bytes[i + 1] == b'"' {
+                            i += 2;
+                            continue;
+                        }
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'$' => {
+                // `$tag$` where the tag is empty or an identifier; `$1` is a parameter, and a `$`
+                // inside an identifier (`a$b`) is part of it.
+                let in_word = i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
+                let mut j = i + 1;
+                while j < n && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+                    j += 1;
+                }
+                let tagged = !in_word
+                    && j < n
+                    && bytes[j] == b'$'
+                    && !(j > i + 1 && bytes[i + 1].is_ascii_digit());
+                if tagged {
+                    let tag = &sql[i..=j];
+                    i = match sql[j + 1..].find(tag) {
+                        Some(off) => j + 1 + off + tag.len(),
+                        None => n,
+                    };
+                } else {
+                    i += 1;
+                }
+            }
+            b'-' if i + 1 < n && bytes[i + 1] == b'-' => {
+                // A line comment: its words collapse like code, its quotes open nothing.
+                let end = sql[i..].find('\n').map(|o| i + o).unwrap_or(n);
+                for word in sql[i..end].split_whitespace() {
+                    push(&mut out, word, &mut gap);
+                    gap = true;
+                }
+                i = end;
+                continue;
+            }
+            b'/' if i + 1 < n && bytes[i + 1] == b'*' => {
+                let end = sql[i + 2..].find("*/").map(|o| i + 2 + o + 2).unwrap_or(n);
+                for word in sql[i..end].split_whitespace() {
+                    push(&mut out, word, &mut gap);
+                    gap = true;
+                }
+                gap = false;
+                i = end;
+                continue;
+            }
+            _ => {
+                // Plain text up to the next whitespace or the next character that may open a
+                // quoted region or a comment.
+                i += 1;
+                while i < n
+                    && !bytes[i].is_ascii_whitespace()
+                    && !matches!(bytes[i], b'\'' | b'"' | b'$' | b'-' | b'/')
+                {
+                    i += 1;
+                }
+            }
+        }
+        i = i.min(n);
+        push(&mut out, &sql[start..i], &mut gap);
+    }
+    // A trailing `;` (or several) goes, with the whitespace before it.
+    while out.ends_with(';') {
+        out.pop();
+        let trimmed = out.trim_end().len();
+        out.truncate(trimmed);
+    }
+    out
 }
 
 /// Sixteen hex characters of SHA-256 over the kind and the parts, separated so that no two part
@@ -887,6 +1008,50 @@ mod tests {
         assert_eq!(stamped[0].definition, bare[0].definition);
         // The comment travels beside the fingerprint, where the reconcile reads the stamp.
         assert!(stamped[0].stamped() && !bare[0].stamped());
+    }
+
+    #[test]
+    fn whitespace_inside_quoted_text_is_kept() {
+        // Outside quotes: collapsed, as before.
+        assert_eq!(normalise_sql("  SELECT\n  1 ,\t2 ;\n"), "SELECT 1 , 2");
+        // Inside a literal, a quoted identifier or a dollar-quoted body the whitespace is the
+        // value, and two values that differ only there are different objects.
+        assert_eq!(
+            normalise_sql("CHECK ((x = 'a  b'))"),
+            "CHECK ((x = 'a  b'))"
+        );
+        assert_ne!(normalise_sql("x = 'a  b'"), normalise_sql("x = 'a b'"));
+        assert_eq!(normalise_sql("SELECT  \"my  col\"  FROM t"), "SELECT \"my  col\" FROM t");
+        assert_eq!(
+            normalise_sql("AS $fn$\n  SELECT  1\n$fn$ ;"),
+            "AS $fn$\n  SELECT  1\n$fn$"
+        );
+        assert_eq!(normalise_sql("AS $$ a   b $$"), "AS $$ a   b $$");
+        // Escaped quotes do not end the literal early.
+        assert_eq!(normalise_sql("'it''s   x'   y"), "'it''s   x' y");
+        assert_eq!(normalise_sql("E'it\\'s   x'   y"), "E'it\\'s   x' y");
+        assert_eq!(normalise_sql("\"a\"\"b   c\"   d"), "\"a\"\"b   c\" d");
+        // A parameter and a `$` inside an identifier are not dollar quotes.
+        assert_eq!(normalise_sql("f($1,   $2)  a$b   c"), "f($1, $2) a$b c");
+        // A quote in a comment opens nothing.
+        assert_eq!(
+            normalise_sql("-- don't\nSELECT   1"),
+            normalise_sql("-- don't\n  SELECT 1")
+        );
+        // Text with no quotes normalises exactly as a plain whitespace split did.
+        let plain = "CREATE  INDEX i\n ON t USING btree (a, b)  WHERE (x > 1);";
+        assert_eq!(
+            normalise_sql(plain),
+            plain
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim_end_matches(';')
+                .to_string()
+        );
+        // Unterminated quotes run to the end without panicking.
+        assert_eq!(normalise_sql("'abc  "), "'abc  ");
+        assert_eq!(normalise_sql("E'ab\\"), "E'ab\\");
     }
 
     #[test]
