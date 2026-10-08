@@ -77,13 +77,21 @@ pub async fn remember(
 
 /// Puts the ledger back as it was before `migration_id`'s push: rows it added go, rows it changed
 /// or removed come back as they were. In the rollback's transaction.
+///
+/// Only rows still as the push left them. The ledger is also written outside a migration (`adopt`,
+/// `adopt --release`, `doctor --rebaseline`), and a write made after the push is not the push's to
+/// undo: a release made since would otherwise be silently reverted. Every row a push writes carries
+/// its transaction's `NOW()`, as does its migration's `applied_at`, so a row written since is one
+/// updated after it.
 pub async fn restore(conn: &mut PgConnection, migration_id: i32) -> Result<()> {
+    let untouched_since = format!("(SELECT applied_at FROM {SCHEMA}.migrations WHERE id = $1)");
     let statements = [
         format!(
             "DELETE FROM {SCHEMA}.managed_objects m USING {SCHEMA}.managed_objects_undo u
               WHERE u.migration_id = $1 AND NOT u.existed
                 AND m.kind = u.kind AND m.schema_name = u.schema_name
-                AND m.parent = u.parent AND m.name = u.name"
+                AND m.parent = u.parent AND m.name = u.name
+                AND m.updated_at <= {untouched_since}"
         ),
         format!(
             "INSERT INTO {SCHEMA}.managed_objects
@@ -101,7 +109,8 @@ pub async fn restore(conn: &mut PgConnection, migration_id: i32) -> Result<()> {
                 status = EXCLUDED.status,
                 migration_id = EXCLUDED.migration_id,
                 created_at = EXCLUDED.created_at,
-                updated_at = EXCLUDED.updated_at"
+                updated_at = EXCLUDED.updated_at
+              WHERE {SCHEMA}.managed_objects.updated_at <= {untouched_since}"
         ),
         format!("DELETE FROM {SCHEMA}.managed_objects_undo WHERE migration_id = $1"),
     ];

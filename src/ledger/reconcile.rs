@@ -388,9 +388,17 @@ impl Action {
     /// Undoes the addition: drops what this action created. An inline `Create` has one too; its
     /// parent's rollback covers it, and the explicit drop is `IF EXISTS`. A replacement in place
     /// is undone by the previous definition alone ([`Action::undo_removal`]). Row-level security
-    /// is never turned off, by a rollback either (D9).
+    /// is never turned off, by a rollback either (D9). Taking over a stamped object is undone by
+    /// putting its comment back, stamp and all: the rollback removes the row, and without the
+    /// stamp the object would read as someone else's and the next push would refuse it.
     pub fn undo_addition(&self) -> Option<String> {
         match self {
+            Action::Adopt {
+                key,
+                reason: AdoptReason::Stamped,
+                comment,
+                ..
+            } => key.comment_sql(comment.as_deref()),
             action if never_removed(action.key().kind) => None,
             // The differ's rollback undoes what the differ did.
             action if altered_by_the_differ(action.key().kind) => None,
@@ -662,6 +670,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         previous_sql: row.desired_sql.clone(),
                         inline,
                         status,
+                        drifted,
                     });
                 } else if l.fingerprint != row.live_fp {
                     changes.push(Action::Drift {
@@ -673,7 +682,6 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         security_relevant: d.security_relevant,
                         inline,
                         status,
-                        drifted,
                     });
                 } else {
                     changes.push(Action::Keep {
@@ -886,6 +894,13 @@ mod tests {
                 assert_eq!(
                     with_stamp[0].sql(),
                     ["COMMENT ON CONSTRAINT \"posts_title_check\" ON \"public\".\"posts\" IS NULL;"]
+                );
+                // And a rollback puts the stamp back, so the object is still recognisably ours.
+                let rollback = with_stamp[0].rollback_sql();
+                assert_eq!(rollback.len(), 1, "{rollback:?}");
+                assert!(
+                    rollback[0].contains("'supatype:managed;kind=check"),
+                    "{rollback:?}"
                 );
             }
             other => panic!("{other:?}"),
