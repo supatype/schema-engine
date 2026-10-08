@@ -144,6 +144,7 @@ pub struct DbFunction {
     /// string without a database. The ledger keys a function by name plus this.
     #[serde(default)]
     pub identity_types: String,
+    /// `pg_get_function_result`, empty for a procedure, which returns nothing.
     pub return_type: String,
     pub language: String,
     /// `i`, `s` or `v`.
@@ -466,7 +467,7 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
                           FROM unnest(p.proargtypes) WITH ORDINALITY AS a(oid, ord)
                           JOIN pg_type t ON t.oid = a.oid
                           JOIN pg_namespace tn ON tn.oid = t.typnamespace), ''),
-                pg_get_function_result(p.oid),
+                COALESCE(pg_get_function_result(p.oid), ''),
                 l.lanname::text, p.provolatile::text, p.prosecdef, p.prosrc,
                 obj_description(p.oid, 'pg_proc')
          FROM pg_proc p

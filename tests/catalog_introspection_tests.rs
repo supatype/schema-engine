@@ -133,6 +133,33 @@ async fn functions_carry_their_identity_body_and_properties() {
     .await;
 }
 
+/// `pg_get_function_result` is NULL for a procedure. Decoded into a `String`, one `CREATE
+/// PROCEDURE` anywhere in a swept schema failed the whole catalog read, and with it every push.
+#[tokio::test]
+async fn a_procedure_is_read_with_an_empty_return_type() {
+    common::with_integration_pool(|pool| async move {
+        exec(
+            &pool,
+            "CREATE TABLE public.log (msg text);
+             CREATE PROCEDURE public.note(m text) LANGUAGE sql
+               AS $$ INSERT INTO public.log VALUES (m) $$;",
+        )
+        .await;
+
+        let catalog = introspector::introspect_catalog(&pool, "public")
+            .await
+            .expect("a procedure does not fail the catalog read");
+        let note = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "note")
+            .expect("procedure read");
+        assert_eq!(note.return_type, "");
+        assert_eq!(note.identity_types, "text");
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn views_schemas_sequences_and_enum_types_are_read_with_comments() {
     common::with_integration_pool(|pool| async move {
