@@ -656,9 +656,10 @@ pub fn add_column_backfill_default(field: &FieldAst) -> Option<String> {
         FieldAst::Money(f) if f.required => Some("0".into()),
         FieldAst::Json(f) if f.required => Some("'{}'::jsonb".into()),
         FieldAst::Blocks(f) if f.required => Some("'[]'::jsonb".into()),
-        FieldAst::Enum(f) if f.required && f.default.is_none() => {
-            f.values.first().map(|v| format!("'{v}'"))
-        }
+        FieldAst::Enum(f) if f.required && f.default.is_none() => f
+            .values
+            .first()
+            .map(|v| format!("'{}'", v.replace('\'', "''"))),
         _ => None,
     }
 }
