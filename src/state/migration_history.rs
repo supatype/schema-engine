@@ -892,6 +892,37 @@ async fn load_prior_applied_migration(
     ))
 }
 
+/// `sql` without its top-level `BEGIN`/`COMMIT` statements. An engine from before Phase 4.0 stored
+/// `sql_down` as a script of its own, wrapped in `BEGIN;`…`COMMIT;`; run inside the rollback's
+/// transaction, that `COMMIT` ended it early, so the history and ledger updates after it ran
+/// outside any transaction and a failure there left the objects rolled back and the record not.
+/// Statements inside a function body or a `DO` block are not top-level and are kept.
+fn without_transaction_control(sql: &str) -> String {
+    crate::desired::statements::split_statements(sql)
+        .into_iter()
+        .filter(|statement| {
+            let head = crate::desired::statements::head(statement)
+                .trim_end()
+                .trim_end_matches(';')
+                .trim_end()
+                .to_ascii_uppercase();
+            let head = head.split_whitespace().collect::<Vec<_>>().join(" ");
+            !matches!(
+                head.as_str(),
+                "BEGIN"
+                    | "BEGIN TRANSACTION"
+                    | "BEGIN WORK"
+                    | "START TRANSACTION"
+                    | "COMMIT"
+                    | "COMMIT TRANSACTION"
+                    | "COMMIT WORK"
+                    | "END"
+                    | "END TRANSACTION"
+            )
+        })
+        .collect()
+}
+
 pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResult> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
@@ -923,7 +954,7 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
     let mut tx = pool.begin().await?;
 
     (&mut *tx)
-        .execute(sqlx::raw_sql(&sql_down))
+        .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
 
@@ -1101,4 +1132,38 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
         eprintln!("Warning: failed to reapply auth helper functions: {e}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_transaction_control;
+
+    #[test]
+    fn a_legacy_rollback_script_loses_its_own_transaction() {
+        let legacy = "-- ============================================================\n\
+                      -- ROLLBACK MIGRATION\n\
+                      -- ============================================================\n\n\
+                      BEGIN;\n\n\
+                      ALTER TABLE \"public\".\"t\" DROP COLUMN IF EXISTS \"c\";\n\
+                      COMMIT;\n";
+        let sql = without_transaction_control(legacy);
+        assert!(!sql.contains("BEGIN;"), "{sql}");
+        assert!(!sql.contains("COMMIT;"), "{sql}");
+        assert!(sql.contains("DROP COLUMN IF EXISTS \"c\";"), "{sql}");
+    }
+
+    #[test]
+    fn transaction_words_inside_a_body_or_a_statement_are_kept() {
+        let sql = "DO $x$\nBEGIN\n  PERFORM 1;\nEND;\n$x$;\n\
+                   CREATE OR REPLACE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$\n\
+                   BEGIN\n  COMMIT;\nEND;\n$$;\n\
+                   DROP TABLE IF EXISTS \"begin\";";
+        assert_eq!(without_transaction_control(sql), sql);
+    }
+
+    #[test]
+    fn a_rollback_from_this_engine_is_unchanged() {
+        let sql = "-- reconciled objects\nALTER TABLE \"public\".\"t\" DROP CONSTRAINT IF EXISTS \"c\";\n";
+        assert_eq!(without_transaction_control(sql), sql);
+    }
 }
