@@ -116,6 +116,15 @@ fn replaced_in_place(kind: ObjectKind) -> bool {
     )
 }
 
+/// Whether a statement that creates an object of this kind as part of another (the versions
+/// layer's script, a re-asserted function file) also replaces one that is there: its `Replace` and
+/// `Drift` can then run no SQL of their own. Not an index: every index is made `IF NOT EXISTS`, so
+/// a changed or hand-edited one would be left as it is while its row recorded it as put right. Its
+/// own drop and create run instead, and the parent's then finds it made.
+fn remade_by_its_parent(kind: ObjectKind) -> bool {
+    kind != ObjectKind::Index
+}
+
 /// The order kinds are created in, dependencies first; drops run in reverse. A trigger needs its
 /// function and its table, a foreign key its two tables, a column its type.
 fn creation_rank(kind: ObjectKind) -> u8 {
@@ -537,7 +546,7 @@ fn drop_for(key: &ObjectKey) -> String {
 fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFingerprint) -> Action {
     let ours_by_location = (inputs.location)(&key) != Location::Neutral;
     let replace = |previous_sql: &str| Action::Replace {
-        inline: inputs.created_by_parent.contains(&key),
+        inline: inputs.created_by_parent.contains(&key) && remade_by_its_parent(key.kind),
         key: key.clone(),
         create_sql: d.create_sql.clone(),
         previous_sql: previous_sql.to_string(),
@@ -629,6 +638,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         }
         let status = row.status;
         let inline = inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind);
+        let replaced_inline = inline && remade_by_its_parent(key.kind);
         match (desired.get(&key), live.get(&key)) {
             (Some(d), None) => changes.push(Action::Recreate {
                 key,
@@ -642,7 +652,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         key,
                         create_sql: d.create_sql.clone(),
                         previous_sql: row.desired_sql.clone(),
-                        inline,
+                        inline: replaced_inline,
                         status,
                     });
                 } else if l.fingerprint != row.live_fp {
@@ -653,7 +663,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         live_fp: l.fingerprint.clone(),
                         create_sql: d.create_sql.clone(),
                         security_relevant: d.security_relevant,
-                        inline,
+                        inline: replaced_inline,
                         status,
                     });
                 } else {
@@ -1161,5 +1171,99 @@ mod tests {
         });
         assert_eq!(plan.actions, [Action::Forget { key }]);
         assert!(plan.actions.iter().all(|a| a.sql().is_empty()));
+    }
+
+    /// The versions layer makes its index `IF NOT EXISTS`, so an inline replacement would run
+    /// nothing while the row recorded the hand-edited index as ours: an index is dropped and made
+    /// again instead. A function, which its parent's `CREATE OR REPLACE` remakes, stays inline.
+    #[test]
+    fn an_index_its_parent_creates_is_still_dropped_and_made_again_when_it_changes() {
+        let mut d = desired("preview_links_live_for_record", "");
+        d.key = ObjectKey {
+            kind: ObjectKind::Index,
+            schema: "_supatype".into(),
+            parent: "preview_links".into(),
+            name: "preview_links_live_for_record".into(),
+        };
+        d.create_sql = "CREATE INDEX IF NOT EXISTS \"preview_links_live_for_record\" ON _supatype.preview_links (\"model\");".into();
+        d.drop_sql = d.key.drop_sql().unwrap();
+        let mut l = live("preview_links_live_for_record", "");
+        l.kind = ObjectKind::Index;
+        l.schema = "_supatype".into();
+        l.parent = "preview_links".into();
+        l.definition = "columns=model".into();
+        l.fingerprint = hash(ObjectKind::Index, &["model"]);
+        let r = row(&d, &l, Status::Managed);
+        let mut edited = l.clone();
+        edited.fingerprint = hash(ObjectKind::Index, &["model,record_id"]);
+        let parent: BTreeSet<ObjectKey> = [d.key.clone()].into_iter().collect();
+        let none = BTreeSet::new();
+        let run = |live: &ObjectFingerprint, d: &DesiredObject| {
+            reconcile(Inputs {
+                desired: std::slice::from_ref(d),
+                ledger: std::slice::from_ref(&r),
+                live: std::slice::from_ref(live),
+                created_by_parent: &parent,
+                dropped_tables: &none,
+                location: no_location,
+                kinds: &[ObjectKind::Index, ObjectKind::Function],
+            })
+            .actions
+        };
+
+        let drifted = run(&edited, &d);
+        assert!(
+            matches!(&drifted[..], [Action::Drift { inline: false, .. }]),
+            "{drifted:?}"
+        );
+        assert_eq!(
+            drifted[0].sql(),
+            [d.key.drop_sql().unwrap(), d.create_sql.clone()]
+        );
+
+        let mut changed = d.clone();
+        changed.create_sql = changed
+            .create_sql
+            .replace("(\"model\")", "(\"model\", \"record_id\")");
+        let replaced = run(&l, &changed);
+        assert!(
+            matches!(&replaced[..], [Action::Replace { inline: false, .. }]),
+            "{replaced:?}"
+        );
+        assert_eq!(replaced[0].sql().len(), 2, "{replaced:?}");
+
+        let mut f = d.clone();
+        f.key = ObjectKey {
+            kind: ObjectKind::Function,
+            schema: "_supatype".into(),
+            parent: String::new(),
+            name: "caller_id()".into(),
+        };
+        f.create_sql = "CREATE OR REPLACE FUNCTION _supatype.caller_id() RETURNS uuid LANGUAGE sql AS $$ SELECT NULL $$;".into();
+        let mut fl = l.clone();
+        fl.kind = ObjectKind::Function;
+        fl.parent = String::new();
+        fl.name = "caller_id()".into();
+        let fr = LedgerRow {
+            key: f.key.clone(),
+            ..row(&f, &fl, Status::Managed)
+        };
+        let mut fedited = fl.clone();
+        fedited.fingerprint = "other".into();
+        let fparent: BTreeSet<ObjectKey> = [f.key.clone()].into_iter().collect();
+        let function = reconcile(Inputs {
+            desired: std::slice::from_ref(&f),
+            ledger: std::slice::from_ref(&fr),
+            live: std::slice::from_ref(&fedited),
+            created_by_parent: &fparent,
+            dropped_tables: &none,
+            location: no_location,
+            kinds: &[ObjectKind::Function],
+        })
+        .actions;
+        assert!(
+            matches!(&function[..], [Action::Drift { inline: true, .. }]),
+            "{function:?}"
+        );
     }
 }

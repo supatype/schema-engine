@@ -305,3 +305,47 @@ async fn a_layer_function_an_older_engine_wrote_is_taken_over_and_brought_up_to_
     })
     .await;
 }
+
+/// The layer makes its preview-link index `IF NOT EXISTS`, so re-running the script leaves a
+/// hand-edited index as it is. Its drift is put right by its own drop and create, and recorded as
+/// what the engine made, not accepted as the new baseline.
+#[tokio::test]
+async fn a_layer_index_changed_by_hand_is_put_back() {
+    common::with_integration_pool(|pool| async move {
+        let ast = schema(vec![posts(Some(true))]);
+        push(&pool, &ast).await.unwrap();
+        let definition = || {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT indexdef FROM pg_indexes \
+                     WHERE schemaname = '_supatype' AND indexname = 'preview_links_live_for_record'",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let ours = definition().await;
+        exec(
+            &pool,
+            "DROP INDEX _supatype.preview_links_live_for_record;
+             CREATE INDEX preview_links_live_for_record ON _supatype.preview_links (model);",
+        )
+        .await
+        .unwrap();
+
+        let outcome = push(&pool, &ast).await.unwrap();
+        assert!(
+            matches!(outcome, push::Outcome::Applied { .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(definition().await, ours);
+        let again = push(&pool, &ast).await.unwrap();
+        assert!(
+            matches!(again, push::Outcome::UpToDate { .. }),
+            "{again:?}"
+        );
+    })
+    .await;
+}
