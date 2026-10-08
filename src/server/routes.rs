@@ -29,6 +29,8 @@ pub async fn parse(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Va
 // ── Introspect (DB) ─────────────────────────────────────────────────────────
 
 pub async fn introspect(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    // Unpinned on purpose (see `introspector::introspect`): an API read in the caller's terms,
+    // feeding no fingerprint.
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
     match crate::introspector::introspect(&pool, &req.schema).await {

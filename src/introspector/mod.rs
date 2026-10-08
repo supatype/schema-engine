@@ -13,6 +13,13 @@ use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 use sqlx::{PgConnection, PgPool};
 
+/// The differ's view of `schema`, read under the session's own `search_path`.
+///
+/// Deliberately not pinned ([`pin_search_path`]): nothing read here is fingerprinted, and it is
+/// what `POST /introspect` and the `introspect` command return, so its deparsed defaults and
+/// expressions read as the caller's session writes them rather than schema-qualified. A push does
+/// not read through here; its live read is pinned, so the ledger's fingerprints never depend on
+/// whose session read them.
 pub async fn introspect(pool: &PgPool, schema: &str) -> Result<DatabaseState> {
     let mut conn = pool.acquire().await?;
     introspect_connection(&mut conn, schema).await
