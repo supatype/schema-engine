@@ -176,7 +176,7 @@ async fn foreign_keys_are_recorded_on_creation_and_left_alone_on_a_second_push()
         assert!(rows[0].migration_id.is_some());
         assert!(rows[0].desired_sql.contains("FOREIGN KEY"));
         assert!(
-            rows[0].live_def.contains("references=users"),
+            rows[0].live_def.contains("references=public.users\n"),
             "{}",
             rows[0].live_def
         );

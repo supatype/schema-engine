@@ -17,6 +17,10 @@ pub struct DbConstraint {
     pub foreign_columns: Option<Vec<String>>,
     pub check_expression: Option<String>,
     pub on_delete: Option<String>,
+    /// `pg_get_constraintdef`, for a foreign key: what the parts above leave out (`ON UPDATE`,
+    /// `MATCH`, `DEFERRABLE`, `NOT VALID`) is in here, and enters its fingerprint.
+    #[serde(default)]
+    pub definition: Option<String>,
     /// Postgres `COMMENT ON CONSTRAINT` text, when set.
     #[serde(default)]
     pub comment: Option<String>,
@@ -132,6 +136,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 foreign_columns: None,
                 check_expression: None,
                 on_delete: None,
+                definition: None,
                 comment,
             },
             "u" => DbConstraint {
@@ -144,6 +149,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 foreign_columns: None,
                 check_expression: None,
                 on_delete: None,
+                definition: None,
                 comment,
             },
             "f" => DbConstraint {
@@ -156,6 +162,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 foreign_columns: Some(foreign_columns.unwrap_or_default()),
                 check_expression: None,
                 on_delete: confdeltype.as_deref().and_then(delete_rule),
+                definition: Some(definition),
                 comment,
             },
             _ => DbConstraint {
@@ -168,6 +175,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
                 foreign_columns: None,
                 check_expression: Some(definition),
                 on_delete: None,
+                definition: None,
                 comment,
             },
         };

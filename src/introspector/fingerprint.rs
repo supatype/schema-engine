@@ -344,7 +344,13 @@ impl ObjectKind {
             ObjectKind::Schema | ObjectKind::Table => &[],
             ObjectKind::Column => &["type", "udt", "nullable", "default", "precision", "scale"],
             ObjectKind::PrimaryKey | ObjectKind::Unique => &["columns"],
-            ObjectKind::ForeignKey => &["columns", "references", "referenced_columns", "on_delete"],
+            ObjectKind::ForeignKey => &[
+                "columns",
+                "references",
+                "referenced_columns",
+                "on_delete",
+                "definition",
+            ],
             ObjectKind::Check => &["expression"],
             ObjectKind::Index => &[
                 "columns",
@@ -746,6 +752,19 @@ fn relation_entries<'a>(
                     .as_ref()
                     .map(|v| v.join(","))
                     .unwrap_or_default();
+                // Schema-qualified: a key to `auth.users` is not a key to `public.users`.
+                let references = format!(
+                    "{}.{}",
+                    c.foreign_schema.as_deref().unwrap_or(schema),
+                    c.foreign_table.as_deref().unwrap_or("")
+                );
+                // The whole deparsed constraint carries `ON UPDATE`, `MATCH`, `DEFERRABLE` and
+                // `NOT VALID`, which the parts before it do not.
+                let definition = c
+                    .definition
+                    .as_deref()
+                    .map(normalise_sql)
+                    .unwrap_or_default();
                 entry(
                     ObjectKind::ForeignKey,
                     schema,
@@ -753,9 +772,10 @@ fn relation_entries<'a>(
                     &c.name,
                     &[
                         columns.as_str(),
-                        c.foreign_table.as_deref().unwrap_or(""),
+                        references.as_str(),
                         foreign_columns.as_str(),
                         c.on_delete.as_deref().unwrap_or(""),
+                        definition.as_str(),
                     ],
                 )
             }
@@ -1006,6 +1026,7 @@ mod tests {
                 foreign_columns: None,
                 check_expression: Some(expression.into()),
                 on_delete: None,
+                definition: None,
                 comment: None,
             }],
             ..Default::default()
@@ -1155,6 +1176,57 @@ mod tests {
             fingerprints(&db, &defaults)[0].fingerprint,
             pinned[0].fingerprint
         );
+    }
+
+    fn foreign_key(schema: &str, definition: &str) -> DatabaseState {
+        DatabaseState {
+            schema: "public".into(),
+            constraints: vec![DbConstraint {
+                table: "ticket".into(),
+                name: "ticket_user_id_fkey".into(),
+                constraint_type: DbConstraintType::ForeignKey,
+                columns: vec!["user_id".into()],
+                foreign_table: Some("users".into()),
+                foreign_schema: Some(schema.into()),
+                foreign_columns: Some(vec!["id".into()]),
+                check_expression: None,
+                on_delete: Some("CASCADE".into()),
+                definition: Some(definition.into()),
+                comment: None,
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// A key to `auth.users` is not a key to a `users` model, and `ON UPDATE`, `DEFERRABLE` and
+    /// `NOT VALID` change what a key does.
+    #[test]
+    fn a_foreign_key_is_fingerprinted_with_its_schema_and_its_whole_definition() {
+        let catalog = CatalogState::default();
+        let def = "FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE";
+        let auth = fingerprints(&foreign_key("auth", def), &catalog);
+        let public = fingerprints(
+            &foreign_key(
+                "public",
+                "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+            ),
+            &catalog,
+        );
+        assert_ne!(auth[0].fingerprint, public[0].fingerprint);
+        assert!(auth[0].definition.contains("references=auth.users\n"));
+        assert!(public[0].definition.contains("references=public.users\n"));
+        for changed in [
+            format!("{def} ON UPDATE CASCADE"),
+            format!("{def} DEFERRABLE INITIALLY DEFERRED"),
+            format!("{def} NOT VALID"),
+            def.replace("REFERENCES", "MATCH FULL REFERENCES"),
+        ] {
+            assert_ne!(
+                fingerprints(&foreign_key("auth", &changed), &catalog)[0].fingerprint,
+                auth[0].fingerprint,
+                "{changed}"
+            );
+        }
     }
 
     #[test]

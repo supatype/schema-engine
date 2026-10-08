@@ -508,7 +508,9 @@ impl<'a> Builder<'a> {
     fn foreign_key(&mut self, table: &str, name: &str, fk: ForeignKeyRef<'_>, create: String) {
         let mut structure = BTreeMap::new();
         structure.insert("columns", fk.column.to_string());
-        structure.insert("references", fk.ref_table.to_string());
+        // Schema-qualified, as the live side reports it: a key to `auth.users` and one to a
+        // `users` model are different keys.
+        structure.insert("references", format!("{}.{}", fk.ref_schema, fk.ref_table));
         structure.insert("referenced_columns", fk.ref_column.to_string());
         structure.insert("on_delete", fk.on_delete.to_string());
         let mut depends_on = vec![self.table_key(table)];
@@ -1093,5 +1095,41 @@ fn polcmd(suffix: &str) -> &'static str {
         "update" => "w",
         "delete" => "d",
         _ => "*",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ast(json: &str) -> SchemaAst {
+        crate::parser::parse(json).expect("fixture parses")
+    }
+
+    /// The desired side names the referenced table with its schema, as the live fingerprint does:
+    /// a relation to `supatype:user` points at `auth.users`, and recorded as `users` alone it
+    /// matched a live key to a `users` table in the project schema.
+    #[test]
+    fn a_foreign_key_references_its_table_with_its_schema() {
+        let ast = ast(r#"{"astVersion":2,"models":[
+              {"name":"Ticket","fields":{
+                "id":{"kind":"uuid","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"UUID","unique":true,"index":false}}},
+                "owner":{"kind":"relation","cardinality":"belongsTo","target":"supatype:user","annotations":{"db":{"foreignKey":"owner_id"}}},
+                "venue":{"kind":"relation","cardinality":"belongsTo","target":"Venue","annotations":{"db":{"foreignKey":"venue_id"}}}
+              },"options":{},"annotations":{"db":{"tableName":"ticket","indexes":[]}}},
+              {"name":"Venue","fields":{
+                "id":{"kind":"uuid","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"UUID","unique":true,"index":false}}}
+              },"options":{},"annotations":{"db":{"tableName":"venue","indexes":[]}}}
+            ]}"#);
+        let set = desired_objects(&ast, "public").unwrap();
+        let references = |name: &str| {
+            set.iter()
+                .find(|o| o.key.kind == ObjectKind::ForeignKey && o.key.name == name)
+                .unwrap_or_else(|| panic!("{name} desired"))
+                .structure["references"]
+                .clone()
+        };
+        assert_eq!(references("ticket_owner_id_fkey"), "auth.users");
+        assert_eq!(references("ticket_venue_id_fkey"), "public.venue");
     }
 }
