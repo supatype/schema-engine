@@ -833,9 +833,13 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             (None, Some((l, from))) => {
                 // A row under the same name on another table is this constraint before its table
                 // was renamed: a unique constraint's name is its index's, unique in the schema.
-                let recorded_elsewhere = ledger
-                    .keys()
-                    .any(|k| k.kind == from.kind && k.schema == from.schema && k.name == from.name);
+                // Not a released row: that one is the user's, wherever it is.
+                let recorded_elsewhere = ledger.iter().any(|(k, row)| {
+                    row.status != Status::Released
+                        && k.kind == from.kind
+                        && k.schema == from.schema
+                        && k.name == from.name
+                });
                 let ours = recorded_elsewhere
                     || (inputs.location)(&from) != Location::Neutral
                     || inputs.named_by_the_engine.contains(&from);
@@ -1486,6 +1490,32 @@ mod tests {
             kinds: &[ObjectKind::Unique],
         })
         .actions
+    }
+
+    /// A row under the live constraint's name on another table is that constraint before its
+    /// table was renamed, so it is ours and renamed to our name; but not a released row, which is
+    /// the user's: then the constraint is theirs, a conflict.
+    #[test]
+    fn a_released_row_on_another_table_does_not_make_a_unique_ours() {
+        let (d, _) = unique("posts_slug_key", "slug");
+        let (_, old) = unique("posts_slug_unique", "slug");
+        let (mut elsewhere, _) = unique("posts_slug_unique", "slug");
+        elsewhere.key.parent = "articles".into();
+        for (status, ours) in [(Status::Managed, true), (Status::Released, false)] {
+            let recorded = row(&elsewhere, &old, status);
+            let actions = run_uniques(
+                std::slice::from_ref(&d),
+                std::slice::from_ref(&recorded),
+                std::slice::from_ref(&old),
+            );
+            let adopted = actions.iter().any(|a| {
+                matches!(a, Action::Adopt { renamed_from: Some(from), .. } if from == "posts_slug_unique")
+            });
+            let refused = actions
+                .iter()
+                .any(|a| matches!(a, Action::Conflict { key, .. } if *key == old.key()));
+            assert_eq!((adopted, refused), (ours, !ours), "{status:?}: {actions:?}");
+        }
     }
 
     /// With no row, a unique constraint is matched by its columns, as the differ it replaced
