@@ -298,8 +298,8 @@ async fn a_function_differing_from_ours_only_in_its_search_path_refuses_the_push
         auth_users(&pool).await;
         common::push(&pool, &ast).await.unwrap();
         let forget = "DELETE FROM _supatype.managed_objects WHERE kind = 'function';
-                      UPDATE _supatype.migrations SET schema_snapshot = NULL;
-                      UPDATE _supatype.schema_state SET ast_snapshot = NULL;";
+                      UPDATE _supatype.migrations SET schema_snapshot = NULL WHERE true;
+                      UPDATE _supatype.schema_state SET ast_snapshot = NULL WHERE true;";
 
         sqlx::raw_sql(forget).execute(&pool).await.unwrap();
         common::push(&pool, &ast)
