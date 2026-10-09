@@ -399,3 +399,24 @@ pub fn field_index_flag(field: &FieldAst) -> Option<bool> {
         _ => None,
     }
 }
+
+/// Whether the column owns a sequence its database made for it: a `SERIAL` / `BIGSERIAL`, or an
+/// identity column, whose sequence Postgres names the same way (`{table}_{column}_seq`).
+pub fn owns_sequence(field: &FieldAst) -> bool {
+    matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_))
+        || super::ast::scalar_of(field).is_some_and(|f| f.identity.is_some())
+}
+
+/// Whether the database fills the column itself, so an insert may leave it out: a serial, an
+/// identity column, or a generated one.
+pub fn database_fills(field: &FieldAst) -> bool {
+    owns_sequence(field) || super::ast::scalar_of(field).is_some_and(|f| f.generated.is_some())
+}
+
+/// Whether no caller writes the column: a generated one, which Postgres refuses to write, or a
+/// `GENERATED ALWAYS` identity, which it refuses short of `OVERRIDING SYSTEM VALUE`.
+pub fn never_written(field: &FieldAst) -> bool {
+    super::ast::scalar_of(field).is_some_and(|f| {
+        f.generated.is_some() || f.identity == Some(super::ast::IdentityGeneration::Always)
+    })
+}

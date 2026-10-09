@@ -230,10 +230,21 @@ fn model_grant(model: &ModelAst, role: &'static str) -> TableGrant {
         if !allowed {
             continue;
         }
-        let excluded = unwritable_columns(model, privilege, role);
+        let mut excluded = unwritable_columns(model, privilege, role);
         if excluded.is_empty() {
             privileges.push(privilege);
         } else {
+            // Narrowed to columns anyway: none on a column Postgres refuses to write (a generated
+            // one, a `GENERATED ALWAYS` identity), which a table-level privilege leaves to it.
+            for (name, field) in &model.fields {
+                if crate::parser::accessors::never_written(field) {
+                    for column in column_names_for(name, field) {
+                        if !excluded.contains(&column) {
+                            excluded.push(column);
+                        }
+                    }
+                }
+            }
             narrowed.push((privilege, excluded));
         }
     }

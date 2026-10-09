@@ -364,6 +364,18 @@ fn render_write_trigger(
         ));
     }
 
+    // Never a column Postgres refuses to write (a generated one, a `GENERATED ALWAYS` identity):
+    // naming it, even with the value read back, fails the whole write.
+    let unwritten: Vec<String> = model
+        .fields
+        .iter()
+        .filter(|(_, f)| crate::parser::accessors::never_written(f))
+        .flat_map(|(n, f)| crate::parser::accessors::column_names_for(n, f))
+        .collect();
+    let columns: Vec<&str> = columns
+        .into_iter()
+        .filter(|c| !unwritten.iter().any(|u| u == c))
+        .collect();
     let assignments = columns
         .iter()
         .map(|c| format!("{} = NEW.{}", quoted(c), quoted(c)))

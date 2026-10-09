@@ -4,11 +4,12 @@
 //! perfectly reversed (e.g. DropTable, DropColumn) are annotated with a warning
 //! rather than silently omitted.
 
-use super::migration::{rename_serial_sequence_sql, serial_columns};
+use super::migration::{identity_change_sql, rename_serial_sequence_sql, serial_columns};
 use crate::differ::{DiffOutput, Operation};
 use crate::managed::make_object_name;
 use crate::parser::ast::SchemaAst;
 use anyhow::Result;
+use serde_json::json;
 
 /// The rollback as a script of its own: the statements of [`statements`] inside one transaction.
 pub fn generate(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
@@ -195,6 +196,22 @@ fn rollback_alter_column(
             "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" \
              TYPE {restore_type} USING \"{column}\"::{restore_type}; \
              -- restoring from {from_udt}"
+        ));
+    }
+
+    // Reverse an identity change first: it was made after the nullability, and an identity column
+    // cannot drop NOT NULL.
+    if let Some(identity) = changes.get("identity") {
+        let back = match identity.get("action").and_then(|v| v.as_str()) {
+            Some("add") => json!({ "action": "drop" }),
+            Some("drop") => json!({ "action": "add", "to": identity.get("from") }),
+            _ => json!({ "action": "set", "to": identity.get("from") }),
+        };
+        stmts.extend(identity_change_sql(schema, table, column, &back));
+    }
+    if changes.get("generated").is_some() {
+        stmts.push(format!(
+            "-- WARNING: Cannot automatically make \"{table}\".\"{column}\" a generated column again."
         ));
     }
 

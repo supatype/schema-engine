@@ -872,7 +872,7 @@ impl<'a> Builder<'a> {
     fn model_sequences(&mut self, model: &ModelAst) {
         let table = model.table_name();
         for (field_name, field) in &model.fields {
-            if !matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_)) {
+            if !crate::parser::accessors::owns_sequence(field) {
                 continue;
             }
             for column in column_names_for(field_name, field) {

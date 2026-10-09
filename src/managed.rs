@@ -387,8 +387,7 @@ impl ObjectNames {
             relations.claim(&junction.name);
         }
 
-        let serial =
-            |field: &FieldAst| matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_));
+        let serial = crate::parser::accessors::owns_sequence;
         for model in &models {
             let table = model.table_name();
             for (field_name, field) in sorted_fields(model) {

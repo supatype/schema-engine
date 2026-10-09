@@ -281,8 +281,58 @@ pub struct ScalarFieldAst {
     /// Optional `ComputedFrom` template: `{field}` and `{truncate(field, max)}` (see `@supatype/types` JSDoc).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template: Option<String>,
+    /// `GENERATED {ALWAYS | BY DEFAULT} AS IDENTITY`: an integer column the database numbers
+    /// (`Identity<>` / `Int<{ identity }>` in `@supatype/types`). Integer kinds only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<IdentityGeneration>,
+    /// `GENERATED ALWAYS AS (expression) STORED`: a column the database computes from the row
+    /// (`Generated<>` / `{ generated }`). Never written by a caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<GeneratedColumnAst>,
     #[serde(default)]
     pub annotations: FieldAnnotations,
+}
+
+/// How an identity column takes values: `always` refuses an explicit one (short of
+/// `OVERRIDING SYSTEM VALUE`), `byDefault` accepts one.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum IdentityGeneration {
+    Always,
+    ByDefault,
+}
+
+impl IdentityGeneration {
+    /// The keywords after `GENERATED` in the column definition.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            IdentityGeneration::Always => "ALWAYS",
+            IdentityGeneration::ByDefault => "BY DEFAULT",
+        }
+    }
+
+    /// `information_schema.columns.identity_generation` as Postgres spells it.
+    pub fn from_catalog(text: &str) -> Option<Self> {
+        match text {
+            "ALWAYS" => Some(IdentityGeneration::Always),
+            "BY DEFAULT" => Some(IdentityGeneration::ByDefault),
+            _ => None,
+        }
+    }
+}
+
+/// A stored generated column's expression, verbatim SQL over the row's columns.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedColumnAst {
+    pub expression: String,
+    /// Only `STORED` exists before Postgres 18, and only that is supported: `false` is refused.
+    #[serde(default = "stored_by_default")]
+    pub stored: bool,
+}
+
+fn stored_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

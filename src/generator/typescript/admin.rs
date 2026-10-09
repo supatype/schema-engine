@@ -851,7 +851,7 @@ fn field_is_server_managed(field: &FieldAst) -> bool {
             f.primary_key || matches!(f.default, Some(DefaultValueAst::GenRandomUuid))
         }
         FieldAst::Serial(_) | FieldAst::BigSerial(_) => true,
-        _ => false,
+        other => crate::parser::accessors::database_fills(other),
     }
 }
 

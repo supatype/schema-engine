@@ -716,8 +716,12 @@ fn relation_entries<'a>(
 ) {
     for table in tables {
         for col in &table.columns {
+            // An identity or generated column cannot have a default: how the database fills it
+            // takes the default's place, so a plain column's fingerprint is unchanged.
             let default = col
                 .default
+                .clone()
+                .or_else(|| col.generation())
                 .as_deref()
                 .map(normalise_sql)
                 .unwrap_or_default();

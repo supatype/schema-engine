@@ -533,10 +533,7 @@ fn field_has_default(ast: &SchemaAst, model: &ModelAst, name: &str, field: &Fiel
     if json_flag(field, "serverGenerated") || json_flag(field, "readOnly") {
         return true;
     }
-    if matches!(
-        field,
-        FieldAst::Serial(_) | FieldAst::BigSerial(_) | FieldAst::Slug(_)
-    ) {
+    if matches!(field, FieldAst::Slug(_)) || crate::parser::accessors::database_fills(field) {
         return true;
     }
     is_primary_key(field)

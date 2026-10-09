@@ -39,6 +39,11 @@ pub struct DatabaseState {
     /// the reconcile's to keep or drop. Filled with `table_ownership`; never part of a snapshot.
     #[serde(skip)]
     pub owned_policies: BTreeSet<(String, String)>,
+    /// The statement the ledger records for each column it has a row for, keyed by table and
+    /// column: what the last push declared, which the differ compares a generated column's
+    /// expression with (Postgres deparses the live one into other words). Never part of a snapshot.
+    #[serde(skip)]
+    pub recorded_columns: BTreeMap<(String, String), String>,
 }
 
 impl DatabaseState {
@@ -90,6 +95,14 @@ impl DatabaseState {
             .filter(|r| r.status == Status::Adopted)
             .map(|r| (r.key.parent.clone(), r.key.name.clone()))
             .collect();
+        let recorded_columns = here(ObjectKind::Column)
+            .map(|r| {
+                (
+                    (r.key.parent.clone(), r.key.name.clone()),
+                    r.desired_sql.clone(),
+                )
+            })
+            .collect();
         let owned_policies = here(ObjectKind::Policy)
             .filter(|r| r.status != Status::Released)
             .map(|r| (r.key.parent.clone(), r.key.name.clone()))
@@ -98,6 +111,14 @@ impl DatabaseState {
         self.column_ownership = column_ownership;
         self.adopted_columns = adopted_columns;
         self.owned_policies = owned_policies;
+        self.recorded_columns = recorded_columns;
+    }
+
+    /// The statement the ledger records for `column` on `table`, when it has a row for it.
+    pub fn recorded_column_sql(&self, table: &str, column: &str) -> Option<&str> {
+        self.recorded_columns
+            .get(&(table.to_string(), column.to_string()))
+            .map(String::as_str)
     }
 
     /// Whether a policy is Supatype's: the ledger records it, or it carries the stamp an older
