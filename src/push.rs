@@ -75,7 +75,7 @@ const PUSH_LOCK_ID: i32 = 1;
 /// runs, so refusing on that one would refuse every such push. Only this engine takes this key.
 const ENGINE_LOCK_ID: i32 = 2;
 
-/// Refused because another push, adopt or rebaseline holds [`ENGINE_LOCK_ID`]. A type, so a caller
+/// Refused because another push, adopt, rebaseline or rollback holds [`ENGINE_LOCK_ID`]. A type, so a caller
 /// can tell it from a failed push and retry: the HTTP server answers it with 409 and
 /// [`ENGINE_BUSY`].
 #[derive(Debug)]
@@ -87,7 +87,7 @@ pub const ENGINE_BUSY: &str = "engine_busy";
 impl std::fmt::Display for EngineBusy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(
-            "another push, adopt or rebaseline is running on this database; try again. \
+            "another push, adopt, rebaseline or rollback is running on this database; try again. \
              Nothing was applied.",
         )
     }
@@ -952,24 +952,36 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     // Rendered before anything is applied, so a schema whose versioned models have no stated
     // visibility fails the push rather than half-applying it.
     let versions_sql = versions::render_versions_layer(plan.ast, &plan.schema)?;
-    sqlx::raw_sql(&storage::generate(plan.ast)?)
-        .execute(pool)
-        .await
-        .context("Failed to apply storage schema/policies")?;
-    if !versions_sql.trim().is_empty() {
-        sqlx::raw_sql(&versions_sql)
-            .execute(pool)
-            .await
-            .context("Failed to apply drafts and publishing layer")?;
-    }
-
+    let storage_sql = storage::generate(plan.ast)?;
     // AST-only changes (widgets, labels) still need admin_config and the snapshot so Studio and
     // tooling see the latest schema without a DDL migration.
     let admin_cfg = admin::generate(plan.ast)?;
     let schema_snap = serde_json::to_value(plan.ast)?;
-    migration_history::refresh_metadata_on_up_to_date_push(pool, &admin_cfg, &schema_snap)
+
+    // These are writes too: under the engine's lock like any other, and only to the database the
+    // plan found up to date.
+    let mut tx = pool.begin().await.context("begin up-to-date push")?;
+    take_engine_lock(&mut tx).await?;
+    take_push_lock(&mut tx).await?;
+    let now = read_state(&mut tx, &plan.schema)
+        .await
+        .context("Failed to re-read the database before applying")?;
+    plan.inputs.assert_current(&now)?;
+
+    (&mut *tx)
+        .execute(sqlx::raw_sql(&storage_sql))
+        .await
+        .context("Failed to apply storage schema/policies")?;
+    if !versions_sql.trim().is_empty() {
+        (&mut *tx)
+            .execute(sqlx::raw_sql(&versions_sql))
+            .await
+            .context("Failed to apply drafts and publishing layer")?;
+    }
+    migration_history::refresh_metadata_on_up_to_date_push(&mut tx, &admin_cfg, &schema_snap)
         .await
         .context("Failed to refresh Studio metadata on up-to-date push")?;
+    tx.commit().await.context("commit up-to-date push")?;
     Ok(Outcome::UpToDate {
         warnings: plan.diff.warnings,
     })

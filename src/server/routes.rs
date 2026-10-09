@@ -257,9 +257,10 @@ pub async fn rollback(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::
             .await
             .map_err(engine_error)?;
     }
+    // Refused with `engine_busy` while another writer holds the engine's lock.
     let result = crate::state::migration_history::apply_rollback(&pool, &req.schema)
         .await
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
     Ok(Json(serde_json::to_value(&result).unwrap()))
 }
 

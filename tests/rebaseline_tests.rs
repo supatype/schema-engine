@@ -220,6 +220,18 @@ async fn a_push_adopt_or_rebaseline_refuses_while_another_holds_the_engine_lock(
                 .await
                 .expect_err("rebaselined while another held the lock"),
         );
+        // A push with nothing to change still writes (the storage and versions layers, Studio's
+        // metadata), and a rollback writes objects, history and ledger.
+        busy(
+            push(&pool, &ast)
+                .await
+                .expect_err("an up-to-date push ran while another held the lock"),
+        );
+        busy(
+            supatype_engine::state::migration_history::apply_rollback(&pool, "public")
+                .await
+                .expect_err("rolled back while another held the lock"),
+        );
         // A preview writes nothing, so it does not need the lock.
         adopt::run(&pool, &ast, "public", adopt::Request::default())
             .await
@@ -241,6 +253,31 @@ async fn a_push_adopt_or_rebaseline_refuses_while_another_holds_the_engine_lock(
             .await
             .unwrap();
         other.close().await.unwrap();
+    })
+    .await;
+}
+
+/// An up-to-date push re-reads what it decided from before it writes, as an applying push does:
+/// a change landing between the plan and the apply refuses it rather than being written over.
+#[tokio::test]
+async fn an_up_to_date_push_refuses_when_the_database_moved_after_its_plan() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        let plan = supatype_engine::push::prepare(&pool, &ast, "public")
+            .await
+            .unwrap();
+        sqlx::raw_sql("CREATE POLICY sneaky ON public.posts FOR SELECT USING (true)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let e = supatype_engine::push::apply(&pool, plan, Default::default())
+            .await
+            .expect_err("applied a plan the database had moved away from");
+        assert!(
+            format!("{e:#}").contains("changed after this push was planned"),
+            "{e:#}"
+        );
     })
     .await;
 }

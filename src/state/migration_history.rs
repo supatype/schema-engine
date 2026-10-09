@@ -685,7 +685,7 @@ where
 /// Updates `admin_config` and `schema_snapshot` on the latest non-rolled-back migration row.
 /// Returns the number of rows updated (0 if there are no applicable migration records).
 pub async fn update_latest_migration_admin(
-    pool: &PgPool,
+    pool: impl sqlx::PgExecutor<'_>,
     admin_config: &serde_json::Value,
     schema_snapshot: &serde_json::Value,
 ) -> Result<u64> {
@@ -704,13 +704,13 @@ pub async fn update_latest_migration_admin(
 /// When push finds no DDL diff: refresh Studio metadata on the latest migration row, or
 /// record a one-time `initial_*` baseline when no active migration exists yet.
 pub async fn refresh_metadata_on_up_to_date_push(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     admin_config: &serde_json::Value,
     schema_snapshot: &serde_json::Value,
 ) -> Result<()> {
-    save_studio_metadata_if_present(pool, admin_config, schema_snapshot).await?;
+    save_studio_metadata_if_present(&mut *conn, admin_config, schema_snapshot).await?;
 
-    let n = update_latest_migration_admin(pool, admin_config, schema_snapshot).await?;
+    let n = update_latest_migration_admin(&mut *conn, admin_config, schema_snapshot).await?;
     if n > 0 {
         return Ok(());
     }
@@ -727,14 +727,14 @@ pub async fn refresh_metadata_on_up_to_date_push(
         .bind(None::<String>)
         .bind(None::<Vec<u8>>)
         .bind(None::<serde_json::Value>)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     Ok(())
 }
 
 /// Persist Studio metadata on `schema_state` when a cached DB snapshot row already exists.
 pub async fn save_studio_metadata_if_present(
-    pool: &PgPool,
+    pool: impl sqlx::PgExecutor<'_>,
     admin_config: &serde_json::Value,
     schema_snapshot: &serde_json::Value,
 ) -> Result<()> {
@@ -926,6 +926,13 @@ fn without_transaction_control(sql: &str) -> String {
 pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResult> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 
+    // A rollback writes objects, the history and the ledger, as a push does: under the engine's
+    // lock, refused while a push, adopt or rebaseline holds it, and taken before the migration to
+    // undo is chosen, so it is still the latest when it is undone.
+    let mut tx = pool.begin().await?;
+    crate::push::take_engine_lock(&mut tx).await?;
+    crate::push::take_push_lock(&mut tx).await?;
+
     let latest = load_latest_applied_migration(pool).await?.ok_or_else(|| {
         anyhow::anyhow!("no_applied_migration: No applied migration to roll back")
     })?;
@@ -950,8 +957,6 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
     assert_project_schema(pool, schema).await?;
 
     let prior = load_prior_applied_migration(pool, latest.id).await?;
-
-    let mut tx = pool.begin().await?;
 
     // The ledger goes back with the objects. Both tables exist on any database a push bootstrapped
     // since; asserted here for one bootstrapped before the undo table was.
