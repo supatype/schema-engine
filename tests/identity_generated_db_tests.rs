@@ -342,6 +342,97 @@ async fn a_column_stops_and_starts_being_generated() {
     .await;
 }
 
+/// `posts` with three rows, then `column` added to it: the push applies (no backfill `DEFAULT`
+/// beside the identity or expression, which Postgres refuses), the next is up to date, and doctor
+/// reports nothing.
+async fn added_to_rows(pool: &PgPool, column: Value) {
+    converges(pool, &with_id(identity("always"), None)).await;
+    exec(
+        pool,
+        "INSERT INTO public.posts (title) VALUES ('A'), ('B'), ('C')",
+    )
+    .await
+    .unwrap();
+    let added = posts(json!({
+        "id": identity("always"),
+        "title": text(json!({})),
+        "added": column,
+    }));
+    let outcome = converges(pool, &added).await;
+    assert!(
+        matches!(outcome, push::Outcome::Applied { .. }),
+        "{outcome:?}"
+    );
+}
+
+/// The identity numbers the rows already there, and new ones carry on past them.
+async fn numbered(pool: &PgPool) {
+    assert_eq!(
+        one::<Vec<i32>>(
+            pool,
+            "SELECT array_agg(added ORDER BY id) FROM public.posts"
+        )
+        .await,
+        [1, 2, 3]
+    );
+    exec(pool, "INSERT INTO public.posts (title) VALUES ('D')")
+        .await
+        .unwrap();
+    assert_eq!(
+        one::<i32>(pool, "SELECT added FROM public.posts WHERE title = 'D'").await,
+        4
+    );
+}
+
+#[tokio::test]
+async fn a_required_auto_increment_column_added_to_rows_numbers_them() {
+    common::with_integration_pool(|pool| async move {
+        added_to_rows(
+            &pool,
+            int(json!({ "identity": "byDefault", "autoIncrement": true })),
+        )
+        .await;
+        assert_eq!(
+            how_filled(&pool, "added").await,
+            ("YES".into(), Some("BY DEFAULT".into()), "NEVER".into())
+        );
+        numbered(&pool).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_required_identity_always_column_added_to_rows_numbers_them() {
+    common::with_integration_pool(|pool| async move {
+        added_to_rows(&pool, int(json!({ "identity": "always" }))).await;
+        assert_eq!(
+            how_filled(&pool, "added").await,
+            ("YES".into(), Some("ALWAYS".into()), "NEVER".into())
+        );
+        numbered(&pool).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_required_generated_column_added_to_rows_computes_them() {
+    common::with_integration_pool(|pool| async move {
+        added_to_rows(
+            &pool,
+            text(json!({ "required": true,
+                         "generated": { "expression": "lower(coalesce(title, ''))", "stored": true } })),
+        )
+        .await;
+        assert_eq!(how_filled(&pool, "added").await.2, "ALWAYS");
+        assert_eq!(
+            one::<Vec<String>>(&pool, "SELECT array_agg(added ORDER BY id) FROM public.posts")
+                .await,
+            ["a", "b", "c"]
+        );
+    })
+    .await;
+}
+
 fn serial_posts() -> SchemaAst {
     posts(json!({
         "id": { "kind": "serial", "primaryKey": true, "required": true,

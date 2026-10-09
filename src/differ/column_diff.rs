@@ -1147,6 +1147,7 @@ pub fn diff(
                 == Some("not_null")
                 && field_is_required(field) == Some(true)
                 && add_column_backfill_default(field).is_none()
+                && !crate::parser::accessors::database_fills(field)
             {
                 warnings.push(required_field_existing_table_warning(
                     model.table_name(),
