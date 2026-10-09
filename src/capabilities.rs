@@ -22,6 +22,10 @@ pub const FEATURES: &[&str] = &[
     // A writer refused while another holds the engine's lock: HTTP 409 `engine_busy`, and the
     // binary's `{"status":"refused","reason":"engine_busy"}` line.
     "engine_busy",
+    // A field's `identity` and `generated` (identity-contract): identity and stored generated
+    // columns, created, changed and introspected (`isIdentity`, `generationExpression`, ...). An
+    // engine without it parses neither key and makes a plain column.
+    "identity_columns",
 ];
 
 /// The capabilities document.
@@ -32,10 +36,10 @@ pub fn capabilities() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_document_lists_every_feature_of_this_round() {
+    fn the_document_lists_every_feature_this_engine_supports() {
         assert_eq!(
             super::capabilities().to_string(),
-            r#"{"features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","overwrite_drift","engine_busy"]}"#
+            r#"{"features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","overwrite_drift","engine_busy","identity_columns"]}"#
         );
     }
 }

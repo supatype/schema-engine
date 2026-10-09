@@ -388,6 +388,6 @@ fn capabilities_prints_the_features_this_engine_supports() {
     assert_eq!(
         body,
         serde_json::json!({ "features": ["adopt_keys", "adopt_none", "release", "reclaim",
-            "rebaseline", "accept_access_drift", "overwrite_drift", "engine_busy"] })
+            "rebaseline", "accept_access_drift", "overwrite_drift", "engine_busy", "identity_columns"] })
     );
 }

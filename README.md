@@ -241,7 +241,8 @@ ENGINE_ADMIN_TOKEN=<token> supatype-engine-server
 | `RUST_LOG` | `info` | Tracing filter |
 
 Routes mirror the subcommands. `GET /capabilities` answers `{"features": [...]}`, what this
-engine supports of the ownership contract. Compute only: `/parse`, `/generate`, `/triggers`, `/rls`, `/storage`,
+engine supports of the ownership contract, and `identity_columns` when it makes identity and
+generated columns. Compute only: `/parse`, `/generate`, `/triggers`, `/rls`, `/storage`,
 `/postgrest`, `/auth-functions`, `/sso`, `/admin`, `/studio`, `/openapi`. Database backed:
 `/introspect`, `/diff`, `/migrate`, `/push`, `/migrations`, `/rollback`, `/doctor`,
 `/adopt`, `/studio-config`, `/sql`. `/health` sits behind the admin token as well.
