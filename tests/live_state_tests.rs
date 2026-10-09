@@ -289,3 +289,42 @@ async fn a_non_interactive_push_refuses_to_overwrite_access_changed_by_hand() {
     })
     .await;
 }
+
+/// While another session holds the engine's lock, each writing command refuses, and says so on
+/// stdout as `{"status":"refused","reason":"engine_busy",...}`, where a caller reads the result,
+/// exiting non-zero.
+#[tokio::test]
+async fn a_writer_refuses_on_stdout_while_the_engine_is_busy() {
+    use sqlx::Connection;
+    common::with_integration_url(|url| async move {
+        let first = push(&url);
+        assert!(first.ok, "first push: {}", first.stderr);
+        let mut other = sqlx::PgConnection::connect(&url).await.unwrap();
+        sqlx::query("SELECT pg_advisory_lock(872014, 2)")
+            .execute(&mut other)
+            .await
+            .unwrap();
+        for args in [
+            &["push", "--force", "--non-interactive"][..],
+            &["adopt", "--yes"],
+            &["doctor", "--rebaseline"],
+            &["rollback"],
+        ] {
+            let run = engine(&url, args);
+            assert!(!run.ok, "{args:?} ran while the engine was busy: {}", run.stdout);
+            let refusal: serde_json::Value = run
+                .stdout
+                .lines()
+                .find_map(|l| serde_json::from_str(l).ok())
+                .unwrap_or_else(|| panic!("{args:?}: no JSON refusal on stdout: {}", run.stdout));
+            assert_eq!(refusal["status"], "refused", "{args:?}");
+            assert_eq!(refusal["reason"], "engine_busy", "{args:?}");
+            assert!(
+                refusal["message"].as_str().unwrap().contains("try again"),
+                "{args:?}: {refusal}"
+            );
+            assert!(run.stderr.contains("try again"), "{args:?}: {}", run.stderr);
+        }
+    })
+    .await;
+}

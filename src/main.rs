@@ -259,7 +259,28 @@ async fn main() -> Result<()> {
         _ => read_input(cli.input.as_deref())?,
     };
 
-    match cli.command {
+    let result = run(cli.command, input).await;
+    // Refused because another writer holds the engine's lock: said on stdout too, beside the other
+    // refusals, so a caller reading the result can tell it from a failure and retry. The message
+    // still reaches stderr via the error, and the exit is non-zero.
+    if let Err(e) = &result {
+        if let Some(busy) = e.downcast_ref::<supatype_engine::push::EngineBusy>() {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "refused",
+                    "reason": supatype_engine::push::ENGINE_BUSY,
+                    "message": busy.to_string(),
+                })
+            );
+        }
+    }
+    result
+}
+
+/// The command, once its input is read.
+async fn run(command: Command, input: String) -> Result<()> {
+    match command {
         Command::Parse => {
             let ast = supatype_engine::parser::parse(&input)?;
             println!("{}", serde_json::to_string_pretty(&ast)?);
