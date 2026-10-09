@@ -285,6 +285,45 @@ async fn a_renamed_table_keeps_its_rows_and_its_records_follow_it() {
     .await;
 }
 
+/// A push that renames a table and drops one of its columns drops it: the column's row is still
+/// under the table's old name, which is where its ownership is looked up. It used to be looked up
+/// under the new name, found no row, and was kept as someone else's.
+#[tokio::test]
+async fn a_column_dropped_with_its_tables_rename_is_dropped() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &schema(false, false)).await.unwrap();
+        let without_slug = parser::parse(
+            &json!({ "astVersion": 2, "models": [model(
+                "Post",
+                "posts_archive",
+                json!({ "id": id(), "title": field("TEXT", false) }),
+            )] })
+            .to_string(),
+        )
+        .unwrap();
+        let outcome = common::push_with(&pool, &without_slug, forced())
+            .await
+            .unwrap();
+        let push::Outcome::Applied { warnings, .. } = &outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!(
+            !warnings.iter().any(|w| w.contains("not Supatype's")),
+            "{warnings:?}"
+        );
+        let columns: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name::text FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'posts_archive' ORDER BY 1",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(columns, ["id", "title"]);
+        assert!(up_to_date(&push(&pool, &without_slug).await.unwrap()));
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_unique_an_older_engine_recorded_with_its_stamp_is_not_rebuilt() {
     common::with_integration_pool(|pool| async move {

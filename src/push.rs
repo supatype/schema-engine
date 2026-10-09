@@ -386,6 +386,22 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     // A column adopted with `supatype adopt --key column:<table>.<column>` while the schema does not
     // declare it is kept: Supatype knows of it (and a narrowed write grant includes it), but has
     // no definition to bring it to.
+    // A table this push renames still has its rows under its old name, so its columns are
+    // looked up there.
+    let renamed_from: BTreeMap<String, String> = diff
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            Operation::RenameTable { from, to, .. } => Some((to.clone(), from.clone())),
+            _ => None,
+        })
+        .collect();
+    let recorded_as = |table: &str| {
+        renamed_from
+            .get(table)
+            .cloned()
+            .unwrap_or_else(|| table.to_string())
+    };
     let adopted: BTreeSet<(&str, &str)> = state
         .ledger
         .iter()
@@ -398,13 +414,15 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
         .collect();
     diff.operations.retain(|op| {
         !matches!(op, Operation::DropColumn { table, column, .. }
-            if adopted.contains(&(table.as_str(), column.as_str())))
+            if adopted.contains(&(recorded_as(table).as_str(), column.as_str())))
     });
     diff.summary = differ::DiffSummary::of(&diff.operations);
     diff.leave_released_columns(|table, column| {
-        state.db.column_owned(table, column) == Some(false)
+        state.db.column_owned(&recorded_as(table), column) == Some(false)
     });
-    diff.keep_columns_not_ours(|table, column| state.db.column_owned(table, column) == Some(true));
+    diff.keep_columns_not_ours(|table, column| {
+        state.db.column_owned(&recorded_as(table), column) == Some(true)
+    });
     let narrowed = NarrowedColumns::of(ast, state, &diff, schema);
     diff.warnings.extend(narrowed.warnings());
     let mut desired = desired_here(&diff, &state.catalog, schema, ast)?;
