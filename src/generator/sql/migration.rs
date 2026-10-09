@@ -1649,6 +1649,16 @@ pub(crate) fn identity_change_sql(
             if identity.get("dropDefault").and_then(|v| v.as_bool()) == Some(true) {
                 stmts.push(format!("{alter} DROP DEFAULT;"));
             }
+            // A serial's own sequence goes with its default, found by its ownership (the default's
+            // text names it relative to whatever search path it was read under).
+            if identity.get("serial").is_some() {
+                stmts.push(format!(
+                    "DO $$ BEGIN EXECUTE format('DROP SEQUENCE IF EXISTS %s', \
+                     pg_get_serial_sequence('{}', '{}')); END $$;",
+                    target.replace('\'', "''"),
+                    column.replace('\'', "''")
+                ));
+            }
             stmts.push(format!(
                 "{alter} ADD GENERATED {} AS IDENTITY;",
                 identity_keywords(identity, "to")

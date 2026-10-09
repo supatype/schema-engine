@@ -700,6 +700,10 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                 .to_string()
         };
         parts.push(match action {
+            "add" if identity.get("serial").is_some() => format!(
+                "{table}.{column}: a serial column becomes an identity column (generated {}): its default and its sequence are dropped, and it is numbered on from the rows there",
+                text("to")
+            ),
             "add" => format!(
                 "{table}.{column}: becomes an identity column (generated {}), numbered on from the rows there",
                 text("to")
@@ -747,13 +751,11 @@ fn conversion_strategy_name(changes: &serde_json::Value) -> Option<&str> {
 }
 
 /// What changes how the database fills a column (identity-contract): the entries an
-/// `AlterColumn` carries (`identity`, `generated`), a generated column to recreate instead, and a
-/// warning for what is left as it is.
+/// `AlterColumn` carries (`identity`, `generated`), and a generated column to recreate instead.
 #[derive(Debug, Default)]
 struct GenerationDiff {
     alter: serde_json::Map<String, serde_json::Value>,
     recreate: Option<serde_json::Value>,
-    warning: Option<String>,
 }
 
 /// The expression a recorded column statement generates the column with, as it was declared.
@@ -777,21 +779,16 @@ fn loose_expression(expression: &str) -> String {
 ///
 /// - Identity is compared with the catalog: added (`ADD GENERATED ... AS IDENTITY`, the sequence
 ///   started past the rows there), removed (`DROP IDENTITY`) or switched (`SET GENERATED`). A
-///   `SERIAL` column the schema now declares as identity is left as it is, with a warning saying
-///   how to convert it: renumbering a key column is a change to ask for, not to infer.
+///   `SERIAL` column satisfies `AutoIncrement` (identity by default, which used to make a serial)
+///   and is left as it is; an explicit `Identity` on one converts it (its default and sequence
+///   dropped, the identity numbering on past the rows there).
 /// - A generated column's expression cannot be compared with the catalog's text, which Postgres
 ///   rewrites on the way in, so it is compared with the statement the ledger records (the last
 ///   push's declaration), or loosely with the live text where there is no record. A change is a
 ///   `SET EXPRESSION` (Postgres 17) or the column made again (16); a plain column becoming
 ///   generated is made again (its values are replaced); a generated one becoming plain keeps its
 ///   values (`DROP EXPRESSION`).
-fn generation_diff(
-    table: &str,
-    schema: &str,
-    field: &FieldAst,
-    db_col: &DbColumn,
-    recorded: Option<&str>,
-) -> GenerationDiff {
+fn generation_diff(field: &FieldAst, db_col: &DbColumn, recorded: Option<&str>) -> GenerationDiff {
     let mut out = GenerationDiff::default();
     // A serial declares its own sequence and is never converted either way here.
     if matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_)) {
@@ -800,7 +797,6 @@ fn generation_diff(
     let Some(declared) = crate::parser::ast::scalar_of(field) else {
         return out;
     };
-    let column = db_col.name.as_str();
     let live_identity = db_col
         .identity_generation
         .as_deref()
@@ -818,8 +814,22 @@ fn generation_diff(
             );
         }
         (Some(to), None) => {
-            if let Some(default) = serial_default {
-                out.warning = Some(serial_kept_warning(schema, table, column, to, default));
+            if serial_default.is_some() {
+                // `AutoIncrement` used to make a serial: a column made then already is one, and is
+                // left as it is, with nothing to say. An explicit `Identity` asks for the
+                // conversion: the default and its sequence go, and the identity numbers on past
+                // the rows there.
+                if !declared.auto_increment {
+                    out.alter.insert(
+                        "identity".into(),
+                        json!({
+                            "action": "add",
+                            "to": to,
+                            "dropDefault": true,
+                            "serial": { "sequenceType": sequence_type(&db_col.udt_name) },
+                        }),
+                    );
+                }
             } else {
                 out.alter.insert(
                     "identity".into(),
@@ -865,30 +875,13 @@ fn generation_diff(
     out
 }
 
-/// What the push says of a `SERIAL` column the schema declares as an identity column, which it
-/// leaves as it is: the statements that convert it, to run deliberately.
-fn serial_kept_warning(
-    schema: &str,
-    table: &str,
-    column: &str,
-    to: IdentityGeneration,
-    default: &str,
-) -> String {
-    let sequence = default
-        .strip_prefix("nextval('")
-        .and_then(|rest| rest.split_once("'::regclass)"))
-        .map(|(name, _)| name.to_string())
-        .unwrap_or_else(|| format!("\"{schema}\".\"{table}_{column}_seq\""));
-    let target = format!("\"{schema}\".\"{table}\"");
-    format!(
-        "{table}.{column} is a serial column and the schema declares it an identity column: it is \
-         left as a serial, since changing how a key is numbered is a change to make deliberately. \
-         To convert it, run: ALTER TABLE {target} ALTER COLUMN \"{column}\" DROP DEFAULT; \
-         DROP SEQUENCE {sequence}; ALTER TABLE {target} ALTER COLUMN \"{column}\" ADD GENERATED \
-         {} AS IDENTITY; SELECT setval(pg_get_serial_sequence('{target}', '{column}'), \
-         COALESCE(MAX(\"{column}\"), 0) + 1, false) FROM {target};",
-        to.as_sql()
-    )
+/// The `AS` type of a serial's sequence, from its column's type.
+fn sequence_type(udt: &str) -> &'static str {
+    match udt {
+        "int2" => "smallint",
+        "int8" => "bigint",
+        _ => "integer",
+    }
 }
 
 pub fn diff(
@@ -1077,15 +1070,10 @@ pub fn diff(
                 &db_table.schema,
             );
             let generation = generation_diff(
-                model.table_name(),
-                &db_table.schema,
                 field,
                 db_col,
                 db.recorded_column_sql(model.table_name(), col_name),
             );
-            if let Some(w) = &generation.warning {
-                warnings.push(w.clone());
-            }
             if !generation.alter.is_empty() {
                 if changes.is_null() {
                     changes = json!({});

@@ -208,6 +208,26 @@ fn rollback_alter_column(
             _ => json!({ "action": "set", "to": identity.get("from") }),
         };
         stmts.extend(identity_change_sql(schema, table, column, &back));
+        // A serial converted to an identity column is a serial again: its own sequence, numbering
+        // on past the rows there, as its default.
+        if let Some(serial) = identity.get("serial") {
+            let as_type = serial
+                .get("sequenceType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("integer");
+            let target = format!("\"{schema}\".\"{table}\"");
+            let sequence = format!("\"{schema}\".\"{table}_{column}_seq\"");
+            let literal = sequence.replace('\'', "''");
+            stmts.push(format!(
+                "CREATE SEQUENCE {sequence} AS {as_type} OWNED BY {target}.\"{column}\";"
+            ));
+            stmts.push(format!(
+                "SELECT setval('{literal}', COALESCE(MAX(\"{column}\"), 0) + 1, false) FROM {target};"
+            ));
+            stmts.push(format!(
+                "ALTER TABLE {target} ALTER COLUMN \"{column}\" SET DEFAULT nextval('{literal}'::regclass);"
+            ));
+        }
     }
     if changes.get("generated").is_some() {
         stmts.push(format!(

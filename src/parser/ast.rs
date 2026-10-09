@@ -285,6 +285,12 @@ pub struct ScalarFieldAst {
     /// (`Identity<>` / `Int<{ identity }>` in `@supatype/types`). Integer kinds only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<IdentityGeneration>,
+    /// `AutoIncrement<>` (identity-contract): an identity `BY DEFAULT` column, which a live
+    /// `SERIAL` column (numbered by the default `nextval` of the sequence it owns) also satisfies,
+    /// so a column made before `AutoIncrement` meant identity is left exactly as it is. Only with
+    /// `identity: byDefault`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_increment: bool,
     /// `GENERATED ALWAYS AS (expression) STORED`: a column the database computes from the row
     /// (`Generated<>` / `{ generated }`). Never written by a caller.
     #[serde(default, skip_serializing_if = "Option::is_none")]
