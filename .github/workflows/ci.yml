@@ -136,6 +136,14 @@ jobs:
     services:
       postgres:
         image: supatype/postgres:17-latest
+        # Service images are pulled before any step runs, so a login step cannot cover this one.
+        # Anonymous Docker Hub pulls are rate-limited per runner IP and were failing with 429
+        # toomanyrequests. Where secrets are withheld (fork and Dependabot PRs) both values are
+        # empty, and the runner skips the registry login when either is empty and pulls
+        # anonymously, so those runs behave as before instead of failing.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: supatype_admin
           POSTGRES_PASSWORD: postgres
