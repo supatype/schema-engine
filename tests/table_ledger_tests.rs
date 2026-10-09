@@ -11,8 +11,7 @@ mod common;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
-    differ::doctor, introspector, introspector::fingerprint::ObjectKind, ledger, parser,
-    parser::ast::SchemaAst, push,
+    introspector::fingerprint::ObjectKind, ledger, parser, parser::ast::SchemaAst, push,
 };
 
 use common::{exec, push};
@@ -201,13 +200,7 @@ async fn a_column_someone_adds_does_not_make_its_table_drift() {
             .await
             .unwrap();
 
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let catalog = introspector::introspect_catalog(&pool, "public")
-            .await
-            .unwrap();
-        let mut conn = pool.acquire().await.unwrap();
-        let rows = ledger::load(&mut conn).await.unwrap();
-        let report = doctor::report(&ast, &db, &catalog, &rows).unwrap();
+        let report = common::doctor(&pool, &ast).await;
         assert!(report.drifted.is_empty(), "{:#?}", report.drifted);
         assert!(report
             .unmanaged_drift

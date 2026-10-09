@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use supatype_engine::{
     introspector::{
         self,
-        fingerprint::{fingerprints, ObjectFingerprint, ObjectKind},
+        fingerprint::{ObjectFingerprint, ObjectKind},
     },
     parser,
     parser::ast::SchemaAst,
@@ -31,11 +31,9 @@ type Key = (ObjectKind, String, String, String);
 
 /// Fingerprint and definition per object key.
 async fn snapshot(pool: &sqlx::PgPool) -> BTreeMap<Key, (String, String)> {
-    let db = introspector::introspect(pool, "public").await.unwrap();
-    let catalog = introspector::introspect_catalog(pool, "public")
+    common::live_state(pool)
         .await
-        .unwrap();
-    fingerprints(&db, &catalog)
+        .fingerprints
         .into_iter()
         .map(
             |ObjectFingerprint {
@@ -240,8 +238,7 @@ async fn a_functions_settings_and_atomic_body_enter_its_fingerprint() {
             .unwrap();
         assert!(atomic.body.contains("41"), "{:?}", atomic.body);
 
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let fps = fingerprints(&db, &catalog);
+        let fps = common::live_state(&pool).await.fingerprints;
         let whoami_fp = fps
             .iter()
             .find(|f| f.kind == ObjectKind::Function && f.name == "whoami()")

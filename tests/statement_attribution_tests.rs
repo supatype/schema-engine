@@ -22,10 +22,7 @@ use supatype_engine::{
         statements::{attribute_all, head, split_statements, Attribution, Statement},
         ObjectKey,
     },
-    introspector::{
-        self,
-        fingerprint::{fingerprints, ObjectKind},
-    },
+    introspector::fingerprint::ObjectKind,
     parser,
     parser::ast::SchemaAst,
     push,
@@ -222,9 +219,9 @@ async fn after_a_push_every_created_object_exists_under_its_key() {
                 .await
                 .unwrap_or_else(|e| panic!("{name}: applies: {e}"));
 
-            let db = introspector::introspect(&pool, "public").await.unwrap();
-            let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
-            let live: BTreeSet<ObjectKey> = fingerprints(&db, &catalog)
+            let live: BTreeSet<ObjectKey> = common::live_state(&pool)
+                .await
+                .fingerprints
                 .into_iter()
                 .map(|f| f.key())
                 .collect();

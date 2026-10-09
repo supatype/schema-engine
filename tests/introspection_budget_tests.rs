@@ -10,10 +10,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use supatype_engine::{
-    introspector::{self, fingerprint::fingerprints},
-    parser,
-};
+use supatype_engine::parser;
 
 /// Loose on purpose: CI runners are slow and shared, and a timing assertion that flakes teaches
 /// people to ignore it. The number that matters is printed; this catches a regression, not drift.
@@ -41,16 +38,13 @@ async fn a_full_read_of_the_kitchen_sink_fits_the_budget() {
             .expect("kitchen sink applies");
 
         // Warm once so connection setup and plan caching are not what gets measured.
-        let _ = introspector::introspect(&pool, "public").await.unwrap();
-        let _ = introspector::introspect_catalog(&pool, "public").await.unwrap();
+        let _ = common::live_state(&pool).await;
 
         let mut samples = Vec::new();
         let mut objects = 0;
         for _ in 0..5 {
             let started = Instant::now();
-            let db = introspector::introspect(&pool, "public").await.unwrap();
-            let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
-            objects = fingerprints(&db, &catalog).len();
+            objects = common::live_state(&pool).await.fingerprints.len();
             samples.push(started.elapsed());
         }
         samples.sort();

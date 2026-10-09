@@ -4,7 +4,7 @@
 mod common;
 
 use common::{exec, push};
-use supatype_engine::{differ::doctor, introspector, ledger, parser, push as orchestrator};
+use supatype_engine::{parser, push as orchestrator};
 
 #[tokio::test]
 async fn the_kitchen_sink_pushes_clean_and_a_second_push_does_nothing() {
@@ -24,12 +24,9 @@ async fn the_kitchen_sink_pushes_clean_and_a_second_push_does_nothing() {
             "{first:?}"
         );
 
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
-        let mut conn = pool.acquire().await.unwrap();
-        let rows = ledger::load(&mut conn).await.unwrap();
-        assert!(!rows.is_empty(), "the kitchen sink has checks to record");
-        let report = doctor::report(&ast, &db, &catalog, &rows).unwrap();
+        let state = common::live_state(&pool).await;
+        assert!(!state.ledger.is_empty(), "the kitchen sink has checks to record");
+        let report = common::doctor(&pool, &ast).await;
         assert!(
             report.missing.is_empty()
                 && report.stale_managed.is_empty()

@@ -17,8 +17,7 @@
 mod common;
 
 use supatype_engine::{
-    adopt, differ::doctor, introspector, introspector::fingerprint::ObjectKind, ledger, parser,
-    push,
+    adopt, differ::doctor, introspector::fingerprint::ObjectKind, ledger, parser, push,
 };
 
 const ONE_MODEL: &str = r#"{
@@ -59,8 +58,7 @@ async fn doctor_reports_an_unmanaged_table_absent_from_the_schema() {
         .expect("fixture applies");
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        let db = introspector::introspect(&pool, "public").await.expect("introspect");
-        let report = doctor::report(&ast, &db, &supatype_engine::introspector::catalog::CatalogState::default(), &[]).unwrap();
+        let report = common::doctor(&pool, &ast).await;
 
         // Not ours, not in the schema: push will leave it, and the report says so in the same words
         // the index and constraint cases use.
@@ -107,16 +105,7 @@ async fn doctor_explains_why_columns_survive_on_an_unstamped_model_table() {
         .expect("fixture applies");
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        let db = introspector::introspect(&pool, "public")
-            .await
-            .expect("introspect");
-        let report = doctor::report(
-            &ast,
-            &db,
-            &supatype_engine::introspector::catalog::CatalogState::default(),
-            &[],
-        )
-        .unwrap();
+        let report = common::doctor(&pool, &ast).await;
 
         // A declared table that is not ours is the reconcile's conflict (Phase 4.11): the push
         // refuses until it is adopted, which is also why its columns survive.
@@ -228,13 +217,7 @@ async fn doctor_of(
     pool: &sqlx::PgPool,
     ast: &supatype_engine::parser::ast::SchemaAst,
 ) -> doctor::DoctorReport {
-    let db = introspector::introspect(pool, "public").await.unwrap();
-    let catalog = introspector::introspect_catalog(pool, "public")
-        .await
-        .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let rows = ledger::load(&mut conn).await.unwrap();
-    doctor::report(ast, &db, &catalog, &rows).unwrap()
+    common::doctor(pool, ast).await
 }
 
 #[tokio::test]

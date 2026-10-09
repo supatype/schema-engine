@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
     differ::doctor::{self, DoctorReport},
-    introspector, ledger, parser,
+    parser,
     parser::ast::SchemaAst,
 };
 
@@ -41,13 +41,7 @@ fn title_index() -> Value {
 }
 
 async fn doctor_of(pool: &PgPool, ast: &SchemaAst) -> DoctorReport {
-    let db = introspector::introspect(pool, "public").await.unwrap();
-    let catalog = introspector::introspect_catalog(pool, "public")
-        .await
-        .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let rows = ledger::load_if_present(&mut conn).await.unwrap();
-    doctor::report(ast, &db, &catalog, &rows).unwrap()
+    common::doctor(pool, ast).await
 }
 
 fn names(items: &[doctor::DoctorItem]) -> Vec<String> {

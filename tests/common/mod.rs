@@ -293,6 +293,27 @@ pub async fn push_with(
     supatype_engine::push::apply(pool, plan, options).await
 }
 
+/// What a push reads of `public` before it decides: the live state under the pinned
+/// `search_path`, its fingerprints and the ledger. A test that compares fingerprints, or hands a
+/// state to the doctor, reads through here; the differ's unpinned `introspector::introspect`
+/// deparses names the session's path covers bare, and the ledger recorded them qualified.
+pub async fn live_state(pool: &sqlx::PgPool) -> supatype_engine::push::State {
+    let mut conn = pool.acquire().await.expect("acquire");
+    supatype_engine::push::read_state(&mut conn, "public")
+        .await
+        .expect("read the state a push reads")
+}
+
+/// `supatype doctor` on `public`, as the binary and the server run it.
+pub async fn doctor(
+    pool: &sqlx::PgPool,
+    ast: &supatype_engine::parser::ast::SchemaAst,
+) -> supatype_engine::differ::doctor::DoctorReport {
+    supatype_engine::inspect::doctor(pool, ast, "public", false)
+        .await
+        .expect("doctor")
+}
+
 /// Run `sql` as one batch.
 pub async fn exec(pool: &sqlx::PgPool, sql: &str) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(sql).execute(pool).await.map(|_| ())

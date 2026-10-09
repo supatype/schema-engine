@@ -20,10 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use supatype_engine::{
     desired::{desired_objects, DesiredObject},
-    introspector::{
-        self,
-        fingerprint::{fingerprints, ObjectKind},
-    },
+    introspector::fingerprint::ObjectKind,
     parser,
     parser::ast::SchemaAst,
     push,
@@ -159,12 +156,13 @@ async fn structure_problems(
     ast: &SchemaAst,
     kinds: Option<&[ObjectKind]>,
 ) -> Vec<String> {
-    let db = introspector::introspect(pool, "public").await.unwrap();
-    let catalog = introspector::introspect_catalog(pool, "public")
-        .await
-        .unwrap();
+    let push::State {
+        catalog,
+        fingerprints,
+        ..
+    } = common::live_state(pool).await;
     let live: BTreeMap<(ObjectKind, String, String, String), BTreeMap<String, String>> =
-        fingerprints(&db, &catalog)
+        fingerprints
             .into_iter()
             .map(|f| {
                 let parts = f
