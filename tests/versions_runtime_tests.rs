@@ -1496,3 +1496,74 @@ async fn a_blanket_grant_does_not_survive_the_next_push() {
     })
     .await;
 }
+
+/// The versioned fixture with three columns on `posts` that the database fills: `number`, a
+/// `GENERATED ALWAYS` identity column that is not the key, `ticket`, a `BY DEFAULT` one, and
+/// `title_lower`, a stored generated column.
+fn numbered_forward_migration() -> String {
+    let mut doc: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/versioned_blog.json")).unwrap();
+    let fields = &mut doc["models"][0]["fields"];
+    fields["number"] = serde_json::json!({
+        "kind": "integer", "required": true, "identity": "always",
+        "annotations": { "db": { "pgType": "INTEGER", "serverGenerated": true } } });
+    fields["ticket"] = serde_json::json!({
+        "kind": "bigInt", "required": true, "identity": "byDefault",
+        "annotations": { "db": { "pgType": "BIGINT", "serverGenerated": true } } });
+    fields["title_lower"] = serde_json::json!({
+        "kind": "text", "required": false,
+        "generated": { "expression": "lower(title)", "stored": true },
+        "annotations": { "db": { "pgType": "TEXT", "serverGenerated": true } } });
+    let ast = parser::parse(&doc.to_string()).unwrap();
+    push::fresh_migration(&ast, "public", false)
+        .unwrap()
+        .up_script()
+}
+
+/// `posts`'s `(number, ticket, title_lower)`, the columns the database fills.
+async fn filled_in(db: &mut PgConnection) -> (i32, i64, Option<String>) {
+    sqlx::query_as("SELECT number, ticket, title_lower FROM public.posts WHERE id = $1::uuid")
+        .bind(POST)
+        .fetch_one(db)
+        .await
+        .expect("read the live row")
+}
+
+/// Publishing writes the snapshot's columns into the live row, and Postgres refuses any value for a
+/// `GENERATED ALWAYS` identity column there (only `DEFAULT`): the publish failed on every model
+/// with one that was not the key. The database's own numbering is left as it is.
+#[tokio::test]
+async fn publishing_leaves_the_columns_the_database_fills_alone() {
+    common::with_integration_pool(|pool| async move {
+        let _guard = FIXTURE_LOCK.lock().await;
+        let mut conn = pool.acquire().await.expect("acquire one connection");
+        let db = &mut *conn;
+        db.execute(sqlx::raw_sql(&numbered_forward_migration()))
+            .await
+            .expect("the forward migration applies");
+        become_caller(db, Some(EDITOR)).await;
+        sqlx::query("INSERT INTO public.posts (id, title) VALUES ($1::uuid, 'First cut')")
+            .bind(POST)
+            .execute(&mut *db)
+            .await
+            .expect("seed a post");
+        let before = filled_in(db).await;
+
+        save_draft(
+            db,
+            r#"{"title": "Edited In Draft", "number": 99, "ticket": 7}"#,
+        )
+        .await;
+        publish(db).await.expect("publish");
+
+        assert_eq!(live_title(db).await, "Edited In Draft");
+        let after = filled_in(db).await;
+        assert_eq!(after.0, before.0, "the identity column keeps its number");
+        assert_eq!(
+            after.1, 7,
+            "a by default identity is written like any column"
+        );
+        assert_eq!(after.2.as_deref(), Some("edited in draft"));
+    })
+    .await;
+}
