@@ -402,3 +402,143 @@ async fn a_long_table_with_every_generated_object_pushes_and_converges() {
     })
     .await;
 }
+
+fn order(fields: Value) -> Value {
+    model("Order", "order", fields)
+}
+
+fn order_item(fields: Value) -> Value {
+    model("OrderItem", "order_item", fields)
+}
+
+async fn uniques_on(pool: &PgPool, table: &str) -> Vec<String> {
+    names_in_catalog(
+        pool,
+        &format!(
+            "SELECT conname::text FROM pg_constraint
+              WHERE conrelid = 'public.{table}'::regclass AND contype = 'u' ORDER BY 1"
+        ),
+    )
+    .await
+}
+
+/// Names never depend on declaration order: a push of the same models in another order changes
+/// nothing. Adding a model whose name clashes with an existing one's is another matter, and
+/// accepted: `order` sorts before `order_item`, so it takes `order_item_code_key` and the existing
+/// `order_item.code` unique moves to `order_item_code_key1`, as it would had both been pushed
+/// together. Once both exist, reordering them renames nothing.
+#[tokio::test]
+async fn reordering_models_renames_nothing() {
+    common::with_integration_pool(|pool| async move {
+        let item = || order_item(json!({ "id": id(), "code": text(true) }));
+        let order_model = || order(json!({ "id": id(), "item_code": text(true) }));
+
+        push(&pool, &schema(vec![item()])).await.unwrap();
+        assert_eq!(
+            uniques_on(&pool, "order_item").await,
+            ["order_item_code_key"]
+        );
+
+        // A new clashing model: the one rename this can cause.
+        push_with_force(&pool, &schema(vec![order_model(), item()])).await;
+        assert_eq!(uniques_on(&pool, "order").await, ["order_item_code_key"]);
+        assert_eq!(
+            uniques_on(&pool, "order_item").await,
+            ["order_item_code_key1"]
+        );
+
+        // Reordered, in either direction: nothing to do.
+        for models in [vec![item(), order_model()], vec![order_model(), item()]] {
+            assert!(up_to_date(&push(&pool, &schema(models)).await.unwrap()));
+        }
+        assert_eq!(uniques_on(&pool, "order").await, ["order_item_code_key"]);
+        assert_eq!(
+            uniques_on(&pool, "order_item").await,
+            ["order_item_code_key1"]
+        );
+    })
+    .await;
+}
+
+async fn push_with_force(pool: &PgPool, ast: &SchemaAst) {
+    common::push_with(pool, ast, forced()).await.unwrap();
+}
+
+/// `order.item_id` and `order_item.id` both make `order_item_id_seq`, and Postgres gives it to
+/// whichever table it creates first, which need not be the one the engine would have predicted.
+/// The ledger records each sequence under the name its own column's sequence has, so its rows
+/// match the catalog, the next push has nothing to do and doctor finds nothing.
+#[tokio::test]
+async fn two_serials_named_alike_are_recorded_as_postgres_named_them() {
+    two_serials_named_alike(false).await;
+}
+
+/// The same, first pushed with the models the other way round, so Postgres creates `order_item`
+/// first and gives it the undigited name.
+#[tokio::test]
+async fn two_serials_named_alike_declared_the_other_way_round() {
+    two_serials_named_alike(true).await;
+}
+
+async fn two_serials_named_alike(first_reversed: bool) {
+    common::with_integration_pool(|pool| async move {
+        let models = |reversed: bool| {
+            let o = order(json!({ "id": id(), "item_id": { "kind": "serial", "required": true } }));
+            let i = order_item(json!({ "id": serial_id() }));
+            if reversed {
+                vec![i, o]
+            } else {
+                vec![o, i]
+            }
+        };
+        let ast = schema(models(first_reversed));
+        push(&pool, &ast).await.unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let rows: Vec<ledger::LedgerRow> = ledger::load(&mut conn)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.key.kind == ObjectKind::Sequence && r.key.schema == "public")
+            .collect();
+        drop(conn);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        for (table, column) in [("order", "item_id"), ("order_item", "id")] {
+            let actual: String = sqlx::query_scalar(&format!(
+                "SELECT split_part(pg_get_serial_sequence('public.{table}', '{column}'), '.', 2)"
+            ))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let actual = actual.trim_matches('"').to_string();
+            let row = rows
+                .iter()
+                .find(|r| r.key.name == actual)
+                .unwrap_or_else(|| panic!("no row for {actual}: {rows:?}"));
+            assert!(
+                row.desired_sql
+                    .ends_with(&format!("OWNED BY \"public\".\"{table}\".\"{column}\";")),
+                "{actual} is recorded as another column's: {}",
+                row.desired_sql
+            );
+            assert!(
+                row.live_def.contains(&format!("{table}.{column}")),
+                "{actual}: {}",
+                row.live_def
+            );
+        }
+
+        for reversed in [false, true] {
+            let ast = schema(models(reversed));
+            assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
+            let report = supatype_engine::inspect::doctor(&pool, &ast, "public", false)
+                .await
+                .unwrap();
+            assert!(
+                !supatype_engine::differ::doctor::has_strict_issues(&report),
+                "{report:?}"
+            );
+        }
+    })
+    .await;
+}

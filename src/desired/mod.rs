@@ -217,6 +217,13 @@ pub struct DesiredObject {
     pub security_relevant: bool,
 }
 
+/// The statement a serial's sequence is recorded with: `ALTER SEQUENCE ... OWNED BY` its column.
+pub fn sequence_owned_by_sql(schema: &str, name: &str, table: &str, column: &str) -> String {
+    format!(
+        "ALTER SEQUENCE \"{schema}\".\"{name}\" OWNED BY \"{schema}\".\"{table}\".\"{column}\";"
+    )
+}
+
 /// The kinds the engine never removes (D9): row-level security on a table it owns is never turned
 /// off automatically, because a table with RLS on and no policies denies everything and turning it
 /// off is a decision no reconcile should make; and a schema or sequence (plan section 15: created if
@@ -871,10 +878,7 @@ impl<'a> Builder<'a> {
             for column in column_names_for(field_name, field) {
                 let name = self.names.sequence(table, &column);
                 let structure = BTreeMap::from([("owned_by", format!("{table}.{column}"))]);
-                let create = format!(
-                    "ALTER SEQUENCE \"{schema}\".\"{name}\" OWNED BY \"{schema}\".\"{table}\".\"{column}\";",
-                    schema = self.schema
-                );
+                let create = sequence_owned_by_sql(self.schema, &name, table, &column);
                 let column_key = self.key(ObjectKind::Column, table, &column);
                 self.push(
                     self.key(ObjectKind::Sequence, "", &name),

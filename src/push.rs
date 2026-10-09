@@ -540,7 +540,93 @@ fn desired_here(
         ObjectKind::TableGrant => catalog.granted_roles.contains(&d.key.name),
         _ => true,
     });
+    sequences_as_created(&mut desired, &catalog.sequences, schema);
     Ok(desired)
+}
+
+/// The desired sequences under the names Postgres actually gave them. A serial's sequence is
+/// named by Postgres when its column is created, free of whatever the schema held at that moment,
+/// so the name the engine predicts from the schema alone can be another serial's: `order.item_id`
+/// and `order_item.id` both make `order_item_id_seq`, and which one has it depends on which table
+/// was created first, possibly pushes apart. A sequence is known by the column that owns it, so
+/// one whose column exists takes its live name; one still to be made, whose predicted name a live
+/// sequence holds, is predicted again free of every name in use, as Postgres will choose it. The
+/// push then records each under the name it found ([`record_ledger`]).
+fn sequences_as_created(
+    desired: &mut [crate::desired::DesiredObject],
+    live: &[catalog::DbSequence],
+    schema: &str,
+) {
+    let live: Vec<&catalog::DbSequence> = live.iter().filter(|s| s.schema == schema).collect();
+    let live_name = |owner: &str| {
+        live.iter()
+            .find(|s| s.owned_by.as_deref() == Some(owner))
+            .map(|s| s.name.clone())
+    };
+    let owner = |d: &crate::desired::DesiredObject| d.structure.get("owned_by").cloned();
+    let mut unresolved = Vec::new();
+    for (i, d) in desired.iter_mut().enumerate() {
+        if d.key.kind != ObjectKind::Sequence || d.key.schema != schema {
+            continue;
+        }
+        let Some(owner) = owner(d) else { continue };
+        match live_name(&owner) {
+            Some(name) => rename_sequence(d, schema, &owner, &name),
+            None => unresolved.push(i),
+        }
+    }
+    let mut taken = crate::managed::NameChooser::default();
+    for s in &live {
+        taken.claim(&s.name);
+    }
+    for (i, d) in desired.iter().enumerate() {
+        let relation = matches!(
+            d.key.kind,
+            ObjectKind::Table | ObjectKind::Index | ObjectKind::Sequence | ObjectKind::View
+        );
+        if relation && d.key.schema == schema && !unresolved.contains(&i) {
+            taken.claim(&d.key.name);
+        }
+    }
+    for i in unresolved {
+        let d = &mut desired[i];
+        let Some(owner) = owner(d) else { continue };
+        let Some((table, column)) = owner.split_once('.') else {
+            continue;
+        };
+        if live.iter().all(|s| s.name != d.key.name) {
+            taken.claim(&d.key.name);
+            continue;
+        }
+        let name = taken.choose(table, Some(column), "seq");
+        rename_sequence(d, schema, &owner, &name);
+    }
+}
+
+fn rename_sequence(d: &mut crate::desired::DesiredObject, schema: &str, owner: &str, name: &str) {
+    let Some((table, column)) = owner.split_once('.') else {
+        return;
+    };
+    d.key.name = name.to_string();
+    d.create_sql = crate::desired::sequence_owned_by_sql(schema, name, table, column);
+}
+
+/// The `table.column` a sequence's recorded `ALTER SEQUENCE ... OWNED BY` names.
+fn sequence_owner(create_sql: &str) -> Option<String> {
+    let (_, target) = create_sql.rsplit_once(" OWNED BY ")?;
+    let parts: Vec<&str> = target
+        .trim_end()
+        .trim_end_matches(';')
+        .split("\".\"")
+        .collect();
+    match parts.as_slice() {
+        [_, table, column] => Some(format!(
+            "{}.{}",
+            table.trim_matches('"'),
+            column.trim_matches('"')
+        )),
+        _ => None,
+    }
 }
 
 /// The columns of model tables whose write privilege a field rule narrows that the schema does not
@@ -1015,7 +1101,15 @@ async fn within_transaction(
     .await
     .context("Failed to record migration in history")?;
 
-    record_ledger(tx, &plan.reconcile, &after.fingerprints, migration_id).await?;
+    record_ledger(
+        tx,
+        &plan.reconcile,
+        &after.fingerprints,
+        &after.catalog.sequences,
+        &plan.schema,
+        migration_id,
+    )
+    .await?;
 
     migration_history::save_schema_state(&mut **tx, &after.db)
         .await
@@ -1089,6 +1183,8 @@ async fn record_ledger(
     tx: &mut Transaction<'_, Postgres>,
     plan: &reconcile::Plan,
     after: &[ObjectFingerprint],
+    sequences: &[catalog::DbSequence],
+    schema: &str,
     migration_id: i32,
 ) -> Result<()> {
     if plan.actions.is_empty() {
@@ -1104,6 +1200,14 @@ async fn record_ledger(
         let key = action.key();
         match action.row_after() {
             reconcile::RowAfter::Write { create_sql, status } => {
+                // A sequence this push made is recorded under the name Postgres gave it, found by
+                // its column: the name predicted for it may be another serial's.
+                let (key, create_sql) = match created_sequence(key, create_sql, sequences, schema) {
+                    Some((key, sql)) => (std::borrow::Cow::Owned(key), sql),
+                    None => (std::borrow::Cow::Borrowed(key), create_sql.to_string()),
+                };
+                let key = key.as_ref();
+                let create_sql = create_sql.as_str();
                 let fp = live.get(key).with_context(|| {
                     format!("{key} was not found in the catalog after the push applied it")
                 })?;
@@ -1130,6 +1234,33 @@ async fn record_ledger(
     ledger::undo::remember(tx, migration_id, &touched).await?;
     ledger::upsert(tx, &rows).await?;
     ledger::delete(tx, &removed).await
+}
+
+/// For a sequence row, the key and statement naming the sequence its column owns after apply,
+/// when that is not the one the plan named.
+fn created_sequence(
+    key: &ObjectKey,
+    create_sql: &str,
+    sequences: &[catalog::DbSequence],
+    schema: &str,
+) -> Option<(ObjectKey, String)> {
+    if key.kind != ObjectKind::Sequence {
+        return None;
+    }
+    let owner = sequence_owner(create_sql)?;
+    let actual = sequences
+        .iter()
+        .find(|s| s.schema == key.schema && s.owned_by.as_deref() == Some(owner.as_str()))?;
+    if actual.name == key.name {
+        return None;
+    }
+    let (table, column) = owner.split_once('.')?;
+    let key = ObjectKey {
+        name: actual.name.clone(),
+        ..key.clone()
+    };
+    let sql = crate::desired::sequence_owned_by_sql(schema, &actual.name, table, column);
+    Some((key, sql))
 }
 
 /// A signal to realtime, which skips WAL polls while anyone holds this transaction-level lock;
@@ -1165,6 +1296,56 @@ pub(crate) async fn take_engine_lock(tx: &mut PgConnection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sequence(name: &str, owned_by: Option<&str>) -> catalog::DbSequence {
+        catalog::DbSequence {
+            schema: "public".into(),
+            name: name.into(),
+            owned_by: owned_by.map(String::from),
+            comment: None,
+        }
+    }
+
+    /// `order_item.id` was created first and holds `order_item_id_seq`: the desired sequence of
+    /// that column is known by its live name, and `order.item_id`'s, still to be created, is
+    /// predicted free of it.
+    #[test]
+    fn a_desired_sequence_takes_the_name_its_column_has() {
+        let doc = serde_json::json!({ "astVersion": 2, "models": [
+            { "name": "Order", "fields": {
+                "id": { "kind": "integer", "primaryKey": true, "required": true },
+                "item_id": { "kind": "serial", "required": true } },
+              "options": { "timestamps": false, "softDelete": false, "singleton": false },
+              "annotations": { "db": { "tableName": "order", "indexes": [] }, "platform": {} } },
+            { "name": "OrderItem", "fields": {
+                "id": { "kind": "serial", "primaryKey": true, "required": true } },
+              "options": { "timestamps": false, "softDelete": false, "singleton": false },
+              "annotations": { "db": { "tableName": "order_item", "indexes": [] }, "platform": {} } }
+        ]});
+        let ast = crate::parser::parse(&doc.to_string()).unwrap();
+        let mut desired = desired_objects_for(&ast, "public", FieldEnforcement::Labels).unwrap();
+        sequences_as_created(
+            &mut desired,
+            &[sequence("order_item_id_seq", Some("order_item.id"))],
+            "public",
+        );
+        let mut sequences: Vec<(String, String)> = desired
+            .iter()
+            .filter(|d| d.key.kind == ObjectKind::Sequence)
+            .map(|d| (d.key.name.clone(), sequence_owner(&d.create_sql).unwrap()))
+            .collect();
+        sequences.sort();
+        assert_eq!(
+            sequences,
+            [
+                ("order_item_id_seq".to_string(), "order_item.id".to_string()),
+                (
+                    "order_item_id_seq1".to_string(),
+                    "order.item_id".to_string()
+                ),
+            ]
+        );
+    }
     use crate::introspector::tables::{DbColumn, DbTable};
     use crate::ledger::Status;
 
