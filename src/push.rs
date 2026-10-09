@@ -401,6 +401,9 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
             if adopted.contains(&(table.as_str(), column.as_str())))
     });
     diff.summary = differ::DiffSummary::of(&diff.operations);
+    diff.leave_released_columns(|table, column| {
+        state.db.column_owned(table, column) == Some(false)
+    });
     diff.keep_columns_not_ours(|table, column| state.db.column_owned(table, column) == Some(true));
     let narrowed = NarrowedColumns::of(ast, state, &diff, schema);
     diff.warnings.extend(narrowed.warnings());

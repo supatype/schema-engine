@@ -27,7 +27,8 @@ use crate::state::migration_history;
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Outcome {
-    /// `preview` until applied; then `adopted`, or `nothing_to_adopt` when there was nothing.
+    /// `preview` until applied; then `adopted` when anything was adopted, otherwise `released`,
+    /// `reclaimed` or `released_and_reclaimed`, or `nothing_to_adopt` when nothing was written.
     pub status: &'static str,
     /// The objects handed over: what a push refuses because their names are taken.
     pub adopt: Vec<DoctorItem>,
@@ -121,7 +122,9 @@ fn choose(
     let outcome = Outcome {
         status: status(
             request.apply,
-            adopted.len() + released.len() + reclaimed.len(),
+            !adopted.is_empty(),
+            !released.is_empty(),
+            !reclaimed.is_empty(),
         ),
         adopt: items(
             &adopted,
@@ -133,7 +136,9 @@ fn choose(
         ),
         reclaim: items(
             &reclaimed,
-            "will be Supatype's again: the next push makes it match the schema",
+            "will be Supatype's again: the next push brings it to the schema, and a change made \
+             while it was released is a change made outside Supatype, which for an access rule \
+             the push asks about first",
         ),
         doctor: report,
     };
@@ -213,11 +218,16 @@ fn records_nothing(row: &LedgerRow) -> bool {
     row.desired_sql.is_empty() && row.live_fp.is_empty()
 }
 
-fn status(apply: bool, changes: usize) -> &'static str {
-    match (apply, changes) {
-        (false, _) => "preview",
-        (true, 0) => "nothing_to_adopt",
-        (true, _) => "adopted",
+/// What an applied run did: `adopted` when it adopted anything, otherwise `released`,
+/// `reclaimed` or both, and `nothing_to_adopt` when it wrote nothing.
+fn status(apply: bool, adopted: bool, released: bool, reclaimed: bool) -> &'static str {
+    match (apply, adopted, released, reclaimed) {
+        (false, ..) => "preview",
+        (true, true, ..) => "adopted",
+        (true, false, true, true) => "released_and_reclaimed",
+        (true, false, true, false) => "released",
+        (true, false, false, true) => "reclaimed",
+        (true, false, false, false) => "nothing_to_adopt",
     }
 }
 
@@ -404,6 +414,16 @@ mod tests {
         assert_eq!((table.parent.as_str(), table.name.as_str()), ("", "posts"));
         let label = parse_object("security_label:posts.email.supatype").unwrap();
         assert_eq!(label.parent, "posts.email");
+    }
+
+    #[test]
+    fn an_applied_run_says_what_it_did() {
+        assert_eq!(status(false, true, true, true), "preview");
+        assert_eq!(status(true, true, true, false), "adopted");
+        assert_eq!(status(true, false, true, false), "released");
+        assert_eq!(status(true, false, false, true), "reclaimed");
+        assert_eq!(status(true, false, true, true), "released_and_reclaimed");
+        assert_eq!(status(true, false, false, false), "nothing_to_adopt");
     }
 
     #[test]

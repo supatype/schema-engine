@@ -261,6 +261,75 @@ async fn a_released_column_is_never_dropped() {
     .await;
 }
 
+/// A push whose only change is to a released column leaves it as it is and has nothing to do: no
+/// type change, no migration recorded. A release-only adopt says it released, and a reclaim says
+/// the next push asks before overwriting what changed while it was released.
+#[tokio::test]
+async fn a_change_to_a_released_column_is_left_and_records_nothing() {
+    common::with_integration_pool(|pool| async move {
+        let with_summary = posts(json!({ "summary": text() }));
+        push(&pool, &with_summary).await.unwrap();
+        let summary = ["column:posts.summary".to_string()];
+        let released = supatype_engine::adopt::run(
+            &pool,
+            &with_summary,
+            "public",
+            supatype_engine::adopt::Request {
+                release: &summary,
+                apply: true,
+                keys: Some(&[]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(released.status, "released");
+
+        let migrations = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _supatype.migrations")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+        let before = migrations().await;
+        let narrowed = posts(json!({ "summary": { "kind": "text",
+            "annotations": { "db": { "pgType": "VARCHAR(20)", "unique": false } } } }));
+        let outcome = common::push_with(&pool, &narrowed, forced()).await.unwrap();
+        assert!(up_to_date(&outcome), "{outcome:?}");
+        assert!(warned_about(&outcome, "released column"), "{outcome:?}");
+        assert_eq!(migrations().await, before);
+        let kind: String = sqlx::query_scalar(
+            "SELECT data_type FROM information_schema.columns
+              WHERE table_name = 'posts' AND column_name = 'summary'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(kind, "text");
+
+        let reclaimed = supatype_engine::adopt::run(
+            &pool,
+            &narrowed,
+            "public",
+            supatype_engine::adopt::Request {
+                reclaim: &summary,
+                apply: true,
+                keys: Some(&[]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(reclaimed.status, "reclaimed");
+        assert!(
+            reclaimed.reclaim[0].message.contains("asks about first"),
+            "{:?}",
+            reclaimed.reclaim
+        );
+    })
+    .await;
+}
+
 /// A column someone added that the schema does not declare can be adopted by name (#63): it is
 /// recorded as adopted, kept by every push rather than dropped as an undeclared column of ours, and
 /// its row stays while the column does. Adopting it is asked for by name only.
