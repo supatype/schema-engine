@@ -383,7 +383,7 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     // D4: the column differ drops only a column the ledger records as ours. One someone added to
     // a managed table, one released with `adopt --release`, or one an older engine made that this
     // push has not recorded yet, stays.
-    // A column adopted with `supatype adopt column:<table>.<column>` while the schema does not
+    // A column adopted with `supatype adopt --key column:<table>.<column>` while the schema does not
     // declare it is kept: Supatype knows of it (and a narrowed write grant includes it), but has
     // no definition to bring it to.
     let adopted: BTreeSet<(&str, &str)> = state
@@ -546,7 +546,7 @@ fn desired_here(
 /// The columns of model tables whose write privilege a field rule narrows that the schema does not
 /// declare (#63). A narrowed grant names the declared columns, so such a column gets no write
 /// privilege for the narrowed role: one the ledger has no row for was added outside Supatype and
-/// is reported, with how to include it; one adopted (`supatype adopt column:<table>.<column>`) is
+/// is reported, with how to include it; one adopted (`supatype adopt --key column:<table>.<column>`) is
 /// granted beside the declared ones.
 pub struct NarrowedColumns {
     /// `(table, column)` adopted while undeclared, in the table's column order.
@@ -646,7 +646,7 @@ impl NarrowedColumns {
 pub fn ungranted_message(table: &str, column: &str, roles: &[&str]) -> String {
     format!(
         "column {table}.{column} was added outside Supatype and has no write grant for {}; run \
-         `supatype adopt column:{table}.{column}` to include it",
+         `supatype adopt --key column:{table}.{column}` to include it",
         roles.join(", ")
     )
 }
@@ -1254,7 +1254,7 @@ mod tests {
     fn a_column_added_outside_supatype_is_flagged_until_adopted_then_granted() {
         let ast = narrowed();
         let flag = "column posts.extra was added outside Supatype and has no write grant for \
-                    authenticated; run `supatype adopt column:posts.extra` to include it";
+                    authenticated; run `supatype adopt --key column:posts.extra` to include it";
 
         let found = state(None);
         let decision = decide(&ast, &found, None).unwrap();

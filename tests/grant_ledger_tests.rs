@@ -297,7 +297,7 @@ async fn a_narrowed_grant_follows_the_declared_columns() {
 
 /// #63: a narrowed write grant names the declared columns, so a column someone adds outside the
 /// schema gets no write privilege from it. Push and doctor say so and how to include it; once
-/// `supatype adopt column:<table>.<column>` records it, the grant includes it and the warning stops.
+/// `supatype adopt --key column:<table>.<column>` records it, the grant includes it and the warning stops.
 #[tokio::test]
 async fn a_column_added_outside_supatype_is_granted_once_adopted() {
     common::with_integration_pool(|pool| async move {
@@ -315,7 +315,7 @@ async fn a_column_added_outside_supatype_is_granted_once_adopted() {
             .unwrap();
 
         let flag = "column posts.extra was added outside Supatype and has no write grant for \
-                    authenticated; run `supatype adopt column:posts.extra` to include it";
+                    authenticated; run `supatype adopt --key column:posts.extra` to include it";
         let plan = push::plan(&pool, &ast, "public").await.unwrap();
         assert!(
             plan.diff.warnings.iter().any(|w| w == flag),
