@@ -283,8 +283,8 @@ async fn without_an_earlier_schema_the_push_says_it_could_not_check() {
             &pool,
             &format!(
                 "{FORGET_THE_ACCESS_ROWS};
-                 UPDATE _supatype.migrations SET schema_snapshot = NULL;
-                 UPDATE _supatype.schema_state SET ast_snapshot = NULL;
+                 UPDATE _supatype.migrations SET schema_snapshot = NULL WHERE true;
+                 UPDATE _supatype.schema_state SET ast_snapshot = NULL WHERE true;
                  ALTER POLICY posts_select ON public.posts USING (false);"
             ),
         )
