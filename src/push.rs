@@ -537,11 +537,13 @@ pub async fn decide_probed(
 /// drift. One the last schema did not declare was not that engine's, and is taken over as before.
 /// Without a last schema there is nothing to compare with, and the push says so.
 ///
-/// Not grants. An older engine granted on top of the database's default privileges and revoked
-/// only some, so on the supatype image every API role it left holds `REFERENCES`, `TRIGGER` and
-/// `TRUNCATE` beside what the rules allow: what the last schema renders today (the exact set, D7)
-/// is not what that engine left, and every clean upgrade would read as a hand edit. A grant with no
-/// row is taken over as before, and doctor lists it as claimed.
+/// Grants are compared with what that engine left rather than with the exact set (D7) the last
+/// schema renders today. An older engine granted and revoked only the four privileges the rules
+/// govern, on top of the database's default privileges, so on the supatype image every API role it
+/// left also holds `REFERENCES`, `TRIGGER`, `TRUNCATE` (and `MAINTAIN`) from them. What it made is
+/// therefore the rendered set plus whatever else the defaults give that role on that table
+/// ([`older_engine_grant_sql`]); a clean upgrade matches it, and a privilege beyond it, or one
+/// taken away, is a hand edit and asks first.
 async fn upgrade_hand_edits(
     conn: &mut PgConnection,
     state: &State,
@@ -557,7 +559,6 @@ async fn upgrade_hand_edits(
         .filter(|(_, a)| {
             matches!(a, reconcile::Action::Replace { key, drifted: None, .. }
                 if crate::desired::security_relevant(key.kind)
-                    && key.kind != ObjectKind::TableGrant
                     && !recorded.contains(key))
         })
         .map(|(i, _)| i)
@@ -608,7 +609,15 @@ async fn upgrade_hand_edits(
         .filter_map(|&i| {
             let key = decision.reconcile.actions[i].key();
             let sql = before.get(key)?;
-            Some((key.clone(), format!("{}\n{sql}", reset_sql(key))))
+            let mut probe = format!("{}\n{sql}", reset_sql(key));
+            // Under tier 2 that engine took every privilege off the base table, defaults included.
+            if key.kind == ObjectKind::TableGrant
+                && decision.diff.field_masking != FieldMaskingTier::Views
+            {
+                probe.push('\n');
+                probe.push_str(&older_engine_grant_sql(&key.schema, &key.parent, &key.name));
+            }
+            Some((key.clone(), probe))
         })
         .collect();
     let (made, failed) = match made_by(conn, schema, &probes).await {
@@ -661,6 +670,40 @@ async fn upgrade_hand_edits(
             unchecked.join(", ")
         ));
     }
+}
+
+/// What an older engine's grant to `role` on a table held beyond the four privileges the rules
+/// govern: what the database's default privileges give that role on a table its owner creates in
+/// its schema (`ALTER DEFAULT PRIVILEGES`, global and per schema), read from `pg_default_acl` as
+/// the table's `CREATE` applied them. That engine granted and revoked only `SELECT`, `INSERT`,
+/// `UPDATE` and `DELETE`, so everything else the defaults gave stayed. Granted after the last
+/// schema's statement, which revokes everything first; guarded on the role and the table, as the
+/// grant itself is.
+fn older_engine_grant_sql(schema: &str, table: &str, role: &str) -> String {
+    let target = format!(
+        "\"{}\".\"{}\"",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\"")
+    );
+    let literal = |s: &str| s.replace('\'', "''");
+    format!(
+        "DO $defaults$\nDECLARE\n  privileges text;\nBEGIN\n  \
+         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role_lit}') AND to_regclass('{target_lit}') IS NOT NULL THEN\n    \
+         SELECT string_agg(DISTINCT a.privilege_type, ', ')\n      INTO privileges\n      \
+         FROM pg_class c\n      \
+         JOIN pg_default_acl d ON d.defaclrole = c.relowner AND d.defaclobjtype = 'r'\n                           \
+         AND d.defaclnamespace IN (0, c.relnamespace)\n      \
+         CROSS JOIN LATERAL aclexplode(d.defaclacl) a\n     \
+         WHERE c.oid = to_regclass('{target_lit}')\n       \
+         AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = '{role_lit}')\n       \
+         AND a.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE');\n    \
+         IF privileges IS NOT NULL THEN\n      \
+         EXECUTE format('GRANT %s ON %s TO %I', privileges, '{target_lit}', '{role_lit}');\n    \
+         END IF;\n  \
+         END IF;\nEND\n$defaults$;",
+        role_lit = literal(role),
+        target_lit = literal(&target),
+    )
 }
 
 /// What clears an object before the last schema's statement for it runs: its drop, or for row-level

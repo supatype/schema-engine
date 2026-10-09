@@ -172,8 +172,9 @@ async fn a_grant_to_another_role_is_never_ours() {
 }
 
 /// What an older engine left: the image's default privileges, minus what its four-privilege
-/// block revoked, and no rows. The push takes the API roles' grants over and leaves them holding
-/// the exact set; the rollback would restore what they held.
+/// block revoked, and no rows. That is what it made, so nothing was changed by hand: the push takes
+/// the API roles' grants over without asking and leaves them holding the exact set; the rollback
+/// would restore what they held.
 #[tokio::test]
 async fn an_upgrade_takes_the_api_roles_grants_over() {
     common::with_integration_pool(|pool| async move {
@@ -181,7 +182,10 @@ async fn an_upgrade_takes_the_api_roles_grants_over() {
         exec(
             &pool,
             "DELETE FROM _supatype.managed_objects WHERE kind = 'table_grant';
-             GRANT ALL ON public.posts TO anon;",
+             ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;
+             GRANT ALL ON public.posts TO anon, authenticated;
+             REVOKE INSERT, UPDATE, DELETE ON public.posts FROM anon;
+             REVOKE DELETE ON public.posts FROM authenticated;",
         )
         .await
         .unwrap();
@@ -190,7 +194,10 @@ async fn an_upgrade_takes_the_api_roles_grants_over() {
         let plan = push::prepare(&pool, &ast, "public").await.unwrap();
         let actions = grant_actions(&plan);
         let anon = actions.iter().find(|a| a.key().name == "anon").unwrap();
-        assert!(matches!(anon, Action::Replace { .. }), "{actions:?}");
+        assert!(
+            matches!(anon, Action::Replace { drifted: None, .. }),
+            "{actions:?}"
+        );
         assert!(
             anon.rollback_sql().iter().any(|s| s.contains("TRUNCATE")),
             "the rollback restores what anon held: {:?}",

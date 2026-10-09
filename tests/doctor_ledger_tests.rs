@@ -169,9 +169,16 @@ async fn what_someone_added_to_a_model_table_is_unmanaged_columns_included() {
     .await;
 }
 
-/// What an older engine leaves: its policies, grants, RLS attributes and schemas, with no row.
+/// What an older engine leaves: its policies, grants, RLS attributes and schemas, with no row, and
+/// its grants as it made them on the supatype image. The image's default privileges give the API
+/// roles everything on a new table, and that engine revoked only those of the four privileges the
+/// rules govern which they do not allow (here, every write), so `TRUNCATE`, `REFERENCES`, `TRIGGER`
+/// and `MAINTAIN` stayed.
 const FORGET_THE_ACCESS_ROWS: &str = "DELETE FROM _supatype.managed_objects
-    WHERE kind IN ('policy', 'table_grant', 'rls_attributes', 'schema')";
+    WHERE kind IN ('policy', 'table_grant', 'rls_attributes', 'schema');
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;
+    GRANT ALL ON public.posts TO anon, authenticated;
+    REVOKE INSERT, UPDATE, DELETE ON public.posts FROM anon, authenticated";
 
 /// A clean upgrade: Supatype's own objects with no row yet are claimed, reported apart from the
 /// conflicts and failing nothing, and the push records them without asking.
@@ -269,6 +276,87 @@ async fn an_older_engines_object_edited_by_hand_is_drift() {
         .await
         .expect("applied with consent");
         assert!(is_clean(&doctor_of(&pool, &ast).await));
+    })
+    .await;
+}
+
+/// A privilege an older engine's grant would not hold, given the database's default privileges, was
+/// granted by hand: drift on access, refused without consent like a policy edited by hand.
+#[tokio::test]
+async fn a_privilege_granted_by_hand_under_an_older_engine_is_drift() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            &format!("{FORGET_THE_ACCESS_ROWS}; GRANT DELETE ON public.posts TO anon;"),
+        )
+        .await
+        .unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        assert_eq!(names(&report.drifted), ["table_grant posts.anon"]);
+        let claimed = names(&report.claimed);
+        assert!(
+            claimed.contains(&"table_grant posts.authenticated".to_string()),
+            "{claimed:?}"
+        );
+        let item = &report.drifted[0];
+        assert!(
+            item.live.as_deref().unwrap_or_default().contains("DELETE"),
+            "{item:?}"
+        );
+        assert!(
+            !item
+                .recorded
+                .as_deref()
+                .unwrap_or_default()
+                .contains("DELETE"),
+            "{item:?}"
+        );
+
+        let refused = push(&pool, &ast)
+            .await
+            .expect_err("took a privilege granted by hand under the older engine without consent");
+        let drift = refused
+            .downcast_ref::<supatype_engine::ledger::drift::SecurityDrift>()
+            .unwrap_or_else(|| panic!("{refused:#}"));
+        assert_eq!(drift.objects.len(), 1, "{drift}");
+
+        common::push_with(
+            &pool,
+            &ast,
+            supatype_engine::push::ApplyOptions {
+                overwrite_drift: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("applied with consent");
+        assert!(is_clean(&doctor_of(&pool, &ast).await));
+    })
+    .await;
+}
+
+/// Where the default privileges give the API roles nothing, an older engine left nothing beyond
+/// the four it governs: `TRUNCATE` on a model table was granted by hand.
+#[tokio::test]
+async fn a_privilege_the_defaults_never_gave_is_drift() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            "DELETE FROM _supatype.managed_objects
+               WHERE kind IN ('policy', 'table_grant', 'rls_attributes', 'schema');
+             GRANT TRUNCATE ON public.posts TO anon;",
+        )
+        .await
+        .unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        assert_eq!(names(&report.drifted), ["table_grant posts.anon"]);
+        assert!(push(&pool, &ast).await.is_err(), "refused without consent");
     })
     .await;
 }
