@@ -738,10 +738,13 @@ pub fn diff(
     // Only a column that is ours is renamed (D4): one the ledger records, or, where it has no row
     // (an upgraded database), one the last push's schema declared on this table. A rename is a
     // similarity guess, so a column someone added (`nickname`) would otherwise be renamed into a
-    // declared one (`nick_name`) and taken over with its data.
+    // declared one (`nick_name`) and taken over with its data. Not one recorded as adopted: that is
+    // someone else's column Supatype was told about (`adopt --key column:...`), never its own.
     let ours = |column: &str| {
-        db.column_owned(&db_table.name, column)
-            .unwrap_or_else(|| declared_by(previous_model, column))
+        !db.column_adopted(&db_table.name, column)
+            && db
+                .column_owned(&db_table.name, column)
+                .unwrap_or_else(|| declared_by(previous_model, column))
     };
 
     for &drop in dropped.iter().filter(|c| ours(c)) {

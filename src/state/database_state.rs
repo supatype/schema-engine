@@ -31,6 +31,10 @@ pub struct DatabaseState {
     /// The same for each column the ledger has a row for, keyed by table and column (D4).
     #[serde(skip)]
     pub column_ownership: BTreeMap<(String, String), bool>,
+    /// The columns among those the ledger records as `adopted`: Supatype knows of them, but they
+    /// are not of its making, so a rename never takes one as its source.
+    #[serde(skip)]
+    pub adopted_columns: BTreeSet<(String, String)>,
     /// The `(table, policy)` pairs of this schema the ledger records as Supatype's (not released):
     /// the reconcile's to keep or drop. Filled with `table_ownership`; never part of a snapshot.
     #[serde(skip)]
@@ -56,6 +60,12 @@ impl DatabaseState {
             .copied()
     }
 
+    /// Whether the ledger records `column` on `table` as adopted rather than made by Supatype.
+    pub fn column_adopted(&self, table: &str, column: &str) -> bool {
+        self.adopted_columns
+            .contains(&(table.to_string(), column.to_string()))
+    }
+
     /// Takes each table's and each column's ownership, and which policies are ours, from the
     /// ledger rows of `schema`.
     pub fn set_table_ownership(&mut self, ledger: &[LedgerRow]) {
@@ -76,12 +86,17 @@ impl DatabaseState {
                 )
             })
             .collect();
+        let adopted_columns = here(ObjectKind::Column)
+            .filter(|r| r.status == Status::Adopted)
+            .map(|r| (r.key.parent.clone(), r.key.name.clone()))
+            .collect();
         let owned_policies = here(ObjectKind::Policy)
             .filter(|r| r.status != Status::Released)
             .map(|r| (r.key.parent.clone(), r.key.name.clone()))
             .collect();
         self.table_ownership = table_ownership;
         self.column_ownership = column_ownership;
+        self.adopted_columns = adopted_columns;
         self.owned_policies = owned_policies;
     }
 

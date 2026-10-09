@@ -372,6 +372,16 @@ fn test_rename_column_needs_a_column_that_is_ours() {
     let released = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
     assert_eq!(renames(&released), 0, "{:?}", released.operations);
     assert!(adds_subtitle(&released), "{:?}", released.operations);
+
+    // Adopted while undeclared (`adopt --key column:posts.subtitel`): recorded, but someone
+    // else's column Supatype was told about, never the source of a rename.
+    db.column_ownership = [(("posts".to_string(), "subtitel".to_string()), true)].into();
+    let managed = differ::diff(&ast("subtitle"), &db).unwrap();
+    assert_eq!(renames(&managed), 1, "{:?}", managed.operations);
+    db.adopted_columns = [("posts".to_string(), "subtitel".to_string())].into();
+    let adopted = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
+    assert_eq!(renames(&adopted), 0, "{:?}", adopted.operations);
+    assert!(adds_subtitle(&adopted), "{:?}", adopted.operations);
 }
 
 // ─── Scenario 5: FK already exists, a no-op ───────────────────────────────────

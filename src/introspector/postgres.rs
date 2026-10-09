@@ -27,5 +27,6 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
         table_ownership: Default::default(),
         owned_policies: Default::default(),
         column_ownership: Default::default(),
+        adopted_columns: Default::default(),
     })
 }
