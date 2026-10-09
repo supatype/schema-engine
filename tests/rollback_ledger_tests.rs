@@ -238,3 +238,82 @@ async fn a_release_made_after_a_push_survives_rolling_that_push_back() {
     })
     .await;
 }
+
+/// `posts` with the `title` index and an extra `note` column.
+fn posts_with_note() -> SchemaAst {
+    let mut ast = posts("body");
+    let doc = serde_json::to_value(&ast).unwrap();
+    let mut doc = doc;
+    doc["models"][0]["fields"]["note"] = json!({ "kind": "text", "required": false,
+        "annotations": { "db": { "pgType": "TEXT", "unique": false } } });
+    ast = serde_json::from_value(doc).expect("the AST round-trips");
+    ast
+}
+
+async fn release(pool: &PgPool, ast: &SchemaAst, objects: &[&str]) {
+    use supatype_engine::adopt;
+    let release: Vec<String> = objects.iter().map(|o| o.to_string()).collect();
+    adopt::run(
+        pool,
+        ast,
+        "public",
+        adopt::Request {
+            release: &release,
+            apply: true,
+            keys: Some(&[]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A column and an index the push made, released after it: rolling the push back leaves both,
+/// and the column's data, where they are, with their rows still saying released. It used to drop
+/// the column with its data and leave a row for a column that was gone.
+#[tokio::test]
+async fn rolling_back_leaves_what_was_released_since_the_push() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        let ast = posts_with_note();
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            "INSERT INTO public.posts (id, title, body, note) VALUES (1, 't', 'b', 'kept')",
+        )
+        .await
+        .unwrap();
+        release(
+            &pool,
+            &ast,
+            &["column:posts.note", "index:posts.posts_body_idx"],
+        )
+        .await;
+
+        let result = migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("the push rolls back");
+        assert!(result.message.contains("posts.note"), "{}", result.message);
+
+        let note: String = sqlx::query_scalar("SELECT note FROM public.posts WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("the released column and its data are still there");
+        assert_eq!(note, "kept");
+        assert!(index_exists(&pool, "posts_body_idx").await);
+        // The rest of the push is undone.
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        let released: Vec<String> = sqlx::query_scalar(
+            "SELECT kind || ':' || parent || '.' || name FROM _supatype.managed_objects
+              WHERE status = 'released' ORDER BY 1",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            released,
+            ["column:posts.note", "index:posts.posts_body_idx"]
+        );
+    })
+    .await;
+}

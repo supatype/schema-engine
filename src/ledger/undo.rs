@@ -14,6 +14,8 @@ use anyhow::{Context, Result};
 use sqlx::PgConnection;
 
 use super::{key_columns, ObjectKey, SCHEMA};
+use crate::desired::statements;
+use crate::introspector::fingerprint::ObjectKind;
 
 /// One row per (migration, object) the migration's push wrote or removed: the row as it was, or
 /// `existed = false` when there was none.
@@ -122,4 +124,172 @@ pub async fn restore(conn: &mut PgConnection, migration_id: i32) -> Result<()> {
             .context("put the ledger back as it was before the push")?;
     }
     Ok(())
+}
+
+/// The objects a rollback of `migration_id` must leave as they are: every released object, which a
+/// push never touches, and every object the push wrote whose row has been written again since
+/// (`adopt --release`, `doctor --rebaseline`). [`restore`] already leaves those rows; their objects
+/// stay with them, or a rollback would drop a column the user took back after the push, with its
+/// data, and leave a row for a column that is gone.
+pub async fn rewritten_since(conn: &mut PgConnection, migration_id: i32) -> Result<Vec<ObjectKey>> {
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(&format!(
+        "SELECT m.kind, m.schema_name, m.parent, m.name
+           FROM {SCHEMA}.managed_objects m
+          WHERE m.status = 'released'
+             OR (m.updated_at > (SELECT applied_at FROM {SCHEMA}.migrations WHERE id = $1)
+                 AND EXISTS (SELECT 1 FROM {SCHEMA}.managed_objects_undo u
+                              WHERE u.migration_id = $1 AND u.kind = m.kind
+                                AND u.schema_name = m.schema_name AND u.parent = m.parent
+                                AND u.name = m.name))
+          ORDER BY 1, 2, 3, 4"
+    ))
+    .bind(migration_id)
+    .fetch_all(&mut *conn)
+    .await
+    .context("read the objects released or recorded again since the push")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(kind, schema, parent, name)| {
+            Some(ObjectKey {
+                kind: ObjectKind::parse(&kind)?,
+                schema,
+                parent,
+                name,
+            })
+        })
+        .collect())
+}
+
+/// `sql_down` without the statements that act on any of `leave`: on the object itself, on a column
+/// or constraint of it, or on anything of a table among them. Returns the script and the objects
+/// whose statements were left out.
+pub fn leaving_alone(
+    sql_down: &str,
+    schema: &str,
+    leave: &[ObjectKey],
+) -> (String, Vec<ObjectKey>) {
+    if leave.is_empty() {
+        return (sql_down.to_string(), Vec::new());
+    }
+    let table = |s: &str, t: &str| {
+        leave
+            .iter()
+            .find(|k| k.kind == ObjectKind::Table && k.schema == s && k.name == t)
+    };
+    let constraint = |s: &str, t: &str, n: &str| {
+        leave.iter().find(|k| {
+            matches!(
+                k.kind,
+                ObjectKind::PrimaryKey
+                    | ObjectKind::Unique
+                    | ObjectKind::ForeignKey
+                    | ObjectKind::Check
+            ) && k.schema == s
+                && k.parent == t
+                && k.name == n
+        })
+    };
+    let mut kept = String::new();
+    let mut left: Vec<ObjectKey> = Vec::new();
+    for statement in statements::attribute_all(schema, statements::split_statements(sql_down)) {
+        let mut hit: Option<&ObjectKey> = statement.attribution.keys().iter().find_map(|k| {
+            // A `DROP INDEX` names no table, and attributes to none unless the script created
+            // the index too.
+            leave
+                .iter()
+                .find(|l| {
+                    (l.kind, &l.schema, &l.name) == (k.kind, &k.schema, &k.name)
+                        && (k.parent.is_empty() || l.parent == k.parent)
+                })
+                .or_else(|| table(&k.schema, &k.parent))
+        });
+        if hit.is_none() {
+            if let Some(target) = statements::table_target(schema, &statement.sql) {
+                hit = table(&target.schema, &target.table)
+                    .or_else(|| {
+                        let column = target.column.as_deref()?;
+                        leave.iter().find(|k| {
+                            k.kind == ObjectKind::Column
+                                && k.schema == target.schema
+                                && k.parent == target.table
+                                && k.name == column
+                        })
+                    })
+                    .or_else(|| {
+                        constraint(&target.schema, &target.table, target.constraint.as_deref()?)
+                    });
+            }
+        }
+        match hit {
+            Some(key) => {
+                if !left.contains(key) {
+                    left.push(key.clone());
+                }
+                // The statement goes; a comment says why, so the stored script still reads true.
+                kept.push_str(&format!(
+                    "\n-- left as it is: {key} was released or recorded again since this push\n"
+                ));
+            }
+            None => kept.push_str(&statement.sql),
+        }
+    }
+    (kept, left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(kind: ObjectKind, parent: &str, name: &str) -> ObjectKey {
+        ObjectKey {
+            kind,
+            schema: "public".into(),
+            parent: parent.into(),
+            name: name.into(),
+        }
+    }
+
+    const DOWN: &str = "-- reconciled objects\n\
+        DROP POLICY IF EXISTS \"posts_select\" ON \"public\".\"posts\";\n\
+        ALTER TABLE \"public\".\"order_item\" DROP COLUMN IF EXISTS \"note\";\n\
+        ALTER TABLE \"public\".\"order_item\" DROP COLUMN IF EXISTS \"other\";\n\
+        ALTER TABLE \"public\".\"posts\" DROP CONSTRAINT IF EXISTS \"posts_a_check\";\n\
+        DROP TABLE IF EXISTS \"public\".\"tags\";\n\
+        DROP INDEX IF EXISTS \"public\".\"posts_body_idx\";\n";
+
+    #[test]
+    fn nothing_released_leaves_the_script_as_it_is() {
+        assert_eq!(
+            leaving_alone(DOWN, "public", &[]),
+            (DOWN.to_string(), vec![])
+        );
+    }
+
+    #[test]
+    fn a_released_column_policy_constraint_and_table_are_left_alone() {
+        let leave = [
+            key(ObjectKind::Column, "order_item", "note"),
+            key(ObjectKind::Policy, "posts", "posts_select"),
+            key(ObjectKind::Check, "posts", "posts_a_check"),
+            key(ObjectKind::Table, "", "tags"),
+            key(ObjectKind::Index, "posts", "posts_body_idx"),
+        ];
+        let (sql, left) = leaving_alone(DOWN, "public", &leave);
+        assert!(!sql.contains("DROP COLUMN IF EXISTS \"note\""), "{sql}");
+        assert!(sql.contains("DROP COLUMN IF EXISTS \"other\""), "{sql}");
+        assert!(!sql.contains("DROP POLICY"), "{sql}");
+        assert!(!sql.contains("DROP CONSTRAINT"), "{sql}");
+        assert!(!sql.contains("DROP TABLE"), "{sql}");
+        assert!(!sql.contains("DROP INDEX"), "{sql}");
+        assert_eq!(left.len(), 5);
+    }
+
+    #[test]
+    fn everything_on_a_released_table_is_left_alone() {
+        let leave = [key(ObjectKind::Table, "", "order_item")];
+        let (sql, left) = leaving_alone(DOWN, "public", &leave);
+        assert!(!sql.contains("order_item\" DROP COLUMN"), "{sql}");
+        assert!(sql.contains("DROP POLICY"), "{sql}");
+        assert_eq!(left, leave);
+    }
 }

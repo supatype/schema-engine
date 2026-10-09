@@ -953,11 +953,6 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
 
     let mut tx = pool.begin().await?;
 
-    (&mut *tx)
-        .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
-
     // The ledger goes back with the objects. Both tables exist on any database a push bootstrapped
     // since; asserted here for one bootstrapped before the undo table was.
     for sql in [
@@ -966,6 +961,16 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
     ] {
         (&mut *tx).execute(sqlx::raw_sql(&sql)).await?;
     }
+    // What was released or recorded again since the push is no longer the push's to undo: its
+    // statements are left out, as `restore` leaves its row.
+    let leave = crate::ledger::undo::rewritten_since(&mut tx, latest.id).await?;
+    let (sql_down, left) = crate::ledger::undo::leaving_alone(&sql_down, schema, &leave);
+
+    (&mut *tx)
+        .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
+
     crate::ledger::undo::restore(&mut tx, latest.id).await?;
 
     let mark_sql = format!(
@@ -1007,7 +1012,19 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
     Ok(RollbackResult {
         status: "rolled_back".into(),
         name: latest.name.clone(),
-        message: format!("Rolled back migration {}.", latest.name),
+        message: if left.is_empty() {
+            format!("Rolled back migration {}.", latest.name)
+        } else {
+            format!(
+                "Rolled back migration {}, leaving {} as they are: released or recorded again \
+                 since the push.",
+                latest.name,
+                left.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        },
         restored_migration_name: restored_name,
         schema_sources_manifest: manifest,
         schema_sources_base64: sources_b64,

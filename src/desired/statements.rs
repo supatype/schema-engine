@@ -155,6 +155,72 @@ pub fn attribute_all(schema: &str, statements: Vec<String>) -> Vec<Statement> {
         .collect()
 }
 
+/// The table an `ALTER TABLE`, `DROP TABLE` or `CREATE TABLE` statement acts on, and the column or
+/// constraint its clause names, for what [`attribute_all`] does not name: the differ's incremental
+/// and rollback statements (`DROP COLUMN`, `ALTER COLUMN`, `DROP CONSTRAINT`, a table's rename).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableTarget {
+    pub schema: String,
+    pub table: String,
+    pub column: Option<String>,
+    pub constraint: Option<String>,
+}
+
+/// [`TableTarget`] for `sql`, or `None` when it is not a statement on a table.
+pub fn table_target(schema: &str, sql: &str) -> Option<TableTarget> {
+    let h = head(sql);
+    let rest = [
+        "DROP TABLE IF EXISTS ",
+        "DROP TABLE ",
+        "CREATE TABLE IF NOT EXISTS ",
+    ]
+    .iter()
+    .find_map(|p| h.strip_prefix(p));
+    if let Some(rest) = rest {
+        let (parts, _) = qualified_name(rest)?;
+        let (schema, table) = split_schema(parts, schema);
+        return Some(TableTarget {
+            schema,
+            table,
+            column: None,
+            constraint: None,
+        });
+    }
+    let rest = h.strip_prefix("ALTER TABLE ")?;
+    let rest = rest.strip_prefix("IF EXISTS ").unwrap_or(rest);
+    let rest = rest.strip_prefix("ONLY ").unwrap_or(rest);
+    let (parts, clause) = qualified_name(rest)?;
+    let (schema, table) = split_schema(parts, schema);
+    let clause = clause.trim_start();
+    let named = |prefixes: &[&str]| {
+        prefixes.iter().find_map(|p| {
+            let (parts, _) = qualified_name(clause.strip_prefix(p)?)?;
+            parts.into_iter().next()
+        })
+    };
+    let column = named(&[
+        "DROP COLUMN IF EXISTS ",
+        "DROP COLUMN ",
+        "ALTER COLUMN ",
+        "RENAME COLUMN ",
+        "ADD COLUMN IF NOT EXISTS ",
+        "ADD COLUMN ",
+    ]);
+    let constraint = named(&[
+        "DROP CONSTRAINT IF EXISTS ",
+        "DROP CONSTRAINT ",
+        "RENAME CONSTRAINT ",
+        "VALIDATE CONSTRAINT ",
+        "ADD CONSTRAINT ",
+    ]);
+    Some(TableTarget {
+        schema,
+        table,
+        column,
+        constraint,
+    })
+}
+
 /// The statement with leading whitespace and `--` comment lines removed.
 pub fn head(sql: &str) -> &str {
     let mut rest = sql;
@@ -766,6 +832,31 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_table_statement_names_its_table_column_and_constraint() {
+        let target = |sql: &str| table_target("public", sql).unwrap();
+        let t = target("ALTER TABLE \"public\".\"order_item\" DROP COLUMN IF EXISTS \"note\";");
+        assert_eq!(
+            (t.table.as_str(), t.column.as_deref()),
+            ("order_item", Some("note"))
+        );
+        let t =
+            target("-- undo\nALTER TABLE \"public\".\"t\" DROP CONSTRAINT IF EXISTS \"t_a_key\";");
+        assert_eq!(
+            (t.table.as_str(), t.constraint.as_deref()),
+            ("t", Some("t_a_key"))
+        );
+        let t = target("DROP TABLE IF EXISTS \"public\".\"posts\";");
+        assert_eq!(
+            (t.table.as_str(), t.column, t.constraint),
+            ("posts", None, None)
+        );
+        assert_eq!(
+            table_target("public", "DROP POLICY IF EXISTS \"p\" ON \"public\".\"t\";"),
+            None
+        );
+    }
 
     #[test]
     fn splitting_keeps_every_byte_and_respects_quotes() {
