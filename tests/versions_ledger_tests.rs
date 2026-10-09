@@ -137,7 +137,7 @@ async fn force_push(pool: &PgPool, ast: &SchemaAst) -> push::Outcome {
 
 #[tokio::test]
 async fn the_layers_objects_are_recorded_on_creation_and_left_alone_on_a_second_push() {
-    common::with_integration_pool(|pool| async move {
+    common::with_cron_database(|pool| async move {
         let cron = cron_available(&pool).await;
         let ast = schema(vec![posts(Some(false))]);
         assert!(applied(&push(&pool, &ast).await.unwrap()));
@@ -208,7 +208,7 @@ async fn removing_versions_drops_the_audit_trigger_and_its_function_and_writes_k
 
 #[tokio::test]
 async fn removing_the_last_versioned_model_retires_the_global_layer() {
-    common::with_integration_pool(|pool| async move {
+    common::with_cron_database(|pool| async move {
         let cron = cron_available(&pool).await;
         push(&pool, &schema(vec![posts(Some(true))])).await.unwrap();
         assert!(function_exists(&pool, "supatype", "publish").await);

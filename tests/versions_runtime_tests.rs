@@ -896,7 +896,7 @@ async fn retention_prunes_old_versions_but_never_the_newest_or_the_live_one() {
 
 #[tokio::test]
 async fn the_scheduler_is_wired_up_when_the_database_has_one() {
-    common::with_integration_pool(|pool| async move {
+    common::with_cron_database(|pool| async move {
         let mut conn = pool.acquire().await.expect("acquire");
         // `pg_cron` needs shared_preload_libraries, so it is available in the supatype image and
         // absent almost everywhere else. Install it here and assert the push schedules the jobs;

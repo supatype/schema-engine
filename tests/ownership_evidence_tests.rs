@@ -474,7 +474,7 @@ async fn turning_drafts_off_removes_the_draft_view() {
 
 #[tokio::test]
 async fn removing_the_last_versioned_model_retires_the_cron_jobs() {
-    common::with_integration_pool(|pool| async move {
+    common::with_cron_database(|pool| async move {
         // `pg_cron` needs shared_preload_libraries, so it is available in the supatype image and
         // absent almost everywhere else; the same guard `versions_runtime_tests` uses.
         if let Err(e) = exec(&pool, "CREATE EXTENSION IF NOT EXISTS pg_cron").await {
