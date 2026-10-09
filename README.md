@@ -90,6 +90,7 @@ These read the AST and need no database connection.
 
 | Command | Description |
 |---|---|
+| `capabilities` | What this engine supports of the ownership contract, as JSON (also `GET /capabilities`) |
 | `parse` | Parse and validate an AST, printing the resolved form |
 | `generate` | Typed client code. `--lang typescript` (default), `python`, `go`, `php`, `swift`, `kotlin`, `dart` |
 | `rls` | RLS policy SQL plus auth helpers |
@@ -239,7 +240,8 @@ ENGINE_ADMIN_TOKEN=<token> supatype-engine-server
 | `ENGINE_ADMIN_TOKEN` | none | Required. Every route rejects a request without a matching `X-Engine-Admin-Token`, and returns `503` when the variable is unset. |
 | `RUST_LOG` | `info` | Tracing filter |
 
-Routes mirror the subcommands. Compute only: `/parse`, `/generate`, `/triggers`, `/rls`, `/storage`,
+Routes mirror the subcommands. `GET /capabilities` answers `{"features": [...]}`, what this
+engine supports of the ownership contract. Compute only: `/parse`, `/generate`, `/triggers`, `/rls`, `/storage`,
 `/postgrest`, `/auth-functions`, `/sso`, `/admin`, `/studio`, `/openapi`. Database backed:
 `/introspect`, `/diff`, `/migrate`, `/push`, `/migrations`, `/rollback`, `/doctor`,
 `/adopt`, `/studio-config`, `/sql`. `/health` sits behind the admin token as well.

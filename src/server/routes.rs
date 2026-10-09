@@ -16,6 +16,13 @@ pub async fn health() -> Json<HealthResponse> {
     })
 }
 
+// ── Capabilities ────────────────────────────────────────────────────────────
+
+/// What this engine supports of the ownership contract (`crate::capabilities`).
+pub async fn capabilities() -> Json<serde_json::Value> {
+    Json(crate::capabilities::capabilities())
+}
+
 // ── Parse (no DB) ───────────────────────────────────────────────────────────
 
 pub async fn parse(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Value> {
@@ -620,6 +627,16 @@ mod tests {
         };
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(body.error.contains("rebaseline"), "{}", body.error);
+    }
+
+    #[tokio::test]
+    async fn capabilities_lists_the_contracts_features() {
+        let Json(body) = super::capabilities().await;
+        assert_eq!(body, crate::capabilities::capabilities());
+        assert!(body["features"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("accept_access_drift")));
     }
 
     #[test]

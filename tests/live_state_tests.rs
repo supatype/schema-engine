@@ -371,3 +371,23 @@ async fn doctor_rebaselines_access_drift_with_its_own_consent() {
     })
     .await;
 }
+
+/// `capabilities` needs no input and no database: the CLI asks it before relying on a flag.
+#[test]
+fn capabilities_prints_the_features_this_engine_supports() {
+    let out = Command::new(env!("CARGO_BIN_EXE_supatype-engine"))
+        .arg("capabilities")
+        .output()
+        .expect("run the engine");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({ "features": ["adopt_keys", "adopt_none", "release", "reclaim",
+            "rebaseline", "accept_access_drift", "overwrite_drift", "engine_busy"] })
+    );
+}

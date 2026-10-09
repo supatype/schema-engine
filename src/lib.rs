@@ -4,6 +4,7 @@
 // Modules that depend on sqlx/tokio (introspector, state, differ) are gated
 // from the wasm32 target so the library can be compiled to WASM cleanly.
 
+pub mod capabilities;
 pub mod generator;
 pub mod licensing;
 pub mod parser;

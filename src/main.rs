@@ -36,6 +36,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Print what this engine supports of the ownership contract, as JSON
+    Capabilities,
     /// Parse and validate a schema AST
     Parse,
     /// Introspect current database state
@@ -258,7 +260,9 @@ async fn main() -> Result<()> {
     let _license = supatype_engine::licensing::License::new(cli.license.as_deref());
 
     let input = match &cli.command {
-        Command::Migrations { .. } | Command::Rollback { .. } => String::new(),
+        Command::Migrations { .. } | Command::Rollback { .. } | Command::Capabilities => {
+            String::new()
+        }
         Command::Seed { status: true, .. } => String::new(),
         _ => read_input(cli.input.as_deref())?,
     };
@@ -285,6 +289,9 @@ async fn main() -> Result<()> {
 /// The command, once its input is read.
 async fn run(command: Command, input: String) -> Result<()> {
     match command {
+        Command::Capabilities => {
+            println!("{}", supatype_engine::capabilities::capabilities());
+        }
         Command::Parse => {
             let ast = supatype_engine::parser::parse(&input)?;
             println!("{}", serde_json::to_string_pretty(&ast)?);

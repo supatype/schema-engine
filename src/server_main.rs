@@ -58,6 +58,7 @@ async fn main() {
     let app = Router::new()
         // Health
         .route("/health", get(server::routes::health))
+        .route("/capabilities", get(server::routes::capabilities))
         // Compute-only (no DB)
         .route("/parse", post(server::routes::parse))
         .route("/generate", post(server::routes::generate))
