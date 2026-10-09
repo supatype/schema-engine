@@ -432,7 +432,14 @@ fn a_generated_expression_is_compared_with_what_the_last_push_declared() {
         sql.contains("ALTER TABLE \"public\".\"posts\" ALTER COLUMN \"title_lower\" SET EXPRESSION AS (upper(title))"),
         "{sql}"
     );
-    // Before 17, made again: dropped and added with the new expression.
+    // Before 17, made again: dropped and added with the new expression, the tier-2 view that reads
+    // it (made again later in the migration) out of the way first.
+    let else_branch = &sql[sql.find("ELSE").expect(&sql)..];
+    let view = else_branch
+        .find("DROP VIEW IF EXISTS \"api\".\"posts\"")
+        .expect(&sql);
+    let drop = else_branch.find("DROP COLUMN").expect(&sql);
+    assert!(view < drop, "{sql}");
     assert!(
         sql.contains("DROP COLUMN IF EXISTS \"title_lower\""),
         "{sql}"
@@ -486,6 +493,10 @@ fn a_plain_column_becoming_generated_is_made_again_and_says_so() {
         "{ops:?}"
     );
     assert!(!sql.contains("SET EXPRESSION"), "{sql}");
+    assert!(
+        sql.contains("DROP VIEW IF EXISTS \"api\".\"posts\";"),
+        "{sql}"
+    );
     assert!(
         diff.warnings
             .iter()

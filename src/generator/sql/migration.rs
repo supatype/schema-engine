@@ -1683,17 +1683,27 @@ fn generated_column_sql(
     recreate: &str,
 ) -> String {
     let action = generated.get("action").and_then(|v| v.as_str());
+    // Under tier-2 masking the `api` view reads the column, and a column a view reads cannot be
+    // dropped. The view is Supatype's alone and is made again later in this migration (with its
+    // trigger and privileges), so it goes first; where there is none this does nothing.
+    let view = format!(
+        "DROP VIEW IF EXISTS \"{}\".\"{}\";",
+        super::field_views::VIEW_SCHEMA,
+        table.replace('"', "\"\"")
+    );
+    let recreate = format!("{view}\n{recreate}");
     let Some(expression) = generated.get("expression").and_then(|v| v.as_str()) else {
-        return recreate.to_string();
+        return recreate;
     };
     if action != Some("set_expression") {
-        return recreate.to_string();
+        return recreate;
     }
     let in_place = format!(
         "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" SET EXPRESSION AS ({expression})"
     );
     // One statement per line, as `recreate_column_sql` writes them: one `EXECUTE` each.
     let again: String = recreate
+        .as_str()
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
