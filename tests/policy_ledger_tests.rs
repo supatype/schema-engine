@@ -202,17 +202,21 @@ async fn a_hand_written_policy_on_a_model_table_is_never_ours() {
 
 /// What an older engine left: its policies stamped, one with a rule the schema has since
 /// changed, and one for an operation the schema no longer declares, all with no rows. The first
-/// is replaced, since the name says it is ours and its expression cannot be compared with our
-/// text; the second is dropped, as the stamp says it is ours.
+/// is replaced, since the name says it is ours and it is what the last push's schema made of it
+/// (one that is not is a hand edit, which asks first: `doctor_ledger_tests`); the second is
+/// dropped, as the stamp says it is ours.
 #[tokio::test]
 async fn an_older_engines_policies_are_brought_up_to_date() {
     common::with_integration_pool(|pool| async move {
-        push(&pool, &public_read()).await.unwrap();
+        push(
+            &pool,
+            &posts(json!({ "read": { "type": "authenticated" } })),
+        )
+        .await
+        .unwrap();
         exec(
             &pool,
             "DELETE FROM _supatype.managed_objects WHERE kind = 'policy';
-             DROP POLICY posts_select ON public.posts;
-             CREATE POLICY posts_select ON public.posts FOR SELECT USING (false);
              COMMENT ON POLICY posts_select ON public.posts
                IS 'supatype:managed;kind=rls_policy;table=posts;fields=select;v=1';
              CREATE POLICY posts_delete ON public.posts FOR DELETE USING (true);

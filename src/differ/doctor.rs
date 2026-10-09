@@ -4,7 +4,9 @@
 //! object the ledger owns: an owned object that is absent is **missing**, one changed outside
 //! Supatype is **drifted** (with what Supatype recorded beside what the database holds), one the
 //! schema no longer asks for is **stale**, a desired name taken by someone else's object is
-//! **conflicting**, and one the user took back is **released**. Objects on a model table that
+//! **conflicting**, and one the user took back is **released**. One of Supatype's own from an
+//! earlier engine, which no row records yet (a policy or grant named for its table, an object in
+//! the engine's own schemas), is **claimed**: the next push records it, and that is not a failure. Objects on a model table that
 //! Supatype did not create, columns included (D4), are **unmanaged**: a push leaves them in place.
 //! A table the schema no longer declares is stale when it is ours and unmanaged when it is not.
 
@@ -41,6 +43,10 @@ pub struct DoctorReport {
     /// Taken back with `adopt --release`: left alone whatever the schema says.
     #[serde(default)]
     pub released: Vec<DoctorItem>,
+    /// Supatype's own object from an earlier engine, which no row records yet: the next push
+    /// records it, with the schema's definition. Reported, not a failure (`--strict` passes).
+    #[serde(default)]
+    pub claimed: Vec<DoctorItem>,
     /// Drifted objects whose live definition `doctor --rebaseline` just recorded as the baseline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rebaselined: Vec<DoctorItem>,
@@ -221,19 +227,21 @@ fn classify(action: &Action, recorded: &BTreeSet<&ObjectKey>, out: &mut DoctorRe
             &edit.recorded_def,
             &edit.live_def,
         )),
-        // No row: an object Supatype never recorded, under a name the schema needs, that its
-        // name or location makes ours. The push replaces it with the schema's definition rather
-        // than refusing, but what it holds now is not Supatype's record, so it is reported.
+        // No row: Supatype's own object from an earlier engine, which its name or location makes
+        // ours (a policy or grant named for its table, an object in the engine's own schemas).
+        // The push records it with the schema's definition rather than refusing, as it does on
+        // every upgrade, so it is reported apart from the conflicts and fails nothing. One changed
+        // by hand since is a `Replace` with `drifted` set, reported above.
         Action::Replace {
             key, previous_sql, ..
         } if !recorded.contains(key) => {
             let mut item = DoctorItem::about(
                 key,
-                "exists under a name the schema needs and was not recorded by Supatype: \
-                 `supatype push` replaces it with the schema's definition",
+                "is Supatype's own from an earlier engine and not recorded yet: the next \
+                 `supatype push` records it, with the schema's definition",
             );
             item.live = Some(previous_sql.clone());
-            out.conflicting.push(item);
+            out.claimed.push(item);
         }
         Action::Drop { key, .. } => out.stale_managed.push(DoctorItem::about(
             key,
@@ -385,7 +393,7 @@ fn undeclared_tables(db: &DatabaseState, schema_tables: &HashSet<&str>, out: &mu
 }
 
 /// Whether the report has something a push would change or refuse: what `doctor --strict` fails
-/// on. Unmanaged objects and released ones are reported, not failures.
+/// on. Unmanaged, released and claimed objects are reported, not failures.
 pub fn has_strict_issues(report: &DoctorReport) -> bool {
     !report.missing.is_empty()
         || !report.stale_managed.is_empty()

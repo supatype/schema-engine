@@ -58,6 +58,7 @@ fn is_clean(report: &DoctorReport) -> bool {
         && report.drifted.is_empty()
         && report.conflicting.is_empty()
         && report.released.is_empty()
+        && report.claimed.is_empty()
 }
 
 #[tokio::test]
@@ -168,30 +169,137 @@ async fn what_someone_added_to_a_model_table_is_unmanaged_columns_included() {
     .await;
 }
 
+/// What an older engine leaves: its policies, grants, RLS attributes and schemas, with no row.
+const FORGET_THE_ACCESS_ROWS: &str = "DELETE FROM _supatype.managed_objects
+    WHERE kind IN ('policy', 'table_grant', 'rls_attributes', 'schema')";
+
+/// A clean upgrade: Supatype's own objects with no row yet are claimed, reported apart from the
+/// conflicts and failing nothing, and the push records them without asking.
 #[tokio::test]
-async fn an_unrecorded_object_the_push_would_replace_is_reported() {
+async fn an_older_engines_own_objects_are_claimed_not_conflicting() {
     common::with_integration_pool(|pool| async move {
         let ast = posts(json!([]));
         push(&pool, &ast).await.unwrap();
-        // A policy under the schema's name that Supatype never recorded, made differently: the
-        // push replaces it (a policy's name says whose it is), so doctor must not stay silent.
+        exec(&pool, FORGET_THE_ACCESS_ROWS).await.unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        let claimed = names(&report.claimed);
+        assert!(
+            claimed.contains(&"policy posts.posts_select".to_string()),
+            "{claimed:?}"
+        );
+        assert!(
+            claimed.contains(&"rls_attributes posts.rls".to_string()),
+            "{claimed:?}"
+        );
+        assert!(
+            claimed.contains(&"table_grant posts.anon".to_string()),
+            "{claimed:?}"
+        );
+        assert!(report.conflicting.is_empty(), "{report:#?}");
+        assert!(report.drifted.is_empty(), "{report:#?}");
+        assert!(report.claimed[0]
+            .message
+            .contains("next `supatype push` records it"));
+        assert!(!doctor::has_strict_issues(&report), "{report:#?}");
+        assert!(!report.blocking);
+
+        // Recorded without consent: nothing was changed by hand.
+        push(&pool, &ast)
+            .await
+            .expect("a clean upgrade asks nothing");
+        assert!(is_clean(&doctor_of(&pool, &ast).await));
+    })
+    .await;
+}
+
+/// Hand edits made under an older engine, which recorded nothing: each policy and RLS attribute is
+/// compared with what the last push's schema makes of it, and one that differs is drift on access,
+/// so the push asks before overwriting it, as it would after the upgrade.
+#[tokio::test]
+async fn an_older_engines_object_edited_by_hand_is_drift() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
         exec(
             &pool,
-            "DELETE FROM _supatype.managed_objects WHERE kind = 'policy';
-             ALTER POLICY posts_select ON public.posts USING (false);",
+            &format!(
+                "{FORGET_THE_ACCESS_ROWS};
+                 ALTER POLICY posts_select ON public.posts USING (false);
+                 ALTER TABLE public.posts DISABLE ROW LEVEL SECURITY;"
+            ),
         )
         .await
         .unwrap();
 
         let report = doctor_of(&pool, &ast).await;
-        assert_eq!(names(&report.conflicting), ["policy posts.posts_select"]);
-        let item = &report.conflicting[0];
-        assert!(item.message.contains("replaces it"), "{item:?}");
+        assert_eq!(
+            names(&report.drifted),
+            ["policy posts.posts_select", "rls_attributes posts.rls"]
+        );
+        let claimed = names(&report.claimed);
+        assert!(
+            !claimed.contains(&"policy posts.posts_select".to_string()),
+            "{claimed:?}"
+        );
+        let item = &report.drifted[0];
         assert!(
             item.live.as_deref().unwrap_or_default().contains("false"),
             "{item:?}"
         );
+        assert!(item.message.contains("after asking"), "{item:?}");
         assert!(doctor::has_strict_issues(&report));
+
+        let refused = push(&pool, &ast)
+            .await
+            .expect_err("overwrote a hand edit made under the older engine without consent");
+        let drift = refused
+            .downcast_ref::<supatype_engine::ledger::drift::SecurityDrift>()
+            .unwrap_or_else(|| panic!("{refused:#}"));
+        assert_eq!(drift.objects.len(), 2, "{drift}");
+
+        common::push_with(
+            &pool,
+            &ast,
+            supatype_engine::push::ApplyOptions {
+                overwrite_drift: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("applied with consent");
+        assert!(is_clean(&doctor_of(&pool, &ast).await));
+    })
+    .await;
+}
+
+/// With no earlier schema to compare with, the push replaces them as before, and says so.
+#[tokio::test]
+async fn without_an_earlier_schema_the_push_says_it_could_not_check() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            &format!(
+                "{FORGET_THE_ACCESS_ROWS};
+                 UPDATE _supatype.migrations SET schema_snapshot = NULL;
+                 UPDATE _supatype.schema_state SET ast_snapshot = NULL;
+                 ALTER POLICY posts_select ON public.posts USING (false);"
+            ),
+        )
+        .await
+        .unwrap();
+        let outcome = push(&pool, &ast).await.expect("replaced as before");
+        let supatype_engine::push::Outcome::Applied { warnings, .. } = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("no earlier schema to compare") && w.contains("posts_select")),
+            "{warnings:?}"
+        );
     })
     .await;
 }

@@ -502,7 +502,201 @@ pub async fn decide_probed(
         }
     };
     decision.reconcile.adopt_equivalent(&proven);
+    upgrade_hand_edits(conn, state, &mut decision, previous).await;
     Ok(decision)
+}
+
+/// The first push after an upgrade finds every policy, grant, label and RLS attribute an older
+/// engine made with no ledger row, and replaces each with the schema's definition, as its name or
+/// location makes it ours. One edited by hand under the older engine would be overwritten silently,
+/// where the same edit made after the upgrade needs consent (plan 3.5). So each is compared with
+/// what the last push's schema makes of it: that schema's statements are run in a transaction that
+/// is always rolled back, each object read back, and one whose live fingerprint differs is a hand
+/// edit: its `Replace` carries it, so the push asks before overwriting it and doctor reports it as
+/// drift. One the last schema did not declare was not that engine's, and is taken over as before.
+/// Without a last schema there is nothing to compare with, and the push says so.
+///
+/// Not grants. An older engine granted on top of the database's default privileges and revoked
+/// only some, so on the supatype image every API role it left holds `REFERENCES`, `TRIGGER` and
+/// `TRUNCATE` beside what the rules allow: what the last schema renders today (the exact set, D7)
+/// is not what that engine left, and every clean upgrade would read as a hand edit. A grant with no
+/// row is taken over as before, and doctor lists it as claimed.
+async fn upgrade_hand_edits(
+    conn: &mut PgConnection,
+    state: &State,
+    decision: &mut Decision,
+    previous: Option<&SchemaAst>,
+) {
+    let recorded: BTreeSet<&ObjectKey> = state.ledger.iter().map(|r| &r.key).collect();
+    let candidates: Vec<usize> = decision
+        .reconcile
+        .actions
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            matches!(a, reconcile::Action::Replace { key, drifted: None, .. }
+                if crate::desired::security_relevant(key.kind)
+                    && key.kind != ObjectKind::TableGrant
+                    && !recorded.contains(key))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let keys = |indices: &[usize]| {
+        indices
+            .iter()
+            .map(|&i| decision.reconcile.actions[i].key().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let Some(previous) = previous else {
+        let warning = format!(
+            "{} object(s) that decide who may read or write have no record and there is no \
+             earlier schema to compare them with, so they are replaced with the schema's \
+             definition without checking for changes made by hand: {}",
+            candidates.len(),
+            keys(&candidates)
+        );
+        decision.diff.warnings.push(warning);
+        return;
+    };
+    let schema = match state.db.schema.as_str() {
+        "" => "public",
+        named => named,
+    };
+    let plan = field_views::field_view_plan(previous, &state.db);
+    let fields = match decision.diff.field_masking {
+        FieldMaskingTier::Views => FieldEnforcement::Views(&plan),
+        FieldMaskingTier::None | FieldMaskingTier::Extension => FieldEnforcement::Labels,
+    };
+    let before: BTreeMap<ObjectKey, String> = match desired_objects_for(previous, schema, fields) {
+        Ok(objects) => objects.into_iter().map(|d| (d.key, d.create_sql)).collect(),
+        Err(e) => {
+            decision.diff.warnings.push(format!(
+                "the last push's schema could not be rendered ({e:#}), so {} are replaced \
+                 without checking for changes made by hand",
+                keys(&candidates)
+            ));
+            return;
+        }
+    };
+    let probes: Vec<(ObjectKey, String)> = candidates
+        .iter()
+        .filter_map(|&i| {
+            let key = decision.reconcile.actions[i].key();
+            let sql = before.get(key)?;
+            Some((key.clone(), format!("{}\n{sql}", reset_sql(key))))
+        })
+        .collect();
+    let (made, failed) = match made_by(conn, schema, &probes).await {
+        Ok(made) => made,
+        Err(e) => {
+            decision.diff.warnings.push(format!(
+                "{} could not be compared with the last push's schema ({e:#}): they are replaced \
+                 without checking for changes made by hand",
+                keys(&candidates)
+            ));
+            return;
+        }
+    };
+    let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
+        state.fingerprints.iter().map(|f| (f.key(), f)).collect();
+    let mut unchecked = Vec::new();
+    for i in candidates {
+        let reconcile::Action::Replace { key, drifted, .. } = &mut decision.reconcile.actions[i]
+        else {
+            continue;
+        };
+        let Some(l) = live.get(key) else { continue };
+        // One the last push's schema did not declare is not an older engine's (a table adopted
+        // since, say, whose RLS the schema now asks for): taken over as before.
+        if !before.contains_key(key) {
+            continue;
+        }
+        if failed.contains(key) {
+            unchecked.push(key.to_string());
+            continue;
+        }
+        let expected = made.get(key).cloned();
+        let differs = expected
+            .as_ref()
+            .is_none_or(|e| e.fingerprint != l.fingerprint);
+        if differs {
+            *drifted = Some(reconcile::HandEdit {
+                recorded_def: expected.map(|e| e.definition).unwrap_or_else(|| {
+                    "(nothing: the schema of the last push makes no such object)".to_string()
+                }),
+                live_def: l.definition.clone(),
+                live_fp: l.fingerprint.clone(),
+            });
+        }
+    }
+    if !unchecked.is_empty() {
+        decision.diff.warnings.push(format!(
+            "{} could not be compared with the last push's schema: they are replaced without \
+             checking for changes made by hand",
+            unchecked.join(", ")
+        ));
+    }
+}
+
+/// What clears an object before the last schema's statement for it runs: its drop, or for row-level
+/// security, both attributes off, since that statement only turns on what it asks for.
+fn reset_sql(key: &ObjectKey) -> String {
+    match key.kind {
+        ObjectKind::RlsAttributes => format!(
+            "ALTER TABLE \"{s}\".\"{t}\" NO FORCE ROW LEVEL SECURITY;\n\
+             ALTER TABLE \"{s}\".\"{t}\" DISABLE ROW LEVEL SECURITY;",
+            s = key.schema,
+            t = key.parent
+        ),
+        _ => key.drop_sql().unwrap_or_default(),
+    }
+}
+
+/// Each probe's statements run in a transaction that is always rolled back, every one in a
+/// savepoint of its own, and the objects read back as a push reads them: the fingerprints found,
+/// and the keys whose statements the database refused.
+async fn made_by(
+    conn: &mut PgConnection,
+    schema: &str,
+    probes: &[(ObjectKey, String)],
+) -> Result<(BTreeMap<ObjectKey, ObjectFingerprint>, BTreeSet<ObjectKey>)> {
+    use sqlx::Connection;
+    let mut tx = conn.begin().await.context("begin the upgrade comparison")?;
+    let result = async {
+        // Never wait on a table someone is using: a comparison that cannot lock is skipped.
+        sqlx::query("SET LOCAL lock_timeout = '2s'")
+            .execute(&mut *tx)
+            .await?;
+        let mut failed = BTreeSet::new();
+        for (key, sql) in probes {
+            let mut one = (*tx).begin().await?;
+            match (&mut *one).execute(sqlx::raw_sql(sql)).await {
+                Ok(_) => one.commit().await?,
+                Err(e) => {
+                    tracing::debug!("{key} not compared with the last push's schema: {e}");
+                    one.rollback().await?;
+                    failed.insert(key.clone());
+                }
+            }
+        }
+        let after = live(&mut tx, schema).await?;
+        let made = after
+            .fingerprints
+            .into_iter()
+            .map(|f| (f.key(), f))
+            .filter(|(k, _)| probes.iter().any(|(p, _)| p == k))
+            .collect();
+        anyhow::Ok((made, failed))
+    }
+    .await;
+    tx.rollback()
+        .await
+        .context("roll the upgrade comparison back")?;
+    result
 }
 
 /// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
