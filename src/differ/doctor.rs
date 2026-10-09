@@ -45,7 +45,7 @@ pub struct DoctorReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rebaselined: Vec<DoctorItem>,
     /// Drifted objects that decide access, which `doctor --rebaseline` did not record because
-    /// `--overwrite-drift` was not given (plan 3.5). Still listed under `drifted`.
+    /// `--accept-access-drift` was not given (plan 3.5). Still listed under `drifted`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rebaseline_refused: Vec<DoctorItem>,
     /// Whether a push would change or refuse something: what `doctor --strict` fails on, so a

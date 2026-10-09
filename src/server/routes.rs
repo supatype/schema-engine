@@ -309,12 +309,25 @@ pub async fn execute_sql(Json(req): Json<SqlExecRequest>) -> EngineResponse<SqlE
 // ── Doctor (DB: drift report; with `rebaseline`, ledger rows only) ──────────
 
 pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    if let Some(refusal) = crate::inspect::doctor_flags_refusal(
+        req.rebaseline,
+        req.accept_access_drift,
+        req.overwrite_drift,
+    ) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: refusal.to_string(),
+                ..Default::default()
+            }),
+        ));
+    }
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
     let report = if req.rebaseline {
-        crate::inspect::rebaseline(&pool, &ast, &req.schema, req.overwrite_drift).await
+        crate::inspect::rebaseline(&pool, &ast, &req.schema, req.accept_access_drift).await
     } else {
         crate::inspect::doctor(&pool, &ast, &req.schema, false).await
     }
@@ -526,7 +539,7 @@ mod tests {
     use axum::http::StatusCode;
     use axum::Json;
 
-    use super::ErrorResponse;
+    use super::{DbRequest, ErrorResponse};
 
     fn sanitize_schema_identifier(
         schema: &str,
@@ -579,6 +592,34 @@ mod tests {
         let (status, Json(body)) = super::refusal_error(anyhow::anyhow!("failed"));
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body.reason, None);
+    }
+
+    /// `overwrite_drift` is the push's consent; a doctor asked for it refuses, naming the
+    /// rebaseline's own, before touching any database.
+    #[tokio::test]
+    async fn doctor_refuses_the_push_consent_and_names_its_own() {
+        let request =
+            |body: serde_json::Value| -> DbRequest { serde_json::from_value(body).unwrap() };
+        let ast = serde_json::json!({ "astVersion": 2, "models": [] });
+        for body in [
+            serde_json::json!({ "ast": ast, "rebaseline": true, "overwrite_drift": true }),
+            serde_json::json!({ "ast": ast, "overwrite_drift": true }),
+        ] {
+            let Err((status, Json(body))) = super::doctor(Json(request(body))).await else {
+                panic!("doctor took overwrite_drift");
+            };
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(body.error.contains("accept_access_drift"), "{}", body.error);
+        }
+        let Err((status, Json(body))) = super::doctor(Json(request(
+            serde_json::json!({ "ast": ast, "accept_access_drift": true }),
+        )))
+        .await
+        else {
+            panic!("doctor took accept_access_drift without rebaseline");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.error.contains("rebaseline"), "{}", body.error);
     }
 
     #[test]

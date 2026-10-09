@@ -174,6 +174,10 @@ enum Command {
         /// With `--rebaseline`: record drift on policies, grants, labels and RLS too, which is
         /// otherwise refused and listed (plan 3.5).
         #[arg(long, requires = "rebaseline")]
+        accept_access_drift: bool,
+        /// A push option, refused here with a pointer to `--accept-access-drift`: accepted by the
+        /// parser only so the refusal can say so.
+        #[arg(long, hide = true)]
         overwrite_drift: bool,
     },
     /// Apply a seed IR document to the database
@@ -585,12 +589,21 @@ async fn run(command: Command, input: String) -> Result<()> {
             schema,
             strict,
             rebaseline,
+            accept_access_drift,
             overwrite_drift,
         } => {
+            if let Some(refusal) = supatype_engine::inspect::doctor_flags_refusal(
+                rebaseline,
+                accept_access_drift,
+                overwrite_drift,
+            ) {
+                anyhow::bail!(refusal);
+            }
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
             let report = if rebaseline {
-                supatype_engine::inspect::rebaseline(&pool, &ast, &schema, overwrite_drift).await?
+                supatype_engine::inspect::rebaseline(&pool, &ast, &schema, accept_access_drift)
+                    .await?
             } else {
                 supatype_engine::inspect::doctor(&pool, &ast, &schema, false).await?
             };

@@ -128,6 +128,11 @@ supatype-engine push -i schema.json --database-url "$DATABASE_URL" --non-interac
 # Report drift, exit non-zero when managed objects are missing or stale
 supatype-engine doctor -i schema.json --database-url "$DATABASE_URL" --strict
 
+# Record drift as the new baseline (after a Postgres upgrade reformats definitions). Drift on
+# policies, grants, labels and RLS is recorded only with --accept-access-drift (HTTP
+# `accept_access_drift`); doctor refuses push's --overwrite-drift, which puts definitions back
+supatype-engine doctor -i schema.json --database-url "$DATABASE_URL" --rebaseline --accept-access-drift
+
 # Take ownership of pre-existing tables that match the schema
 supatype-engine adopt -i schema.json --database-url "$DATABASE_URL" --yes
 

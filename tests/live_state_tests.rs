@@ -311,7 +311,11 @@ async fn a_writer_refuses_on_stdout_while_the_engine_is_busy() {
             &["rollback"],
         ] {
             let run = engine(&url, args);
-            assert!(!run.ok, "{args:?} ran while the engine was busy: {}", run.stdout);
+            assert!(
+                !run.ok,
+                "{args:?} ran while the engine was busy: {}",
+                run.stdout
+            );
             let refusal: serde_json::Value = run
                 .stdout
                 .lines()
@@ -325,6 +329,45 @@ async fn a_writer_refuses_on_stdout_while_the_engine_is_busy() {
             );
             assert!(run.stderr.contains("try again"), "{args:?}: {}", run.stderr);
         }
+    })
+    .await;
+}
+
+/// Rebaselining drift on access takes `--accept-access-drift`; `--overwrite-drift`, the push's
+/// consent to put Supatype's definitions back, is refused by doctor with a pointer to it.
+#[tokio::test]
+async fn doctor_rebaselines_access_drift_with_its_own_consent() {
+    common::with_integration_url(|url| async move {
+        let first = push(&url);
+        assert!(first.ok, "first push: {}", first.stderr);
+        sql(&url, "ALTER TABLE public.widget DISABLE ROW LEVEL SECURITY").await;
+
+        let refused = engine(&url, &["doctor", "--rebaseline", "--overwrite-drift"]);
+        assert!(
+            !refused.ok,
+            "doctor took --overwrite-drift: {}",
+            refused.stdout
+        );
+        assert!(
+            refused.stderr.contains("--accept-access-drift"),
+            "{}",
+            refused.stderr
+        );
+
+        let without = engine(&url, &["doctor", "--rebaseline"]);
+        assert!(without.ok, "{}", without.stderr);
+        let report: serde_json::Value = serde_json::from_str(&without.stdout).unwrap();
+        let message = report["rebaselineRefused"][0]["message"].as_str().unwrap();
+        assert!(message.contains("--accept-access-drift"), "{report}");
+
+        let with = engine(&url, &["doctor", "--rebaseline", "--accept-access-drift"]);
+        assert!(with.ok, "{}", with.stderr);
+        let report: serde_json::Value = serde_json::from_str(&with.stdout).unwrap();
+        assert_eq!(
+            report["rebaselined"][0]["kind"], "rls_attributes",
+            "{report}"
+        );
+        assert!(report.get("rebaselineRefused").is_none(), "{report}");
     })
     .await;
 }

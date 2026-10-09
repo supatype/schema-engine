@@ -44,11 +44,14 @@ pub struct DbRequest {
     pub no_cache: bool,
     #[serde(default)]
     pub strict: bool,
-    /// Put back access changed outside Supatype (plan 3.5). Without it, a push that would have to
-    /// refuses instead. For `doctor` with `rebaseline`: record drift on access as the baseline too,
-    /// which is otherwise refused and listed.
+    /// For `push`: put back access changed outside Supatype (plan 3.5). Without it, a push that
+    /// would have to refuses instead. Push only: `doctor` refuses it.
     #[serde(default)]
     pub overwrite_drift: bool,
+    /// For `doctor` with `rebaseline`: record drift on access as the baseline too, which is
+    /// otherwise refused and listed.
+    #[serde(default)]
+    pub accept_access_drift: bool,
     #[serde(default)]
     pub yes: bool,
     /// For `adopt`: objects every push should leave alone, as `kind:table.name` (plan section 8).

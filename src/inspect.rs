@@ -11,9 +11,10 @@
 //!
 //! Drift on what decides access (a policy, grant, security label or RLS attribute) is a hand edit
 //! a push would ask about before overwriting (plan 3.5), and rebaselining it would make the hand
-//! edit Supatype's own without anyone having looked. So it is rebaselined only with the same
-//! consent a push takes, `--overwrite-drift`; without it each one is left drifted and listed as
-//! refused.
+//! edit Supatype's own without anyone having looked. So it is rebaselined only with consent of its
+//! own, `--accept-access-drift` (HTTP `accept_access_drift`); without it each one is left drifted
+//! and listed as refused. The push's `--overwrite-drift` puts Supatype's definition back, the
+//! opposite of accepting the hand edit, so doctor refuses it rather than reading it as this.
 
 use std::collections::BTreeMap;
 
@@ -45,13 +46,13 @@ pub async fn doctor(
 
 /// Records every drifted object's live definition as its baseline, in one transaction, and returns
 /// the report with those objects moved from `drifted` to `rebaselined`. Drift on access is recorded
-/// only with `overwrite_drift`; without it, it stays under `drifted` and is listed under
+/// only with `accept_access_drift`; without it, it stays under `drifted` and is listed under
 /// `rebaseline_refused`.
 pub async fn rebaseline(
     pool: &PgPool,
     ast: &SchemaAst,
     schema: &str,
-    overwrite_drift: bool,
+    accept_access_drift: bool,
 ) -> Result<DoctorReport> {
     let mut tx = pool.begin().await?;
     // As a push does: these are ledger writes too.
@@ -67,12 +68,12 @@ pub async fn rebaseline(
         .iter()
         .filter_map(|action| rebaselined(action, &rows))
     {
-        if security_relevant(key.kind) && !overwrite_drift {
+        if security_relevant(key.kind) && !accept_access_drift {
             let mut refused = DoctorItem::about(
                 key,
                 "decides who may read or write and was changed outside Supatype: not \
-                 rebaselined without --overwrite-drift, so a push still asks before putting it \
-                 back",
+                 rebaselined without --accept-access-drift, so a push still asks before putting \
+                 it back",
             );
             refused.recorded = item.recorded;
             refused.live = item.live;
@@ -95,6 +96,31 @@ pub async fn rebaseline(
         .retain(|item| !rebaselined.iter().any(|r| same(r, item)));
     report.blocking = doctor::has_strict_issues(&report);
     Ok(report)
+}
+
+/// Why a doctor request's consent flags are refused, if they are: `overwrite_drift` is the push's
+/// (put Supatype's definition back), and the consent to take drift on access as the baseline is
+/// `accept_access_drift`, which only means anything with `rebaseline`.
+pub fn doctor_flags_refusal(
+    rebaseline: bool,
+    accept_access_drift: bool,
+    overwrite_drift: bool,
+) -> Option<&'static str> {
+    if overwrite_drift {
+        return Some(
+            "--overwrite-drift (overwrite_drift) is a push option: it puts Supatype's definitions \
+             back. To record drift on policies, grants, labels and RLS as the new baseline, run \
+             doctor --rebaseline --accept-access-drift (HTTP: rebaseline with \
+             accept_access_drift: true).",
+        );
+    }
+    if accept_access_drift && !rebaseline {
+        return Some(
+            "--accept-access-drift (accept_access_drift) only applies with --rebaseline \
+             (rebaseline: true).",
+        );
+    }
+    None
 }
 
 /// For a drifted object (put back, or replaced as well because the schema changed it): its row

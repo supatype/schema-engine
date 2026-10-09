@@ -147,7 +147,10 @@ async fn drift_on_access_is_rebaselined_only_with_consent() {
             ["rls_attributes posts.rls"]
         );
         let refused = &report.rebaseline_refused[0];
-        assert!(refused.message.contains("--overwrite-drift"), "{refused:?}");
+        assert!(
+            refused.message.contains("--accept-access-drift"),
+            "{refused:?}"
+        );
         assert_eq!(refused.live.as_deref(), Some("enabled=f"));
         assert_eq!(names(&report.drifted), ["rls_attributes posts.rls"]);
         assert!(report.blocking);
