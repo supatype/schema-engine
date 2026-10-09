@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{IndexAst, SchemaAst};
+use crate::parser::ast::{FieldAst, IndexAst, ModelAst, SchemaAst};
 
 pub const MANAGED_PREFIX: &str = "supatype:managed";
 
@@ -294,14 +294,16 @@ type NameOwner = (String, &'static str, String);
 /// Postgres keeps index names (a primary key's and a unique constraint's included), sequence names
 /// and table names in one namespace per schema, and a clash there is `42P07` on the second
 /// `CREATE`. So `order.item_code` and `order_item.code` cannot both have `order_item_code_key`:
-/// the first in declaration order keeps it and the second gets `order_item_code_key1`, as Postgres
-/// itself would have given it. Constraint names are chosen as Postgres chooses them too: free of
+/// the first in order of table name keeps it and the second gets `order_item_code_key1`, as
+/// Postgres itself would have given it had it created them in that order. Constraint names are chosen as Postgres chooses them too: free of
 /// every constraint name in the schema, not only those on the same table, and a primary key or
 /// unique constraint, being both an index and a constraint, free in both. Tables, the names the
 /// schema states outright and the versions tables' fixed names are claimed first, then the
 /// sequences (Postgres names a serial's sequence when it creates the table, before anything else
-/// on it), then each model's keys and indexes in declaration order, then the checks and foreign
-/// keys. The functions and triggers a push generates are fitted the same way, with a digit where
+/// on it), then each model's keys and indexes, then the checks and foreign keys. Never in
+/// declaration order: tables go in order of their names, and a table's columns and indexes in
+/// order of theirs, so reordering models or fields in the schema renames nothing. Adding a model
+/// whose names clash with an existing one's can still move a digit, as it would in Postgres. The functions and triggers a push generates are fitted the same way, with a digit where
 /// two would otherwise share a name: trigger names per table, function names per schema (a
 /// function taking its table's row type is told apart by that argument and needs none). The
 /// desired set and the generator both read their names from here, so what a push creates is what
@@ -309,6 +311,28 @@ type NameOwner = (String, &'static str, String);
 #[derive(Debug, Default, Clone)]
 pub struct ObjectNames {
     chosen: HashMap<NameOwner, String>,
+}
+
+/// The schema's models in order of their tables' names; models on one table keep their declared
+/// order among themselves.
+fn sorted_models(ast: &SchemaAst) -> Vec<&ModelAst> {
+    let mut models: Vec<&ModelAst> = ast.models.iter().collect();
+    models.sort_by(|a, b| a.table_name().cmp(b.table_name()));
+    models
+}
+
+/// A model's fields in order of their names.
+fn sorted_fields(model: &ModelAst) -> Vec<(&String, &FieldAst)> {
+    let mut fields: Vec<_> = model.fields.iter().collect();
+    fields.sort_by(|a, b| a.0.cmp(b.0));
+    fields
+}
+
+/// Indexes in order of what they cover.
+fn sorted_indexes<'a>(indexes: impl Iterator<Item = &'a IndexAst>) -> Vec<&'a IndexAst> {
+    let mut indexes: Vec<&IndexAst> = indexes.collect();
+    indexes.sort_by_cached_key(|index| index_owner(index));
+    indexes
 }
 
 fn index_owner(index: &IndexAst) -> String {
@@ -328,13 +352,19 @@ impl ObjectNames {
             column_names_for, db_foreign_key, db_unique, default_foreign_key_column, versions_of,
             versions_table_name,
         };
-        use crate::parser::ast::{FieldAst, RelationCardinality};
+        use crate::parser::ast::RelationCardinality;
 
         let mut names = ObjectNames::default();
+        // Declaration order decides nothing: the tables are named in order of their names, and
+        // each table's columns and indexes in order of theirs, so reordering models or fields
+        // renames nothing (a model added with a clashing name still can, as it would in Postgres).
+        let models = sorted_models(ast);
+        let mut junctions: Vec<_> = ast.junction_tables.iter().collect();
+        junctions.sort_by(|a, b| a.name.cmp(&b.name));
         let mut relations = NameChooser::default();
         let mut constraints = NameChooser::default();
 
-        for model in &ast.models {
+        for model in &models {
             relations.claim(model.table_name());
             if versions_of(model).is_some() {
                 let vt = versions_table_name(model.table_name());
@@ -353,15 +383,15 @@ impl ObjectNames {
                 }
             }
         }
-        for junction in &ast.junction_tables {
+        for junction in &junctions {
             relations.claim(&junction.name);
         }
 
         let serial =
             |field: &FieldAst| matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_));
-        for model in &ast.models {
+        for model in &models {
             let table = model.table_name();
-            for (field_name, field) in &model.fields {
+            for (field_name, field) in sorted_fields(model) {
                 if !serial(field) {
                     continue;
                 }
@@ -373,14 +403,14 @@ impl ObjectNames {
             }
         }
 
-        for model in &ast.models {
+        for model in &models {
             let table = model.table_name();
             if model.fields.values().any(engine::field_is_primary_key) {
                 names.pick(table, "pkey", "", || {
                     choose_free(&mut [&mut relations, &mut constraints], table, None, "pkey")
                 });
             }
-            for (field_name, field) in &model.fields {
+            for (field_name, field) in sorted_fields(model) {
                 let unique_fk = matches!(
                     field,
                     FieldAst::Relation(rel)
@@ -405,7 +435,7 @@ impl ObjectNames {
                     });
                 }
             }
-            for index in model.indexes() {
+            for index in sorted_indexes(model.indexes().iter()) {
                 if index.name.is_none() {
                     names.pick(table, "index", &index_owner(index), || {
                         relations.choose(table, Some(&name_addition(&index.fields)), "idx")
@@ -413,13 +443,14 @@ impl ObjectNames {
                 }
             }
             // The indexes nobody declares: a named one is a Blocks GIN, the rest Postgres's own.
-            for index in implicit_model_indexes(model) {
+            let implicit = implicit_model_indexes(model);
+            for index in sorted_indexes(implicit.iter()) {
                 let label = if index.name.is_some() {
                     "gin_idx"
                 } else {
                     "idx"
                 };
-                names.pick(table, "index", &index_owner(&index), || {
+                names.pick(table, "index", &index_owner(index), || {
                     relations.choose(table, Some(&name_addition(&index.fields)), label)
                 });
             }
@@ -429,7 +460,7 @@ impl ObjectNames {
                 });
             }
         }
-        for junction in &ast.junction_tables {
+        for junction in &junctions {
             names.pick(&junction.name, "pkey", "", || {
                 choose_free(
                     &mut [&mut relations, &mut constraints],
@@ -442,9 +473,9 @@ impl ObjectNames {
 
         // Foreign keys, the checks a field type carries, declared bounds and model rules, each free
         // of every constraint name in the schema.
-        for model in &ast.models {
+        for model in &models {
             let table = model.table_name();
-            for (field_name, field) in &model.fields {
+            for (field_name, field) in sorted_fields(model) {
                 if let FieldAst::Relation(rel) = field {
                     if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
                         let column = db_foreign_key(field, field_name)
@@ -455,7 +486,7 @@ impl ObjectNames {
                     }
                 }
             }
-            for (field_name, field) in &model.fields {
+            for (field_name, field) in sorted_fields(model) {
                 let type_check = matches!(
                     field,
                     FieldAst::Email(_)
@@ -487,7 +518,7 @@ impl ObjectNames {
                 });
             }
         }
-        for junction in &ast.junction_tables {
+        for junction in &junctions {
             for column in [&junction.fk_a, &junction.fk_b] {
                 names.pick(&junction.name, "fkey", column, || {
                     constraints.choose(&junction.name, Some(column), "fkey")
@@ -511,7 +542,7 @@ impl ObjectNames {
         }
         let mut helper = NameChooser::default();
         let mut api = NameChooser::default();
-        for model in &ast.models {
+        for model in sorted_models(ast) {
             let table = model.table_name();
             let mut triggers = NameChooser::default();
             let lower = table.to_ascii_lowercase();
@@ -556,8 +587,10 @@ impl ObjectNames {
                 api.choose(table, None, "_write")
             });
             let mut fields = NameChooser::default();
+            let mut columns: Vec<&String> = model.access().fields.keys().collect();
+            columns.sort();
             for op in ["read", "write"] {
-                for column in model.access().fields.keys() {
+                for column in columns.iter().copied() {
                     self.pick(table, "field_can", &format!("{op}.{column}"), || {
                         fields.choose(&format!("can_{op}_{table}_"), Some(column), "")
                     });

@@ -146,7 +146,7 @@ fn parse(models: Vec<Value>) -> SchemaAst {
 }
 
 /// `order.item_code` and `order_item.code` both make `order_item_code_key`, and unique
-/// constraints share one namespace per schema: the first in declaration order keeps it and the
+/// constraints share one namespace per schema: the first in order of table name keeps it and the
 /// second gets the digit Postgres would have given it.
 fn clashing_uniques() -> SchemaAst {
     parse(vec![
@@ -168,6 +168,46 @@ fn a_clash_across_tables_takes_a_digit() {
     let names = ObjectNames::for_schema(&clashing_uniques());
     assert_eq!(names.unique("order", "item_code"), "order_item_code_key");
     assert_eq!(names.unique("order_item", "code"), "order_item_code_key1");
+}
+
+/// Declaration order decides no name: the same models and fields in another order take the same
+/// names, so reordering a schema never renames another model's constraints, indexes or sequences.
+#[test]
+fn reordering_models_and_fields_renames_nothing() {
+    let serial = json!({ "kind": "serial", "required": true });
+    let email = json!({ "kind": "email", "annotations": { "db": { "pgType": "TEXT" } } });
+    let order = |reversed: bool| {
+        let fields = if reversed {
+            json!({ "tag_email": email, "item_id": serial, "item_code": text(true), "id": id() })
+        } else {
+            json!({ "id": id(), "item_code": text(true), "item_id": serial, "tag_email": email })
+        };
+        model("Order", "order", fields)
+    };
+    let item = || {
+        model(
+            "OrderItem",
+            "order_item",
+            json!({ "id": id(), "code": text(true), "id_seq": text(false), "tag_email": email }),
+        )
+    };
+    let forward = parse(vec![order(false), item()]);
+    let backward = parse(vec![item(), order(true)]);
+    let keys = |ast: &SchemaAst| {
+        let mut keys: Vec<String> = desired_objects(ast, "public")
+            .unwrap()
+            .into_iter()
+            .map(|o| o.key.to_string())
+            .collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(keys(&forward), keys(&backward));
+    for ast in [&forward, &backward] {
+        let names = ObjectNames::for_schema(ast);
+        assert_eq!(names.unique("order", "item_code"), "order_item_code_key");
+        assert_eq!(names.unique("order_item", "code"), "order_item_code_key1");
+    }
 }
 
 #[test]
