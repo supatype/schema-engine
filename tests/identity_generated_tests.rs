@@ -351,6 +351,19 @@ fn an_identity_the_schema_no_longer_declares_is_dropped() {
         "{:?}",
         diff.warnings
     );
+    assert!(diff.summary.is_destructive, "{:?}", diff.summary);
+    let refused = migration::generate(&diff, false, "public", &ast).unwrap_err();
+    assert!(refused.to_string().contains("Use --force"), "{refused}");
+}
+
+#[test]
+fn switching_how_an_identity_numbers_is_not_destructive() {
+    let diff = differ::diff(
+        &identity_posts("always"),
+        &db(vec![identity_column("BY DEFAULT"), title()], &[]),
+    )
+    .unwrap();
+    assert!(!diff.summary.is_destructive, "{:?}", diff.operations);
 }
 
 #[test]
@@ -521,11 +534,15 @@ fn a_generated_column_becoming_plain_keeps_its_values() {
         ],
         &[("title_lower", RECORDED_LOWER)],
     );
-    let (sql, _) = sql_of(&ast, &live);
+    let (sql, diff) = sql_of(&ast, &live);
     assert!(
         sql.contains("ALTER TABLE \"public\".\"posts\" ALTER COLUMN \"title_lower\" DROP EXPRESSION IF EXISTS;"),
         "{sql}"
     );
+    // Asked for, as a drop is.
+    assert_eq!(diff.summary.destructive, 1, "{:?}", diff.operations);
+    let refused = migration::generate(&diff, false, "public", &ast).unwrap_err();
+    assert!(refused.to_string().contains("Use --force"), "{refused}");
 }
 
 // ─── fingerprint and introspection shape ────────────────────────────────────

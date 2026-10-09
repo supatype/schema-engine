@@ -540,6 +540,14 @@ fn changes_risk(changes: &serde_json::Value, field: &FieldAst, column: &str) -> 
         return Risk::Destructive;
     }
 
+    // Taking away how the database fills a column (its identity, its generation expression) is
+    // asked for like a drop: the column's values stop being the database's to keep, and putting
+    // it back is not the reverse (a re-added identity numbers on from the rows, a re-added
+    // expression replaces what was written meanwhile).
+    if removes_database_fill(changes) {
+        return Risk::Destructive;
+    }
+
     if let Some(null_change) = changes.get("nullability") {
         if null_change.get("to").and_then(|v| v.as_str()) == Some("not_null") {
             return Risk::Cautious;
@@ -697,7 +705,7 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                 text("to")
             ),
             "drop" => format!(
-                "{table}.{column}: is no longer an identity column; an insert must now give it a value"
+                "{table}.{column}: is no longer an identity column; an insert must now give it a value. Use --force to proceed (destructive)."
             ),
             _ => format!(
                 "{table}.{column}: identity changes from generated {} to generated {}",
@@ -709,7 +717,7 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
 
     if changes.get("generated").is_some() {
         parts.push(format!(
-            "{table}.{column}: is no longer a generated column; it keeps its values and can be written"
+            "{table}.{column}: is no longer a generated column; it keeps its values and can be written. Use --force to proceed (destructive)."
         ));
     }
 
@@ -718,6 +726,17 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
     } else {
         Some(parts.join("; "))
     }
+}
+
+/// Whether `changes` take a column's identity or its generation expression away.
+fn removes_database_fill(changes: &serde_json::Value) -> bool {
+    let action = |key: &str| {
+        changes
+            .get(key)
+            .and_then(|c| c.get("action"))
+            .and_then(|v| v.as_str())
+    };
+    action("identity") == Some("drop") || action("generated") == Some("drop_expression")
 }
 
 fn conversion_strategy_name(changes: &serde_json::Value) -> Option<&str> {

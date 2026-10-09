@@ -83,6 +83,30 @@ async fn converges(pool: &PgPool, ast: &SchemaAst) -> push::Outcome {
     outcome
 }
 
+/// Refused without consent, as a drop is, then pushed with `--force` and converging.
+async fn converges_only_forced(pool: &PgPool, ast: &SchemaAst) {
+    let refused = push(pool, ast).await;
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|e| e.to_string().contains("Use --force")),
+        "needs --force: {refused:?}"
+    );
+    common::push_with(
+        pool,
+        ast,
+        push::ApplyOptions {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("forced");
+    assert!(up_to_date(&push(pool, ast).await.expect("second push")));
+    let report = common::doctor(pool, ast).await;
+    assert!(is_clean(&report), "{report:#?}");
+}
+
 async fn one<
     T: for<'r> sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres> + Send + Unpin,
 >(
@@ -207,7 +231,9 @@ async fn a_plain_key_becomes_an_identity_numbered_past_its_rows_and_back() {
         converges(&pool, &with_id(identity("always"), None)).await;
         assert_eq!(how_filled(&pool, "id").await.1.as_deref(), Some("ALWAYS"));
 
-        converges(&pool, &with_id(int(json!({ "primaryKey": true })), None)).await;
+        // Taking the identity away is asked for, as a drop is.
+        let plain = with_id(int(json!({ "primaryKey": true })), None);
+        converges_only_forced(&pool, &plain).await;
         assert_eq!(how_filled(&pool, "id").await.0, "NO");
         exec(
             &pool,
@@ -270,13 +296,13 @@ async fn a_column_stops_and_starts_being_generated() {
             .await
             .unwrap();
 
-        // Plain: it keeps its values and can be written.
+        // Plain: asked for, as a drop is; it keeps its values and can be written.
         let plain = posts(json!({
             "id": identity("always"),
             "title": text(json!({})),
             "title_lower": text(json!({})),
         }));
-        converges(&pool, &plain).await;
+        converges_only_forced(&pool, &plain).await;
         assert_eq!(how_filled(&pool, "title_lower").await.2, "NEVER");
         assert_eq!(
             one::<String>(&pool, "SELECT title_lower FROM public.posts").await,
