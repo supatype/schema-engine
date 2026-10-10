@@ -54,10 +54,8 @@ pub async fn rebaseline(
     schema: &str,
     accept_access_drift: bool,
 ) -> Result<DoctorReport> {
-    let mut tx = pool.begin().await?;
     // As a push does: these are ledger writes too.
-    push::take_engine_lock(&mut tx).await?;
-    push::take_push_lock(&mut tx).await?;
+    let mut tx = push::begin_writer(pool).await?;
     let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
     let mut report = doctor::report_of(ast, &state, &decision);
     let rows: BTreeMap<&ObjectKey, &LedgerRow> = state.ledger.iter().map(|r| (&r.key, r)).collect();

@@ -929,9 +929,7 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
     // A rollback writes objects, the history and the ledger, as a push does: under the engine's
     // lock, refused while a push, adopt or rebaseline holds it, and taken before the migration to
     // undo is chosen, so it is still the latest when it is undone.
-    let mut tx = pool.begin().await?;
-    crate::push::take_engine_lock(&mut tx).await?;
-    crate::push::take_push_lock(&mut tx).await?;
+    let mut tx = crate::push::begin_writer(pool).await?;
 
     let latest = load_latest_applied_migration(pool).await?.ok_or_else(|| {
         anyhow::anyhow!("no_applied_migration: No applied migration to roll back")

@@ -72,12 +72,12 @@ pub async fn run(
         .await
         .context("Failed to bootstrap _supatype internal state")?;
     migration_history::assert_project_schema(pool, schema).await?;
-    let mut tx = pool.begin().await?;
-    if request.apply {
-        // As a push does: these are ledger writes too.
-        push::take_engine_lock(&mut tx).await?;
-        push::take_push_lock(&mut tx).await?;
-    }
+    // As a push does: these are ledger writes too. A preview writes nothing and takes no lock.
+    let mut tx = if request.apply {
+        push::begin_writer(pool).await?
+    } else {
+        pool.begin().await?
+    };
     let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
     let (outcome, changes, forgotten) = choose(ast, &state, &decision, request)?;
     if request.apply {

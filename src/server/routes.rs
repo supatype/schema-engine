@@ -448,9 +448,9 @@ fn parse_ast(
 }
 
 async fn connect_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse>)> {
-    PgPool::connect(url)
+    crate::db::connect(url)
         .await
-        .map_err(|e| engine_error(anyhow::anyhow!("Failed to connect to database: {e}")))
+        .map_err(|e| engine_error(format!("{e:#}")))
 }
 
 fn resolve_db_request_url(req: &DbRequest) -> Result<String, (StatusCode, Json<ErrorResponse>)> {

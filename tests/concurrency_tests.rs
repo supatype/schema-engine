@@ -1,0 +1,346 @@
+//! Writers that meet: a lost client, a second writer while one is in flight, and two first pushes
+//! at once (pre-launch items E33, A4-N1 and E14a).
+//!
+//! Every writer (push, adopt, rebaseline, rollback) takes the engine's two advisory lock keys,
+//! (872014, 1) and (872014, 2), for one transaction. A writer whose client is lost must not hold
+//! them, or its table locks, for longer than the engine's own timeouts; a second writer must be
+//! told `engine_busy` at once rather than queue behind the first.
+
+mod common;
+
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use serde_json::json;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::PgPool;
+use supatype_engine::push::Outcome;
+use supatype_engine::{parser, parser::ast::SchemaAst};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+
+use common::push;
+
+/// One model per `table:col,col` entry, every column nullable text and a uuid key, as the
+/// verification scripts' generator wrote them.
+fn tables_doc(spec: &str) -> String {
+    let models: Vec<serde_json::Value> = spec
+        .split(';')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let (table, cols) = part.split_once(':').unwrap_or((part, ""));
+            let mut fields = serde_json::Map::new();
+            fields.insert(
+                "id".into(),
+                json!({ "kind": "uuid", "required": true, "primaryKey": true,
+                        "default": { "kind": "genRandomUuid" },
+                        "annotations": { "db": { "pgType": "UUID", "unique": false } } }),
+            );
+            for col in cols.split(',').filter(|c| !c.is_empty()) {
+                fields.insert(
+                    col.into(),
+                    json!({ "kind": "text", "required": false,
+                            "annotations": { "db": { "pgType": "TEXT", "unique": false } } }),
+                );
+            }
+            let mut name = table.to_string();
+            name[..1].make_ascii_uppercase();
+            json!({ "name": name, "fields": fields,
+                    "options": { "timestamps": false, "softDelete": false },
+                    "annotations": { "db": { "tableName": table, "indexes": [] } } })
+        })
+        .collect();
+    json!({ "astVersion": 2, "models": models }).to_string()
+}
+
+fn tables(spec: &str) -> SchemaAst {
+    parser::parse(&tables_doc(spec)).expect("fixture parses")
+}
+
+/// The backend holding the engine's own key, (872014, 2), in this database, if any.
+async fn engine_lock_holder(pool: &PgPool) -> Option<i32> {
+    sqlx::query_scalar(
+        "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 872014 AND objid = 2
+            AND granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap()
+}
+
+/// How many of the two engine keys are held by anyone in this database.
+async fn engine_keys_held(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = 872014
+            AND objid IN (1, 2) AND granted
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn waits_on_a_lock(pool: &PgPool, pid: i32) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND wait_event_type = 'Lock')",
+    )
+    .bind(pid)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn backend_alive(pool: &PgPool, pid: i32) -> bool {
+    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)")
+        .bind(pid)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Poll `check` every 250 ms until it holds or `limit` passes; how long it took, if it held.
+async fn within<F, Fut>(limit: Duration, mut check: F) -> Option<Duration>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let start = Instant::now();
+    while start.elapsed() < limit {
+        if check().await {
+            return Some(start.elapsed());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    None
+}
+
+/// A session holding SHARE on `_supatype.managed_objects` for `seconds`, which keeps a push inside
+/// its transaction at the ledger write, as the verification scripts held one. Returns its pid,
+/// once the lock is granted.
+async fn hold_the_ledger(pool: &PgPool, seconds: u32) -> i32 {
+    // One connection, so the pid read is the session that takes the lock.
+    let one = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&one)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let sql = format!(
+            "BEGIN; LOCK TABLE _supatype.managed_objects IN SHARE MODE; \
+             SELECT pg_sleep({seconds}); COMMIT;"
+        );
+        let _ = sqlx::raw_sql(&sql).execute(&one).await;
+    });
+    let granted = within(Duration::from_secs(10), || async {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid = $1 AND mode = 'ShareLock'
+                AND relation = '_supatype.managed_objects'::regclass AND granted)",
+        )
+        .bind(pid)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    })
+    .await;
+    assert!(granted.is_some(), "the blocker never got its lock");
+    pid
+}
+
+async fn end_backend(pool: &PgPool, pid: i32) {
+    let _ = sqlx::query("SELECT pg_terminate_backend($1)")
+        .bind(pid)
+        .execute(pool)
+        .await;
+}
+
+const OPEN: u8 = 0;
+/// Bytes still arrive and are read, so the peer's writes succeed, but none is passed on: a client
+/// that stopped answering, or a network that drops everything with no reset.
+const SILENT: u8 = 1;
+/// Both sockets closed: the client process is gone.
+const KILLED: u8 = 2;
+
+/// A TCP relay between the engine and Postgres that a test can silence or cut, to lose a client
+/// mid-push without losing the test's own connections.
+struct Relay {
+    port: u16,
+    mode: Arc<AtomicU8>,
+}
+
+impl Relay {
+    async fn start(target: &PgConnectOptions) -> Relay {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mode = Arc::new(AtomicU8::new(OPEN));
+        let upstream = format!("{}:{}", target.get_host(), target.get_port());
+        let shared = mode.clone();
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let server = TcpStream::connect(&upstream).await.unwrap();
+                let (cr, cw) = client.into_split();
+                let (sr, sw) = server.into_split();
+                tokio::spawn(pump(cr, sw, shared.clone()));
+                tokio::spawn(pump(sr, cw, shared.clone()));
+            }
+        });
+        Relay { port, mode }
+    }
+
+    fn options(&self, target: &PgConnectOptions) -> PgConnectOptions {
+        target.clone().host("127.0.0.1").port(self.port)
+    }
+
+    fn set(&self, mode: u8) {
+        self.mode.store(mode, Ordering::SeqCst);
+    }
+}
+
+async fn pump(
+    mut from: tokio::net::tcp::OwnedReadHalf,
+    mut to: tokio::net::tcp::OwnedWriteHalf,
+    mode: Arc<AtomicU8>,
+) {
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        let read = tokio::select! {
+            read = from.read(&mut buf) => read,
+            _ = tokio::time::sleep(Duration::from_millis(100)) => Ok(usize::MAX),
+        };
+        match mode.load(Ordering::SeqCst) {
+            KILLED => return,
+            SILENT => {}
+            _ => match read {
+                Ok(0) | Err(_) => return,
+                Ok(usize::MAX) => {}
+                Ok(n) => {
+                    if to.write_all(&buf[..n]).await.is_err() {
+                        return;
+                    }
+                }
+            },
+        }
+        if matches!(read, Ok(0) | Err(_)) {
+            return;
+        }
+    }
+}
+
+/// A push held inside its transaction at the ledger write, through a relay, after one earlier
+/// push (so a rollback has a migration to undo).
+struct InFlight {
+    relay: Relay,
+    /// The push's backend.
+    pid: i32,
+    /// The session holding the ledger.
+    blocker: i32,
+    push: tokio::task::JoinHandle<anyhow::Result<Outcome>>,
+}
+
+impl InFlight {
+    async fn start(pool: &PgPool, hold: u32) -> InFlight {
+        push(pool, &tables("t1:a")).await.unwrap();
+        let blocker = hold_the_ledger(pool, hold).await;
+        let relay = Relay::start(&pool.connect_options()).await;
+        let relayed = PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(relay.options(&pool.connect_options()))
+            .await
+            .unwrap();
+        let push = tokio::spawn(async move { push(&relayed, &tables("t1:a,b")).await });
+        // Holding the lock is not enough: the push must be at the ledger write, waiting on the
+        // blocker.
+        let waiting = within(Duration::from_secs(60), || async {
+            match engine_lock_holder(pool).await {
+                Some(pid) => waits_on_a_lock(pool, pid).await,
+                None => false,
+            }
+        })
+        .await;
+        assert!(waiting.is_some(), "the push never reached the ledger write");
+        let pid = engine_lock_holder(pool).await.unwrap();
+        InFlight {
+            relay,
+            pid,
+            blocker,
+            push,
+        }
+    }
+
+    /// Abandon the push and end both sessions, whatever the test found.
+    async fn abandon(self, pool: &PgPool) {
+        self.push.abort();
+        end_backend(pool, self.pid).await;
+        end_backend(pool, self.blocker).await;
+    }
+}
+
+/// How long until the push's backend is gone and neither engine key is held, up to `limit`.
+async fn freed_within(pool: &PgPool, pid: i32, limit: Duration) -> Option<Duration> {
+    within(limit, || async {
+        engine_keys_held(pool).await == 0 && !backend_alive(pool, pid).await
+    })
+    .await
+}
+
+/// E33, network drop: the client stops answering after the push is inside its transaction. Once
+/// the blocker lets go, the backend finishes its statement and waits, idle in transaction, for a
+/// client that will never speak again. Without a timeout of its own it held both keys until TCP
+/// gave up (15 minutes to over 2 hours).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_silent_client_frees_both_keys_and_its_table_locks_within_the_idle_timeout() {
+    common::with_integration_pool(|pool| async move {
+        let push = InFlight::start(&pool, 120).await;
+        push.relay.set(SILENT);
+        end_backend(&pool, push.blocker).await;
+        let freed = freed_within(&pool, push.pid, Duration::from_secs(100)).await;
+        push.abandon(&pool).await;
+        let freed = freed.expect("a silent client still held the engine's keys after 100 s");
+        assert!(
+            freed <= Duration::from_secs(80),
+            "freed only after {freed:?}"
+        );
+    })
+    .await;
+}
+
+/// E33, client killed: the engine process dies while its backend waits on a lock. The backend
+/// does not read the socket while it waits, so without a timeout it held both keys until the
+/// blocker ended, however long that was.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_killed_client_waiting_on_a_lock_frees_both_keys_within_the_lock_timeout() {
+    common::with_integration_pool(|pool| async move {
+        let push = InFlight::start(&pool, 120).await;
+        push.relay.set(KILLED);
+        let freed = freed_within(&pool, push.pid, Duration::from_secs(45)).await;
+        push.abandon(&pool).await;
+        freed.expect("a killed client's backend still held the engine's keys after 45 s");
+    })
+    .await;
+}
+
+/// Every connection the engine makes asks Postgres to probe its peer, so a client lost with no
+/// reset is noticed in about a minute rather than when the operating system's two hours run out.
+#[tokio::test]
+async fn the_engines_connections_ask_postgres_to_probe_a_lost_client() {
+    common::with_integration_url(|url| async move {
+        let pool = supatype_engine::db::connect(&url).await.unwrap();
+        for (setting, wanted) in [
+            ("tcp_keepalives_idle", "30"),
+            ("tcp_keepalives_interval", "10"),
+            ("tcp_keepalives_count", "3"),
+        ] {
+            let value: String = sqlx::query_scalar(&format!("SHOW {setting}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(value, wanted, "{setting}");
+        }
+        pool.close().await;
+    })
+    .await;
+}

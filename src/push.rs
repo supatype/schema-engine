@@ -1271,9 +1271,7 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
 
     // These are writes too: under the engine's lock like any other, and only to the database the
     // plan found up to date.
-    let mut tx = pool.begin().await.context("begin up-to-date push")?;
-    take_engine_lock(&mut tx).await?;
-    take_push_lock(&mut tx).await?;
+    let mut tx = begin_writer(pool).await?;
     let now = read_state(&mut tx, &plan.schema)
         .await
         .context("Failed to re-read the database before applying")?;
@@ -1332,9 +1330,8 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
 async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<Outcome> {
     let strict = opts.strict;
     let rendered = render(&plan, opts)?;
-    let mut tx = pool.begin().await.context("begin migration transaction")?;
-    // Before anything is written, so a refusal records no failed migration.
-    take_engine_lock(&mut tx).await?;
+    // Locked before anything is written, so a refusal records no failed migration.
+    let mut tx = begin_writer(pool).await?;
     let applied = match within_transaction(&mut tx, &plan, strict, &rendered).await {
         Ok(applied) => applied,
         Err(e) => {
@@ -1386,7 +1383,6 @@ async fn within_transaction(
     strict: bool,
     rendered: &Rendered,
 ) -> Result<Applied> {
-    take_push_lock(tx).await?;
     // The reconcile's inputs, read again inside this transaction: what it decided is applied only
     // to the database it decided it against.
     let now = read_state(tx, &plan.schema)
@@ -1584,6 +1580,50 @@ fn created_sequence(
     };
     let sql = crate::desired::sequence_owned_by_sql(schema, &actual.name, table, column);
     Some((key, sql))
+}
+
+/// How long a writer's backend may sit idle inside its transaction before Postgres ends the
+/// session. The engine sends a writer's statements back to back, so only a client that stopped
+/// answering (frozen, or cut off with no reset) leaves it idle, holding the lock keys and every
+/// table lock it took (E33: 15 minutes to over 2 hours).
+const WRITER_IDLE_TIMEOUT: &str = "60s";
+/// How long one of a writer's statements may wait for a lock. A backend waiting on a lock does not
+/// read its socket, so it cannot see that its client was killed; this bounds that wait, and the
+/// queue of app queries a waiting `ALTER` holds up behind it.
+const WRITER_LOCK_TIMEOUT: &str = "30s";
+/// How often a writer's backend checks, while a statement runs, that its client is still there
+/// (Postgres 14 and later, on platforms that support it).
+const WRITER_CLIENT_CHECK: &str = "5s";
+
+/// A writer's transaction: bounded by the timeouts above, holding [`ENGINE_LOCK_ID`] (or refused
+/// with [`EngineBusy`]) and then [`PUSH_LOCK_ID`]. Push, adopt, rebaseline and rollback all begin
+/// here, so none of them can outlive a lost client.
+pub(crate) async fn begin_writer(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("begin the writer's transaction")?;
+    bound_writer(&mut tx).await?;
+    take_engine_lock(&mut tx).await?;
+    take_push_lock(&mut tx).await?;
+    Ok(tx)
+}
+
+/// `SET LOCAL` for the writer's timeouts, so they end with its transaction.
+async fn bound_writer(tx: &mut PgConnection) -> Result<()> {
+    sqlx::query(
+        "SELECT set_config('idle_in_transaction_session_timeout', $1, true),
+                set_config('lock_timeout', $2, true),
+                CASE WHEN current_setting('server_version_num')::int >= 140000
+                     THEN set_config('client_connection_check_interval', $3, true) END",
+    )
+    .bind(WRITER_IDLE_TIMEOUT)
+    .bind(WRITER_LOCK_TIMEOUT)
+    .bind(WRITER_CLIENT_CHECK)
+    .execute(&mut *tx)
+    .await
+    .context("bound the writer's transaction")?;
+    Ok(())
 }
 
 /// A signal to realtime, which skips WAL polls while anyone holds this transaction-level lock;
