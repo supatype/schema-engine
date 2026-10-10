@@ -35,6 +35,7 @@ use crate::introspector::fingerprint::{
 use crate::introspector::{self, catalog, catalog::CatalogState};
 use crate::ledger::{self, drift, probe, reconcile, LedgerRow};
 use crate::parser::ast::SchemaAst;
+use crate::sql_quote::{quote_literal, quote_qualified};
 use crate::state::database_state::DatabaseState;
 use crate::state::{migration_history, studio_state};
 
@@ -733,29 +734,23 @@ async fn upgrade_hand_edits(
 /// schema's statement, which revokes everything first; guarded on the role and the table, as the
 /// grant itself is.
 fn older_engine_grant_sql(schema: &str, table: &str, role: &str) -> String {
-    let target = format!(
-        "\"{}\".\"{}\"",
-        schema.replace('"', "\"\""),
-        table.replace('"', "\"\"")
-    );
-    let literal = |s: &str| s.replace('\'', "''");
+    let role_lit = quote_literal(role);
+    let target_lit = quote_literal(&quote_qualified(schema, table));
     format!(
         "DO $defaults$\nDECLARE\n  privileges text;\nBEGIN\n  \
-         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role_lit}') AND to_regclass('{target_lit}') IS NOT NULL THEN\n    \
+         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {role_lit}) AND to_regclass({target_lit}) IS NOT NULL THEN\n    \
          SELECT string_agg(DISTINCT a.privilege_type, ', ')\n      INTO privileges\n      \
          FROM pg_class c\n      \
          JOIN pg_default_acl d ON d.defaclrole = c.relowner AND d.defaclobjtype = 'r'\n                           \
          AND d.defaclnamespace IN (0, c.relnamespace)\n      \
          CROSS JOIN LATERAL aclexplode(d.defaclacl) a\n     \
-         WHERE c.oid = to_regclass('{target_lit}')\n       \
-         AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = '{role_lit}')\n       \
+         WHERE c.oid = to_regclass({target_lit})\n       \
+         AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {role_lit})\n       \
          AND a.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE');\n    \
          IF privileges IS NOT NULL THEN\n      \
-         EXECUTE format('GRANT %s ON %s TO %I', privileges, '{target_lit}', '{role_lit}');\n    \
+         EXECUTE format('GRANT %s ON %s TO %I', privileges, {target_lit}, {role_lit});\n    \
          END IF;\n  \
-         END IF;\nEND\n$defaults$;",
-        role_lit = literal(role),
-        target_lit = literal(&target),
+         END IF;\nEND\n$defaults$;"
     )
 }
 
@@ -763,12 +758,13 @@ fn older_engine_grant_sql(schema: &str, table: &str, role: &str) -> String {
 /// security, both attributes off, since that statement only turns on what it asks for.
 fn reset_sql(key: &ObjectKey) -> String {
     match key.kind {
-        ObjectKind::RlsAttributes => format!(
-            "ALTER TABLE \"{s}\".\"{t}\" NO FORCE ROW LEVEL SECURITY;\n\
-             ALTER TABLE \"{s}\".\"{t}\" DISABLE ROW LEVEL SECURITY;",
-            s = key.schema,
-            t = key.parent
-        ),
+        ObjectKind::RlsAttributes => {
+            let target = quote_qualified(&key.schema, &key.parent);
+            format!(
+                "ALTER TABLE {target} NO FORCE ROW LEVEL SECURITY;\n\
+                 ALTER TABLE {target} DISABLE ROW LEVEL SECURITY;"
+            )
+        }
         _ => key.drop_sql().unwrap_or_default(),
     }
 }

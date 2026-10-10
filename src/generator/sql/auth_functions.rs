@@ -5,6 +5,7 @@
 //!
 //! PostgREST sets `request.jwt.claims` as a GUC on each request.
 
+use crate::sql_quote::{comment_text, quote_ident, quote_literal};
 use serde::{Deserialize, Serialize};
 
 /// Configuration for auth function generation
@@ -53,13 +54,15 @@ pub const API_ROLES: [&str; 3] = ["anon", "authenticated", "service_role"];
 /// `rls::generate_security_labels` checks the privilege afterwards and refuses the push when a
 /// schema declaring field rules still does not have it.
 pub fn grant_auth_schema_usage(schema: &str) -> String {
-    let quoted = schema.replace('"', "\"\"");
+    let quoted = quote_ident(schema);
     let body: String = API_ROLES
         .iter()
         .map(|role| {
             format!(
-                "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN\n    \
-                 EXECUTE 'GRANT USAGE ON SCHEMA \"{quoted}\" TO {role}';\n  END IF;\n"
+                "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {}) THEN\n    \
+                 EXECUTE {};\n  END IF;\n",
+                quote_literal(role),
+                quote_literal(&format!("GRANT USAGE ON SCHEMA {quoted} TO {role}"))
             )
         })
         .collect();
@@ -73,7 +76,7 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
 
     sql.push_str(&format!(
         "-- Auth helper functions for project: {}\n",
-        config.project_ref
+        comment_text(&config.project_ref)
     ));
     sql.push_str(&format!(
         "CREATE SCHEMA IF NOT EXISTS {};\n\n",
@@ -100,12 +103,12 @@ pub fn generate_auth_functions(config: &AuthFunctionConfig) -> String {
     sql
 }
 
-/// auth.uid() — the caller's user id, or NULL when the request has no subject.
+/// auth.uid(): the caller's user id, or NULL when the request has no subject.
 ///
 /// **NULL, not the nil UUID.** It used to fall back to
 /// `00000000-0000-0000-0000-000000000000`, and that is a hole rather than a convenience: any rule
 /// shaped `column = auth.uid()` then matches for *every* subject-less caller wherever that column
-/// can hold the nil UUID — and a column holds it exactly when a subject-less writer stamped it,
+/// can hold the nil UUID, and a column holds it exactly when a subject-less writer stamped it,
 /// which is what a `service_role` write is. So a row written through the admin API became readable
 /// by anyone whose token carried no `sub`.
 ///
@@ -127,7 +130,7 @@ $$ LANGUAGE sql STABLE;"#,
     )
 }
 
-/// auth.role() — extracts the role from JWT claims (self-host / dedicated cloud).
+/// auth.role(): extracts the role from JWT claims (self-host / dedicated cloud).
 fn generate_role_function(schema: &str, _project_ref: &str) -> String {
     format!(
         r#"-- auth.role() -- application role for access rules.
@@ -149,7 +152,7 @@ $$ LANGUAGE sql STABLE;"#,
     )
 }
 
-/// auth.email() — extracts the email from the JWT claims.
+/// auth.email(): extracts the email from the JWT claims.
 fn generate_email_function(schema: &str) -> String {
     format!(
         r#"-- auth.email() -- extracts email from JWT claims
@@ -160,7 +163,7 @@ $$ LANGUAGE sql STABLE;"#,
     )
 }
 
-/// auth.claim(path) — reads a nested JWT claim by dotted path.
+/// auth.claim(path): reads a nested JWT claim by dotted path.
 ///
 /// `Claim<"app_metadata.tier">` in a schema compiles to a call here. Returning
 /// `jsonb` rather than `text` keeps arrays usable: a claim holding a list is what
@@ -169,7 +172,7 @@ $$ LANGUAGE sql STABLE;"#,
 /// `->>`-style semantics use `#>>`, which this mirrors.
 ///
 /// A missing path yields SQL NULL, so a policy comparing against an absent claim
-/// is false rather than an error — an unauthenticated or partial token must deny,
+/// is false rather than an error: an unauthenticated or partial token must deny,
 /// not break the query.
 fn generate_claim_function(schema: &str) -> String {
     format!(
@@ -186,7 +189,7 @@ $$ LANGUAGE sql STABLE;"#,
     )
 }
 
-/// auth.jwt() — the verified claims, and the one place they are read.
+/// auth.jwt(): the verified claims, and the one place they are read.
 ///
 /// **Every other helper goes through this**, which is what makes the guard below worth having
 /// rather than repeating: `current_setting(…, true)` returns NULL when the setting is unset but the

@@ -26,6 +26,7 @@
 
 use crate::parser::accessors::{db_table_name, versions_of, versions_table_name};
 use crate::parser::ast::{ModelAst, PublishingAst, SchemaAst};
+use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 use anyhow::{bail, Result};
 
 /// Schema holding one draft view per versioned model, selected with `Accept-Profile: draft`.
@@ -58,18 +59,6 @@ pub fn versions_tables(ast: &SchemaAst) -> Vec<String> {
         .iter()
         .map(|m| versions_table_name(db_table_name(m)))
         .collect()
-}
-
-fn quoted(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-/// Single-quote a string for SQL.
-///
-/// Every value passed here comes from a schema the author wrote, but a stray apostrophe in a role
-/// name would otherwise end the literal and change the meaning of a policy.
-fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 /// Refuse a versioned model that also masks a column.
@@ -163,16 +152,16 @@ pub fn create_versions_table_sql(
          CONSTRAINT {record_version_key_q} UNIQUE (\"record_id\", \"version\")\n\
          );\n\n\
          CREATE INDEX IF NOT EXISTS {index_q} ON {schema_q}.{versions_q} (\"record_id\", \"version\" DESC);",
-        schema_q = quoted(schema),
-        versions_q = quoted(versions_table),
-        table_q = quoted(table),
-        pk_q = quoted(primary_key),
-        index_q = quoted(&index),
-        pk_name_q = quoted(&pk_name),
-        fk_name_q = quoted(&fk_name),
-        status_check_q = quoted(&status_check),
+        schema_q = quote_ident(schema),
+        versions_q = quote_ident(versions_table),
+        table_q = quote_ident(table),
+        pk_q = quote_ident(primary_key),
+        index_q = quote_ident(&index),
+        pk_name_q = quote_ident(&pk_name),
+        fk_name_q = quote_ident(&fk_name),
+        status_check_q = quote_ident(&status_check),
         status_check_expr = super::type_checks::versions_status_check_expr(),
-        record_version_key_q = quoted(&record_version_key),
+        record_version_key_q = quote_ident(&record_version_key),
     )
 }
 
@@ -182,9 +171,9 @@ pub use crate::managed::{versions_record_index_name, versions_record_key_name};
 pub fn versions_record_index_sql(schema: &str, versions_table: &str) -> String {
     format!(
         "CREATE INDEX IF NOT EXISTS {} ON {}.{} (\"record_id\", \"version\" DESC);",
-        quoted(&versions_record_index_name(versions_table)),
-        quoted(schema),
-        quoted(versions_table),
+        quote_ident(&versions_record_index_name(versions_table)),
+        quote_ident(schema),
+        quote_ident(versions_table),
     )
 }
 
@@ -419,9 +408,9 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
          REVOKE ALL PRIVILEGES ON {schema_q}.{versions_q} FROM authenticated;\n\
          GRANT SELECT ON {schema_q}.{versions_q} TO authenticated;\n\
          GRANT ALL ON {schema_q}.{versions_q} TO service_role;\n\n",
-        schema_q = quoted(schema),
-        versions_q = quoted(versions_table),
-        policy_q = quoted(&policy),
+        schema_q = quote_ident(schema),
+        versions_q = quote_ident(versions_table),
+        policy_q = quote_ident(&policy),
         model_lit = quote_literal(model_table),
         helper = HELPER_SCHEMA,
     )
@@ -473,14 +462,12 @@ pub fn drop_draft_views_sql(ast: &SchemaAst) -> String {
 /// which is every first push.
 pub fn drop_views_in_schema_sql(schema: &str, tables: &[&str]) -> String {
     let mut out = format!(
-        "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '{schema}') THEN\n"
+        "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = {}) THEN\n",
+        quote_literal(schema)
     );
     for table in tables {
-        out.push_str(&format!(
-            "    EXECUTE 'DROP VIEW IF EXISTS {}.{}';\n",
-            quoted(schema),
-            quoted(table),
-        ));
+        let drop = format!("DROP VIEW IF EXISTS {}", quote_qualified(schema, table));
+        out.push_str(&format!("    EXECUTE {};\n", quote_literal(&drop)));
     }
     out.push_str("  END IF;\nEND $$;\n\n");
     out
@@ -490,7 +477,7 @@ fn draft_schema_preamble() -> String {
     format!(
         "REVOKE ALL ON SCHEMA {draft} FROM anon;\n\
          GRANT USAGE ON SCHEMA {draft} TO authenticated, service_role;\n\n",
-        draft = quoted(DRAFT_SCHEMA),
+        draft = quote_ident(DRAFT_SCHEMA),
     )
 }
 
@@ -524,10 +511,10 @@ fn draft_view_sql(schema: &str, table: &str, versions_table: &str) -> String {
          ORDER BY pv.\"record_id\", pv.\"version\" DESC\n  \
          ) v;\n\
          GRANT SELECT ON {draft}.{table_q} TO authenticated, service_role;\n\n",
-        draft = quoted(DRAFT_SCHEMA),
-        schema_q = quoted(schema),
-        table_q = quoted(table),
-        versions_q = quoted(versions_table),
+        draft = quote_ident(DRAFT_SCHEMA),
+        schema_q = quote_ident(schema),
+        table_q = quote_ident(table),
+        versions_q = quote_ident(versions_table),
     )
 }
 
@@ -546,7 +533,7 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
     let publishing = require_publishing(ast)?;
 
     let mut out = String::from("CREATE SCHEMA IF NOT EXISTS ");
-    out.push_str(&quoted(DRAFT_SCHEMA));
+    out.push_str(&quote_ident(DRAFT_SCHEMA));
     out.push_str(";\n\n");
     out.push_str(&settings_sql(publishing));
     out.push('\n');
@@ -592,8 +579,8 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
             // is the layer's to take back until grants are on the ledger.
             out.push_str(&format!(
                 "REVOKE INSERT, UPDATE ON {schema_q}.{versions_q} FROM authenticated;\n\n",
-                schema_q = quoted(schema),
-                versions_q = quoted(&versions_table),
+                schema_q = quote_ident(schema),
+                versions_q = quote_ident(&versions_table),
             ));
             out.push_str(&audit_trigger_sql(
                 schema,
@@ -779,11 +766,11 @@ fn can_edit_function_sql(
          $fn$;\n\
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}({pk_type}) TO authenticated, service_role;\n\n",
         helper = HELPER_SCHEMA,
-        fn_q = quoted(&name),
+        fn_q = quote_ident(&name),
         pk_type = primary_key_type,
-        schema_q = quoted(schema),
-        table_q = quoted(table),
-        pk_q = quoted(&primary_key),
+        schema_q = quote_ident(schema),
+        table_q = quote_ident(table),
+        pk_q = quote_ident(&primary_key),
     )
 }
 
@@ -835,12 +822,12 @@ fn draft_aware_select_policy_sql(
          CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
          FOR SELECT USING ({helper}.{fn_q}({pk_q}::text));\n\n",
         helper = HELPER_SCHEMA,
-        fn_q = quoted(&helper_fn),
-        policy_q = quoted(&policy),
-        schema_q = quoted(schema),
-        table_q = quoted(table),
-        versions_q = quoted(versions_table),
-        pk_q = quoted(primary_key),
+        fn_q = quote_ident(&helper_fn),
+        policy_q = quote_ident(&policy),
+        schema_q = quote_ident(schema),
+        table_q = quote_ident(table),
+        versions_q = quote_ident(versions_table),
+        pk_q = quote_ident(primary_key),
         table_lit = quote_literal(table),
     )
 }
@@ -872,7 +859,7 @@ fn versions_write_access_sql(
 ) -> String {
     let can_edit = format!(
         "{HELPER_SCHEMA}.{}",
-        quoted(&names.can_edit_function(table))
+        quote_ident(&names.can_edit_function(table))
     );
     let insert_policy = crate::managed::policy_name(versions_table, "insert");
     let update_policy = crate::managed::policy_name(versions_table, "update");
@@ -887,10 +874,10 @@ fn versions_write_access_sql(
          FOR UPDATE USING ({can_edit}(\"record_id\")) WITH CHECK ({can_edit}(\"record_id\"));\n\n\
          GRANT INSERT, UPDATE ON {schema_q}.{versions_q} TO authenticated;\n\n\
          {trigger}",
-        insert_q = quoted(&insert_policy),
-        update_q = quoted(&update_policy),
-        schema_q = quoted(schema),
-        versions_q = quoted(versions_table),
+        insert_q = quote_ident(&insert_policy),
+        update_q = quote_ident(&update_policy),
+        schema_q = quote_ident(schema),
+        versions_q = quote_ident(versions_table),
         trigger = versions_guard_trigger_sql(schema, versions_table, &guard),
     )
 }
@@ -942,9 +929,9 @@ CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
 
 "#,
         helper = HELPER_SCHEMA,
-        guard_q = quoted(guard),
-        schema_q = quoted(schema),
-        versions_q = quoted(versions_table),
+        guard_q = quote_ident(guard),
+        schema_q = quote_ident(schema),
+        versions_q = quote_ident(versions_table),
     )
 }
 
@@ -989,11 +976,11 @@ CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
 
 "#,
         helper = HELPER_SCHEMA,
-        audit_q = quoted(&audit),
-        schema_q = quoted(schema),
-        table_q = quoted(table),
-        versions_q = quoted(versions_table),
-        pk_q = quoted(primary_key),
+        audit_q = quote_ident(&audit),
+        schema_q = quote_ident(schema),
+        table_q = quote_ident(table),
+        versions_q = quote_ident(versions_table),
+        pk_q = quote_ident(primary_key),
     )
 }
 
@@ -1024,16 +1011,16 @@ fn write_search_path(schema: &str) -> String {
     if schema == "public" {
         return "pg_catalog, public, extensions".to_string();
     }
-    format!("pg_catalog, {}, public, extensions", quoted(schema))
+    format!("pg_catalog, {}, public, extensions", quote_ident(schema))
 }
 
 fn rpc_functions_sql(schema: &str) -> String {
     let write_path = write_search_path(schema);
     let helper = HELPER_SCHEMA;
-    let rpc = RPC_SCHEMA;
+    let rpc_q = quote_ident(RPC_SCHEMA);
     format!(
-        r#"CREATE SCHEMA IF NOT EXISTS "{rpc}";
-GRANT USAGE ON SCHEMA "{rpc}" TO anon, authenticated, service_role;
+        r#"CREATE SCHEMA IF NOT EXISTS {rpc_q};
+GRANT USAGE ON SCHEMA {rpc_q} TO anon, authenticated, service_role;
 
 -- The registry row for a table, or an error naming what was asked for.
 --
@@ -1062,7 +1049,7 @@ CREATE OR REPLACE FUNCTION {helper}.versioned_model(p_table text)
 -- table's SELECT policy to pass, which for anyone entitled to edit the record it does: draft
 -- visibility covers every Studio role precisely so that an editor cannot save over a pending draft
 -- they were not shown.
-CREATE OR REPLACE FUNCTION "{rpc}".create_draft(model_table text, record_id text, data jsonb)
+CREATE OR REPLACE FUNCTION {rpc_q}.create_draft(model_table text, record_id text, data jsonb)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
@@ -1122,7 +1109,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".create_draft(model_table text, record_id text
 --
 -- The `UPDATE` runs under the caller's own rules, so the policy that already governs editing governs
 -- publishing and there is nothing new to keep in step.
-CREATE OR REPLACE FUNCTION "{rpc}".publish(
+CREATE OR REPLACE FUNCTION {rpc_q}.publish(
   model_table text, record_id text, version integer DEFAULT NULL, locales text[] DEFAULT NULL)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
@@ -1264,7 +1251,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".publish(
 -- On a model with no localized column this is the whole record, and the content stays in the row:
 -- withdrawing publication is not the same as reverting an edit, and blanking the row would lose the
 -- thing a later publish would restore.
-CREATE OR REPLACE FUNCTION "{rpc}".unpublish(
+CREATE OR REPLACE FUNCTION {rpc_q}.unpublish(
   model_table text, record_id text, locales text[] DEFAULT NULL)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
@@ -1331,7 +1318,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".unpublish(
 --
 -- Nothing goes live without publishing, so restoring is an editing act with a preview and a second
 -- decision behind it, not a way to change what the world sees in one call.
-CREATE OR REPLACE FUNCTION "{rpc}".restore_version(model_table text, record_id text, version integer)
+CREATE OR REPLACE FUNCTION {rpc_q}.restore_version(model_table text, record_id text, version integer)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
     entry {helper}.versioned_models := {helper}.versioned_model(model_table);
@@ -1347,7 +1334,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".restore_version(model_table text, record_id t
         USING ERRCODE = '02000';
     END IF;
 
-    RETURN "{rpc}".create_draft(model_table, record_id, snapshot);
+    RETURN {rpc_q}.create_draft(model_table, record_id, snapshot);
   END;
   $fn$;
 
@@ -1371,7 +1358,7 @@ CREATE OR REPLACE FUNCTION {helper}.default_locales(entry {helper}.versioned_mod
 -- `SECURITY INVOKER`, and it writes the version row, so the same `can_edit` gate that governs
 -- drafting governs scheduling. Nothing is published here: this records an intent, and the job acts
 -- on it.
-CREATE OR REPLACE FUNCTION "{rpc}".schedule_publish(
+CREATE OR REPLACE FUNCTION {rpc_q}.schedule_publish(
   model_table text, record_id text, at timestamptz,
   version integer DEFAULT NULL, locales text[] DEFAULT NULL)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
@@ -1419,7 +1406,7 @@ CREATE OR REPLACE FUNCTION "{rpc}".schedule_publish(
   $fn$;
 
 -- Withdraw a schedule without publishing anything.
-CREATE OR REPLACE FUNCTION "{rpc}".unschedule_publish(
+CREATE OR REPLACE FUNCTION {rpc_q}.unschedule_publish(
   model_table text, record_id text, version integer DEFAULT NULL, locales text[] DEFAULT NULL)
   RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
   DECLARE
@@ -1443,9 +1430,9 @@ CREATE OR REPLACE FUNCTION "{rpc}".unschedule_publish(
   END;
   $fn$;
 
-GRANT EXECUTE ON FUNCTION "{rpc}".schedule_publish(text, text, timestamptz, integer, text[])
+GRANT EXECUTE ON FUNCTION {rpc_q}.schedule_publish(text, text, timestamptz, integer, text[])
   TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION "{rpc}".unschedule_publish(text, text, integer, text[])
+GRANT EXECUTE ON FUNCTION {rpc_q}.unschedule_publish(text, text, integer, text[])
   TO authenticated, service_role;
 
 -- Publish everything whose scheduled time has arrived.
@@ -1480,7 +1467,7 @@ CREATE OR REPLACE FUNCTION {helper}.run_due_publishes(now_at timestamptz DEFAULT
           USING now_at
       LOOP
         BEGIN
-          PERFORM "{rpc}".publish(
+          PERFORM {rpc_q}.publish(
             entry."table_name", due.record_id::text, due.version, due.locales);
           published := published + 1;
         EXCEPTION WHEN OTHERS THEN
@@ -1570,10 +1557,10 @@ GRANT EXECUTE ON FUNCTION {helper}.preview_epoch() TO anon, authenticated, servi
 GRANT EXECUTE ON FUNCTION {helper}.caller_id() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION {helper}.versioned_model(text) TO authenticated, service_role;
 
-GRANT EXECUTE ON FUNCTION "{rpc}".create_draft(text, text, jsonb) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION "{rpc}".publish(text, text, integer, text[]) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION "{rpc}".unpublish(text, text, text[]) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION "{rpc}".restore_version(text, text, integer) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {rpc_q}.create_draft(text, text, jsonb) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {rpc_q}.publish(text, text, integer, text[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {rpc_q}.unpublish(text, text, text[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION {rpc_q}.restore_version(text, text, integer) TO authenticated, service_role;
 
 "#
     )
@@ -1594,13 +1581,12 @@ GRANT EXECUTE ON FUNCTION "{rpc}".restore_version(text, text, integer) TO authen
 /// `IF NOT EXISTS` on the extension and an upsert on the schedule, so re-emission on every push is
 /// free and a changed schedule converges rather than accumulating jobs.
 fn cron_jobs_sql() -> String {
-    let helper = HELPER_SCHEMA;
     format!(
         r#"-- Scheduled publishing and retention, if this database has a scheduler.
 DO $cron$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
-    RAISE NOTICE 'pg_cron is not installed here, so scheduled publishing and version pruning will not run on a timer. Everything else works. Call {helper}.run_due_publishes(), {helper}.prune_versions() and {helper}.prune_preview_links() from a scheduler of your own.';
+    RAISE NOTICE 'pg_cron is not installed here, so scheduled publishing and version pruning will not run on a timer. Everything else works. Call {HELPER_SCHEMA}.run_due_publishes(), {HELPER_SCHEMA}.prune_versions() and {HELPER_SCHEMA}.prune_preview_links() from a scheduler of your own.';
     RETURN;
   END IF;
 
@@ -1615,14 +1601,14 @@ BEGIN
   -- Every minute: the smallest useful granularity for "publish at nine", and the job does nothing
   -- but one indexed scan per versioned model when there is nothing due.
   PERFORM cron.schedule('supatype-scheduled-publish', '* * * * *',
-    'SELECT {helper}.run_due_publishes()');
+    'SELECT {HELPER_SCHEMA}.run_due_publishes()');
 
   -- Hourly: pruning is housekeeping, and running it every minute would spend more on the scan than
   -- it reclaims.
   -- One job for both kinds of housekeeping: they run at the same cadence and a second timer
   -- would be a second thing to notice had stopped.
   PERFORM cron.schedule('supatype-prune-versions', '0 * * * *',
-    'SELECT {helper}.prune_versions(), {helper}.prune_preview_links()');
+    'SELECT {HELPER_SCHEMA}.prune_versions(), {HELPER_SCHEMA}.prune_preview_links()');
 END;
 $cron$;
 

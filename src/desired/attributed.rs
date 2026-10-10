@@ -246,7 +246,7 @@ fn list_element(value: &str) -> String {
     if plain {
         value.to_string()
     } else {
-        format!("\"{}\"", value.replace('"', "\"\""))
+        crate::sql_quote::quote_ident(value)
     }
 }
 

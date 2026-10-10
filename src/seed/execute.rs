@@ -12,6 +12,7 @@ use super::plan::{Batch, ConnectLookup, Plan, PlannedStep, PlannedWrite, WriteKi
 use super::{Condition, Value};
 use crate::generator::sql::rls::{access_rule_to_expr, operand_to_expr};
 use crate::parser::ast::{ModelAst, Operand, SchemaAst};
+use crate::sql_quote::quote_ident;
 use indexmap::IndexMap;
 use sqlx::{Executor, PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
@@ -68,11 +69,6 @@ fn render(value: &Value) -> Rendered {
     }
 }
 
-/// Quote an identifier for SQL.
-fn quote(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
-}
-
 /// Build the statement for one batch.
 ///
 /// Columns whose value is inline rather than bound are lifted out of the `UNNEST` array
@@ -119,8 +115,8 @@ fn batch_sql(
 
     let all_columns: Vec<String> = bound_columns
         .iter()
-        .map(|c| quote(c))
-        .chain(inline.iter().map(|(c, _)| quote(c)))
+        .map(|c| quote_ident(c))
+        .chain(inline.iter().map(|(c, _)| quote_ident(c)))
         .collect();
 
     let select_list: Vec<String> = bound_columns
@@ -132,7 +128,7 @@ fn batch_sql(
             Some(expression) => expression.clone(),
             None => {
                 let target = column_types.get(*c).map(String::as_str).unwrap_or("text");
-                format!("src.{}::{}", quote(c), target)
+                format!("src.{}::{}", quote_ident(c), target)
             }
         })
         .chain(inline.iter().map(|(_, expression)| expression.clone()))
@@ -148,7 +144,7 @@ fn batch_sql(
             unnest_args.join(", "),
             bound_columns
                 .iter()
-                .map(|c| quote(c))
+                .map(|c| quote_ident(c))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -156,19 +152,19 @@ fn batch_sql(
 
     let mut sql = format!(
         "INSERT INTO {} ({}) SELECT {} FROM {}",
-        quote(table),
+        quote_ident(table),
         all_columns.join(", "),
         select_list.join(", "),
         source
     );
 
     if batch.kind == WriteKind::Upsert && !batch.conflict.is_empty() {
-        let conflict: Vec<String> = batch.conflict.iter().map(|c| quote(c)).collect();
+        let conflict: Vec<String> = batch.conflict.iter().map(|c| quote_ident(c)).collect();
         let updates: Vec<String> = batch
             .columns
             .iter()
             .filter(|column| !batch.conflict.contains(*column))
-            .map(|column| format!("{c} = EXCLUDED.{c}", c = quote(column)))
+            .map(|column| format!("{c} = EXCLUDED.{c}", c = quote_ident(column)))
             .collect();
         if updates.is_empty() {
             sql.push_str(&format!(
@@ -215,11 +211,11 @@ fn lookup_expressions(
                 .unwrap_or_else(|| "text".to_string());
             let expression = format!(
                 "(SELECT {alias}.{referenced} FROM {table} AS {alias} WHERE {alias}.{key} = src.{column}::{key_type})",
-                alias = quote("__connect"),
-                referenced = quote(&lookup.referenced_column),
-                table = quote(&table),
-                key = quote(&lookup.key_column),
-                column = quote(column),
+                alias = quote_ident("__connect"),
+                referenced = quote_ident(&lookup.referenced_column),
+                table = quote_ident(&table),
+                key = quote_ident(&lookup.key_column),
+                column = quote_ident(column),
             );
             (column.clone(), expression)
         })
@@ -307,7 +303,7 @@ fn condition_sql(
                 .unwrap_or_else(|| "TRUE".to_string());
             Some(format!(
                 "SELECT EXISTS (SELECT 1 FROM {} WHERE {})",
-                quote(table),
+                quote_ident(table),
                 predicate
             ))
         }

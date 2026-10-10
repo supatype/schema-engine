@@ -11,9 +11,10 @@
 //! triggers to whatever sat in `public` under the same name: someone else's table, on a database
 //! Supatype did not create.
 
-use crate::desired::identity::function_key;
+use crate::desired::identity::{function_key, quote_if_needed};
 use crate::managed::ObjectNames;
 use crate::parser::ast::{FieldAst, ModelAst, SchemaAst};
+use crate::sql_quote::{quote_ident, quote_qualified};
 use anyhow::Result;
 
 /// The schema the trigger functions live in.
@@ -54,9 +55,11 @@ impl TriggerFunction {
         function_key(&self.name, self.args)
     }
 
-    /// `_platform.name`, as a trigger's `EXECUTE FUNCTION` names it and the catalog reports it.
+    /// `_platform.name`, as a trigger's `EXECUTE FUNCTION` names it and the catalog reports it:
+    /// quoted only when Postgres would quote it, so a name made from a table holding a quote is
+    /// still one identifier.
     pub fn qualified(&self) -> String {
-        format!("{PLATFORM_SCHEMA}.{}", self.name)
+        qualified_function(&self.name)
     }
 
     pub fn create_sql(&self) -> String {
@@ -89,18 +92,23 @@ pub struct ModelTrigger {
 impl ModelTrigger {
     /// `_platform.name`, as the catalog reports the function a trigger runs.
     pub fn qualified_function(&self) -> String {
-        format!("{PLATFORM_SCHEMA}.{}", self.function)
+        qualified_function(&self.function)
     }
 
     pub fn create_sql(&self, schema: &str) -> String {
         format!(
-            "CREATE OR REPLACE TRIGGER \"{}\"\nBEFORE {} ON \"{schema}\".\"{}\"\nFOR EACH ROW EXECUTE FUNCTION {}();\n",
-            self.name,
+            "CREATE OR REPLACE TRIGGER {}\nBEFORE {} ON {}\nFOR EACH ROW EXECUTE FUNCTION {}();\n",
+            quote_ident(&self.name),
             self.events.join(" OR "),
-            self.table,
+            quote_qualified(schema, &self.table),
             self.qualified_function()
         )
     }
+}
+
+/// `_platform.<name>` for one of this module's functions, the name spelled as the catalog spells it.
+fn qualified_function(name: &str) -> String {
+    format!("{PLATFORM_SCHEMA}.{}", quote_if_needed(name))
 }
 
 /// The functions every push has, whatever the schema declares: shared by every model's
@@ -165,7 +173,9 @@ pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunc
             returns: "trigger",
             volatility: 'v',
             body: format!(
-                "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"{slug_field}\" IS NULL OR BTRIM(NEW.\"{slug_field}\"::TEXT) = '' THEN\n      NEW.\"{slug_field}\" = {PLATFORM_SCHEMA}.slugify(NEW.\"{source_field}\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"{source_field}\" IS DISTINCT FROM OLD.\"{source_field}\" THEN\n      IF OLD.\"{slug_field}\" IS NOT DISTINCT FROM {PLATFORM_SCHEMA}.slugify(OLD.\"{source_field}\"::TEXT) THEN\n        NEW.\"{slug_field}\" = {PLATFORM_SCHEMA}.slugify(NEW.\"{source_field}\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n"
+                "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.{slug} IS NULL OR BTRIM(NEW.{slug}::TEXT) = '' THEN\n      NEW.{slug} = {PLATFORM_SCHEMA}.slugify(NEW.{source}::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.{source} IS DISTINCT FROM OLD.{source} THEN\n      IF OLD.{slug} IS NOT DISTINCT FROM {PLATFORM_SCHEMA}.slugify(OLD.{source}::TEXT) THEN\n        NEW.{slug} = {PLATFORM_SCHEMA}.slugify(NEW.{source}::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+                slug = quote_ident(slug_field),
+                source = quote_ident(source_field),
             ),
         })
         .collect();
@@ -181,12 +191,10 @@ pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunc
         let assignments: String = rich_text
             .iter()
             .map(|(field, localised)| {
+                let column = format!("NEW.{}", quote_ident(field));
                 format!(
-                    "  NEW.\"{field}\" := {};\n",
-                    super::column_conversion::lexical_normalise_expr(
-                        &format!("NEW.\"{field}\""),
-                        *localised
-                    )
+                    "  {column} := {};\n",
+                    super::column_conversion::lexical_normalise_expr(&column, *localised)
                 )
             })
             .collect();

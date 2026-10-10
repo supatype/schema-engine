@@ -22,6 +22,7 @@ use crate::desired::statements::check_expression;
 use crate::desired::ObjectKey;
 use crate::introspector::fingerprint::{definition_value, normalise_sql, ObjectKind};
 use crate::ledger::reconcile::{parse_definition, Action, Plan};
+use crate::sql_quote::{quote_ident, quote_qualified};
 
 /// The conflicts of `plan` whose live object the database deparses to the declared definition.
 /// Only check constraints are probed today; other kinds stay conflicts.
@@ -127,13 +128,13 @@ async fn declare(
     key: &ObjectKey,
     expression: &str,
 ) -> Result<()> {
+    let probe = quote_ident(&format!("_supatype_probe_{i}"));
     let clone = format!(
-        "CREATE TEMP TABLE \"_supatype_probe_{i}\" (LIKE \"{}\".\"{}\")",
-        key.schema, key.parent
+        "CREATE TEMP TABLE {probe} (LIKE {})",
+        quote_qualified(&key.schema, &key.parent)
     );
-    let declare = format!(
-        "ALTER TABLE pg_temp.\"_supatype_probe_{i}\" ADD CONSTRAINT \"_supatype_probe_{i}\" CHECK ({expression})"
-    );
+    let declare =
+        format!("ALTER TABLE pg_temp.{probe} ADD CONSTRAINT {probe} CHECK ({expression})");
     sqlx::query(&clone)
         .execute(&mut *conn)
         .await

@@ -18,6 +18,7 @@
 
 use crate::parser::accessors::{column_names_for, db_table_name, platform_access};
 use crate::parser::ast::{AccessRule, MembershipSource, ModelAst, Operand, SchemaAst};
+use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 
 /// Whether an unauthenticated caller could ever satisfy a rule.
 ///
@@ -123,15 +124,12 @@ impl TableGrant {
     /// not exist would abort the whole migration. One block per role and table, so the ledger
     /// attributes it to one object (`crate::desired::statements`).
     pub fn create_sql(&self, schema: &str) -> String {
-        let target = qualified(schema, &self.table);
+        let target = quote_qualified(schema, &self.table);
         let role = self.role;
-        let mut body = format!(
-            "    EXECUTE 'REVOKE ALL PRIVILEGES ON {}';\n",
-            escape(&format!("{target} FROM {role}"))
-        );
+        let mut body = execute(&format!("REVOKE ALL PRIVILEGES ON {target} FROM {role}"));
         if !self.privileges.is_empty() {
             let grant = format!("GRANT {} ON {target} TO {role}", self.privileges.join(", "));
-            body.push_str(&format!("    EXECUTE '{}';\n", escape(&grant)));
+            body.push_str(&execute(&grant));
         }
         for (op, excluded) in &self.narrowed {
             let writable: Vec<&str> = self
@@ -148,33 +146,32 @@ impl TableGrant {
             "DECLARE\n  granted text;\n"
         };
         format!(
-            "DO $grants$\n{declare}BEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN\n{body}  END IF;\nEND\n$grants$;"
+            "DO $grants$\n{declare}BEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {}) THEN\n{body}  END IF;\nEND\n$grants$;",
+            quote_literal(role)
         )
     }
 }
 
 /// The statement that takes every privilege `role` holds on a table away, guarded on the role and
 /// the table existing: the drop of a [`TableGrant`].
+///
+/// The role comes from the ledger row, so it is quoted like any other name read back.
 pub fn revoke_all_sql(schema: &str, table: &str, role: &str) -> String {
-    let target = qualified(schema, table);
+    let target = quote_qualified(schema, table);
     format!(
-        "DO $grants$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}')\n     AND to_regclass('{}') IS NOT NULL THEN\n    EXECUTE 'REVOKE ALL PRIVILEGES ON {}';\n  END IF;\nEND\n$grants$;",
-        escape(&target),
-        escape(&format!("{target} FROM {role}"))
+        "DO $grants$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {})\n     AND to_regclass({}) IS NOT NULL THEN\n{}  END IF;\nEND\n$grants$;",
+        quote_literal(role),
+        quote_literal(&target),
+        execute(&format!(
+            "REVOKE ALL PRIVILEGES ON {target} FROM {}",
+            quote_ident(role)
+        ))
     )
 }
 
-fn qualified(schema: &str, table: &str) -> String {
-    format!(
-        "\"{}\".\"{}\"",
-        schema.replace('"', "\"\""),
-        table.replace('"', "\"\"")
-    )
-}
-
-/// Doubled single quotes, for text inside an `EXECUTE '...'` literal.
-fn escape(sql: &str) -> String {
-    sql.replace('\'', "''")
+/// One `EXECUTE` line of a `DO` block: `sql` as a literal.
+fn execute(sql: &str) -> String {
+    format!("    EXECUTE {};\n", quote_literal(sql))
 }
 
 /// Every model table's [`TableGrant`] for each API role.
@@ -314,7 +311,7 @@ pub fn generate_view_grants(ast: &SchemaAst, view_schema: &str) -> String {
     for model in &ast.models {
         for role in GRANTED_ROLES {
             let grant = model_grant(model, role);
-            let target = qualified(view_schema, &grant.table);
+            let target = quote_qualified(view_schema, &grant.table);
             let statements: Vec<String> = RULED
                 .iter()
                 .map(|privilege| {
@@ -334,18 +331,16 @@ pub fn generate_view_grants(ast: &SchemaAst, view_schema: &str) -> String {
 
 /// The privileges for one role, applied only if the role exists.
 fn guarded_block(role: &str, statements: &[String]) -> String {
-    let body = statements
-        .iter()
-        .map(|s| format!("    EXECUTE '{}';\n", escape(s)))
-        .collect::<String>();
+    let body = statements.iter().map(|s| execute(s)).collect::<String>();
     format!(
         "DO $grants$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {}) THEN
 {body}  END IF;
 END
 $grants$;
-"
+",
+        quote_literal(role)
     )
 }
 
@@ -389,22 +384,26 @@ fn column_grant(schema: &str, table: &str, op: &str, role: &str, columns: &[&str
     }
     let column_list = columns
         .iter()
-        .map(|column| format!("'{}'", escape(column)))
+        .map(|column| quote_literal(column))
         .collect::<Vec<_>>()
         .join(", ");
+    // `format`'s pattern is a literal of its own, holding the target's quoted name.
+    let grant = quote_literal(&format!(
+        "GRANT {op} (%s) ON {} TO {role}",
+        quote_qualified(schema, table)
+    ));
     format!(
         "    SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
       INTO granted
       FROM information_schema.columns
-     WHERE table_schema = '{schema_literal}'
-       AND table_name = '{table_literal}'
+     WHERE table_schema = {schema_literal}
+       AND table_name = {table_literal}
        AND column_name IN ({column_list});
     IF granted IS NOT NULL THEN
-      EXECUTE format('GRANT {op} (%s) ON {target} TO {role}', granted);
+      EXECUTE format({grant}, granted);
     END IF;
 ",
-        schema_literal = escape(schema),
-        table_literal = escape(table),
-        target = escape(&qualified(schema, table)),
+        schema_literal = quote_literal(schema),
+        table_literal = quote_literal(table),
     )
 }

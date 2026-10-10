@@ -11,6 +11,7 @@
 //! field's kind, so nothing here has to know that a `JSONB` column might be an array or an object.
 //! Deciding that twice is what produced `char_length(text[])`, and one copy of that table is enough.
 use crate::parser::ast::{AccessRule, CompareOp, LiteralValue, MeasureForm, Operand};
+use crate::sql_quote::{quote_ident, quote_literal};
 use anyhow::{bail, Result};
 
 /// The SQL that measures a column, per the form the CLI resolved.
@@ -135,14 +136,6 @@ pub fn constraint_to_expr(rule: &AccessRule) -> Result<String> {
              in `access`, which the API layer applies."
         ),
     }
-}
-
-fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn literal_sql(value: &LiteralValue) -> String {

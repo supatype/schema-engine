@@ -23,6 +23,7 @@ use super::catalog::{CatalogState, DbFunction, DbPolicy, DbSecurityLabel};
 use super::constraints::{DbConstraint, DbConstraintType};
 use super::indexes::DbIndex;
 use super::tables::DbTable;
+use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 use crate::state::database_state::DatabaseState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -480,8 +481,12 @@ fn function_create_sql(f: &DbFunction) -> String {
         ""
     };
     format!(
-        "CREATE OR REPLACE FUNCTION \"{}\".\"{}\"({}) RETURNS {} LANGUAGE {} {volatility}{security} AS $supatype_previous${}$supatype_previous$;",
-        f.schema, f.name, f.identity_arguments, f.return_type, f.language, f.body
+        "CREATE OR REPLACE FUNCTION {}({}) RETURNS {} LANGUAGE {} {volatility}{security} AS $supatype_previous${}$supatype_previous$;",
+        quote_qualified(&f.schema, &f.name),
+        f.identity_arguments,
+        f.return_type,
+        f.language,
+        f.body
     )
 }
 
@@ -496,27 +501,21 @@ fn trigger_create_sql(definition: &str) -> String {
 /// The `SECURITY LABEL` that puts a label back as the catalog reports it: what a rollback runs to
 /// restore one the push took off or replaced.
 fn security_label_create_sql(l: &DbSecurityLabel) -> String {
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let table = quote_qualified(&l.schema, &l.table);
     let target = match &l.column {
-        Some(column) => format!(
-            "COLUMN {}.{}.{}",
-            quote(&l.schema),
-            quote(&l.table),
-            quote(column)
-        ),
-        None => format!("TABLE {}.{}", quote(&l.schema), quote(&l.table)),
+        Some(column) => format!("COLUMN {table}.{}", quote_ident(column)),
+        None => format!("TABLE {table}"),
     };
     format!(
-        "SECURITY LABEL FOR {} ON {target} IS '{}';",
-        quote(&l.provider),
-        l.label.replace('\'', "''")
+        "SECURITY LABEL FOR {} ON {target} IS {};",
+        quote_ident(&l.provider),
+        quote_literal(&l.label)
     )
 }
 
 /// `CREATE POLICY` for a policy as the catalog reports it: what a rollback runs to restore one
 /// the push dropped or replaced.
 fn policy_create_sql(p: &DbPolicy) -> String {
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
     let command = match p.command.as_str() {
         "r" => "SELECT",
         "a" => "INSERT",
@@ -531,7 +530,7 @@ fn policy_create_sql(p: &DbPolicy) -> String {
             if r == "public" {
                 "PUBLIC".to_string()
             } else {
-                quote(r)
+                quote_ident(r)
             }
         })
         .collect::<Vec<_>>()
@@ -548,9 +547,9 @@ fn policy_create_sql(p: &DbPolicy) -> String {
         .unwrap_or_default();
     format!(
         "CREATE POLICY {} ON {}.{} AS {} FOR {command} TO {roles}{using}{check};",
-        quote(&p.name),
-        quote(&p.schema),
-        quote(&p.table),
+        quote_ident(&p.name),
+        quote_ident(&p.schema),
+        quote_ident(&p.table),
         if p.permissive {
             "PERMISSIVE"
         } else {
@@ -640,12 +639,11 @@ fn grant_create_sql(
     grantee: &str,
     privileges: &HeldPrivileges<'_>,
 ) -> String {
-    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-    let target = format!("{}.{}", quote(schema), quote(table));
+    let target = quote_qualified(schema, table);
     let role = if grantee == "PUBLIC" {
         "PUBLIC".to_string()
     } else {
-        quote(grantee)
+        quote_ident(grantee)
     };
     let mut statements = vec![format!("REVOKE ALL PRIVILEGES ON {target} FROM {role};")];
     if !privileges.table.is_empty() {
@@ -658,7 +656,7 @@ fn grant_create_sql(
         for privilege in privs {
             statements.push(format!(
                 "GRANT {privilege} ({}) ON {target} TO {role};",
-                quote(column)
+                quote_ident(column)
             ));
         }
     }
@@ -669,9 +667,8 @@ fn grant_create_sql(
 /// what a rollback runs to restore it. Row-level security is never turned off automatically (D9).
 pub fn rls_enable_sql(schema: &str, table: &str) -> String {
     format!(
-        "ALTER TABLE \"{}\".\"{}\" ENABLE ROW LEVEL SECURITY;",
-        schema.replace('"', "\"\""),
-        table.replace('"', "\"\"")
+        "ALTER TABLE {} ENABLE ROW LEVEL SECURITY;",
+        quote_qualified(schema, table)
     )
 }
 

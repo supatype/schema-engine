@@ -23,6 +23,7 @@ use serde::Serialize;
 
 use crate::desired::{never_removed, DesiredObject, ObjectKey};
 use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKind};
+use crate::sql_quote::{quote_ident, quote_qualified};
 
 use super::{LedgerRow, Status};
 
@@ -600,8 +601,10 @@ fn structure_matches(desired: &DesiredObject, live: &ObjectFingerprint) -> bool 
 /// `ALTER TABLE ... RENAME CONSTRAINT` for a constraint on `key`'s table, from `from` to `to`.
 fn rename_constraint_sql(key: &ObjectKey, from: &str, to: &str) -> String {
     format!(
-        "ALTER TABLE \"{}\".\"{}\" RENAME CONSTRAINT \"{from}\" TO \"{to}\";",
-        key.schema, key.parent
+        "ALTER TABLE {} RENAME CONSTRAINT {} TO {};",
+        quote_qualified(&key.schema, &key.parent),
+        quote_ident(from),
+        quote_ident(to)
     )
 }
 
