@@ -8,7 +8,10 @@
 
 mod common;
 
-use supatype_engine::{introspector, state::migration_history};
+use serde_json::json;
+use supatype_engine::{
+    inspect, introspector, parser, parser::ast::SchemaAst, push, state::migration_history,
+};
 
 #[tokio::test]
 async fn the_first_push_records_the_project_schema_and_the_same_schema_passes() {
@@ -150,6 +153,94 @@ async fn a_rollback_for_a_different_schema_is_refused() {
                 .await
                 .unwrap();
         assert!(!rolled_back);
+    })
+    .await;
+}
+
+/// Two tables anyone may read and a signed-in user may write, as the verification scripts made
+/// them: policies, grants and the `_platform` helpers to drift.
+fn two_tables_with_access() -> SchemaAst {
+    let table = |name: &str, model: &str, column: &str| {
+        json!({
+            "name": model,
+            "fields": {
+                "id": { "kind": "uuid", "required": true, "primaryKey": true,
+                        "default": { "kind": "genRandomUuid" },
+                        "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+                column: { "kind": "text", "required": false,
+                          "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+            },
+            "options": { "timestamps": false, "softDelete": false },
+            "annotations": {
+                "db": { "tableName": name, "indexes": [] },
+                "platform": { "access": {
+                    "read": { "type": "public" },
+                    "create": { "type": "role", "roles": ["authenticated"] },
+                    "update": { "type": "role", "roles": ["authenticated"] },
+                    "delete": { "type": "role", "roles": ["authenticated"] } } }
+            }
+        })
+    };
+    let doc = json!({ "astVersion": 2,
+                      "models": [table("t1", "T1", "a"), table("t2", "T2", "b")] });
+    parser::parse(&doc.to_string()).expect("fixture parses")
+}
+
+/// Every ledger row with its fingerprints, in key order.
+async fn ledger(pool: &sqlx::PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT concat_ws(' ', kind, schema_name, parent, name, desired_fp, live_fp, status)
+           FROM _supatype.managed_objects ORDER BY kind, schema_name, parent, name",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// E14b: `doctor`, `doctor --rebaseline` (with and without consent for access drift), `diff` and
+/// `migrate` all assert the project, as push and adopt do. A rebaseline for another schema
+/// rewrote this project's ledger row for `_platform.slugify(text)`.
+#[tokio::test]
+async fn every_command_refuses_another_projects_database() {
+    common::with_integration_pool(|pool| async move {
+        sqlx::raw_sql("CREATE SCHEMA app1; CREATE SCHEMA app2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let ast = two_tables_with_access();
+        let plan = push::prepare(&pool, &ast, "app1").await.unwrap();
+        push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
+            .unwrap();
+        // Drift on a helper the project's ledger records, so a rebaseline has something to take.
+        sqlx::raw_sql(
+            "CREATE OR REPLACE FUNCTION _platform.slugify(val text) RETURNS text
+               LANGUAGE sql IMMUTABLE AS $$ SELECT lower(val) $$",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let before = ledger(&pool).await;
+
+        let refused = |what: &str, e: anyhow::Error| {
+            let message = format!("{e:#}");
+            assert!(
+                message.contains("\"app1\"") && message.contains("\"app2\""),
+                "{what} was not refused for the project: {message}"
+            );
+        };
+        let doctor = inspect::doctor(&pool, &ast, "app2", false).await;
+        refused("doctor", doctor.expect_err("doctor ran for app2"));
+        for consent in [false, true] {
+            let rebaseline = inspect::rebaseline(&pool, &ast, "app2", consent).await;
+            refused("rebaseline", rebaseline.expect_err("rebaselined app2"));
+        }
+        // `diff` and `migrate` are both this plan.
+        match push::plan(&pool, &ast, "app2").await {
+            Ok(_) => panic!("diff and migrate planned app2 against app1's database"),
+            Err(e) => refused("diff and migrate", e),
+        }
+        assert_eq!(ledger(&pool).await, before, "app1's ledger was rewritten");
     })
     .await;
 }

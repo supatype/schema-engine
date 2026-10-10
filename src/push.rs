@@ -313,7 +313,11 @@ impl State {
     }
 }
 
+/// The state of `schema` as a push reads it, once the database is known to be `schema`'s project
+/// ([`migration_history::assert_project_schema_on`]): every command reads through here, so none
+/// of them can read, or write, another project's database.
 pub async fn read_state(conn: &mut PgConnection, schema: &str) -> Result<State> {
+    migration_history::assert_project_schema_on(conn, schema).await?;
     let Live {
         mut db,
         catalog,
@@ -1236,7 +1240,6 @@ pub async fn prepare<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Res
     if engine_lock_held(pool).await? {
         return Err(EngineBusy::Running.into());
     }
-    migration_history::assert_project_schema(pool, schema).await?;
     plan(pool, ast, schema).await
 }
 

@@ -379,13 +379,15 @@ pub fn backfill_schema_state_project_schema_sql() -> String {
     )
 }
 
-/// Refuse to push a second project into a database that already holds one.
+/// Refuse to run a command for one project against a database that holds another.
 ///
 /// `_supatype.migrations` has no project column, `schema_state` is one row, and the publishing cron
 /// jobs are named with no schema, so two projects in one database share a history they should not:
 /// the second one's push loads the first one's snapshot as "the previous schema" and diffs against
 /// it. Cloud runs one Postgres per project; this makes the same shape explicit for self-host rather
-/// than letting it fail in a way that names nothing.
+/// than letting it fail in a way that names nothing. Every command that reads the project asks
+/// (`push::read_state` does, inside the writer's transaction when there is one), not only push and
+/// adopt: a rebaseline for another schema rewrote this project's ledger (E14b).
 ///
 /// A database with no recorded schema (a fresh one) passes, and [`save_schema_state`] records the
 /// schema at the end of that push. One written by an engine from before this column has its schema
@@ -393,16 +395,33 @@ pub fn backfill_schema_state_project_schema_sql() -> String {
 /// read from the snapshot here too: the bootstrap runs only when its version changes, so a row
 /// emptied since is not filled again.
 pub async fn assert_project_schema(pool: &PgPool, schema: &str) -> Result<()> {
+    assert_project_schema_on(&mut *pool.acquire().await?, schema).await
+}
+
+/// [`assert_project_schema`] on `conn`, inside its transaction when it has one. Asks the catalog
+/// first, so a database no engine has written to passes without a failed statement that would
+/// abort that transaction.
+pub async fn assert_project_schema_on(conn: &mut PgConnection, schema: &str) -> Result<()> {
+    let present: bool = sqlx::query_scalar(&format!(
+        "SELECT to_regclass('{SCHEMA}.schema_state') IS NOT NULL"
+    ))
+    .fetch_one(&mut *conn)
+    .await?;
+    if !present {
+        return Ok(());
+    }
+    // `to_jsonb` reads `project_schema` whether or not an older engine's table has the column.
     let sql = format!(
-        "SELECT COALESCE(project_schema, NULLIF(db_state ->> 'schema', '')) \
-         FROM {SCHEMA}.schema_state WHERE id = 1"
+        "SELECT COALESCE(to_jsonb(s) ->> 'project_schema', NULLIF(s.db_state ->> 'schema', '')) \
+         FROM {SCHEMA}.schema_state s WHERE s.id = 1"
     );
-    let recorded: Option<Option<String>> = sqlx::query_scalar(&sql).fetch_optional(pool).await?;
+    let recorded: Option<Option<String>> =
+        sqlx::query_scalar(&sql).fetch_optional(&mut *conn).await?;
     match recorded.flatten() {
         Some(existing) if existing != schema => anyhow::bail!(
-            "This database already holds the project schema \"{existing}\", and this push is for \
-             \"{schema}\". Supatype runs one project per database: point this project at a database \
-             of its own, or set pg_schema back to \"{existing}\"."
+            "This database already holds the project schema \"{existing}\", not \"{schema}\". \
+             Supatype runs one project per database: point this project at a database of its own, \
+             or set pg_schema back to \"{existing}\"."
         ),
         _ => Ok(()),
     }
