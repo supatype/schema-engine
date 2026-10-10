@@ -12,6 +12,7 @@ pub mod seed;
 pub mod wasm;
 
 pub mod managed;
+pub mod sql_quote;
 
 // DB-dependent modules, not needed in WASM context
 #[cfg(not(target_arch = "wasm32"))]

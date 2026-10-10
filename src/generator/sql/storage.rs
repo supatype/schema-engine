@@ -1,7 +1,9 @@
+use crate::generator::sql::rls::role_matches;
 use crate::parser::ast::{
     AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageAccessMode, StorageBucketAst,
 };
 use crate::parser::resolver::{bucket_uses_declared_storage_rls, storage_policy_label};
+use crate::sql_quote::{comment_text, quote_ident, quote_literal};
 use anyhow::Result;
 
 /// Generates SQL for the storage subsystem:
@@ -104,7 +106,7 @@ fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
         Some(types) if !types.is_empty() => {
             let arr = types
                 .iter()
-                .map(|t| format!("'{}'", t.replace('\'', "''")))
+                .map(|t| quote_literal(t))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("ARRAY[{arr}]::TEXT[]")
@@ -115,36 +117,29 @@ fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
         .file_size_limit
         .map(|s| s.to_string())
         .unwrap_or_else(|| "NULL".to_string());
-    let id = bucket.id.replace('\'', "''");
-    let access_mode_sql = match &bucket.access_mode {
-        Some(StorageAccessMode::Public) => "'public'".to_string(),
-        Some(StorageAccessMode::Private) => "'private'".to_string(),
-        Some(StorageAccessMode::Custom) => "'custom'".to_string(),
+    let id = quote_literal(&bucket.id);
+    let access_mode = match &bucket.access_mode {
+        Some(StorageAccessMode::Public) => quote_literal("public"),
+        Some(StorageAccessMode::Private) => quote_literal("private"),
+        Some(StorageAccessMode::Custom) => quote_literal("custom"),
         None => "NULL".to_string(),
     };
-    let policy_esc = bucket
+    let policy = bucket
         .s3_bucket_policy
-        .as_ref()
-        .map(|p| format!("'{}'", p.replace('\'', "''")))
-        .unwrap_or_else(|| "NULL".to_string());
+        .as_deref()
+        .map_or_else(|| "NULL".to_string(), quote_literal);
 
     format!(
         "INSERT INTO storage.buckets (id, name, public, allowed_mime_types, file_size_limit, access_mode, s3_bucket_policy)\n\
-         VALUES ('{id}', '{id}', {public}, {mime}, {size_limit}, {access_mode}, {policy_esc})\n\
+         VALUES ({id}, {id}, {public}, {mime}, {size_limit}, {access_mode}, {policy})\n\
          ON CONFLICT (id) DO UPDATE SET\n  \
            public             = EXCLUDED.public,\n  \
            allowed_mime_types = EXCLUDED.allowed_mime_types,\n  \
            file_size_limit    = EXCLUDED.file_size_limit,\n  \
            access_mode        = EXCLUDED.access_mode,\n  \
            s3_bucket_policy   = EXCLUDED.s3_bucket_policy,\n  \
-           updated_at         = NOW();\n",
-        access_mode = access_mode_sql,
-        policy_esc = policy_esc,
+           updated_at         = NOW();\n"
     )
-}
-
-fn sql_quote_bucket_id(bucket_id: &str) -> String {
-    bucket_id.replace('\'', "''")
 }
 
 /// Storage policies run on storage.objects, so owner checks must reference the
@@ -169,18 +164,7 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => "auth.uid() IS NOT NULL".to_string(),
-        AccessRule::Role { roles } => {
-            if roles.len() == 1 {
-                format!("auth.role() = '{}'", roles[0])
-            } else {
-                let arr = roles
-                    .iter()
-                    .map(|r| format!("'{r}'"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("auth.role() = ANY(ARRAY[{arr}])")
-            }
-        }
+        AccessRule::Role { roles } => role_matches("auth.role()", roles),
         // Storage policies run on `storage.objects`, which has none of the
         // model's columns. A rule naming one cannot be evaluated here, so it
         // denies rather than being rendered against a table where the column
@@ -292,8 +276,8 @@ impl<'a> ObjectPolicies<'a> {
     /// The `CREATE POLICY` of every declared rule. A rule removed from the schema takes its policy
     /// with it because nothing desires that policy any more and the reconcile drops it.
     fn render(&self) -> String {
-        let b = sql_quote_bucket_id(self.bucket_id);
-        let mut out = format!("-- {}\n", self.comment);
+        let bucket = quote_literal(self.bucket_id);
+        let mut out = format!("-- {}\n", comment_text(&self.comment));
         for ((op, rule), name) in ObjectOp::ALL
             .into_iter()
             .zip(&self.rules)
@@ -301,11 +285,12 @@ impl<'a> ObjectPolicies<'a> {
         {
             let Some(rule) = rule else { continue };
             let expr = format!(
-                "bucket_id = '{b}' AND ({})",
+                "bucket_id = {bucket} AND ({})",
                 access_rule_to_storage_expr(rule)
             );
             out.push_str(&format!(
-                "CREATE POLICY \"{name}\" ON \"storage\".\"objects\"\n  {};\n",
+                "CREATE POLICY {} ON \"storage\".\"objects\"\n  {};\n",
+                quote_ident(name),
                 op.clause(&expr),
             ));
         }

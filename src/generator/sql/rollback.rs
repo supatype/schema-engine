@@ -4,10 +4,13 @@
 //! perfectly reversed (e.g. DropTable, DropColumn) are annotated with a warning
 //! rather than silently omitted.
 
-use super::migration::{identity_change_sql, rename_serial_sequence_sql, serial_columns};
+use super::migration::{
+    identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
+};
 use crate::differ::{DiffOutput, Operation};
 use crate::managed::make_object_name;
 use crate::parser::ast::SchemaAst;
+use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified};
 use anyhow::Result;
 use serde_json::json;
 
@@ -23,7 +26,10 @@ pub fn statements(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<Ve
     let mut lines = Vec::new();
     for op in diff.operations.iter().rev() {
         if let Some(sql) = rollback_op(op, schema, ast, diff)? {
-            lines.push(format!("-- rollback: {}", forward_description(op)));
+            lines.push(format!(
+                "-- rollback: {}",
+                comment_text(&forward_description(op))
+            ));
             lines.push(sql);
             lines.push(String::new());
         }
@@ -57,6 +63,16 @@ fn sequence_back(schema: &str, table: &str, column: &str) -> String {
     )
 }
 
+/// A `-- WARNING:` line for an operation no statement can undo.
+fn warning(text: &str) -> String {
+    format!("-- WARNING: {}", comment_text(text))
+}
+
+/// `"table"."column"`, as the warnings name a column.
+fn column_label(table: &str, column: &str) -> String {
+    format!("{}.{}", quote_ident(table), quote_ident(column))
+}
+
 fn rollback_op(
     op: &Operation,
     schema: &str,
@@ -66,56 +82,36 @@ fn rollback_op(
     let sql = match op {
         // CreateTable → DROP TABLE, never `CASCADE` (plan 3.3): the reconcile's rollback, which runs
         // first, has already dropped what of ours depends on the table.
-        Operation::CreateTable { table, .. } => {
-            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\";")
+        Operation::CreateTable { table, .. } | Operation::CreateJunctionTable { table, .. } => {
+            drop_table(schema, table)
         }
-        // RenameTable → rename back, and its serials' sequences with it. The column renames of
-        // the same migration are undone first, so each column has its old name again here.
-        Operation::RenameTable { from, to, .. } => {
-            let mut sql = format!("ALTER TABLE \"{schema}\".\"{to}\" RENAME TO \"{from}\";");
-            for column in serial_columns(ast, to) {
-                let column = diff
-                    .operations
-                    .iter()
-                    .find_map(|op| match op {
-                        Operation::RenameColumn {
-                            table,
-                            from,
-                            to: renamed,
-                            ..
-                        } if table == to && *renamed == column => Some(from.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or(column);
-                sql.push('\n');
-                sql.push_str(&sequence_back(schema, from, &column));
-            }
-            sql
-        }
+        // RenameTable → rename back, and its serials' sequences with it.
+        Operation::RenameTable { from, to, .. } => rename_table_back(schema, ast, diff, from, to),
         // DropTable → cannot restore (need snapshot); emit a commented placeholder
-        Operation::DropTable { table, .. } => {
-            format!(
-                "-- WARNING: Cannot automatically roll back DROP TABLE \"{table}\". \
-                     Restore from backup or snapshot."
-            )
-        }
+        Operation::DropTable { table, .. } => warning(&format!(
+            "Cannot automatically roll back DROP TABLE {}. Restore from backup or snapshot.",
+            quote_ident(table)
+        )),
         // AddColumn → DROP COLUMN
-        Operation::AddColumn { table, column, .. } => {
-            format!("ALTER TABLE \"{schema}\".\"{table}\" DROP COLUMN IF EXISTS \"{column}\";")
-        }
+        Operation::AddColumn { table, column, .. } => format!(
+            "ALTER TABLE {} DROP COLUMN IF EXISTS {};",
+            quote_qualified(schema, table),
+            quote_ident(column)
+        ),
         // DropColumn → cannot restore without snapshot
-        Operation::DropColumn { table, column, .. } => {
-            format!(
-                "-- WARNING: Cannot automatically roll back DROP COLUMN \"{table}\".\"{column}\". \
-                     Restore from backup or snapshot."
-            )
-        }
+        Operation::DropColumn { table, column, .. } => warning(&format!(
+            "Cannot automatically roll back DROP COLUMN {}. Restore from backup or snapshot.",
+            column_label(table, column)
+        )),
         // RenameColumn → rename back
         Operation::RenameColumn {
             table, from, to, ..
         } => {
             let mut sql = format!(
-                "ALTER TABLE \"{schema}\".\"{table}\" RENAME COLUMN \"{to}\" TO \"{from}\";"
+                "ALTER TABLE {} RENAME COLUMN {} TO {};",
+                quote_qualified(schema, table),
+                quote_ident(to),
+                quote_ident(from)
             );
             if serial_columns(ast, table).contains(to) {
                 sql.push('\n');
@@ -130,40 +126,73 @@ fn rollback_op(
             changes,
             ..
         } => rollback_alter_column(table, column, changes, schema),
-        Operation::RecreateColumn { table, column, .. } => {
-            format!(
-                "-- WARNING: Cannot automatically roll back RECREATE COLUMN \"{table}\".\"{column}\". \
-                     Original column data was discarded. Restore from backup or snapshot."
-            )
-        }
+        Operation::RecreateColumn { table, column, .. } => warning(&format!(
+            "Cannot automatically roll back RECREATE COLUMN {}. Original column data was discarded. \
+             Restore from backup or snapshot.",
+            column_label(table, column)
+        )),
         // Never in a diff: the reconcile creates indexes, foreign keys and unique constraints from
         // the desired set (these operations only render its `CREATE`s), and its rollback drops them.
         Operation::AddIndex { .. }
         | Operation::AddForeignKey { .. }
         | Operation::AddUniqueConstraint { .. } => return Ok(None),
         // CreateRlsPolicy → DROP POLICY
-        Operation::CreateRlsPolicy { table, policy, .. } => {
-            format!("DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";")
-        }
-        // CreateJunctionTable → DROP TABLE
-        Operation::CreateJunctionTable { table, .. } => {
-            format!("DROP TABLE IF EXISTS \"{schema}\".\"{table}\";")
-        }
+        Operation::CreateRlsPolicy { table, policy, .. } => format!(
+            "DROP POLICY IF EXISTS {} ON {};",
+            quote_ident(policy),
+            quote_qualified(schema, table)
+        ),
         // CreateVersionsTable → DROP TABLE. Safe to roll back exactly because the operation only
         // ever *creates*: it runs when the table is absent, so a rollback removes a table this
         // migration made and no history that predates it.
         Operation::CreateVersionsTable { versions_table, .. } => {
-            format!("DROP TABLE IF EXISTS \"{schema}\".\"{versions_table}\";")
+            drop_table(schema, versions_table)
         }
         // EnableExtension → DROP EXTENSION (risky, so only emit a warning)
-        Operation::EnableExtension { name, .. } => {
-            format!(
-                "-- WARNING: Rollback of CREATE EXTENSION \"{name}\" would DROP it. \
-                     Remove manually if safe to do so."
-            )
-        }
+        Operation::EnableExtension { name, .. } => warning(&format!(
+            "Rollback of CREATE EXTENSION {} would DROP it. Remove manually if safe to do so.",
+            quote_ident(name)
+        )),
     };
     Ok(Some(sql))
+}
+
+fn drop_table(schema: &str, table: &str) -> String {
+    format!("DROP TABLE IF EXISTS {};", quote_qualified(schema, table))
+}
+
+/// A table renamed back, and its serials' sequences with it. The column renames of the same
+/// migration are undone first, so each column has its old name again here.
+fn rename_table_back(
+    schema: &str,
+    ast: &SchemaAst,
+    diff: &DiffOutput,
+    from: &str,
+    to: &str,
+) -> String {
+    let mut sql = format!(
+        "ALTER TABLE {} RENAME TO {};",
+        quote_qualified(schema, to),
+        quote_ident(from)
+    );
+    for column in serial_columns(ast, to) {
+        let column = diff
+            .operations
+            .iter()
+            .find_map(|op| match op {
+                Operation::RenameColumn {
+                    table,
+                    from,
+                    to: renamed,
+                    ..
+                } if table == to && *renamed == column => Some(from.clone()),
+                _ => None,
+            })
+            .unwrap_or(column);
+        sql.push('\n');
+        sql.push_str(&sequence_back(schema, from, &column));
+    }
+    sql
 }
 
 fn rollback_alter_column(
@@ -176,96 +205,116 @@ fn rollback_alter_column(
 
     // Reverse type change: restore old type from from_udt
     if let Some(type_change) = changes.get("type") {
-        if changes
-            .get("conversion")
-            .and_then(|c| c.get("strategy"))
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| matches!(s, "transform_cast" | "kind_migrate"))
-        {
-            stmts.push(format!(
-                "-- WARNING: Transform/kind migration on \"{table}\".\"{column}\" is not automatically reversible."
-            ));
-        }
-        let from_udt = type_change
-            .get("from_udt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("text");
-        // Map udt_name back to a castable type keyword
-        let restore_type = udt_to_pg_type(from_udt);
-        stmts.push(format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" \
-             TYPE {restore_type} USING \"{column}\"::{restore_type}; \
-             -- restoring from {from_udt}"
-        ));
+        stmts.extend(type_back(schema, table, column, changes, type_change));
     }
 
     // Reverse an identity change first: it was made after the nullability, and an identity column
     // cannot drop NOT NULL.
     if let Some(identity) = changes.get("identity") {
-        let back = match identity.get("action").and_then(|v| v.as_str()) {
-            Some("add") => json!({ "action": "drop" }),
-            Some("drop") => json!({ "action": "add", "to": identity.get("from") }),
-            _ => json!({ "action": "set", "to": identity.get("from") }),
-        };
-        stmts.extend(identity_change_sql(schema, table, column, &back));
-        // A serial converted to an identity column is a serial again: its own sequence, numbering
-        // on past the rows there, as its default.
-        if let Some(serial) = identity.get("serial") {
-            let as_type = serial
-                .get("sequenceType")
-                .and_then(|v| v.as_str())
-                .unwrap_or("integer");
-            let target = format!("\"{schema}\".\"{table}\"");
-            let sequence = format!("\"{schema}\".\"{table}_{column}_seq\"");
-            let literal = sequence.replace('\'', "''");
-            stmts.push(format!(
-                "CREATE SEQUENCE {sequence} AS {as_type} OWNED BY {target}.\"{column}\";"
-            ));
-            stmts.push(format!(
-                "SELECT setval('{literal}', COALESCE(MAX(\"{column}\"), 0) + 1, false) FROM {target};"
-            ));
-            stmts.push(format!(
-                "ALTER TABLE {target} ALTER COLUMN \"{column}\" SET DEFAULT nextval('{literal}'::regclass);"
-            ));
-        }
+        stmts.extend(identity_back(schema, table, column, identity));
     }
     if changes.get("generated").is_some() {
-        stmts.push(format!(
-            "-- WARNING: Cannot automatically make \"{table}\".\"{column}\" a generated column again."
-        ));
+        stmts.push(warning(&format!(
+            "Cannot automatically make {} a generated column again.",
+            column_label(table, column)
+        )));
     }
 
-    // Reverse nullability change
+    // Reverse nullability change: was NOT NULL, so apply it again, or was nullable, so drop it.
     if let Some(null_change) = changes.get("nullability") {
         let original_state = null_change
             .get("from")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if original_state == "not_null" {
-            // Was NOT NULL, now re-apply NOT NULL constraint
-            stmts.push(format!(
-                "DO $$ BEGIN\n  \
-                 IF EXISTS (SELECT 1 FROM \"{schema}\".\"{table}\" WHERE \"{column}\" IS NULL) THEN\n    \
-                 RAISE EXCEPTION 'Cannot restore NOT NULL on {table}.{column}: NULL values exist.';\n  \
-                 END IF;\n\
-                 END $$;"
-            ));
-            stmts.push(format!(
-                "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
-            ));
-        } else {
-            // Was nullable: restore by dropping not null
-            stmts.push(format!(
-                "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
-            ));
-        }
+        stmts.extend(nullability_sql(
+            schema,
+            table,
+            column,
+            (original_state == "not_null").then_some("restore"),
+        ));
     }
 
     if stmts.is_empty() {
-        format!("-- WARNING: Cannot automatically roll back ALTER COLUMN \"{table}\".\"{column}\".")
+        warning(&format!(
+            "Cannot automatically roll back ALTER COLUMN {}.",
+            column_label(table, column)
+        ))
     } else {
         stmts.join("\n")
     }
+}
+
+/// The column's type changed back to the one it had, from `from_udt`.
+fn type_back(
+    schema: &str,
+    table: &str,
+    column: &str,
+    changes: &serde_json::Value,
+    type_change: &serde_json::Value,
+) -> Vec<String> {
+    let mut stmts = Vec::new();
+    if changes
+        .get("conversion")
+        .and_then(|c| c.get("strategy"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| matches!(s, "transform_cast" | "kind_migrate"))
+    {
+        stmts.push(warning(&format!(
+            "Transform/kind migration on {} is not automatically reversible.",
+            column_label(table, column)
+        )));
+    }
+    let from_udt = type_change
+        .get("from_udt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("text");
+    // Map udt_name back to a castable type keyword
+    let restore_type = udt_to_pg_type(from_udt);
+    let col = quote_ident(column);
+    stmts.push(format!(
+        "ALTER TABLE {} ALTER COLUMN {col} TYPE {restore_type} USING {col}::{restore_type}; \
+         -- restoring from {}",
+        quote_qualified(schema, table),
+        comment_text(from_udt)
+    ));
+    stmts
+}
+
+/// An identity change undone. A serial converted to an identity column is a serial again: its own
+/// sequence, numbering on past the rows there, as its default.
+fn identity_back(
+    schema: &str,
+    table: &str,
+    column: &str,
+    identity: &serde_json::Value,
+) -> Vec<String> {
+    let back = match identity.get("action").and_then(|v| v.as_str()) {
+        Some("add") => json!({ "action": "drop" }),
+        Some("drop") => json!({ "action": "add", "to": identity.get("from") }),
+        _ => json!({ "action": "set", "to": identity.get("from") }),
+    };
+    let mut stmts = identity_change_sql(schema, table, column, &back);
+    let Some(serial) = identity.get("serial") else {
+        return stmts;
+    };
+    let as_type = serial
+        .get("sequenceType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("integer");
+    let target = quote_qualified(schema, table);
+    let sequence = quote_qualified(schema, &format!("{table}_{column}_seq"));
+    let literal = quote_literal(&sequence);
+    let col = quote_ident(column);
+    stmts.push(format!(
+        "CREATE SEQUENCE {sequence} AS {as_type} OWNED BY {target}.{col};"
+    ));
+    stmts.push(format!(
+        "SELECT setval({literal}, COALESCE(MAX({col}), 0) + 1, false) FROM {target};"
+    ));
+    stmts.push(format!(
+        "ALTER TABLE {target} ALTER COLUMN {col} SET DEFAULT nextval({literal}::regclass);"
+    ));
+    stmts
 }
 
 fn udt_to_pg_type(udt: &str) -> &'static str {

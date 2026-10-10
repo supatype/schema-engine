@@ -6,6 +6,7 @@ use crate::parser::ast::{
     AccessRule, DefaultValueAst, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst,
     Operand, SchemaAst,
 };
+use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified};
 use anyhow::Result;
 
 /// Generates RLS policy SQL for all models that have access rules.
@@ -30,23 +31,27 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
         }
 
         let table = db_table_name(model);
+        let target = quote_qualified(schema, table);
 
         out.push_str(&format!(
             "-- RLS Policies for: {}\n-- Generated from schema access rules\n\n",
-            model.name
+            comment_text(&model.name)
         ));
 
         out.push_str(&format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" ENABLE ROW LEVEL SECURITY;\n"
+            "ALTER TABLE {target} ENABLE ROW LEVEL SECURITY;\n"
         ));
         out.push_str(&format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" FORCE ROW LEVEL SECURITY;\n\n"
+            "ALTER TABLE {target} FORCE ROW LEVEL SECURITY;\n\n"
         ));
 
         // A script of its own, so each policy is dropped before it is made and the script can run
         // twice. A push does not use it: there the reconcile drops and creates.
         let drop = |suffix: &str| {
-            format!("DROP POLICY IF EXISTS \"{table}_{suffix}\" ON \"{schema}\".\"{table}\";\n")
+            format!(
+                "DROP POLICY IF EXISTS {} ON {target};\n",
+                quote_ident(&format!("{table}_{suffix}"))
+            )
         };
         if let Some(rule) = &access.read {
             out.push_str(&drop("select"));
@@ -134,13 +139,22 @@ pub fn render_policy_migration_sql(
             render_update_policy_sql(schema, table, ast, model, rule, update_check.as_ref())
         }
         "delete" => render_delete_policy_sql(schema, table, ast, model, rule),
-        other => return format!("-- unknown RLS policy suffix: {other}\n"),
+        other => return format!("-- unknown RLS policy suffix: {}\n", comment_text(other)),
     };
 
     // The `CREATE POLICY` alone. Which policies are ours is the ledger's record (Phase 4.7b), not
     // a comment, and the reconcile drops a policy before making it again. The membership indexes
     // a rule's join columns need are the reconcile's too (Phase 4.3).
     sql.trim_end().to_string()
+}
+
+/// `CREATE POLICY "<table>_<suffix>" ON "<schema>"."<table>"`, the head every model policy shares.
+fn policy_head(schema: &str, table: &str, suffix: &str) -> String {
+    format!(
+        "CREATE POLICY {} ON {}",
+        quote_ident(&crate::managed::policy_name(table, suffix)),
+        quote_qualified(schema, table)
+    )
 }
 
 pub(crate) fn render_select_policy_sql(
@@ -151,11 +165,8 @@ pub(crate) fn render_select_policy_sql(
     rule: &AccessRule,
 ) -> String {
     let expr = access_rule_to_expr(ast, model, rule, schema);
-    let name = crate::managed::policy_name(table, "select");
-    format!(
-        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
-           FOR SELECT USING (\n    {expr}\n  );\n\n"
-    )
+    let head = policy_head(schema, table, "select");
+    format!("{head}\nFOR SELECT USING (\n    {expr}\n  );\n\n")
 }
 
 pub(crate) fn render_insert_policy_sql(
@@ -166,11 +177,8 @@ pub(crate) fn render_insert_policy_sql(
     rule: &AccessRule,
 ) -> String {
     let expr = access_rule_to_expr(ast, model, rule, schema);
-    let name = crate::managed::policy_name(table, "insert");
-    format!(
-        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
-           FOR INSERT WITH CHECK (\n    {expr}\n  );\n\n"
-    )
+    let head = policy_head(schema, table, "insert");
+    format!("{head}\nFOR INSERT WITH CHECK (\n    {expr}\n  );\n\n")
 }
 
 /// `check` splits the result constraint from the row selection. `None` uses the
@@ -188,10 +196,9 @@ pub(crate) fn render_update_policy_sql(
         Some(c) => access_rule_to_expr(ast, model, c, schema),
         None => using_expr.clone(),
     };
-    let name = crate::managed::policy_name(table, "update");
+    let head = policy_head(schema, table, "update");
     format!(
-        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
-           FOR UPDATE USING (\n    {using_expr}\n  ) WITH CHECK (\n    {check_expr}\n  );\n\n"
+        "{head}\nFOR UPDATE USING (\n    {using_expr}\n  ) WITH CHECK (\n    {check_expr}\n  );\n\n"
     )
 }
 
@@ -203,11 +210,8 @@ pub(crate) fn render_delete_policy_sql(
     rule: &AccessRule,
 ) -> String {
     let expr = access_rule_to_expr(ast, model, rule, schema);
-    let name = crate::managed::policy_name(table, "delete");
-    format!(
-        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
-           FOR DELETE USING (\n    {expr}\n  );\n\n"
-    )
+    let head = policy_head(schema, table, "delete");
+    format!("{head}\nFOR DELETE USING (\n    {expr}\n  );\n\n")
 }
 
 /// `auth.uid()` wrapped so Postgres evaluates it once per query, not once per row.
@@ -229,6 +233,25 @@ pub const DEFAULT_POLICY_SCHEMA: &str = "public";
 /// `auth.role()`, wrapped for the same reason as [`AUTH_UID`].
 pub const AUTH_ROLE: &str = "(SELECT auth.role())";
 
+/// `subject` equals one of `roles`: the check a `Role<...>` rule compiles to, for a model's policies
+/// and a bucket's alike.
+///
+/// Each role is a literal. A role is a name the schema declares, and one holding a quote must
+/// still compare as that name rather than end the string and add terms to the policy.
+pub(crate) fn role_matches(subject: &str, roles: &[String]) -> String {
+    match roles {
+        [role] => format!("{subject} = {}", quote_literal(role)),
+        _ => {
+            let arr = roles
+                .iter()
+                .map(|r| quote_literal(r))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{subject} = ANY(ARRAY[{arr}])")
+        }
+    }
+}
+
 /// Converts an AccessRule to a Postgres expression string for use in a USING / WITH CHECK clause.
 pub fn access_rule_to_expr(
     ast: &SchemaAst,
@@ -244,18 +267,7 @@ pub fn access_rule_to_expr(
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
         AccessRule::Owner { field } => owner_access_expr(ast, model, field),
-        AccessRule::Role { roles } => {
-            if roles.len() == 1 {
-                format!("{AUTH_ROLE} = '{}'", roles[0])
-            } else {
-                let arr = roles
-                    .iter()
-                    .map(|r| format!("'{r}'"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{AUTH_ROLE} = ANY(ARRAY[{arr}])")
-            }
-        }
+        AccessRule::Role { roles } => role_matches(AUTH_ROLE, roles),
         AccessRule::Any { rules } => join_rules(ast, model, rules, "OR", schema),
         AccessRule::All { rules } => join_rules(ast, model, rules, "AND", schema),
         AccessRule::Not { rule } => {
@@ -299,8 +311,7 @@ fn set_exists_expr(
         }
 
         MembershipSource::Rows { table, filter, .. } => {
-            let table_esc = table.replace('"', "\"\"");
-            let mut sql = format!("EXISTS (SELECT 1 FROM \"{schema}\".\"{table_esc}\"");
+            let mut sql = format!("EXISTS (SELECT 1 FROM {}", quote_qualified(schema, table));
             if let Some(rule) = filter {
                 let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
                 let inner_expr = match inner_model {
@@ -335,7 +346,7 @@ fn membership_to_expr(
     // Qualified so the correlated reference is unambiguous: the subquery's own
     // table may well have a column of the same name, and an unqualified reference
     // would silently bind to the *inner* one, making the test always true.
-    let own_col = format!("\"{own_table}\".\"{}\"", column.replace('"', "\"\""));
+    let own_col = format!("{}.{}", quote_ident(own_table), quote_ident(column));
 
     match source {
         MembershipSource::Claim { path } => format!(
@@ -364,8 +375,6 @@ fn membership_to_expr(
             column: source_column,
             filter,
         } => {
-            let table_esc = table.replace('"', "\"\"");
-            let col_esc = source_column.replace('"', "\"\"");
             // Schema-qualified so the source is unambiguously the real table.
             // Inside a `can_*` function the row is a derived table aliased with the
             // model's own name, and a self-referential membership
@@ -373,8 +382,10 @@ fn membership_to_expr(
             // `FROM "posts"` to that single row instead of the table, quietly
             // answering about one row when it should have searched all of them.
             let mut sql = format!(
-                "EXISTS (SELECT 1 FROM \"{schema}\".\"{table_esc}\" \
-                 WHERE \"{table_esc}\".\"{col_esc}\" = {own_col}"
+                "EXISTS (SELECT 1 FROM {} WHERE {}.{} = {own_col}",
+                quote_qualified(schema, table),
+                quote_ident(table),
+                quote_ident(source_column)
             );
             if let Some(rule) = filter {
                 // The filter is evaluated against the *source* table, so resolve
@@ -403,23 +414,20 @@ fn membership_to_expr(
 /// and if both do, silently against the wrong one. Only already-unqualified
 /// references are touched, so an explicit `"other"."col"` is left alone.
 fn qualify_bare_columns(expr: &str, table: &str) -> String {
-    let table_esc = table.replace('"', "\"\"");
+    let qualifier = quote_ident(table);
     let mut out = String::with_capacity(expr.len());
     let mut rest = expr;
 
-    while let Some(start) = rest.find('"') {
+    while let Some(start) = rest.find(['"', '\'']) {
         out.push_str(&rest[..start]);
-        let after_open = &rest[start + 1..];
-        let Some(end) = after_open.find('"') else {
-            out.push_str(&rest[start..]);
-            return out;
-        };
-        let ident = &after_open[..end];
-        let tail = &after_open[end + 1..];
+        let (token, tail) = split_quoted(&rest[start..]);
+        rest = tail;
 
+        // A string literal is a value, never a column, whatever it contains, and an unterminated
+        // token is left exactly as it was written.
+        let is_identifier = token.starts_with('"') && token.len() > 1 && token.ends_with('"');
         // Already qualified (`"t"."c"`) if a dot follows, or if a dot preceded.
-        let preceded_by_dot = out.ends_with('.');
-        let followed_by_dot = tail.starts_with('.');
+        let qualified = out.ends_with('.') || tail.starts_with('.');
         // A quoted identifier straight after FROM or JOIN is a *table*, not a
         // column. Qualifying it produced `"categories"."posts"`, which Postgres
         // read as a schema-qualified relation that does not exist, so every
@@ -429,17 +437,34 @@ fn qualify_bare_columns(expr: &str, table: &str) -> String {
             "FROM" | "JOIN" | "INTO" | "UPDATE"
         );
 
-        if preceded_by_dot || followed_by_dot || in_table_position {
-            out.push('"');
-            out.push_str(ident);
-            out.push('"');
-        } else {
-            out.push_str(&format!("\"{table_esc}\".\"{ident}\""));
+        if is_identifier && !qualified && !in_table_position {
+            out.push_str(&qualifier);
+            out.push('.');
         }
-        rest = tail;
+        out.push_str(token);
     }
     out.push_str(rest);
     out
+}
+
+/// Splits the quoted token at the front of `s` (an identifier in `"`, a literal in `'`) from what
+/// follows it. A doubled quote character is part of the token, as Postgres reads it: `"a""b"` is one
+/// identifier and `'it''s'` one literal. An unterminated token runs to the end of `s`.
+fn split_quoted(s: &str) -> (&str, &str) {
+    let bytes = s.as_bytes();
+    let quote = bytes[0];
+    let mut i = 1;
+    while i < bytes.len() {
+        if bytes[i] == quote {
+            if bytes.get(i + 1) == Some(&quote) {
+                i += 2;
+                continue;
+            }
+            return s.split_at(i + 1);
+        }
+        i += 1;
+    }
+    (s, "")
 }
 
 /// The last whitespace-delimited word emitted so far, for deciding whether the
@@ -505,14 +530,20 @@ fn collect_membership_targets(rule: &AccessRule, out: &mut Vec<(String, String)>
 pub fn membership_index_sql(schema: &str, rule: &AccessRule) -> String {
     let mut sql = String::new();
     for (table, column) in membership_index_targets(rule) {
-        let index = crate::managed::membership_index_name(&table, &column);
-        let t = table.replace('"', "\"\"");
-        let c = column.replace('"', "\"\"");
-        sql.push_str(&format!(
-            "CREATE INDEX IF NOT EXISTS \"{index}\" ON \"{schema}\".\"{t}\" (\"{c}\");\n"
-        ));
+        sql.push_str(&membership_index_create_sql(schema, &table, &column));
+        sql.push('\n');
     }
     sql
+}
+
+/// The `CREATE INDEX IF NOT EXISTS` for one join column, under the name the ledger records it by.
+pub fn membership_index_create_sql(schema: &str, table: &str, column: &str) -> String {
+    format!(
+        "CREATE INDEX IF NOT EXISTS {} ON {} ({});",
+        quote_ident(&crate::managed::membership_index_name(table, column)),
+        quote_qualified(schema, table),
+        quote_ident(column)
+    )
 }
 
 /// Joins composed rules, parenthesising any child that is itself a composition.
@@ -553,7 +584,9 @@ fn join_rules(
 fn time_base_expr(operand: &Operand) -> Option<String> {
     match operand {
         Operand::Now => Some("now()".to_string()),
-        Operand::StartOf { unit } => Some(format!("date_trunc('{}', now())", unit.sql())),
+        Operand::StartOf { unit } => {
+            Some(format!("date_trunc({}, now())", quote_literal(unit.sql())))
+        }
         _ => None,
     }
 }
@@ -591,7 +624,7 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
         Operand::Length { column, form } | Operand::ItemCount { column, form } => {
             crate::generator::sql::constraints::measure_expr(column, *form)
         }
-        Operand::Column { name } => format!("\"{}\"", name.replace('"', "\"\"")),
+        Operand::Column { name } => quote_ident(name),
         Operand::AuthUid => AUTH_UID.to_string(),
         Operand::AuthRole => AUTH_ROLE.to_string(),
         // Text, so it compares against a column or a string literal. A claim used
@@ -605,56 +638,59 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
         // `auth.uid()` is wrapped.
         Operand::Now => "(SELECT now())".to_string(),
         Operand::StartOf { unit } => {
-            format!("(SELECT date_trunc('{}', now()))", unit.sql())
+            format!("(SELECT date_trunc({}, now()))", quote_literal(unit.sql()))
         }
         // The interval is assembled from a parsed integer and a keyword from the
         // closed unit set. No author-supplied text reaches Postgres here, which is
         // what keeps this from being a small escape hatch.
         Operand::Ago { amount, unit } => {
-            format!("(SELECT now() - INTERVAL '{amount} {}')", unit.sql())
+            format!(
+                "(SELECT now() - {})",
+                interval(&format!("{amount} {}", unit.sql()))
+            )
         }
         Operand::FromNow { amount, unit } => {
-            format!("(SELECT now() + INTERVAL '{amount} {}')", unit.sql())
+            format!(
+                "(SELECT now() + {})",
+                interval(&format!("{amount} {}", unit.sql()))
+            )
         }
         // The base is rendered unwrapped and the whole expression wrapped once. The
         // fallback covers a base validation should already have refused.
-        Operand::After { base, interval } => {
+        Operand::After {
+            base,
+            interval: spec,
+        } => {
             let rendered = time_base_expr(base).unwrap_or_else(|| operand_to_expr(base));
             format!(
-                "(SELECT {rendered} + INTERVAL '{}')",
-                interval_literal(interval)
+                "(SELECT {rendered} + {})",
+                interval(&interval_literal(spec))
             )
         }
-        Operand::Before { base, interval } => {
+        Operand::Before {
+            base,
+            interval: spec,
+        } => {
             let rendered = time_base_expr(base).unwrap_or_else(|| operand_to_expr(base));
             format!(
-                "(SELECT {rendered} - INTERVAL '{}')",
-                interval_literal(interval)
+                "(SELECT {rendered} - {})",
+                interval(&interval_literal(spec))
             )
         }
     }
 }
 
-/// Single-quotes a string for SQL, doubling any embedded quote.
-///
-/// Schema authors control these strings, but a stray apostrophe in a claim path or
-/// a literal would otherwise end the quoted string and change the meaning of the
-/// policy around it.
-fn quote_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
+/// `INTERVAL '<text>'`.
+fn interval(text: &str) -> String {
+    format!("INTERVAL {}", quote_literal(text))
 }
 
 /// Owner / OwnerFrom: compare auth.uid() to a row column or ownership via a related model.
-/// Quotes a column so it is unambiguous as an identifier.
 ///
-/// Also what lets `qualify_bare_columns` find these references when the same
-/// expression is reused inside a `can_*` function, where a bare column has no
-/// `FROM` clause to resolve against. Quoting changes no meaning and the differ's
-/// normaliser strips quotes, so no policy is recreated for it.
-fn quote_ident(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
+/// Columns are always quoted, which is also what lets `qualify_bare_columns` find these references
+/// when the same expression is reused inside a `can_*` function, where a bare column has no `FROM`
+/// clause to resolve against. Quoting changes no meaning and the differ's normaliser strips quotes,
+/// so no policy is recreated for it.
 fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
     if kernel_field == "id" {
         return format!("{AUTH_UID} = {}", quote_ident("id"));
@@ -671,10 +707,11 @@ fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> S
                     return format!("{AUTH_UID} = {}", quote_ident(&fk));
                 }
                 if let Some(owner_col) = owner_column_on_model(target) {
-                    let table = db_table_name(target);
+                    let table = quote_ident(db_table_name(target));
                     return format!(
-                        "EXISTS (SELECT 1 FROM \"{table}\" WHERE \"{table}\".\"id\" = {fk_q} AND {AUTH_UID} = \"{table}\".\"{owner_col}\")",
-                        fk_q = quote_ident(&fk)
+                        "EXISTS (SELECT 1 FROM {table} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
+                        fk_q = quote_ident(&fk),
+                        owner_q = quote_ident(&owner_col)
                     );
                 }
             }
@@ -843,12 +880,12 @@ fn render_field_can_functions(
 /// Double underscore between table and column so a table named `posts_salary`
 /// cannot collide with column `salary` of table `posts`.
 fn render_field_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
-    let alias = table.replace('"', "\"\"");
+    let (function, row, alias) = can_function_names(schema, table, name);
     format!(
-        "CREATE OR REPLACE FUNCTION \"{schema}\".\"{name}\"(\"{table}\" \"{schema}\".\"{table}\")
+        "CREATE OR REPLACE FUNCTION {function}({alias} {row})
            RETURNS boolean LANGUAGE sql STABLE AS $can$
              SELECT {expr}
-               FROM (SELECT ($1).*) AS \"{alias}\";
+               FROM (SELECT ($1).*) AS {alias};
            $can$;
 {}
 ",
@@ -862,7 +899,10 @@ fn render_field_can_function(schema: &str, table: &str, name: &str, expr: &str) 
 pub const MASK_EXTENSION: &str = "supatype_mask";
 pub const MASK_PROVIDER: &str = "supatype";
 
-/// A qualified, quoted reference to a generated per-column predicate.
+/// A qualified reference to a generated per-column predicate.
+///
+/// The schema is written bare, as every label already in a database holds it: the label is
+/// compared as text, so quoting it would relabel every masked column on the next push.
 fn field_predicate_ref(
     names: &crate::managed::ObjectNames,
     schema: &str,
@@ -871,10 +911,8 @@ fn field_predicate_ref(
     column: &str,
 ) -> String {
     format!(
-        "{schema}.\"{}\"",
-        names
-            .field_can_function(table, op, column)
-            .replace('"', "\"\"")
+        "{schema}.{}",
+        quote_ident(&names.field_can_function(table, op, column))
     )
 }
 
@@ -894,19 +932,14 @@ impl FieldLabel {
         format!(
             "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN {} IS {};",
             label_target(schema, &self.table, &self.column),
-            sql_string(&self.label)
+            quote_literal(&self.label)
         )
     }
 }
 
 /// `"schema"."table"."column"`, quoted as a `SECURITY LABEL` names its column.
 fn label_target(schema: &str, table: &str, column: &str) -> String {
-    format!(
-        "\"{}\".\"{}\".\"{}\"",
-        schema.replace('"', "\"\""),
-        table.replace('"', "\"\""),
-        column.replace('"', "\"\"")
-    )
+    format!("{}.{}", quote_qualified(schema, table), quote_ident(column))
 }
 
 /// The statement that takes a column's label off, guarded on the extension: without the provider
@@ -922,16 +955,16 @@ pub fn drop_field_label_sql(schema: &str, table: &str, column: &str) -> String {
 /// under its provider is its by location, so the reconcile drops it and needs the statement.
 pub fn drop_table_label_sql(schema: &str, table: &str) -> String {
     guarded_label_drop(&format!(
-        "SECURITY LABEL FOR {MASK_PROVIDER} ON TABLE \"{}\".\"{}\" IS NULL",
-        schema.replace('"', "\"\""),
-        table.replace('"', "\"\"")
+        "SECURITY LABEL FOR {MASK_PROVIDER} ON TABLE {} IS NULL",
+        quote_qualified(schema, table)
     ))
 }
 
 fn guarded_label_drop(statement: &str) -> String {
     format!(
-        "DO $mask_label$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = '{MASK_EXTENSION}') THEN\n    EXECUTE {};\n  END IF;\nEND\n$mask_label$;",
-        sql_string(statement)
+        "DO $mask_label$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = {}) THEN\n    EXECUTE {};\n  END IF;\nEND\n$mask_label$;",
+        quote_literal(MASK_EXTENSION),
+        quote_literal(statement)
     )
 }
 
@@ -1074,10 +1107,6 @@ $auth_usage_probe$;
     )
 }
 
-fn sql_string(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
 /// The row is expanded into a one-row derived table aliased with the table's own
 /// name, so the policy expression works unchanged inside the function body.
 ///
@@ -1089,12 +1118,12 @@ fn sql_string(value: &str) -> String {
 /// expression instead and so had to answer "unknown" for those, which is precisely
 /// the state these functions exist to eliminate.
 fn render_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
-    let alias = table.replace('"', "\"\"");
+    let (function, row, alias) = can_function_names(schema, table, name);
     format!(
-        "CREATE OR REPLACE FUNCTION \"{schema}\".\"{name}\"(\"{table}\" \"{schema}\".\"{table}\")\n  \
+        "CREATE OR REPLACE FUNCTION {function}({alias} {row})\n  \
          RETURNS boolean LANGUAGE sql STABLE AS $can$\n    \
          SELECT {expr}\n      \
-         FROM (SELECT ($1).*) AS \"{alias}\";\n  \
+         FROM (SELECT ($1).*) AS {alias};\n  \
          $can$;\n{}\n",
         can_function_grants(schema, table, name)
     )
@@ -1110,7 +1139,11 @@ fn render_can_function(schema: &str, table: &str, name: &str, expr: &str) -> Str
 /// under the function, so they are part of what the ledger records for it, and the first push
 /// after an engine that did not write them re-applies the function with them.
 fn can_function_grants(schema: &str, table: &str, name: &str) -> String {
-    let signature = format!("\"{schema}\".\"{name}\"(\"{schema}\".\"{table}\")");
+    let signature = format!(
+        "{}({})",
+        quote_qualified(schema, name),
+        quote_qualified(schema, table)
+    );
     format!(
         "REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;\n\
          GRANT EXECUTE ON FUNCTION {signature} TO {};\n",
@@ -1118,10 +1151,44 @@ fn can_function_grants(schema: &str, table: &str, name: &str) -> String {
     )
 }
 
+/// The quoted names a `can_*` function is written with: the function, its row type, and the alias
+/// the row is read under, which is also its argument's name.
+fn can_function_names(schema: &str, table: &str, name: &str) -> (String, String, String) {
+    (
+        quote_qualified(schema, name),
+        quote_qualified(schema, table),
+        quote_ident(table),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::ast::TruncUnit;
+
+    #[test]
+    fn qualifying_columns_leaves_literals_and_doubled_quotes_whole() {
+        // A role holding a double quote is a literal, not a column, and an identifier holding a
+        // doubled quote is one identifier.
+        let expr = r#"(SELECT auth.role()) = 'o"brien' AND "a""b" = 1 AND "t"."c" = 2"#;
+        assert_eq!(
+            qualify_bare_columns(expr, "my\"t"),
+            r#"(SELECT auth.role()) = 'o"brien' AND "my""t"."a""b" = 1 AND "t"."c" = 2"#
+        );
+    }
+
+    #[test]
+    fn a_role_rule_writes_each_role_as_a_literal() {
+        let roles = vec!["o'brien".to_string(), "x' OR true OR 'a'='a".to_string()];
+        assert_eq!(
+            role_matches(AUTH_ROLE, &roles[..1]),
+            "(SELECT auth.role()) = 'o''brien'"
+        );
+        assert_eq!(
+            role_matches(AUTH_ROLE, &roles),
+            "(SELECT auth.role()) = ANY(ARRAY['o''brien', 'x'' OR true OR ''a''=''a'])"
+        );
+    }
 
     #[test]
     fn after_now_renders_a_wrapped_addition() {
