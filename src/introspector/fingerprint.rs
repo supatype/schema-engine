@@ -115,13 +115,15 @@ pub struct ObjectKey {
 
 impl std::fmt::Display for ObjectKey {
     /// `check public.posts.posts_title_check`: the kind, then the dotted path, with an empty
-    /// parent folded away.
+    /// schema (a cron job's) or parent folded away, so a job reads `cron_job supatype-prune-versions`
+    /// rather than `cron_job .supatype-prune-versions`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}", self.kind.as_str(), self.schema)?;
-        if !self.parent.is_empty() {
-            write!(f, ".{}", self.parent)?;
-        }
-        write!(f, ".{}", self.name)
+        let path: Vec<&str> = [&self.schema, &self.parent, &self.name]
+            .into_iter()
+            .map(String::as_str)
+            .filter(|part| !part.is_empty())
+            .collect();
+        write!(f, "{} {}", self.kind.as_str(), path.join("."))
     }
 }
 

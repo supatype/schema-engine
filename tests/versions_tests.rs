@@ -517,7 +517,7 @@ fn unscheduling_a_job_touches_only_this_databases() {
         .expect("the layer replaces its jobs");
     let statement = &unschedule[..unschedule.find(';').unwrap()];
     assert!(
-        statement.contains("AND database = current_database()"),
+        statement.contains(&format!("AND database = {}", versions::CRON_JOB_DATABASE)),
         "{statement}"
     );
 
@@ -529,9 +529,10 @@ fn unscheduling_a_job_touches_only_this_databases() {
     };
     let drop = job.drop_sql().unwrap();
     assert!(
-        drop.contains(
-            "WHERE jobname = 'supatype-prune-versions' AND database = current_database()"
-        ),
+        drop.contains(&format!(
+            "WHERE jobname = 'supatype-prune-versions' AND database = {}",
+            versions::CRON_JOB_DATABASE
+        )),
         "{drop}"
     );
 }
