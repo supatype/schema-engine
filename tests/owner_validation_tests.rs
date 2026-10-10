@@ -65,7 +65,7 @@ fn owner_rule_accepts_kernel_relation_field_name() {
         serialized.contains("\"field\":\"author\""),
         "owner field should keep kernel name author, got: {serialized}"
     );
-    // The point of the assertion is the column resolution — `author` becomes
+    // The point of the assertion is the column resolution: `author` becomes
     // `author_id`. The auth call is wrapped in a scalar subquery so the planner
     // evaluates it once per query, so match on the parts rather than one literal
     // rendering of them.
@@ -112,7 +112,9 @@ fn owner_rule_rejects_non_relation_fields_with_actionable_message() {
         "error should mention invalid owner field, got: {message}"
     );
     assert!(
-        message.contains("kernel field names"),
+        message.contains("field 'title' is of type text")
+            && message
+                .contains("An owner must be \"id\", a relation field, or a field of type UUID"),
         "error should explain constraint, got: {message}"
     );
 }
@@ -353,7 +355,7 @@ fn owner_rule_fk_column_name_generates_correct_rls() {
     let expr = access_rule_to_expr(&ast, message, delete_rule, "public");
     // Asserted as two parts rather than one SQL string: the identity comes from `auth.uid()` and the
     // column must be the `author_id` FK, but the exact rendering is not this test's business. It is
-    // now `(SELECT auth.uid()) = "author_id"` — the call is wrapped in a scalar subquery so the
+    // now `(SELECT auth.uid()) = "author_id"`, with the call wrapped in a scalar subquery so the
     // planner evaluates it once per query instead of once per row, and identifiers are quoted.
     assert!(
         expr.contains("auth.uid()") && expr.contains("author_id"),

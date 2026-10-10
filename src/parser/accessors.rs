@@ -180,18 +180,13 @@ pub fn resolve_owner_column(model: &ModelAst, kernel_field: &str) -> String {
     if kernel_field == "id" {
         return "id".to_string();
     }
-    if let Some((field_name, field)) = model.fields.get_key_value(kernel_field) {
-        if let FieldAst::Relation(rel) = field {
-            let is_owning = matches!(
-                rel.cardinality,
-                RelationCardinality::BelongsTo | RelationCardinality::ManyToMany
-            );
-            if is_owning {
-                return db_foreign_key(field, field_name)
-                    .unwrap_or_else(|| default_foreign_key_column(field_name));
-            }
+    if let Some((field_name, field @ FieldAst::Relation(rel))) =
+        model.fields.get_key_value(kernel_field)
+    {
+        if rel.is_owning() {
+            return db_foreign_key(field, field_name)
+                .unwrap_or_else(|| default_foreign_key_column(field_name));
         }
-        return to_snake_case(kernel_field);
     }
     to_snake_case(kernel_field)
 }
