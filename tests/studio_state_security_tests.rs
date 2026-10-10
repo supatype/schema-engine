@@ -239,3 +239,41 @@ async fn a_push_takes_back_the_grants_an_earlier_engine_made() {
     })
     .await;
 }
+
+/// The `can_*` predicates are `SECURITY INVOKER`, so `EXECUTE` decides nothing about rows; but a
+/// role outside the API has no business calling them, and the API roles still must: policies and
+/// the masking rewrite call them as the querying role.
+#[tokio::test]
+async fn can_predicates_are_executable_by_the_api_roles_only() {
+    common::with_integration_pool(|pool| async move {
+        set_up(&pool).await;
+        let rows: Vec<(String, bool, bool, bool, bool)> = sqlx::query_as(
+            "SELECT p.oid::regprocedure::text,
+                    EXISTS (SELECT 1 FROM aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                             WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE'),
+                    has_function_privilege('anon', p.oid, 'EXECUTE'),
+                    has_function_privilege('authenticated', p.oid, 'EXECUTE'),
+                    has_function_privilege('service_role', p.oid, 'EXECUTE')
+               FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = 'public' AND p.proname LIKE 'can\\_%'",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("read the predicates");
+        assert!(!rows.is_empty(), "no can_* predicates were generated");
+        for (name, public, anon, authenticated, service_role) in rows {
+            assert!(!public, "PUBLIC may execute {name}");
+            assert!(
+                anon && authenticated && service_role,
+                "an API role may not execute {name}"
+            );
+        }
+
+        // And they still answer for the caller, through the row they are handed.
+        assert_eq!(
+            run_as(&pool, Caller::Anon, "SELECT can_read_users(u) FROM users u").await,
+            Ok(0)
+        );
+    })
+    .await;
+}

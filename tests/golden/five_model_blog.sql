@@ -210,120 +210,160 @@ CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users")
     SELECT FALSE
       FROM (SELECT ($1).*) AS "users";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_users"("public"."users") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_users"("public"."users") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_users"("users" "public"."users")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "users";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_users"("public"."users") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_users"("public"."users") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_users"("users" "public"."users")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "users";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_users"("public"."users") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_users"("public"."users") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_users"("users" "public"."users")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "users";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_users"("public"."users") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_users"("public"."users") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_categories"("categories" "public"."categories")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "categories";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_categories"("public"."categories") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_categories"("public"."categories") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_categories"("categories" "public"."categories")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "categories";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_categories"("public"."categories") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_categories"("public"."categories") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_categories"("categories" "public"."categories")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "categories";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_categories"("public"."categories") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_categories"("public"."categories") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_categories"("categories" "public"."categories")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "categories";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_categories"("public"."categories") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_categories"("public"."categories") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_posts"("posts" "public"."posts")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_posts"("public"."posts") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_posts"("public"."posts") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_posts"("posts" "public"."posts")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_posts"("public"."posts") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_posts"("public"."posts") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_posts"("posts" "public"."posts")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_posts"("public"."posts") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_posts"("public"."posts") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_posts"("posts" "public"."posts")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_posts"("public"."posts") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_posts"("public"."posts") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_comments"("comments" "public"."comments")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "comments";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_comments"("public"."comments") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_comments"("public"."comments") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_comments"("comments" "public"."comments")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "comments";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_comments"("public"."comments") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_comments"("public"."comments") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_comments"("comments" "public"."comments")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "comments";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_comments"("public"."comments") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_comments"("public"."comments") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_comments"("comments" "public"."comments")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "comments";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_comments"("public"."comments") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_comments"("public"."comments") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_tags"("public"."tags") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_tags"("public"."tags") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_tags"("public"."tags") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_tags"("public"."tags") TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";

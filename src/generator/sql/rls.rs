@@ -850,8 +850,9 @@ fn render_field_can_function(schema: &str, table: &str, name: &str, expr: &str) 
              SELECT {expr}
                FROM (SELECT ($1).*) AS \"{alias}\";
            $can$;
-
-"
+{}
+",
+        can_function_grants(schema, table, name)
     )
 }
 
@@ -1094,7 +1095,26 @@ fn render_can_function(schema: &str, table: &str, name: &str, expr: &str) -> Str
          RETURNS boolean LANGUAGE sql STABLE AS $can$\n    \
          SELECT {expr}\n      \
          FROM (SELECT ($1).*) AS \"{alias}\";\n  \
-         $can$;\n\n"
+         $can$;\n{}\n",
+        can_function_grants(schema, table, name)
+    )
+}
+
+/// Who may call a `can_*` predicate: the API roles, which is everyone that legitimately does.
+/// Policies, the `supatype_mask` rewrite, the tier 2 views and realtime all call them as the
+/// querying role, and Studio reads them as computed columns through PostgREST.
+///
+/// They are `SECURITY INVOKER`, so `EXECUTE` decides nothing about rows; this only stops every
+/// other role in the cluster calling them, which `PUBLIC`'s default `EXECUTE` allowed. Written as
+/// `REVOKE ALL ... FROM PUBLIC` and `GRANT EXECUTE`, the two forms the statement attribution files
+/// under the function, so they are part of what the ledger records for it, and the first push
+/// after an engine that did not write them re-applies the function with them.
+fn can_function_grants(schema: &str, table: &str, name: &str) -> String {
+    let signature = format!("\"{schema}\".\"{name}\"(\"{schema}\".\"{table}\")");
+    format!(
+        "REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;\n\
+         GRANT EXECUTE ON FUNCTION {signature} TO {};\n",
+        API_ROLES.join(", ")
     )
 }
 

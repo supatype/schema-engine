@@ -214,96 +214,128 @@ CREATE OR REPLACE FUNCTION "public"."can_read_customers"("customers" "public"."c
     SELECT (SELECT auth.uid()) = "id"
       FROM (SELECT ($1).*) AS "customers";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_customers"("public"."customers") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_customers"("public"."customers") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_customers"("customers" "public"."customers")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "customers";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_customers"("public"."customers") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_customers"("public"."customers") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_customers"("customers" "public"."customers")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.uid()) = "id"
       FROM (SELECT ($1).*) AS "customers";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_customers"("public"."customers") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_customers"("public"."customers") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_customers"("customers" "public"."customers")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "customers";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_customers"("public"."customers") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_customers"("public"."customers") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_products"("products" "public"."products")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "products";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_products"("public"."products") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_products"("public"."products") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_products"("products" "public"."products")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "products";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_products"("public"."products") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_products"("public"."products") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_products"("products" "public"."products")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "products";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_products"("public"."products") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_products"("public"."products") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_products"("products" "public"."products")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "products";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_products"("public"."products") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_products"("public"."products") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_orders"("orders" "public"."orders")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT auth.uid()) = "customers"."id")
       FROM (SELECT ($1).*) AS "orders";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_orders"("public"."orders") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_orders"("public"."orders") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_orders"("orders" "public"."orders")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT auth.uid()) = "customers"."id")
       FROM (SELECT ($1).*) AS "orders";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_orders"("public"."orders") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_orders"("public"."orders") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_orders"("orders" "public"."orders")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "orders";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_orders"("public"."orders") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_orders"("public"."orders") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_orders"("orders" "public"."orders")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "orders";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_orders"("public"."orders") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_orders"("public"."orders") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_order_items"("order_items" "public"."order_items")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "order_items";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_order_items"("public"."order_items") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_order_items"("public"."order_items") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_order_items"("order_items" "public"."order_items")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "order_items";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_order_items"("public"."order_items") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_order_items"("public"."order_items") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_order_items"("order_items" "public"."order_items")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "order_items";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_order_items"("public"."order_items") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_order_items"("public"."order_items") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_order_items"("order_items" "public"."order_items")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "order_items";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_order_items"("public"."order_items") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_order_items"("public"."order_items") TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";
