@@ -255,10 +255,8 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
 pub async fn rollback(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    crate::state::migration_history::bootstrap_internal_state(&pool)
-        .await
-        .map_err(refusal_error)?;
-    // Refused with `engine_busy` while another writer holds the engine's lock.
+    // Bootstraps first, and is refused with `engine_busy` while another writer holds the engine's
+    // lock.
     let result = crate::state::migration_history::apply_rollback(&pool, &req.schema)
         .await
         .map_err(refusal_error)?;

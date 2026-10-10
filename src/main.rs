@@ -575,7 +575,6 @@ async fn run(command: Command, input: String) -> Result<()> {
         } => {
             use supatype_engine::state::migration_history;
             let pool = supatype_engine::db::connect(&database_url).await?;
-            migration_history::bootstrap_internal_state(&pool).await?;
             let result = migration_history::apply_rollback(&pool, &schema).await?;
             println!("{}", serde_json::to_string(&result)?);
         }

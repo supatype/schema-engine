@@ -317,3 +317,28 @@ async fn rolling_back_leaves_what_was_released_since_the_push() {
     })
     .await;
 }
+
+/// E36: a rollback runs every statement on the transaction that holds the engine's lock. It used
+/// to choose the migration, check the project and repair `schema_state` on other pool sessions,
+/// which autocommitted outside the lock. On a pool of one connection, any statement sent elsewhere
+/// waits for the connection the rollback's own transaction holds, until the pool gives up.
+#[tokio::test]
+async fn a_rollback_runs_every_statement_on_its_locked_transaction() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        push(&pool, &posts("body")).await.unwrap();
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect_with(pool.connect_options().as_ref().clone())
+            .await
+            .unwrap();
+        migration_history::apply_rollback(&one, "public")
+            .await
+            .expect("the rollback needs no connection beside its own transaction");
+        one.close().await;
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        assert!(!index_exists(&pool, "posts_body_idx").await);
+    })
+    .await;
+}

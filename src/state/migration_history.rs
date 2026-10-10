@@ -898,14 +898,16 @@ struct LatestMigrationRow {
     sql_down: Option<String>,
 }
 
-async fn load_latest_applied_migration(pool: &PgPool) -> Result<Option<LatestMigrationRow>> {
+async fn load_latest_applied_migration(
+    conn: &mut PgConnection,
+) -> Result<Option<LatestMigrationRow>> {
     let sql = format!(
         "SELECT id, name, sql_down FROM {SCHEMA}.migrations \
          WHERE rolled_back = false AND COALESCE(status, 'applied') = 'applied' \
          ORDER BY applied_at DESC LIMIT 1"
     );
     Ok(sqlx::query_as::<_, (i32, String, Option<String>)>(&sql)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .map(|(id, name, sql_down)| LatestMigrationRow { id, name, sql_down }))
 }
@@ -919,7 +921,7 @@ struct PriorMigrationRow {
 }
 
 async fn load_prior_applied_migration(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     exclude_id: i32,
 ) -> Result<Option<PriorMigrationRow>> {
     let sql = format!(
@@ -939,7 +941,7 @@ async fn load_prior_applied_migration(
         ),
     >(&sql)
     .bind(exclude_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?
     .map(
         |(name, schema_snapshot, admin_config, schema_sources, schema_sources_manifest)| {
@@ -985,85 +987,103 @@ fn without_transaction_control(sql: &str) -> String {
         .collect()
 }
 
+/// Roll back the latest applied migration: its `sql_down`, the ledger rows it wrote, its history
+/// row and Studio's metadata, in one writer's transaction under the engine's lock, refused while a
+/// push, adopt or rebaseline holds it.
+///
+/// Every statement runs on that transaction's connection, the lock taken before the migration to
+/// undo is chosen, so it is still the latest when it is undone. The choice, the project check and
+/// the `schema_state` repairs once ran on other pool sessions, which autocommitted outside the lock
+/// and committed even when the rollback was then refused (E36).
 pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResult> {
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-
-    // A rollback writes objects, the history and the ledger, as a push does: under the engine's
-    // lock, refused while a push, adopt or rebaseline holds it, and taken before the migration to
-    // undo is chosen, so it is still the latest when it is undone.
+    bootstrap_internal_state(pool).await?;
     let mut tx = crate::push::begin_writer(pool).await?;
-
-    let latest = load_latest_applied_migration(pool).await?.ok_or_else(|| {
-        anyhow::anyhow!("no_applied_migration: No applied migration to roll back")
-    })?;
-
+    // The history is one project's; rolling it back from another would undo that project's
+    // migration and record this schema as the database's.
+    assert_project_schema_on(&mut tx, schema).await?;
+    let latest = load_latest_applied_migration(&mut tx)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("no_applied_migration: No applied migration to roll back")
+        })?;
     let sql_down = latest
         .sql_down
+        .clone()
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!("no_rollback_sql: Migration has no rollback SQL (metadata-only push?)")
         })?;
+    let prior = load_prior_applied_migration(&mut tx, latest.id).await?;
+    let left = undo_migration(&mut tx, latest.id, &sql_down, schema).await?;
+    restore_studio_metadata(&mut tx, prior.as_ref()).await?;
+    let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
+    save_schema_state(&mut *tx, &new_state).await?;
+    tx.commit().await?;
+    Ok(rolled_back(&latest.name, prior, &left))
+}
 
-    // The history is one project's; rolling it back from another would undo that project's
-    // migration and record this schema as the database's. Asserted as a push asserts it, with the
-    // schema an older engine left unrecorded taken from its snapshot first.
-    for sql in [
-        create_schema_state_table_sql(),
-        ensure_schema_state_project_schema_column_sql(),
-        backfill_schema_state_project_schema_sql(),
-    ] {
-        sqlx::raw_sql(&sql).execute(pool).await?;
-    }
-    assert_project_schema(pool, schema).await?;
-
-    let prior = load_prior_applied_migration(pool, latest.id).await?;
-
-    // The ledger goes back with the objects. Both tables exist on any database a push bootstrapped
-    // since; asserted here for one bootstrapped before the undo table was.
+/// Run `sql_down` for migration `id`, put the ledger back as it was before it and mark it rolled
+/// back. Returns the objects left as they are: released or recorded again since the push, so no
+/// longer the push's to undo.
+async fn undo_migration(
+    tx: &mut PgConnection,
+    id: i32,
+    sql_down: &str,
+    schema: &str,
+) -> Result<Vec<crate::desired::ObjectKey>> {
+    // Both tables exist on any database a push bootstrapped since; asserted here for one
+    // bootstrapped before the undo table was.
     for sql in [
         crate::ledger::create_table_sql(),
         crate::ledger::undo::create_table_sql(),
     ] {
         (&mut *tx).execute(sqlx::raw_sql(&sql)).await?;
     }
-    // What was released or recorded again since the push is no longer the push's to undo: its
-    // statements are left out, as `restore` leaves its row.
-    let leave = crate::ledger::undo::rewritten_since(&mut tx, latest.id).await?;
-    let (sql_down, left) = crate::ledger::undo::leaving_alone(&sql_down, schema, &leave);
-
+    let leave = crate::ledger::undo::rewritten_since(tx, id).await?;
+    let (sql_down, left) = crate::ledger::undo::leaving_alone(sql_down, schema, &leave);
     (&mut *tx)
         .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
-
-    crate::ledger::undo::restore(&mut tx, latest.id).await?;
-
+    crate::ledger::undo::restore(tx, id).await?;
     let mark_sql = format!(
         "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = $1"
     );
-    sqlx::query(&mark_sql)
-        .bind(latest.id)
+    sqlx::query(&mark_sql).bind(id).execute(&mut *tx).await?;
+    Ok(left)
+}
+
+/// Studio reads the schema of the migration now in force: the one before the rolled-back push.
+async fn restore_studio_metadata(
+    tx: &mut PgConnection,
+    prior: Option<&PriorMigrationRow>,
+) -> Result<()> {
+    let Some(PriorMigrationRow {
+        admin_config: Some(admin),
+        schema_snapshot: Some(snap),
+        ..
+    }) = prior
+    else {
+        return Ok(());
+    };
+    let studio_sql = format!(
+        "UPDATE {SCHEMA}.schema_state SET ast_snapshot = $1, admin_config = $2 WHERE id = 1"
+    );
+    sqlx::query(&studio_sql)
+        .bind(snap)
+        .bind(admin)
         .execute(&mut *tx)
         .await?;
+    Ok(())
+}
 
-    if let Some(ref prior) = prior {
-        if let (Some(admin), Some(snap)) = (&prior.admin_config, &prior.schema_snapshot) {
-            let studio_sql = format!(
-                "UPDATE {SCHEMA}.schema_state SET ast_snapshot = $1, admin_config = $2 WHERE id = 1"
-            );
-            sqlx::query(&studio_sql)
-                .bind(snap)
-                .bind(admin)
-                .execute(&mut *tx)
-                .await?;
-        }
-    }
-
-    let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
-    save_schema_state(&mut *tx, &new_state).await?;
-
-    tx.commit().await?;
-
+/// What a rollback of `name` reports, with the migration now in force and its sources.
+fn rolled_back(
+    name: &str,
+    prior: Option<PriorMigrationRow>,
+    left: &[crate::desired::ObjectKey],
+) -> RollbackResult {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     let (restored_name, manifest, sources_b64) = prior
         .map(|p| {
             (
@@ -1073,27 +1093,24 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
             )
         })
         .unwrap_or((None, None, None));
-
-    Ok(RollbackResult {
+    let message = if left.is_empty() {
+        format!("Rolled back migration {name}.")
+    } else {
+        let left: Vec<String> = left.iter().map(ToString::to_string).collect();
+        format!(
+            "Rolled back migration {name}, leaving {} as they are: released or recorded again \
+             since the push.",
+            left.join(", ")
+        )
+    };
+    RollbackResult {
         status: "rolled_back".into(),
-        name: latest.name.clone(),
-        message: if left.is_empty() {
-            format!("Rolled back migration {}.", latest.name)
-        } else {
-            format!(
-                "Rolled back migration {}, leaving {} as they are: released or recorded again \
-                 since the push.",
-                latest.name,
-                left.iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        },
+        name: name.to_string(),
+        message,
         restored_migration_name: restored_name,
         schema_sources_manifest: manifest,
         schema_sources_base64: sources_b64,
-    })
+    }
 }
 
 pub async fn load_migration_sources(
