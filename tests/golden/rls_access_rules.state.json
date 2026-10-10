@@ -756,7 +756,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
         "managed": false
       },
       {
@@ -764,7 +764,7 @@
         "name": "categories_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "((( SELECT auth.role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM posts\n  WHERE (posts.author_id = ( SELECT auth.uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT auth.uid() AS uid)))))))",
+        "usingExpr": "((( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM posts\n  WHERE (posts.author_id = ( SELECT _supatype.jwt_uid() AS jwt_uid)))) AND (EXISTS ( SELECT 1\n   FROM posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT _supatype.jwt_uid() AS jwt_uid)))))))",
         "checkExpr": null,
         "managed": false
       },
@@ -783,7 +783,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "managed": false
       },
       {
@@ -791,7 +791,7 @@
         "name": "comments_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "((author_id = ( SELECT auth.uid() AS uid)) AND (NOT (( SELECT auth.role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = auth.claim_text('app_metadata.tier'::text)))",
+        "usingExpr": "((author_id = ( SELECT _supatype.jwt_uid() AS jwt_uid)) AND (NOT (( SELECT _supatype.jwt_role() AS jwt_role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = _supatype.jwt_claim_text('app_metadata.tier'::text)))",
         "checkExpr": null,
         "managed": false
       },
@@ -800,8 +800,8 @@
         "name": "comments_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
-        "checkExpr": "(( SELECT auth.uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = author_id)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = author_id)",
         "managed": false
       },
       {
@@ -809,7 +809,7 @@
         "name": "posts_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -819,7 +819,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "managed": false
       },
       {
@@ -827,7 +827,7 @@
         "name": "posts_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "((( SELECT auth.role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '210 days'::interval))) AND (updated_at <= ( SELECT (now() + '07:00:00'::interval)))))",
+        "usingExpr": "((( SELECT _supatype.jwt_role() AS jwt_role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '210 days'::interval))) AND (updated_at <= ( SELECT (now() + '07:00:00'::interval)))))",
         "checkExpr": null,
         "managed": false
       },
@@ -836,7 +836,7 @@
         "name": "posts_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = author_id)",
         "checkExpr": "(title <> ''::text)",
         "managed": false
       },
@@ -863,7 +863,7 @@
         "name": "users_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -881,8 +881,8 @@
         "name": "users_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
-        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
         "managed": false
       }
     ],
@@ -1414,7 +1414,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
+        "body": "\n  SELECT _supatype.jwt_claim(claim_path);\n",
         "comment": null,
         "arguments": "claim_path text",
         "config": [],
@@ -1423,7 +1423,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim(claim_path);\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1434,7 +1434,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
+        "body": "\n  SELECT _supatype.jwt_claim_text(claim_path);\n",
         "comment": null,
         "arguments": "claim_path text",
         "config": [],
@@ -1443,7 +1443,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim_text(claim_path);\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1454,7 +1454,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
+        "body": "\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1463,7 +1463,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1474,7 +1474,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
+        "body": "\n  SELECT _supatype.jwt_claims();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1483,7 +1483,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claims();\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1494,7 +1494,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
+        "body": "\n  SELECT _supatype.jwt_role();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1503,7 +1503,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_role();\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1514,7 +1514,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
+        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  ",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1523,7 +1523,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -1534,7 +1534,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
+        "body": "\n  SELECT _supatype.jwt_uid();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1543,7 +1543,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_uid();\n$function$\n"
       },
       {
         "schema": "public",
@@ -1554,7 +1554,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
         "comment": null,
         "arguments": "categories public.categories",
         "config": [],
@@ -1563,7 +1563,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1574,7 +1574,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
         "comment": null,
         "arguments": "comments public.comments",
         "config": [],
@@ -1583,7 +1583,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1594,7 +1594,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
         "arguments": "posts public.posts",
         "config": [],
@@ -1603,7 +1603,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1694,7 +1694,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
         "arguments": "posts public.posts",
         "config": [],
@@ -1703,7 +1703,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1734,7 +1734,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
         "comment": null,
         "arguments": "users public.users",
         "config": [],
@@ -1743,7 +1743,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1754,7 +1754,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT auth.uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT auth.uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
         "comment": null,
         "arguments": "categories public.categories",
         "config": [],
@@ -1763,7 +1763,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT auth.uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT auth.uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1774,7 +1774,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT \"author_id\" = (SELECT auth.uid())\n    AND\n    NOT ((SELECT auth.role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = auth.claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
+        "body": "\n    SELECT \"author_id\" = (SELECT _supatype.jwt_uid())\n    AND\n    NOT ((SELECT _supatype.jwt_role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = _supatype.jwt_claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
         "comment": null,
         "arguments": "comments public.comments",
         "config": [],
@@ -1783,7 +1783,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"author_id\" = (SELECT auth.uid())\n    AND\n    NOT ((SELECT auth.role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = auth.claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"author_id\" = (SELECT _supatype.jwt_uid())\n    AND\n    NOT ((SELECT _supatype.jwt_role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = _supatype.jwt_claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1794,7 +1794,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 weeks')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 hours'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 weeks')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 hours'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
         "arguments": "posts public.posts",
         "config": [],
@@ -1803,7 +1803,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 weeks')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 hours'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 weeks')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 hours'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1874,7 +1874,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
         "comment": null,
         "arguments": "comments public.comments",
         "config": [],
@@ -1883,7 +1883,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1894,7 +1894,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
         "arguments": "posts public.posts",
         "config": [],
@@ -1903,7 +1903,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1934,7 +1934,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
         "comment": null,
         "arguments": "users public.users",
         "config": [],
@@ -1943,7 +1943,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n"
       }
     ],
     "views": [],
@@ -2167,7 +2167,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.role() AS role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = ANY (ARRAY['admin'::text, 'editor'::text]))",
         "comment": null
       },
       {
@@ -2179,7 +2179,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((( SELECT auth.role() AS role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM public.posts\n  WHERE (posts.author_id = ( SELECT auth.uid() AS uid)))) AND (EXISTS ( SELECT 1\n   FROM public.posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT auth.uid() AS uid)))))))",
+        "usingExpr": "((( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text) OR ((EXISTS ( SELECT 1\n   FROM public.posts\n  WHERE (posts.author_id = ( SELECT _supatype.jwt_uid() AS jwt_uid)))) AND (EXISTS ( SELECT 1\n   FROM public.posts\n  WHERE ((posts.category_id = categories.id) AND (posts.author_id = ( SELECT _supatype.jwt_uid() AS jwt_uid)))))))",
         "checkExpr": null,
         "comment": null
       },
@@ -2206,7 +2206,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "comment": null
       },
       {
@@ -2218,7 +2218,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((author_id = ( SELECT auth.uid() AS uid)) AND (NOT (( SELECT auth.role() AS role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = auth.claim_text('app_metadata.tier'::text)))",
+        "usingExpr": "((author_id = ( SELECT _supatype.jwt_uid() AS jwt_uid)) AND (NOT (( SELECT _supatype.jwt_role() AS jwt_role) = 'banned'::text)) AND (body IS NOT NULL) AND (body = _supatype.jwt_claim_text('app_metadata.tier'::text)))",
         "checkExpr": null,
         "comment": null
       },
@@ -2231,8 +2231,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
-        "checkExpr": "(( SELECT auth.uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = author_id)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = author_id)",
         "comment": null
       },
       {
@@ -2244,7 +2244,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -2258,7 +2258,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "comment": null
       },
       {
@@ -2270,7 +2270,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((( SELECT auth.role() AS role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '210 days'::interval))) AND (updated_at <= ( SELECT (now() + '07:00:00'::interval)))))",
+        "usingExpr": "((( SELECT _supatype.jwt_role() AS jwt_role) = 'editor'::text) OR ((created_at <= ( SELECT now() AS now)) AND (created_at >= ( SELECT (now() - '210 days'::interval))) AND (updated_at <= ( SELECT (now() + '07:00:00'::interval)))))",
         "checkExpr": null,
         "comment": null
       },
@@ -2283,7 +2283,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.uid() AS uid) = author_id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = author_id)",
         "checkExpr": "(title <> ''::text)",
         "comment": null
       },
@@ -2322,7 +2322,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -2348,8 +2348,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
-        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
         "comment": null
       }
     ],

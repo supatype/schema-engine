@@ -39,7 +39,7 @@ fn a_field_write_rule_is_conjoined_with_its_read_rule() {
         "write rule was not conjoined with the read rule:\n{body}"
     );
     assert!(
-        body.contains("auth.role()"),
+        body.contains("_supatype.jwt_role()"),
         "the read rule did not reach the write body:\n{body}"
     );
 }
@@ -173,9 +173,10 @@ fn a_schema_with_no_field_rules_neither_labels_nor_probes() {
     );
 }
 
-// The predicates in those labels call `auth.role()` from the query itself, not from a policy, so
-// the caller needs USAGE on the auth schema. Postgres runs a policy's USING clause with the table
-// owner's privileges, which is why row-level security never needed this and masking does.
+// The predicates in those labels call the role reader (`_supatype.jwt_role()`) from the query
+// itself, not from a policy, so the caller needs USAGE on its schema. Postgres runs a policy's
+// USING clause with the table owner's privileges, which is why row-level security never needed
+// this and masking does.
 //
 // The privilege is granted in the auth preamble, which a push emits before the labels, and the
 // labels carry only the probe that proves it landed. That split is deliberate: a GRANT issued by a
@@ -184,11 +185,15 @@ fn a_schema_with_no_field_rules_neither_labels_nor_probes() {
 // version of this test looked for the grant in the labels alone and failed for that reason rather
 // than because the privilege was missing.
 #[test]
-fn field_rules_grant_usage_on_the_auth_schema() {
+fn field_rules_grant_usage_on_the_claims_schema() {
     let preamble = rls::generate_auth_helpers();
     assert!(
-        preamble.contains("GRANT USAGE ON SCHEMA \"auth\" TO authenticated"),
+        preamble.contains("GRANT USAGE ON SCHEMA \"_supatype\" TO authenticated"),
         "the preamble did not grant the privilege the predicates need:\n{preamble}"
+    );
+    assert!(
+        preamble.contains("GRANT EXECUTE ON FUNCTION \"_supatype\".jwt_role() TO authenticated"),
+        "the preamble did not let the caller run the role reader:\n{preamble}"
     );
     assert!(
         preamble.contains("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated')"),
@@ -197,7 +202,7 @@ fn field_rules_grant_usage_on_the_auth_schema() {
 
     let labels = security_labels();
     assert!(
-        labels.contains("has_schema_privilege('authenticated', 'auth', 'USAGE')"),
+        labels.contains("has_schema_privilege('authenticated', '_supatype', 'USAGE')"),
         "the labels did not check that the grant landed:\n{labels}"
     );
 }
@@ -206,15 +211,21 @@ fn field_rules_grant_usage_on_the_auth_schema() {
 // and Postgres answers with a WARNING rather than an error. So the push checks, and refuses,
 // rather than succeeding and leaving every authenticated read of a masked column at 42501.
 #[test]
-fn field_rules_refuse_to_apply_without_usage_on_the_auth_schema() {
+fn field_rules_refuse_to_apply_without_usage_on_the_claims_schema() {
     let sql = security_labels();
     assert!(
-        sql.contains("has_schema_privilege('authenticated', 'auth', 'USAGE')"),
+        sql.contains("has_schema_privilege('authenticated', '_supatype', 'USAGE')"),
         "no privilege probe, so a no-op grant would pass unnoticed:\n{sql}"
     );
     assert!(
-        sql.contains("RAISE EXCEPTION 'field-level access requires USAGE on schema auth'"),
+        sql.contains("RAISE EXCEPTION 'field-level access requires USAGE on schema _supatype'"),
         "the probe did not refuse the push:\n{sql}"
+    );
+    // No generated predicate reaches into `auth` any more, so a database whose auth schema the
+    // pusher cannot grant on is not refused for it.
+    assert!(
+        !sql.contains("has_schema_privilege('authenticated', 'auth', 'USAGE')"),
+        "the labels still demand usage on auth, which nothing they run needs:\n{sql}"
     );
     assert!(
         sql.contains("pg_get_userbyid(nspowner)"),

@@ -725,7 +725,7 @@
         "name": "customers_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -743,7 +743,7 @@
         "name": "customers_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
         "checkExpr": null,
         "managed": false
       },
@@ -752,8 +752,8 @@
         "name": "customers_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
-        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
         "managed": false
       },
       {
@@ -761,7 +761,7 @@
         "name": "orders_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -771,7 +771,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT auth.uid() AS uid) = customers.id))))",
+        "checkExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
         "managed": false
       },
       {
@@ -779,7 +779,7 @@
         "name": "orders_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT auth.uid() AS uid) = customers.id))))",
+        "usingExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
         "checkExpr": null,
         "managed": false
       },
@@ -788,8 +788,8 @@
         "name": "orders_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
-        "checkExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "managed": false
       },
       {
@@ -797,7 +797,7 @@
         "name": "products_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -807,7 +807,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "managed": false
       },
       {
@@ -824,8 +824,8 @@
         "name": "products_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
-        "checkExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "managed": false
       }
     ],
@@ -1284,7 +1284,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
+        "body": "\n  SELECT _supatype.jwt_claim(claim_path);\n",
         "comment": null,
         "arguments": "claim_path text",
         "config": [],
@@ -1293,7 +1293,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim(claim_path);\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1304,7 +1304,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
+        "body": "\n  SELECT _supatype.jwt_claim_text(claim_path);\n",
         "comment": null,
         "arguments": "claim_path text",
         "config": [],
@@ -1313,7 +1313,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim_text(claim_path);\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1324,7 +1324,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
+        "body": "\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1333,7 +1333,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1344,7 +1344,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
+        "body": "\n  SELECT _supatype.jwt_claims();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1353,7 +1353,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claims();\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1364,7 +1364,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
+        "body": "\n  SELECT _supatype.jwt_role();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1373,7 +1373,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_role();\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1384,7 +1384,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
+        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  ",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1393,7 +1393,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -1404,7 +1404,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
+        "body": "\n  SELECT _supatype.jwt_uid();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1413,7 +1413,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_uid();\n$function$\n"
       },
       {
         "schema": "public",
@@ -1464,7 +1464,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT auth.uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
+        "body": "\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
         "comment": null,
         "arguments": "orders public.orders",
         "config": [],
@@ -1473,7 +1473,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT auth.uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1484,7 +1484,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  ",
         "comment": null,
         "arguments": "products public.products",
         "config": [],
@@ -1493,7 +1493,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1504,7 +1504,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"customers\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"customers\";\n  ",
         "comment": null,
         "arguments": "customers public.customers",
         "config": [],
@@ -1513,7 +1513,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1544,7 +1544,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
         "comment": null,
         "arguments": "orders public.orders",
         "config": [],
@@ -1553,7 +1553,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1564,7 +1564,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  ",
         "comment": null,
         "arguments": "products public.products",
         "config": [],
@@ -1573,7 +1573,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1584,7 +1584,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  ",
         "comment": null,
         "arguments": "customers public.customers",
         "config": [],
@@ -1593,7 +1593,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1624,7 +1624,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT auth.uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
+        "body": "\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
         "comment": null,
         "arguments": "orders public.orders",
         "config": [],
@@ -1633,7 +1633,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT auth.uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1664,7 +1664,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  ",
         "comment": null,
         "arguments": "customers public.customers",
         "config": [],
@@ -1673,7 +1673,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1704,7 +1704,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
         "comment": null,
         "arguments": "orders public.orders",
         "config": [],
@@ -1713,7 +1713,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1724,7 +1724,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  ",
         "comment": null,
         "arguments": "products public.products",
         "config": [],
@@ -1733,7 +1733,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
       }
     ],
     "views": [],
@@ -1909,7 +1909,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -1935,7 +1935,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
         "checkExpr": null,
         "comment": null
       },
@@ -1948,8 +1948,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
-        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = id)",
         "comment": null
       },
       {
@@ -1961,7 +1961,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -1975,7 +1975,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(EXISTS ( SELECT 1\n   FROM public.customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT auth.uid() AS uid) = customers.id))))",
+        "checkExpr": "(EXISTS ( SELECT 1\n   FROM public.customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
         "comment": null
       },
       {
@@ -1987,7 +1987,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(EXISTS ( SELECT 1\n   FROM public.customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT auth.uid() AS uid) = customers.id))))",
+        "usingExpr": "(EXISTS ( SELECT 1\n   FROM public.customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
         "checkExpr": null,
         "comment": null
       },
@@ -2000,8 +2000,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
-        "checkExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "comment": null
       },
       {
@@ -2013,7 +2013,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -2027,7 +2027,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "comment": null
       },
       {
@@ -2052,8 +2052,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
-        "checkExpr": "(( SELECT auth.role() AS role) = 'admin'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'admin'::text)",
         "comment": null
       }
     ],

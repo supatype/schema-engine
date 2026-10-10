@@ -67,8 +67,8 @@ fn a_delete_rule_left_out_creates_no_delete_policy() {
 fn an_update_rule_creates_an_update_policy_with_the_rule_on_both_sides() {
     let sql = sql_for(AVATARS_CRUD, "");
     let expected = "CREATE POLICY \"storage_avatars_upd\" ON \"storage\".\"objects\"\n  \
-                    FOR UPDATE USING (\n    bucket_id = 'avatars' AND (auth.uid() = owner)\n  ) \
-                    WITH CHECK (\n    bucket_id = 'avatars' AND (auth.uid() = owner)\n  );";
+                    FOR UPDATE USING (\n    bucket_id = 'avatars' AND ((SELECT _supatype.jwt_uid()) = owner)\n  ) \
+                    WITH CHECK (\n    bucket_id = 'avatars' AND ((SELECT _supatype.jwt_uid()) = owner)\n  );";
     assert!(
         sql.contains(expected),
         "expected an owner-only update policy, got:\n{sql}"

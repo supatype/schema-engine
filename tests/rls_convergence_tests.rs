@@ -85,7 +85,10 @@ async fn or_composition_reaches_the_database() {
         // Studio. Without it, FORCE ROW LEVEL SECURITY hides the post the moment a
         // future date is set, which reads as the product being broken.
         assert!(expr.contains(" OR "), "expected an OR-join, got: {expr}");
-        assert!(expr.contains("auth.role()"), "staff branch missing: {expr}");
+        assert!(
+            expr.contains("_supatype.jwt_role()"),
+            "staff branch missing: {expr}"
+        );
         assert!(expr.contains("now()"), "temporal branch missing: {expr}");
 
         // Asserted in the form Postgres *stores*, not the form the engine generates.
@@ -287,16 +290,30 @@ async fn a_fresh_push_installs_the_canonical_auth_helpers() {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
         common::push(&pool, &ast).await.expect("migration applies");
 
-        let role_src: String = sqlx::query_scalar(
-            "SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-              WHERE n.nspname = 'auth' AND p.proname = 'role'",
-        )
-        .fetch_one(&pool)
-        .await
-        .expect("auth.role() exists");
+        let source_of = |schema: &'static str, name: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT prosrc FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                      WHERE n.nspname = $1 AND p.proname = $2",
+                )
+                .bind(schema)
+                .bind(name)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("{schema}.{name}() exists: {e}"))
+            }
+        };
+        let role_src = source_of("_supatype", "jwt_role").await;
         assert!(
             role_src.contains("app_metadata"),
-            "a fresh push installed a stale auth.role(): {role_src}"
+            "a fresh push installed a stale role reader: {role_src}"
+        );
+        // The alias answers what the reader answers, rather than being a second definition.
+        let alias_src = source_of("auth", "role").await;
+        assert!(
+            alias_src.contains("_supatype.jwt_role()"),
+            "auth.role() does not delegate to the reader: {alias_src}"
         );
 
         for helper in ["uid", "role", "roles", "claim", "claim_text", "jwt", "email"] {
@@ -314,7 +331,7 @@ async fn a_fresh_push_installs_the_canonical_auth_helpers() {
     .await;
 }
 
-// The wrapping is the whole point of the change: a bare `auth.uid()` is
+// The wrapping is the whole point of the change: a bare uid call is
 // re-evaluated per row, a wrapped one becomes an InitPlan evaluated once. Assert
 // it reaches the database that way rather than trusting the generator's string.
 #[tokio::test]
@@ -323,8 +340,8 @@ async fn stored_policies_evaluate_auth_once_per_query() {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
         common::push(&pool, &ast).await.expect("migration applies");
 
-        // Same reason as above: force full qualification so `SELECT auth.uid()` is
-        // what the catalog hands back, rather than a search_path-dependent `uid()`.
+        // Force full qualification so `SELECT _supatype.jwt_uid()` is what the
+        // catalog hands back, rather than a search_path-dependent `jwt_uid()`.
         let mut conn = pool.acquire().await.expect("connection");
         sqlx::raw_sql("SET search_path TO ''")
             .execute(&mut *conn)
@@ -340,12 +357,15 @@ async fn stored_policies_evaluate_auth_once_per_query() {
         .await
         .unwrap();
 
-        assert!(!rows.is_empty(), "expected policies referencing auth.uid()");
+        assert!(
+            !rows.is_empty(),
+            "expected policies referencing the uid reader"
+        );
         for (name, expr) in rows {
             let expr = expr.unwrap_or_default();
             assert!(
-                expr.contains("SELECT auth.uid()"),
-                "policy {name} calls auth.uid() per row: {expr}"
+                expr.contains("SELECT _supatype.jwt_uid()"),
+                "policy {name} reads the uid per row, or not through the engine's reader: {expr}"
             );
         }
     })
@@ -480,7 +500,7 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
 // ─── Field-level access ──────────────────────────────────────────────────────
 
 /// Read one column as a given application role, through the same path an app takes:
-/// claims in the GUC the generated `auth.role()` reads, and the switched database role.
+/// claims in the GUC the generated role reader reads, and the switched database role.
 ///
 /// Selected by `id`, not by `name`: `name` carries a read rule of its own, so for a
 /// non-admin it masks to NULL and `WHERE name = 'probe'` matches nothing. That is the
@@ -622,14 +642,14 @@ async fn removing_a_field_rule_clears_its_label() {
 
 /// A push that cannot grant the privilege it needs must refuse, not report success.
 ///
-/// This is the `database.external` shape: the `auth` schema belongs to another role, so the
-/// `GRANT USAGE` the push emits is silently discarded. Postgres answers a grant from a
-/// non-owner with `WARNING: no privileges were granted`, not an error, so nothing upstream
-/// notices. Left unchecked the push succeeds and every authenticated read of a masked column
-/// then fails with `42501 permission denied for schema auth` -- masking that does not mask,
-/// reported as a clean deploy.
+/// The masking predicates call the claim readers in `_supatype` as the caller. If that schema
+/// belongs to another role, the `GRANT USAGE` the push emits is silently discarded: Postgres
+/// answers a grant from a non-owner with `WARNING: no privileges were granted`, not an error, so
+/// nothing upstream notices. Left unchecked the push succeeds and every authenticated read of a
+/// masked column then fails with `42501 permission denied for schema _supatype`: masking that does
+/// not mask, reported as a clean deploy.
 #[tokio::test]
-async fn a_push_that_cannot_grant_auth_usage_is_refused() {
+async fn a_push_that_cannot_grant_claims_usage_is_refused() {
     common::with_integration_pool(|pool| async move {
         if !common::mask_extension_available(&pool).await {
             return;
@@ -639,26 +659,9 @@ async fn a_push_that_cannot_grant_auth_usage_is_refused() {
 
         // Put the database into the state the push cannot fix: the privilege gone, and the
         // pushing role not the owner of the schema, so it cannot put it back.
-        sqlx::raw_sql(
-            "REVOKE USAGE ON SCHEMA auth FROM authenticated;
-             DO $$ BEGIN
-               CREATE ROLE mask_push_probe;
-             EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
-             GRANT USAGE, CREATE ON SCHEMA auth TO mask_push_probe;",
-        )
-        .execute(&pool)
-        .await
-        .expect("stage a database whose auth schema the pusher does not own");
+        stage_foreign_owned_schema(&pool, "_supatype").await;
 
-        let labels = supatype_engine::generator::sql::rls::generate_security_labels(&ast, "public");
-        let mut tx = pool.begin().await.expect("begin");
-        sqlx::raw_sql("SET LOCAL ROLE mask_push_probe")
-            .execute(&mut *tx)
-            .await
-            .expect("assume the pushing role");
-
-        let err = sqlx::raw_sql(&labels)
-            .execute(&mut *tx)
+        let err = run_mask_probes_as_non_owner(&pool, &ast)
             .await
             .expect_err("a push that cannot enforce its field rules must not apply");
         let db_err = err.as_database_error().expect("a database error");
@@ -671,18 +674,93 @@ async fn a_push_that_cannot_grant_auth_usage_is_refused() {
             "wrong error class, so this failed for some other reason: {err}"
         );
         assert!(
-            err.to_string().contains("USAGE on schema auth"),
+            err.to_string().contains("USAGE on schema _supatype"),
             "the refusal did not name the missing privilege: {err}"
         );
-        tx.rollback().await.expect("rollback");
 
         // And the privilege really is still missing, so the refusal was not spurious.
-        let granted: bool =
-            sqlx::query_scalar("SELECT has_schema_privilege('authenticated', 'auth', 'USAGE')")
-                .fetch_one(&pool)
-                .await
-                .expect("read the privilege back");
+        let granted: bool = sqlx::query_scalar(
+            "SELECT has_schema_privilege('authenticated', '_supatype', 'USAGE')",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the privilege back");
         assert!(!granted, "the probe fired while the privilege was present");
     })
     .await;
+}
+
+/// The `database.external` shape where the `auth` schema belongs to another role is no longer a
+/// reason to refuse: no generated predicate calls into `auth`, so masking works without usage on
+/// it, and refusing would block a push that enforces every rule correctly.
+#[tokio::test]
+async fn an_auth_schema_the_pusher_cannot_grant_on_does_not_block_masking() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            return;
+        }
+        let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
+        common::push(&pool, &ast).await.expect("migration applies");
+        let probe: String = sqlx::query_scalar(
+            "INSERT INTO public.users (email, name) VALUES ('probe@example.com', 'probe') \
+             RETURNING id::text",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("seed a probe row");
+
+        stage_foreign_owned_schema(&pool, "auth").await;
+
+        run_mask_probes_as_non_owner(&pool, &ast)
+            .await
+            .expect("masking needs nothing from the auth schema");
+        assert_eq!(
+            read_email_as(&pool, "admin", &probe).await.as_deref(),
+            Some("probe@example.com"),
+            "an admin could not read the column without usage on auth"
+        );
+        assert_eq!(
+            read_email_as(&pool, "authenticated", &probe).await,
+            None,
+            "a non-admin read the column the field rule restricts"
+        );
+    })
+    .await;
+}
+
+/// Revoke `authenticated`'s usage on `schema` and make a role that may create there but does not
+/// own it, so a grant it issues is silently discarded.
+async fn stage_foreign_owned_schema(pool: &sqlx::PgPool, schema: &str) {
+    sqlx::raw_sql(&format!(
+        "REVOKE USAGE ON SCHEMA {schema} FROM authenticated;
+         DO $$ BEGIN
+           CREATE ROLE mask_push_probe;
+         EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
+         GRANT USAGE, CREATE ON SCHEMA {schema} TO mask_push_probe;"
+    ))
+    .execute(pool)
+    .await
+    .expect("stage a schema the pusher does not own");
+}
+
+/// Run the checks a push makes before it labels any column, as the non-owning role, rolled back
+/// either way. The labels themselves are left out: they need the table's owner, which is a
+/// different refusal from the one under test.
+async fn run_mask_probes_as_non_owner(
+    pool: &sqlx::PgPool,
+    ast: &supatype_engine::parser::ast::SchemaAst,
+) -> Result<(), sqlx::Error> {
+    let probes = supatype_engine::generator::sql::rls::generate_mask_probes(ast, "public");
+    assert!(
+        !probes.trim().is_empty(),
+        "the fixture declares no field rule to probe for"
+    );
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::raw_sql("SET LOCAL ROLE mask_push_probe")
+        .execute(&mut *tx)
+        .await
+        .expect("assume the pushing role");
+    let applied = sqlx::raw_sql(&probes).execute(&mut *tx).await.map(|_| ());
+    tx.rollback().await.expect("rollback");
+    applied
 }

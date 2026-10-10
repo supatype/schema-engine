@@ -1,4 +1,4 @@
-use crate::generator::sql::auth_functions::{API_ROLES, AUTH_SCHEMA};
+use crate::generator::sql::auth_functions::{API_ROLES, AUTH_SCHEMA, CLAIMS_SCHEMA};
 use crate::parser::accessors::{db_table_name, platform_access, resolve_owner_column};
 use crate::parser::ast::{
     AccessRule, DefaultValueAst, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst,
@@ -79,7 +79,7 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
     Ok(out)
 }
 
-/// SQL DDL for the auth helper functions a policy may call.
+/// SQL DDL for the claim readers a policy calls, and the `auth.*` aliases of them.
 ///
 /// Delegates to `auth_functions` rather than keeping a second copy. There were
 /// two definitions of `auth.uid()` and `auth.role()`: this one, installed by a
@@ -97,23 +97,24 @@ pub fn generate_auth_helpers() -> String {
     };
     let mut sql = crate::generator::sql::auth_functions::generate_auth_functions(&config);
 
-    // `auth.roles()` has no equivalent in auth_functions and is referenced by
-    // hand-written policies, so it stays here rather than disappearing.
-    sql.push_str(
+    // `auth.roles()` has no reader of its own and is referenced by hand-written policies, so it
+    // stays here rather than disappearing. It reads the claims through the guarded reader: its own
+    // cast raised `22P02` on an empty claims setting instead of answering an empty array.
+    sql.push_str(&format!(
         r#"
 
--- auth.roles() -- the `roles` claim as a text array.
+-- auth.roles(): the `roles` claim as a text array.
 CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
   LANGUAGE sql STABLE AS $$
     SELECT ARRAY(
       SELECT jsonb_array_elements_text(
-        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)
+        COALESCE({CLAIMS_SCHEMA}.jwt_claims() -> 'roles', '[]'::jsonb)
       )
     );
   $$;
 
-"#,
-    );
+"#
+    ));
     sql
 }
 
@@ -212,14 +213,17 @@ pub(crate) fn render_delete_policy_sql(
     format!("{head}\nFOR DELETE USING (\n    {expr}\n  );\n\n")
 }
 
-/// `auth.uid()` wrapped so Postgres evaluates it once per query, not once per row.
+/// The caller's user id, wrapped so Postgres evaluates it once per query, not once per row.
 ///
-/// A bare `auth.uid()` in a policy is re-evaluated for every row the planner
+/// A bare function call in a policy is re-evaluated for every row the planner
 /// tests, because the function reference sits inside a per-row filter. Wrapping it
 /// in a scalar subquery makes the planner treat it as an InitPlan: computed once,
 /// then compared as a constant. On a table of any size this is the difference
 /// between a policy that scales and one that does not, and it costs nothing.
-pub const AUTH_UID: &str = "(SELECT auth.uid())";
+///
+/// The engine's own reader, never `auth.uid()`: the auth server's migrations replace that one
+/// (see `auth_functions`), and a generated rule must not change meaning when they do.
+pub const AUTH_UID: &str = "(SELECT _supatype.jwt_uid())";
 
 /// Default schema for policies, affordance functions and grants.
 ///
@@ -228,8 +232,14 @@ pub const AUTH_UID: &str = "(SELECT auth.uid())";
 /// empty, for instance.
 pub const DEFAULT_POLICY_SCHEMA: &str = "public";
 
-/// `auth.role()`, wrapped for the same reason as [`AUTH_UID`].
-pub const AUTH_ROLE: &str = "(SELECT auth.role())";
+/// The caller's application role, wrapped and read through the engine's own reader for the same
+/// reasons as [`AUTH_UID`].
+pub const AUTH_ROLE: &str = "(SELECT _supatype.jwt_role())";
+
+/// A nested claim as `jsonb`, through the engine's own reader.
+fn claim_json(path: &str) -> String {
+    format!("{CLAIMS_SCHEMA}.jwt_claim({})", quote_literal(path))
+}
 
 /// `subject` equals one of `roles`: the check a `Role<...>` rule compiles to, for a model's policies
 /// and a bucket's alike.
@@ -298,8 +308,8 @@ fn set_exists_expr(
     match source {
         MembershipSource::Claim { path } => format!(
             "EXISTS (SELECT 1 FROM jsonb_array_elements_text(\
-             COALESCE(auth.claim({}), '[]'::jsonb)))",
-            quote_literal(path)
+             COALESCE({}, '[]'::jsonb)))",
+            claim_json(path)
         ),
 
         // A fixed set's emptiness is known at generation time, so it folds to a
@@ -349,9 +359,9 @@ fn membership_to_expr(
     match source {
         MembershipSource::Claim { path } => format!(
             "EXISTS (SELECT 1 FROM jsonb_array_elements_text(\
-             COALESCE(auth.claim({}), '[]'::jsonb)) AS claim_value \
+             COALESCE({}, '[]'::jsonb)) AS claim_value \
              WHERE claim_value = {own_col}::text)",
-            quote_literal(path)
+            claim_json(path)
         ),
 
         MembershipSource::Literal { values } => {
@@ -628,12 +638,14 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
         // Text, so it compares against a column or a string literal. A claim used
         // as a *set* goes through the membership path instead, which needs the
         // jsonb form.
-        Operand::Claim { path } => format!("auth.claim_text({})", quote_literal(path)),
+        Operand::Claim { path } => {
+            format!("{CLAIMS_SCHEMA}.jwt_claim_text({})", quote_literal(path))
+        }
         Operand::Literal { value } => literal_to_sql(value),
 
         // Each temporal operand is one scalar subquery, so the planner evaluates it
         // once per query as an InitPlan rather than per row, the same reason
-        // `auth.uid()` is wrapped.
+        // the caller's user id is wrapped.
         Operand::Now => "(SELECT now())".to_string(),
         Operand::StartOf { unit } => {
             format!("(SELECT date_trunc({}, now()))", quote_literal(unit.sql()))
@@ -683,8 +695,8 @@ fn interval(text: &str) -> String {
     format!("INTERVAL {}", quote_literal(text))
 }
 
-/// `Owner<"f">`: compare `auth.uid()` with a column of the row, or look ownership up through a
-/// related model.
+/// `Owner<"f">`: compare the caller's user id ([`AUTH_UID`]) with a column of the row, or look
+/// ownership up through a related model.
 ///
 /// `id` and a UUID field are compared directly, as is a relation's key when the related model is
 /// keyed by the auth user id or declares no owner of its own. A related model with an `Owner`
@@ -1019,7 +1031,7 @@ pub fn generate_mask_probes(ast: &SchemaAst, schema: &str) -> String {
     }
     // Proof that the privilege those predicates need actually landed. The grant itself is in the
     // preamble, emitted on every push, so this does not re-issue it: a grant can be a silent no-op
-    // (see `render_auth_usage_probe`), and checking is the half worth doing twice.
+    // (see `render_claims_usage_probe`), and checking is the half worth doing twice.
     format!(
         "DO $mask_probe$
 BEGIN
@@ -1033,7 +1045,7 @@ END
 $mask_probe$;
 
 {}",
-        render_auth_usage_probe(n)
+        render_claims_usage_probe(n)
     )
 }
 
@@ -1049,27 +1061,30 @@ pub fn generate_security_labels(ast: &SchemaAst, schema: &str) -> String {
 
 /// Proof that the masking predicates can actually run, rather than a hope that they can.
 ///
-/// [`grant_auth_schema_usage`] may have been a no-op: a role that does not own the schema cannot
-/// grant on it, and Postgres reports that as `WARNING: no privileges were granted`, not an error.
-/// So the grant alone proves nothing. Without this check a push to a database whose `auth` schema
-/// belongs to another role reports success, and then every authenticated read of a masked column
-/// fails with `42501 permission denied for schema auth`, the same class of fault as a privilege
-/// that is generated and never applied.
+/// The predicates call the claim readers in [`CLAIMS_SCHEMA`] as the caller, and the grant that
+/// lets them may have been a no-op: a role that does not own the schema cannot grant on it, and
+/// Postgres reports that as `WARNING: no privileges were granted`, not an error. So the grant alone
+/// proves nothing. Without this check such a push reports success, and then every authenticated
+/// read of a masked column fails with `42501 permission denied for schema`, the same class of fault
+/// as a privilege that is generated and never applied.
+///
+/// Only the claims schema: no generated predicate calls into `auth` any more, so a database whose
+/// `auth` schema belongs to another role masks correctly and is not refused for it.
 ///
 /// Refuses rather than degrades, matching the extension probe: a schema that declares a masked
 /// column, applied where the mask cannot be evaluated, is a database whose security posture
 /// silently differs from its source.
-fn render_auth_usage_probe(rule_count: usize) -> String {
+fn render_claims_usage_probe(rule_count: usize) -> String {
     let roles = API_ROLES.join(", ");
     format!(
-        r#"DO $auth_usage_probe$
+        r#"DO $claims_usage_probe$
 DECLARE
   owner text;
 BEGIN
   SELECT pg_get_userbyid(nspowner) INTO owner
-    FROM pg_namespace WHERE nspname = '{AUTH_SCHEMA}';
+    FROM pg_namespace WHERE nspname = '{CLAIMS_SCHEMA}';
 
-  -- No auth schema: the field predicates could not have been created either, and the extension
+  -- No claims schema: the field predicates could not have been created either, and the extension
   -- probe has already had its say about capability.
   IF owner IS NULL THEN
     RETURN;
@@ -1081,16 +1096,16 @@ BEGIN
     RETURN;
   END IF;
 
-  IF NOT has_schema_privilege('authenticated', '{AUTH_SCHEMA}', 'USAGE') THEN
-    RAISE EXCEPTION 'field-level access requires USAGE on schema {AUTH_SCHEMA}'
+  IF NOT has_schema_privilege('authenticated', '{CLAIMS_SCHEMA}', 'USAGE') THEN
+    RAISE EXCEPTION 'field-level access requires USAGE on schema {CLAIMS_SCHEMA}'
       USING ERRCODE = 'feature_not_supported',
             DETAIL  = format('%s column rule(s) would raise 42501 for every authenticated caller.',
                              {rule_count}),
-            HINT    = format('Schema {AUTH_SCHEMA} is owned by %s, so this push could not grant on it. As that role: GRANT USAGE ON SCHEMA {AUTH_SCHEMA} TO {roles};',
+            HINT    = format('Schema {CLAIMS_SCHEMA} is owned by %s, so this push could not grant on it. As that role: GRANT USAGE ON SCHEMA {CLAIMS_SCHEMA} TO {roles};',
                              owner);
   END IF;
 END
-$auth_usage_probe$;
+$claims_usage_probe$;
 
 "#
     )
@@ -1159,10 +1174,10 @@ mod tests {
     fn qualifying_columns_leaves_literals_and_doubled_quotes_whole() {
         // A role holding a double quote is a literal, not a column, and an identifier holding a
         // doubled quote is one identifier.
-        let expr = r#"(SELECT auth.role()) = 'o"brien' AND "a""b" = 1 AND "t"."c" = 2"#;
+        let expr = r#"(SELECT _supatype.jwt_role()) = 'o"brien' AND "a""b" = 1 AND "t"."c" = 2"#;
         assert_eq!(
             qualify_bare_columns(expr, "my\"t"),
-            r#"(SELECT auth.role()) = 'o"brien' AND "my""t"."a""b" = 1 AND "t"."c" = 2"#
+            r#"(SELECT _supatype.jwt_role()) = 'o"brien' AND "my""t"."a""b" = 1 AND "t"."c" = 2"#
         );
     }
 
@@ -1171,11 +1186,11 @@ mod tests {
         let roles = vec!["o'brien".to_string(), "x' OR true OR 'a'='a".to_string()];
         assert_eq!(
             role_matches(AUTH_ROLE, &roles[..1]),
-            "(SELECT auth.role()) = 'o''brien'"
+            "(SELECT _supatype.jwt_role()) = 'o''brien'"
         );
         assert_eq!(
             role_matches(AUTH_ROLE, &roles),
-            "(SELECT auth.role()) = ANY(ARRAY['o''brien', 'x'' OR true OR ''a''=''a'])"
+            "(SELECT _supatype.jwt_role()) = ANY(ARRAY['o''brien', 'x'' OR true OR ''a''=''a'])"
         );
     }
 

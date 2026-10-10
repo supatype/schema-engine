@@ -301,17 +301,18 @@ fn visibility_helpers_sql() -> String {
         r#"
 -- The caller's user id, or NULL when the request has no subject.
 --
--- A thin alias for `auth.uid()`, which is what it now means. It was its own implementation while
--- `auth.uid()` fell back to the nil UUID for a subject-less request, and that gap was a hole rather
--- than a nicety: two kinds of request legitimately have no subject, a `service_role` call and a
--- preview link, so a draft saved through Studio was stamped with the nil UUID and every other
+-- A thin alias for `{helper}.jwt_uid()`, which is what it now means. It was its own implementation
+-- while the user id fell back to the nil UUID for a subject-less request, and that gap was a hole
+-- rather than a nicety: two kinds of request legitimately have no subject, a `service_role` call
+-- and a preview link, so a draft saved through Studio was stamped with the nil UUID and every other
 -- subject-less caller then satisfied `created_by = auth.uid()`.
 --
--- `auth.uid()` answers NULL now, so this exists only to keep the policies below reading as one
--- thought. It is not a second definition to keep in step.
+-- The reader answers NULL now, so this exists only to keep the policies below reading as one
+-- thought. It is not a second definition to keep in step. Not `auth.uid()`, which the auth
+-- server's own migrations replace.
 CREATE OR REPLACE FUNCTION {helper}.caller_id() RETURNS uuid
   LANGUAGE sql STABLE SET search_path = '' AS $fn$
-    SELECT auth.uid();
+    SELECT {helper}.jwt_uid();
   $fn$;
 
 CREATE OR REPLACE FUNCTION {helper}.draft_visibility_roles() RETURNS text[]
@@ -965,7 +966,7 @@ fn audit_trigger_sql(
       FROM {schema_q}.{versions_q} v WHERE v."record_id" = NEW.{pk_q};
     INSERT INTO {schema_q}.{versions_q}
       ("record_id", "version", "status", "data", "created_by")
-    VALUES (NEW.{pk_q}, next_version, 'published', to_jsonb(NEW), auth.uid());
+    VALUES (NEW.{pk_q}, next_version, 'published', to_jsonb(NEW), {helper}.jwt_uid());
     RETURN NULL;
   END;
   $fn$;

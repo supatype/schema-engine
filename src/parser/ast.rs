@@ -722,9 +722,11 @@ pub enum MembershipSource {
 pub enum Operand {
     /// A column on the model the policy is attached to.
     Column { name: String },
-    /// `auth.uid()`, wrapped so the planner evaluates it once per query.
+    /// The caller's user id (`_supatype.jwt_uid()`, which `auth.uid()` aliases), wrapped so the
+    /// planner evaluates it once per query.
     AuthUid,
-    /// `auth.role()`, wrapped for the same reason.
+    /// The caller's application role (`_supatype.jwt_role()`, which `auth.role()` aliases),
+    /// wrapped for the same reason.
     AuthRole,
     /// A nested JWT claim by dotted path, e.g. `app_metadata.tier`.
     Claim { path: String },

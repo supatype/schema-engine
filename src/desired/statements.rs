@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use crate::generator::sql::auth_functions;
 use crate::introspector::fingerprint::ObjectKind;
 
 use super::ObjectKey;
@@ -797,8 +798,14 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
         let executed = h[at..].replace("''", "'");
         return attribute(schema, &executed, &mut Context::default());
     }
-    if h.starts_with("DO $auth_schema_usage$") {
+    let tagged = |tag: &str| h.starts_with(&format!("DO ${tag}$"));
+    if tagged(auth_functions::AUTH_SCHEMA_USAGE_TAG) {
         return Attribution::Object(key(ObjectKind::Schema, "auth", "", "auth"));
+    }
+    if tagged(auth_functions::CLAIMS_ACCESS_TAG) {
+        // The API roles' way in to the claim readers: usage on their schema and execute on each.
+        let helper = auth_functions::CLAIMS_SCHEMA;
+        return Attribution::Object(key(ObjectKind::Schema, helper, "", helper));
     }
     if h.starts_with("DO $grants$") {
         // One block per role and table: the privileges a role holds on a model table (a ledger

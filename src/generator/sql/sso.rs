@@ -1,12 +1,13 @@
 use anyhow::Result;
 
+use crate::generator::sql::rls::AUTH_UID;
 use crate::parser::ast::SsoConfigAst;
 
 /// Generate the full `_sso` schema DDL: schema creation, all five `oauth_*`
 /// tables, indexes, and RLS policies.
 ///
-/// The output is idempotent (all statements use `IF NOT EXISTS` or `IF NOT
-/// EXISTS` guards) and can be applied repeatedly without error.
+/// The output is idempotent (`IF NOT EXISTS` guards, and each policy dropped
+/// before it is made) and can be applied repeatedly without error.
 pub fn generate(sso: &SsoConfigAst) -> Result<String> {
     if !sso.enabled {
         return Ok(String::new());
@@ -110,7 +111,7 @@ CREATE INDEX IF NOT EXISTS oauth_refresh_tokens_user_id_idx ON _sso.oauth_refres
 }
 
 fn oauth_consents_ddl() -> String {
-    r#"-- User consent records — tracks which users have approved which clients
+    r#"-- User consent records: which users have approved which clients
 CREATE TABLE IF NOT EXISTS _sso.oauth_consents (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -127,41 +128,37 @@ CREATE INDEX IF NOT EXISTS oauth_consents_user_id_idx ON _sso.oauth_consents (us
 
 // ─── RLS ─────────────────────────────────────────────────────────────────────
 
+/// Each user-facing table, and what its owner may do with their own rows: read them, and delete
+/// them to revoke.
+const OWNED_BY_USER: [(&str, &str); 3] = [
+    ("oauth_access_tokens", "access tokens"),
+    ("oauth_refresh_tokens", "refresh tokens"),
+    ("oauth_consents", "consent records"),
+];
+
+/// Row-level security on the user-facing tables: a user reads and revokes only their own rows.
+///
+/// Dropped and made again rather than `CREATE POLICY IF NOT EXISTS`, which Postgres does not have:
+/// that spelling made the whole script fail at the first policy. The caller is read through the
+/// engine's own reader, not `auth.uid()`, which the auth server's migrations replace.
 fn rls_policies() -> String {
-    r#"-- RLS: enable on user-facing tables
-ALTER TABLE _sso.oauth_access_tokens  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE _sso.oauth_refresh_tokens ENABLE ROW LEVEL SECURITY;
-ALTER TABLE _sso.oauth_consents       ENABLE ROW LEVEL SECURITY;
-
--- Users may only read their own access tokens
-CREATE POLICY IF NOT EXISTS oauth_access_tokens_select
-    ON _sso.oauth_access_tokens FOR SELECT
-    USING (user_id = auth.uid());
-
--- Users may revoke (delete) their own access tokens
-CREATE POLICY IF NOT EXISTS oauth_access_tokens_delete
-    ON _sso.oauth_access_tokens FOR DELETE
-    USING (user_id = auth.uid());
-
--- Users may only read their own refresh tokens
-CREATE POLICY IF NOT EXISTS oauth_refresh_tokens_select
-    ON _sso.oauth_refresh_tokens FOR SELECT
-    USING (user_id = auth.uid());
-
--- Users may revoke (delete) their own refresh tokens
-CREATE POLICY IF NOT EXISTS oauth_refresh_tokens_delete
-    ON _sso.oauth_refresh_tokens FOR DELETE
-    USING (user_id = auth.uid());
-
--- Users may view their own consent records
-CREATE POLICY IF NOT EXISTS oauth_consents_select
-    ON _sso.oauth_consents FOR SELECT
-    USING (user_id = auth.uid());
-
--- Users may revoke (delete) their own consents
-CREATE POLICY IF NOT EXISTS oauth_consents_delete
-    ON _sso.oauth_consents FOR DELETE
-    USING (user_id = auth.uid());
-"#
-    .to_string()
+    let mut out = String::from("-- RLS: enable on user-facing tables\n");
+    for (table, _) in OWNED_BY_USER {
+        out.push_str(&format!(
+            "ALTER TABLE _sso.{table} ENABLE ROW LEVEL SECURITY;\n"
+        ));
+    }
+    for (table, what) in OWNED_BY_USER {
+        for (op, verb) in [("select", "read"), ("delete", "revoke (delete)")] {
+            out.push_str(&format!(
+                "\n-- Users may only {verb} their own {what}\n\
+                 DROP POLICY IF EXISTS {table}_{op} ON _sso.{table};\n\
+                 CREATE POLICY {table}_{op}\n    \
+                 ON _sso.{table} FOR {OP}\n    \
+                 USING (user_id = {AUTH_UID});\n",
+                OP = op.to_uppercase(),
+            ));
+        }
+    }
+    out
 }

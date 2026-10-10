@@ -87,7 +87,7 @@ fn model_named<'a>(ast: &'a SchemaAst, name: &str) -> &'a parser::ast::ModelAst 
         .unwrap_or_else(|| panic!("model {name} exists"))
 }
 
-const OWNER_ID_EXPR: &str = "(SELECT auth.uid()) = \"owner_id\"";
+const OWNER_ID_EXPR: &str = "(SELECT _supatype.jwt_uid()) = \"owner_id\"";
 
 // ---------------------------------------------------------------------------------------------
 // Row rules
@@ -293,7 +293,7 @@ fn owner_through_a_relation_to_a_user_model_is_accepted() {
     let rule = post.access().update.as_ref().unwrap();
     assert_eq!(
         rls::access_rule_to_expr(&ast, post, rule, "public"),
-        "(SELECT auth.uid()) = \"author_id\""
+        "(SELECT _supatype.jwt_uid()) = \"author_id\""
     );
 }
 
@@ -310,7 +310,7 @@ fn owner_through_a_relation_to_the_auth_user_is_accepted() {
     let rule = post.access().read.as_ref().unwrap();
     assert_eq!(
         rls::access_rule_to_expr(&ast, post, rule, "public"),
-        "(SELECT auth.uid()) = \"author_id\""
+        "(SELECT _supatype.jwt_uid()) = \"author_id\""
     );
 }
 
