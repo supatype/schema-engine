@@ -11,7 +11,78 @@ GRANT USAGE ON SCHEMA _platform TO PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
 
--- Auth helper functions for project: 
+-- Claim readers the generated access rules call
+CREATE SCHEMA IF NOT EXISTS _supatype;
+
+-- jwt_claims(): the verified claims, or an empty object for an anonymous request.
+CREATE OR REPLACE FUNCTION _supatype.jwt_claims() RETURNS jsonb AS $$
+  SELECT COALESCE(
+    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,
+    '{}'::jsonb
+  );
+$$ LANGUAGE sql STABLE;
+
+-- jwt_uid(): the caller's user id, or NULL when the request has no subject.
+CREATE OR REPLACE FUNCTION _supatype.jwt_uid() RETURNS uuid AS $$
+  SELECT NULLIF(_supatype.jwt_claims() ->> 'sub', '')::uuid;
+$$ LANGUAGE sql STABLE;
+
+-- jwt_role(): application role for access rules.
+--
+-- Reads `app_metadata.role` first, falling back to the top-level `role` claim.
+-- The top-level claim is the one PostgREST uses to pick the Postgres role it
+-- runs the request as, so it can only ever be anon / authenticated /
+-- service_role; application roles (admin, editor, etc.) live in app_metadata,
+-- which only the Auth admin API can write. Never `user_metadata`, which the
+-- user can edit themselves.
+CREATE OR REPLACE FUNCTION _supatype.jwt_role() RETURNS text AS $$
+  SELECT COALESCE(
+    _supatype.jwt_claims() -> 'app_metadata' ->> 'role',
+    _supatype.jwt_claims() ->> 'role',
+    'anon'
+  );
+$$ LANGUAGE sql STABLE;
+
+-- jwt_claim(path): nested JWT claim by dotted path, e.g. 'app_metadata.tier'.
+CREATE OR REPLACE FUNCTION _supatype.jwt_claim(claim_path text) RETURNS jsonb AS $$
+  SELECT _supatype.jwt_claims() #> string_to_array(claim_path, '.');
+$$ LANGUAGE sql STABLE;
+
+-- jwt_claim_text(path): the same claim as text, for scalar comparisons.
+CREATE OR REPLACE FUNCTION _supatype.jwt_claim_text(claim_path text) RETURNS text AS $$
+  SELECT _supatype.jwt_claims() #>> string_to_array(claim_path, '.');
+$$ LANGUAGE sql STABLE;
+
+DO $claims_access$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA "_supatype" TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claims() TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_uid() TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_role() TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim(text) TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim_text(text) TO anon';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA "_supatype" TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claims() TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_uid() TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_role() TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim(text) TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim_text(text) TO authenticated';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA "_supatype" TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claims() TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_uid() TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_role() TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim(text) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim_text(text) TO service_role';
+  END IF;
+END
+$claims_access$;
+
+-- auth.* aliases of the claim readers, for hand-written rules (project: )
 CREATE SCHEMA IF NOT EXISTS auth;
 
 DO $auth_schema_usage$
@@ -28,56 +99,36 @@ BEGIN
 END
 $auth_schema_usage$;
 
--- auth.jwt() -- the verified claims, or an empty object for an anonymous request.
 CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb AS $$
-  SELECT COALESCE(
-    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,
-    '{}'::jsonb
-  );
+  SELECT _supatype.jwt_claims();
 $$ LANGUAGE sql STABLE;
 
--- auth.uid() -- the caller's user id, or NULL when the request has no subject.
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$
-  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;
+  SELECT _supatype.jwt_uid();
 $$ LANGUAGE sql STABLE;
 
--- auth.role() -- application role for access rules.
---
--- Reads `app_metadata.role` first, falling back to the top-level `role` claim.
--- The top-level claim is the one PostgREST uses to pick the Postgres role it
--- runs the request as, so it can only ever be anon / authenticated /
--- service_role; application roles (admin, editor, etc.) live in app_metadata,
--- which only the Auth admin API can write -- never `user_metadata`, which the
--- user can edit themselves.
 CREATE OR REPLACE FUNCTION auth.role() RETURNS text AS $$
-  SELECT COALESCE(
-    auth.jwt() -> 'app_metadata' ->> 'role',
-    auth.jwt() ->> 'role',
-    'anon'
-  );
+  SELECT _supatype.jwt_role();
 $$ LANGUAGE sql STABLE;
 
--- auth.email() -- extracts email from JWT claims
 CREATE OR REPLACE FUNCTION auth.email() RETURNS text AS $$
-  SELECT COALESCE(auth.jwt() ->> 'email', '');
+  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');
 $$ LANGUAGE sql STABLE;
 
--- auth.claim(path) -- nested JWT claim by dotted path, e.g. 'app_metadata.tier'
 CREATE OR REPLACE FUNCTION auth.claim(claim_path text) RETURNS jsonb AS $$
-  SELECT auth.jwt() #> string_to_array(claim_path, '.');
+  SELECT _supatype.jwt_claim(claim_path);
 $$ LANGUAGE sql STABLE;
 
--- auth.claim_text(path) -- the same claim as text, for scalar comparisons.
 CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text) RETURNS text AS $$
-  SELECT auth.jwt() #>> string_to_array(claim_path, '.');
+  SELECT _supatype.jwt_claim_text(claim_path);
 $$ LANGUAGE sql STABLE;
 
--- auth.roles() -- the `roles` claim as a text array.
+-- auth.roles(): the `roles` claim as a text array.
 CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
   LANGUAGE sql STABLE AS $$
     SELECT ARRAY(
       SELECT jsonb_array_elements_text(
-        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)
+        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)
       )
     );
   $$;
@@ -239,7 +290,7 @@ CREATE OR REPLACE FUNCTION "public"."can_create_posts"("posts" "public"."posts")
 
 CREATE OR REPLACE FUNCTION "public"."can_update_posts"("posts" "public"."posts")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "posts";
   $can$;
 
@@ -251,7 +302,7 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_posts"("posts" "public"."posts")
 
 CREATE OR REPLACE FUNCTION "public"."can_read_ledger"("ledger" "public"."ledger")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) IS NOT NULL
+    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "ledger";
   $can$;
 
@@ -360,17 +411,18 @@ REVOKE ALL ON _supatype.preview_links FROM anon, authenticated, service_role;
 
 -- The caller's user id, or NULL when the request has no subject.
 --
--- A thin alias for `auth.uid()`, which is what it now means. It was its own implementation while
--- `auth.uid()` fell back to the nil UUID for a subject-less request, and that gap was a hole rather
--- than a nicety: two kinds of request legitimately have no subject, a `service_role` call and a
--- preview link, so a draft saved through Studio was stamped with the nil UUID and every other
+-- A thin alias for `_supatype.jwt_uid()`, which is what it now means. It was its own implementation
+-- while the user id fell back to the nil UUID for a subject-less request, and that gap was a hole
+-- rather than a nicety: two kinds of request legitimately have no subject, a `service_role` call
+-- and a preview link, so a draft saved through Studio was stamped with the nil UUID and every other
 -- subject-less caller then satisfied `created_by = auth.uid()`.
 --
--- `auth.uid()` answers NULL now, so this exists only to keep the policies below reading as one
--- thought. It is not a second definition to keep in step.
+-- The reader answers NULL now, so this exists only to keep the policies below reading as one
+-- thought. It is not a second definition to keep in step. Not `auth.uid()`, which the auth
+-- server's own migrations replace.
 CREATE OR REPLACE FUNCTION _supatype.caller_id() RETURNS uuid
   LANGUAGE sql STABLE SET search_path = '' AS $fn$
-    SELECT auth.uid();
+    SELECT _supatype.jwt_uid();
   $fn$;
 
 CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles() RETURNS text[]
@@ -1024,7 +1076,7 @@ CREATE OR REPLACE FUNCTION _supatype."can_edit_posts"(p_record UUID)
   RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$
     SELECT EXISTS (
       SELECT 1 FROM "public"."posts"
-       WHERE "id" = p_record AND ((SELECT auth.role()) = 'editor')
+       WHERE "id" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')
     );
   $fn$;
 GRANT EXECUTE ON FUNCTION _supatype."can_edit_posts"(UUID) TO authenticated, service_role;
@@ -1126,7 +1178,7 @@ CREATE OR REPLACE FUNCTION _supatype."ledger_versions_audit"() RETURNS trigger
       FROM "public"."ledger_versions" v WHERE v."record_id" = NEW."id";
     INSERT INTO "public"."ledger_versions"
       ("record_id", "version", "status", "data", "created_by")
-    VALUES (NEW."id", next_version, 'published', to_jsonb(NEW), auth.uid());
+    VALUES (NEW."id", next_version, 'published', to_jsonb(NEW), _supatype.jwt_uid());
     RETURN NULL;
   END;
   $fn$;
@@ -1208,7 +1260,7 @@ FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 CREATE POLICY "ledger_select" ON "public"."ledger"
 FOR SELECT USING (
-    (SELECT auth.uid()) IS NOT NULL
+    (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
 CREATE POLICY "posts_select" ON "public"."posts"
 FOR SELECT USING (
@@ -1216,9 +1268,9 @@ FOR SELECT USING (
   );
 CREATE POLICY "posts_update" ON "public"."posts"
 FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "tags_select" ON "public"."tags"
 FOR SELECT USING (

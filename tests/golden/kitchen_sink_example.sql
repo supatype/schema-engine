@@ -15,7 +15,78 @@ GRANT USAGE ON SCHEMA _platform TO PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
 
--- Auth helper functions for project: 
+-- Claim readers the generated access rules call
+CREATE SCHEMA IF NOT EXISTS _supatype;
+
+-- jwt_claims(): the verified claims, or an empty object for an anonymous request.
+CREATE OR REPLACE FUNCTION _supatype.jwt_claims() RETURNS jsonb AS $$
+  SELECT COALESCE(
+    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,
+    '{}'::jsonb
+  );
+$$ LANGUAGE sql STABLE;
+
+-- jwt_uid(): the caller's user id, or NULL when the request has no subject.
+CREATE OR REPLACE FUNCTION _supatype.jwt_uid() RETURNS uuid AS $$
+  SELECT NULLIF(_supatype.jwt_claims() ->> 'sub', '')::uuid;
+$$ LANGUAGE sql STABLE;
+
+-- jwt_role(): application role for access rules.
+--
+-- Reads `app_metadata.role` first, falling back to the top-level `role` claim.
+-- The top-level claim is the one PostgREST uses to pick the Postgres role it
+-- runs the request as, so it can only ever be anon / authenticated /
+-- service_role; application roles (admin, editor, etc.) live in app_metadata,
+-- which only the Auth admin API can write. Never `user_metadata`, which the
+-- user can edit themselves.
+CREATE OR REPLACE FUNCTION _supatype.jwt_role() RETURNS text AS $$
+  SELECT COALESCE(
+    _supatype.jwt_claims() -> 'app_metadata' ->> 'role',
+    _supatype.jwt_claims() ->> 'role',
+    'anon'
+  );
+$$ LANGUAGE sql STABLE;
+
+-- jwt_claim(path): nested JWT claim by dotted path, e.g. 'app_metadata.tier'.
+CREATE OR REPLACE FUNCTION _supatype.jwt_claim(claim_path text) RETURNS jsonb AS $$
+  SELECT _supatype.jwt_claims() #> string_to_array(claim_path, '.');
+$$ LANGUAGE sql STABLE;
+
+-- jwt_claim_text(path): the same claim as text, for scalar comparisons.
+CREATE OR REPLACE FUNCTION _supatype.jwt_claim_text(claim_path text) RETURNS text AS $$
+  SELECT _supatype.jwt_claims() #>> string_to_array(claim_path, '.');
+$$ LANGUAGE sql STABLE;
+
+DO $claims_access$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA "_supatype" TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claims() TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_uid() TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_role() TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim(text) TO anon';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim_text(text) TO anon';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA "_supatype" TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claims() TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_uid() TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_role() TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim(text) TO authenticated';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim_text(text) TO authenticated';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA "_supatype" TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claims() TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_uid() TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_role() TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim(text) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION "_supatype".jwt_claim_text(text) TO service_role';
+  END IF;
+END
+$claims_access$;
+
+-- auth.* aliases of the claim readers, for hand-written rules (project: )
 CREATE SCHEMA IF NOT EXISTS auth;
 
 DO $auth_schema_usage$
@@ -32,56 +103,36 @@ BEGIN
 END
 $auth_schema_usage$;
 
--- auth.jwt() -- the verified claims, or an empty object for an anonymous request.
 CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb AS $$
-  SELECT COALESCE(
-    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,
-    '{}'::jsonb
-  );
+  SELECT _supatype.jwt_claims();
 $$ LANGUAGE sql STABLE;
 
--- auth.uid() -- the caller's user id, or NULL when the request has no subject.
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$
-  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;
+  SELECT _supatype.jwt_uid();
 $$ LANGUAGE sql STABLE;
 
--- auth.role() -- application role for access rules.
---
--- Reads `app_metadata.role` first, falling back to the top-level `role` claim.
--- The top-level claim is the one PostgREST uses to pick the Postgres role it
--- runs the request as, so it can only ever be anon / authenticated /
--- service_role; application roles (admin, editor, etc.) live in app_metadata,
--- which only the Auth admin API can write -- never `user_metadata`, which the
--- user can edit themselves.
 CREATE OR REPLACE FUNCTION auth.role() RETURNS text AS $$
-  SELECT COALESCE(
-    auth.jwt() -> 'app_metadata' ->> 'role',
-    auth.jwt() ->> 'role',
-    'anon'
-  );
+  SELECT _supatype.jwt_role();
 $$ LANGUAGE sql STABLE;
 
--- auth.email() -- extracts email from JWT claims
 CREATE OR REPLACE FUNCTION auth.email() RETURNS text AS $$
-  SELECT COALESCE(auth.jwt() ->> 'email', '');
+  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');
 $$ LANGUAGE sql STABLE;
 
--- auth.claim(path) -- nested JWT claim by dotted path, e.g. 'app_metadata.tier'
 CREATE OR REPLACE FUNCTION auth.claim(claim_path text) RETURNS jsonb AS $$
-  SELECT auth.jwt() #> string_to_array(claim_path, '.');
+  SELECT _supatype.jwt_claim(claim_path);
 $$ LANGUAGE sql STABLE;
 
--- auth.claim_text(path) -- the same claim as text, for scalar comparisons.
 CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text) RETURNS text AS $$
-  SELECT auth.jwt() #>> string_to_array(claim_path, '.');
+  SELECT _supatype.jwt_claim_text(claim_path);
 $$ LANGUAGE sql STABLE;
 
--- auth.roles() -- the `roles` claim as a text array.
+-- auth.roles(): the `roles` claim as a text array.
 CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
   LANGUAGE sql STABLE AS $$
     SELECT ARRAY(
       SELECT jsonb_array_elements_text(
-        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)
+        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)
       )
     );
   $$;
@@ -371,19 +422,19 @@ CREATE OR REPLACE FUNCTION "public"."can_read_page"("page" "public"."page")
 
 CREATE OR REPLACE FUNCTION "public"."can_create_page"("page" "public"."page")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "page";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_page"("page" "public"."page")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "page";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_page"("page" "public"."page")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "page";
   $can$;
 
@@ -395,19 +446,19 @@ CREATE OR REPLACE FUNCTION "public"."can_read_speaker"("speaker" "public"."speak
 
 CREATE OR REPLACE FUNCTION "public"."can_create_speaker"("speaker" "public"."speaker")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "speaker";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_speaker"("speaker" "public"."speaker")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "speaker";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_speaker"("speaker" "public"."speaker")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "speaker";
   $can$;
 
@@ -419,19 +470,19 @@ CREATE OR REPLACE FUNCTION "public"."can_read_room"("room" "public"."room")
 
 CREATE OR REPLACE FUNCTION "public"."can_create_room"("room" "public"."room")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "room";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_room"("room" "public"."room")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "room";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_room"("room" "public"."room")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "room";
   $can$;
 
@@ -443,19 +494,19 @@ CREATE OR REPLACE FUNCTION "public"."can_read_talk"("talk" "public"."talk")
 
 CREATE OR REPLACE FUNCTION "public"."can_create_talk"("talk" "public"."talk")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "talk";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_talk"("talk" "public"."talk")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "talk";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_talk"("talk" "public"."talk")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "talk";
   $can$;
 
@@ -467,91 +518,91 @@ CREATE OR REPLACE FUNCTION "public"."can_read_sponsor"("sponsor" "public"."spons
 
 CREATE OR REPLACE FUNCTION "public"."can_create_sponsor"("sponsor" "public"."sponsor")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "sponsor";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_sponsor"("sponsor" "public"."sponsor")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "sponsor";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_sponsor"("sponsor" "public"."sponsor")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "sponsor";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_attendee"("attendee" "public"."attendee")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) IS NOT NULL
+    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_attendee"("attendee" "public"."attendee")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) IS NOT NULL
+    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_attendee"("attendee" "public"."attendee")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) = "id"
+    SELECT (SELECT _supatype.jwt_uid()) = "id"
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_attendee"("attendee" "public"."attendee")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) = "id"
+    SELECT (SELECT _supatype.jwt_uid()) = "id"
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_ticket"("ticket" "public"."ticket")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) = "auth_user_id"
+    SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_ticket"("ticket" "public"."ticket")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) IS NOT NULL
+    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_ticket"("ticket" "public"."ticket")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) = "auth_user_id"
+    SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_ticket"("ticket" "public"."ticket")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) = "auth_user_id"
+    SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_chat_message"("chat_message" "public"."chat_message")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) IS NOT NULL
+    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_chat_message"("chat_message" "public"."chat_message")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) IS NOT NULL
+    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_chat_message"("chat_message" "public"."chat_message")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) = "auth_user_id"
+    SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_chat_message"("chat_message" "public"."chat_message")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.uid()) = "auth_user_id"
+    SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
 
@@ -563,19 +614,19 @@ CREATE OR REPLACE FUNCTION "public"."can_read__global_site_settings"("_global_si
 
 CREATE OR REPLACE FUNCTION "public"."can_create__global_site_settings"("_global_site_settings" "public"."_global_site_settings")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "_global_site_settings";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_update__global_site_settings"("_global_site_settings" "public"."_global_site_settings")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "_global_site_settings";
   $can$;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete__global_site_settings"("_global_site_settings" "public"."_global_site_settings")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT (SELECT auth.role()) = 'editor'
+    SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "_global_site_settings";
   $can$;
 
@@ -642,17 +693,18 @@ REVOKE ALL ON _supatype.preview_links FROM anon, authenticated, service_role;
 
 -- The caller's user id, or NULL when the request has no subject.
 --
--- A thin alias for `auth.uid()`, which is what it now means. It was its own implementation while
--- `auth.uid()` fell back to the nil UUID for a subject-less request, and that gap was a hole rather
--- than a nicety: two kinds of request legitimately have no subject, a `service_role` call and a
--- preview link, so a draft saved through Studio was stamped with the nil UUID and every other
+-- A thin alias for `_supatype.jwt_uid()`, which is what it now means. It was its own implementation
+-- while the user id fell back to the nil UUID for a subject-less request, and that gap was a hole
+-- rather than a nicety: two kinds of request legitimately have no subject, a `service_role` call
+-- and a preview link, so a draft saved through Studio was stamped with the nil UUID and every other
 -- subject-less caller then satisfied `created_by = auth.uid()`.
 --
--- `auth.uid()` answers NULL now, so this exists only to keep the policies below reading as one
--- thought. It is not a second definition to keep in step.
+-- The reader answers NULL now, so this exists only to keep the policies below reading as one
+-- thought. It is not a second definition to keep in step. Not `auth.uid()`, which the auth
+-- server's own migrations replace.
 CREATE OR REPLACE FUNCTION _supatype.caller_id() RETURNS uuid
   LANGUAGE sql STABLE SET search_path = '' AS $fn$
-    SELECT auth.uid();
+    SELECT _supatype.jwt_uid();
   $fn$;
 
 CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles() RETURNS text[]
@@ -1309,7 +1361,7 @@ CREATE OR REPLACE FUNCTION _supatype."can_edit_page"(p_record UUID)
   RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$
     SELECT EXISTS (
       SELECT 1 FROM "public"."page"
-       WHERE "id" = p_record AND ((SELECT auth.role()) = 'editor')
+       WHERE "id" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')
     );
   $fn$;
 GRANT EXECUTE ON FUNCTION _supatype."can_edit_page"(UUID) TO authenticated, service_role;
@@ -1404,7 +1456,7 @@ CREATE OR REPLACE FUNCTION _supatype."can_edit_speaker"(p_record UUID)
   RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$
     SELECT EXISTS (
       SELECT 1 FROM "public"."speaker"
-       WHERE "id" = p_record AND ((SELECT auth.role()) = 'editor')
+       WHERE "id" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')
     );
   $fn$;
 GRANT EXECUTE ON FUNCTION _supatype."can_edit_speaker"(UUID) TO authenticated, service_role;
@@ -1499,7 +1551,7 @@ CREATE OR REPLACE FUNCTION _supatype."can_edit_talk"(p_record UUID)
   RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$
     SELECT EXISTS (
       SELECT 1 FROM "public"."talk"
-       WHERE "id" = p_record AND ((SELECT auth.role()) = 'editor')
+       WHERE "id" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')
     );
   $fn$;
 GRANT EXECUTE ON FUNCTION _supatype."can_edit_talk"(UUID) TO authenticated, service_role;
@@ -1758,11 +1810,11 @@ FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 CREATE POLICY "_global_site_settings_delete" ON "public"."_global_site_settings"
 FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "_global_site_settings_insert" ON "public"."_global_site_settings"
 FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "_global_site_settings_select" ON "public"."_global_site_settings"
 FOR SELECT USING (
@@ -1770,53 +1822,53 @@ FOR SELECT USING (
   );
 CREATE POLICY "_global_site_settings_update" ON "public"."_global_site_settings"
 FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "attendee_delete" ON "public"."attendee"
 FOR DELETE USING (
-    (SELECT auth.uid()) = "id"
+    (SELECT _supatype.jwt_uid()) = "id"
   );
 CREATE POLICY "attendee_insert" ON "public"."attendee"
 FOR INSERT WITH CHECK (
-    (SELECT auth.uid()) IS NOT NULL
+    (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
 CREATE POLICY "attendee_select" ON "public"."attendee"
 FOR SELECT USING (
-    (SELECT auth.uid()) IS NOT NULL
+    (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
 CREATE POLICY "attendee_update" ON "public"."attendee"
 FOR UPDATE USING (
-    (SELECT auth.uid()) = "id"
+    (SELECT _supatype.jwt_uid()) = "id"
   ) WITH CHECK (
-    (SELECT auth.uid()) = "id"
+    (SELECT _supatype.jwt_uid()) = "id"
   );
 CREATE POLICY "chat_message_delete" ON "public"."chat_message"
 FOR DELETE USING (
-    (SELECT auth.uid()) = "auth_user_id"
+    (SELECT _supatype.jwt_uid()) = "auth_user_id"
   );
 CREATE POLICY "chat_message_insert" ON "public"."chat_message"
 FOR INSERT WITH CHECK (
-    (SELECT auth.uid()) IS NOT NULL
+    (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
 CREATE POLICY "chat_message_select" ON "public"."chat_message"
 FOR SELECT USING (
-    (SELECT auth.uid()) IS NOT NULL
+    (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
 CREATE POLICY "chat_message_update" ON "public"."chat_message"
 FOR UPDATE USING (
-    (SELECT auth.uid()) = "auth_user_id"
+    (SELECT _supatype.jwt_uid()) = "auth_user_id"
   ) WITH CHECK (
-    (SELECT auth.uid()) = "auth_user_id"
+    (SELECT _supatype.jwt_uid()) = "auth_user_id"
   );
 CREATE POLICY "page_delete" ON "public"."page"
 FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "page_insert" ON "public"."page"
 FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "page_select" ON "public"."page"
 FOR SELECT USING (
@@ -1824,17 +1876,17 @@ FOR SELECT USING (
   );
 CREATE POLICY "page_update" ON "public"."page"
 FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "room_delete" ON "public"."room"
 FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "room_insert" ON "public"."room"
 FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "room_select" ON "public"."room"
 FOR SELECT USING (
@@ -1842,17 +1894,17 @@ FOR SELECT USING (
   );
 CREATE POLICY "room_update" ON "public"."room"
 FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "speaker_delete" ON "public"."speaker"
 FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "speaker_insert" ON "public"."speaker"
 FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "speaker_select" ON "public"."speaker"
 FOR SELECT USING (
@@ -1860,17 +1912,17 @@ FOR SELECT USING (
   );
 CREATE POLICY "speaker_update" ON "public"."speaker"
 FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "sponsor_delete" ON "public"."sponsor"
 FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "sponsor_insert" ON "public"."sponsor"
 FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "sponsor_select" ON "public"."sponsor"
 FOR SELECT USING (
@@ -1878,17 +1930,17 @@ FOR SELECT USING (
   );
 CREATE POLICY "sponsor_update" ON "public"."sponsor"
 FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "talk_delete" ON "public"."talk"
 FOR DELETE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "talk_insert" ON "public"."talk"
 FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "talk_select" ON "public"."talk"
 FOR SELECT USING (
@@ -1896,35 +1948,35 @@ FOR SELECT USING (
   );
 CREATE POLICY "talk_update" ON "public"."talk"
 FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
+    (SELECT _supatype.jwt_role()) = 'editor'
   );
 CREATE POLICY "ticket_delete" ON "public"."ticket"
 FOR DELETE USING (
-    (SELECT auth.uid()) = "auth_user_id"
+    (SELECT _supatype.jwt_uid()) = "auth_user_id"
   );
 CREATE POLICY "ticket_insert" ON "public"."ticket"
 FOR INSERT WITH CHECK (
-    (SELECT auth.uid()) IS NOT NULL
+    (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
 CREATE POLICY "ticket_select" ON "public"."ticket"
 FOR SELECT USING (
-    (SELECT auth.uid()) = "auth_user_id"
+    (SELECT _supatype.jwt_uid()) = "auth_user_id"
   );
 CREATE POLICY "ticket_update" ON "public"."ticket"
 FOR UPDATE USING (
-    (SELECT auth.uid()) = "auth_user_id"
+    (SELECT _supatype.jwt_uid()) = "auth_user_id"
   ) WITH CHECK (
-    (SELECT auth.uid()) = "auth_user_id"
+    (SELECT _supatype.jwt_uid()) = "auth_user_id"
   );
 CREATE POLICY "storage_speaker_headshots_del" ON "storage"."objects"
   FOR DELETE USING (
-    bucket_id = 'speaker-headshots' AND (auth.uid() = owner)
+    bucket_id = 'speaker-headshots' AND ((SELECT _supatype.jwt_uid()) = owner)
   );
 CREATE POLICY "storage_speaker_headshots_ins" ON "storage"."objects"
   FOR INSERT WITH CHECK (
-    bucket_id = 'speaker-headshots' AND (auth.uid() IS NOT NULL)
+    bucket_id = 'speaker-headshots' AND ((SELECT _supatype.jwt_uid()) IS NOT NULL)
   );
 -- Declarative storage policies for bucket id (sanitized label: speaker_headshots)
 CREATE POLICY "storage_speaker_headshots_sel" ON "storage"."objects"
@@ -1933,9 +1985,9 @@ CREATE POLICY "storage_speaker_headshots_sel" ON "storage"."objects"
   );
 CREATE POLICY "storage_speaker_headshots_upd" ON "storage"."objects"
   FOR UPDATE USING (
-    bucket_id = 'speaker-headshots' AND (auth.uid() = owner)
+    bucket_id = 'speaker-headshots' AND ((SELECT _supatype.jwt_uid()) = owner)
   ) WITH CHECK (
-    bucket_id = 'speaker-headshots' AND (auth.uid() = owner)
+    bucket_id = 'speaker-headshots' AND ((SELECT _supatype.jwt_uid()) = owner)
   );
 CREATE POLICY "storage_sponsor_assets_del" ON "storage"."objects"
   FOR DELETE USING (
@@ -1943,12 +1995,12 @@ CREATE POLICY "storage_sponsor_assets_del" ON "storage"."objects"
   );
 CREATE POLICY "storage_sponsor_assets_ins" ON "storage"."objects"
   FOR INSERT WITH CHECK (
-    bucket_id = 'sponsor-assets' AND (auth.role() = 'sponsor')
+    bucket_id = 'sponsor-assets' AND ((SELECT _supatype.jwt_role()) = 'sponsor')
   );
 -- Declarative storage policies for bucket id (sanitized label: sponsor_assets)
 CREATE POLICY "storage_sponsor_assets_sel" ON "storage"."objects"
   FOR SELECT USING (
-    bucket_id = 'sponsor-assets' AND (auth.role() = 'sponsor')
+    bucket_id = 'sponsor-assets' AND ((SELECT _supatype.jwt_role()) = 'sponsor')
   );
 CREATE POLICY "storage_sponsor_assets_upd" ON "storage"."objects"
   FOR UPDATE USING (
@@ -1958,7 +2010,7 @@ CREATE POLICY "storage_sponsor_assets_upd" ON "storage"."objects"
   );
 CREATE POLICY "storage_ticket_files_del" ON "storage"."objects"
   FOR DELETE USING (
-    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+    bucket_id = 'ticket-files' AND ((SELECT _supatype.jwt_uid()) = owner)
   );
 
 -- Storage policies for model 'speaker', bucket 'speaker-headshots'
@@ -1970,18 +2022,18 @@ CREATE POLICY "storage_ticket_files_del" ON "storage"."objects"
 -- Storage policies for model 'ticket', bucket 'ticket-files'
 CREATE POLICY "storage_ticket_files_ins" ON "storage"."objects"
   FOR INSERT WITH CHECK (
-    bucket_id = 'ticket-files' AND (auth.uid() IS NOT NULL)
+    bucket_id = 'ticket-files' AND ((SELECT _supatype.jwt_uid()) IS NOT NULL)
   );
 -- Declarative storage policies for bucket id (sanitized label: ticket_files)
 CREATE POLICY "storage_ticket_files_sel" ON "storage"."objects"
   FOR SELECT USING (
-    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+    bucket_id = 'ticket-files' AND ((SELECT _supatype.jwt_uid()) = owner)
   );
 CREATE POLICY "storage_ticket_files_upd" ON "storage"."objects"
   FOR UPDATE USING (
-    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+    bucket_id = 'ticket-files' AND ((SELECT _supatype.jwt_uid()) = owner)
   ) WITH CHECK (
-    bucket_id = 'ticket-files' AND (auth.uid() = owner)
+    bucket_id = 'ticket-files' AND ((SELECT _supatype.jwt_uid()) = owner)
   );
 ALTER TABLE "public"."_global_site_settings" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."attendee" ENABLE ROW LEVEL SECURITY;

@@ -1048,17 +1048,26 @@ pub async fn load_migration_sources(
     Ok(row.and_then(|(sources, manifest)| sources.map(|s| (s, manifest))))
 }
 
-/// Re-apply the `auth.*` helper functions used by RLS policies.
+/// Re-apply the claim readers the generated rules call, and the `auth.*` aliases of them.
 ///
 /// These were only ever written at provision time, so an engine change to
 /// `auth.role()` (for example, resolving application roles from
 /// `app_metadata.role`) never reached an existing project: its policies kept
 /// calling the old definition indefinitely. They are CREATE OR REPLACE, so
-/// re-applying on every push is cheap and idempotent.
+/// re-applying on every push is cheap and idempotent. Re-applying also puts back
+/// an `auth.*` alias the auth server's own migrations replaced, for hand-written
+/// rules; the generated ones never call those.
 ///
-/// Skipped when there is no `auth` schema (a plain Postgres target), rather than
-/// failing a push that has nothing to do with auth.
+/// The readers live in `_supatype` and are always applied. The aliases are skipped
+/// when there is no `auth` schema (a plain Postgres target), rather than failing a
+/// push that has nothing to do with auth; the result says whether they were applied.
 pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bool> {
+    use crate::generator::sql::auth_functions;
+
+    sqlx::raw_sql(&auth_functions::generate_claim_readers())
+        .execute(pool)
+        .await?;
+
     let exists: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1")
             .bind(auth_schema)
@@ -1068,12 +1077,13 @@ pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bo
         return Ok(false);
     }
 
-    let config = crate::generator::sql::auth_functions::AuthFunctionConfig {
+    let config = auth_functions::AuthFunctionConfig {
         project_ref: String::new(),
         auth_schema: auth_schema.to_string(),
     };
-    let sql = crate::generator::sql::auth_functions::generate_auth_functions(&config);
-    sqlx::raw_sql(&sql).execute(pool).await?;
+    sqlx::raw_sql(&auth_functions::generate_auth_aliases(&config))
+        .execute(pool)
+        .await?;
     Ok(true)
 }
 

@@ -2012,7 +2012,7 @@ fn test_rls_fresh_model_authenticated() {
             && o.key.name == "posts_select"
     });
     assert!(
-        select.is_some_and(|o| o.create_sql.contains("auth.uid()")),
+        select.is_some_and(|o| o.create_sql.contains("_supatype.jwt_uid()")),
         "posts_select must be desired with the authenticated rule"
     );
 
@@ -2059,12 +2059,12 @@ fn test_rls_any_rule_generates_or_expression() {
     let expr = access_rule_to_expr(&ast, &model, &rule, "public");
     assert!(expr.contains("OR"), "any() rule must produce OR expression");
     assert!(
-        expr.contains("auth.uid()"),
-        "owner clause must reference auth.uid()"
+        expr.contains("_supatype.jwt_uid()"),
+        "owner clause must reference the uid reader"
     );
     assert!(
-        expr.contains("auth.role()"),
-        "role clause must reference auth.role()"
+        expr.contains("_supatype.jwt_role()"),
+        "role clause must reference the role reader"
     );
     assert!(expr.contains("admin"), "role clause must include role name");
 }
@@ -2499,7 +2499,7 @@ fn test_storage_rls_inherits_model_read_access_rule() {
         "must enable RLS on storage.objects"
     );
     assert!(
-        sql.contains("auth.uid() IS NOT NULL"),
+        sql.contains("(SELECT _supatype.jwt_uid()) IS NOT NULL"),
         "select policy must inherit authenticated rule"
     );
     assert!(
@@ -4650,7 +4650,7 @@ fn test_sso_enabled_rls_policies() {
         "must create delete policy for consents (revocation)"
     );
     assert!(
-        sql.contains("user_id = auth.uid()"),
+        sql.contains("user_id = (SELECT _supatype.jwt_uid())"),
         "RLS policies must scope to the authenticated user"
     );
 }

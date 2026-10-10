@@ -1,3 +1,4 @@
+use crate::generator::sql::rls::{role_rule_expr, AUTH_UID};
 use crate::parser::ast::{
     AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageAccessMode, StorageBucketAst,
 };
@@ -153,7 +154,7 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
     match rule {
         // Constraint-only, refused inside `access` by the CLI. Denies rather than grants.
         AccessRule::Matches { .. } => "false".to_string(),
-        AccessRule::Owner { .. } => "auth.uid() = owner".to_string(),
+        AccessRule::Owner { .. } => format!("{AUTH_UID} = owner"),
         AccessRule::Any { rules } => rules
             .iter()
             .map(|r| {
@@ -168,19 +169,8 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
             .join("\n    OR\n    "),
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
-        AccessRule::Authenticated => "auth.uid() IS NOT NULL".to_string(),
-        AccessRule::Role { roles } => {
-            if roles.len() == 1 {
-                format!("auth.role() = '{}'", roles[0])
-            } else {
-                let arr = roles
-                    .iter()
-                    .map(|r| format!("'{r}'"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("auth.role() = ANY(ARRAY[{arr}])")
-            }
-        }
+        AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
+        AccessRule::Role { roles } => role_rule_expr(roles),
         // Storage policies run on `storage.objects`, which has none of the
         // model's columns. A rule naming one cannot be evaluated here, so it
         // denies rather than being rendered against a table where the column
