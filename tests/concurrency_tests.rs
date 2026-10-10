@@ -15,8 +15,9 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
-use supatype_engine::push::Outcome;
-use supatype_engine::{parser, parser::ast::SchemaAst};
+use supatype_engine::push::{EngineBusy, Outcome};
+use supatype_engine::state::migration_history;
+use supatype_engine::{adopt, inspect, parser, parser::ast::SchemaAst};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -341,6 +342,165 @@ async fn the_engines_connections_ask_postgres_to_probe_a_lost_client() {
             assert_eq!(value, wanted, "{setting}");
         }
         pool.close().await;
+    })
+    .await;
+}
+
+/// Refused with `engine_busy`, and within a second: a writer that queues instead holds up everyone
+/// who comes after it (A4-N1).
+async fn refused_at_once<T: std::fmt::Debug>(
+    what: &str,
+    run: impl std::future::Future<Output = anyhow::Result<T>>,
+) {
+    let started = Instant::now();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .unwrap_or_else(|_| panic!("{what} was still waiting after 5 s instead of refusing"));
+    let elapsed = started.elapsed();
+    let err = outcome.expect_err(&format!("{what} ran while a push was in flight"));
+    assert!(
+        err.downcast_ref::<EngineBusy>().is_some(),
+        "{what} was refused for another reason: {err:#}"
+    );
+    assert!(
+        elapsed <= Duration::from_secs(1),
+        "{what} took {elapsed:?} to refuse"
+    );
+}
+
+/// The engine binary with `args` on `url` and the AST document `doc`, killed after 20 s. Its
+/// exit status, stdout and how long it ran.
+async fn engine(url: &str, doc: &str, args: &[&str]) -> (bool, String, Duration) {
+    let input = std::env::temp_dir().join(common::ephemeral_name("concurrency_ast") + ".json");
+    std::fs::write(&input, doc).unwrap();
+    let started = Instant::now();
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_supatype-engine"))
+        .env_remove("DATABASE_URL")
+        .arg("-i")
+        .arg(&input)
+        .args(args)
+        .args(["--database-url", url])
+        .kill_on_drop(true)
+        .output();
+    let out = tokio::time::timeout(Duration::from_secs(20), child).await;
+    let elapsed = started.elapsed();
+    let _ = std::fs::remove_file(&input);
+    match out {
+        Ok(out) => {
+            let out = out.expect("run the engine");
+            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            (out.status.success(), stdout, elapsed)
+        }
+        Err(_) => (false, "<still running after 20 s>".into(), elapsed),
+    }
+}
+
+/// A4-N1, the CONC matrix: with a push in flight, every other writer is refused with
+/// `engine_busy` within a second, through the library and through the binary. Each used to queue:
+/// a push and an adopt on the bootstrap's `ALTER TABLE _supatype.migrations`, behind the push.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_writer_is_refused_at_once_while_a_push_is_in_flight() {
+    common::with_integration_url(|url| async move {
+        let pool = PgPool::connect(&url).await.unwrap();
+        let in_flight = InFlight::start(&pool, 120).await;
+        let ast = tables("t1:a");
+        refused_at_once("push", push(&pool, &tables("t1:a,c"))).await;
+        let adopt = adopt::Request {
+            apply: true,
+            ..Default::default()
+        };
+        refused_at_once("adopt", adopt::run(&pool, &ast, "public", adopt)).await;
+        refused_at_once(
+            "rebaseline",
+            inspect::rebaseline(&pool, &ast, "public", true),
+        )
+        .await;
+        refused_at_once(
+            "rollback",
+            migration_history::apply_rollback(&pool, "public"),
+        )
+        .await;
+
+        for args in [
+            &["push", "--non-interactive"][..],
+            &["adopt", "--yes"],
+            &["doctor", "--rebaseline", "--accept-access-drift"],
+            &["rollback"],
+        ] {
+            let (ok, stdout, elapsed) = engine(&url, &tables_doc("t1:a,c"), args).await;
+            assert!(!ok, "{args:?} ran while a push was in flight: {stdout}");
+            assert!(stdout.contains("engine_busy"), "{args:?}: {stdout}");
+            assert!(
+                elapsed <= Duration::from_secs(2),
+                "{args:?} took {elapsed:?}"
+            );
+        }
+
+        // The push in flight is untouched by all of it, and applies once the ledger is free.
+        end_backend(&pool, in_flight.blocker).await;
+        let applied = tokio::time::timeout(Duration::from_secs(60), in_flight.push)
+            .await
+            .expect("the push in flight finished")
+            .unwrap();
+        assert!(
+            matches!(applied, Ok(Outcome::Applied { .. })),
+            "{applied:?}"
+        );
+    })
+    .await;
+}
+
+/// E14a: two first pushes on a fresh database at the same moment. One applies; the other is
+/// refused with `engine_busy` (it used to fail on a raw catalog error such as
+/// `duplicate key ... pg_type_typname_nsp_index`).
+#[tokio::test(flavor = "multi_thread")]
+async fn two_first_pushes_at_once_give_one_success_and_one_engine_busy() {
+    for trial in 0..5 {
+        common::with_integration_pool(|pool| async move {
+            let ast = tables("t1:a;t2:b");
+            let (one, two) = tokio::join!(push(&pool, &ast), push(&pool, &ast));
+            let applied = |r: &anyhow::Result<Outcome>| matches!(r, Ok(Outcome::Applied { .. }));
+            let busy = |r: &anyhow::Result<Outcome>| {
+                matches!(r, Err(e) if e.downcast_ref::<EngineBusy>().is_some())
+            };
+            assert!(
+                (applied(&one) && busy(&two)) || (busy(&one) && applied(&two)),
+                "trial {trial}: {one:?} / {two:?}"
+            );
+        })
+        .await;
+    }
+}
+
+/// The CLI's preview (`diff`, `doctor`) reads without the engine's lock. One that meets a lock a
+/// writer holds gives up within its lock timeout and says the engine is busy, instead of waiting
+/// as long as the writer does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_preview_that_meets_a_writers_lock_is_told_the_engine_is_busy() {
+    use sqlx::Connection;
+    common::with_integration_url(|url| async move {
+        let pool = PgPool::connect(&url).await.unwrap();
+        push(&pool, &tables("t1:a")).await.unwrap();
+        let mut writer = sqlx::PgConnection::connect_with(&pool.connect_options())
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "BEGIN; SELECT pg_advisory_xact_lock(872014, 2);
+             LOCK TABLE _supatype.migrations IN ACCESS EXCLUSIVE MODE;",
+        )
+        .execute(&mut writer)
+        .await
+        .unwrap();
+        for args in [&["diff"][..], &["doctor"]] {
+            let (ok, stdout, elapsed) = engine(&url, &tables_doc("t1:a,c"), args).await;
+            assert!(!ok, "{args:?} read through a writer's lock: {stdout}");
+            assert!(stdout.contains("engine_busy"), "{args:?}: {stdout}");
+            assert!(
+                elapsed <= Duration::from_secs(10),
+                "{args:?} took {elapsed:?}"
+            );
+        }
+        writer.close().await.unwrap();
     })
     .await;
 }

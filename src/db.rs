@@ -19,12 +19,31 @@ const KEEPALIVES: &str = "SELECT set_config('tcp_keepalives_idle', '30', false),
                                  set_config('tcp_keepalives_interval', '10', false), \
                                  set_config('tcp_keepalives_count', '3', false)";
 
+/// How long a preview's read (`diff`, `migrate`, `doctor`) waits for a lock. A preview takes none
+/// of the engine's locks, so a lock it meets is a writer's: better to say so in seconds than to
+/// wait as long as the writer runs (A4-N1). A writer's own transaction sets its own, longer,
+/// timeout with `SET LOCAL`, which wins over this one.
+const PREVIEW_LOCK_TIMEOUT: &str = "5s";
+
 /// A pool on `url` whose every connection runs with [`KEEPALIVES`].
 pub async fn connect(url: &str) -> Result<PgPool> {
+    pool(url, KEEPALIVES.to_string()).await
+}
+
+/// [`connect`], with [`PREVIEW_LOCK_TIMEOUT`] on every connection.
+pub async fn connect_for_preview(url: &str) -> Result<PgPool> {
+    let session =
+        format!("{KEEPALIVES}, set_config('lock_timeout', '{PREVIEW_LOCK_TIMEOUT}', false)");
+    pool(url, session).await
+}
+
+/// A pool on `url` that runs `session` on each connection as it opens.
+async fn pool(url: &str, session: String) -> Result<PgPool> {
     PgPoolOptions::new()
-        .after_connect(|conn, _meta| {
+        .after_connect(move |conn, _meta| {
+            let session = session.clone();
             Box::pin(async move {
-                conn.execute(KEEPALIVES).await?;
+                conn.execute(session.as_str()).await?;
                 Ok(())
             })
         })

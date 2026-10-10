@@ -40,7 +40,10 @@ pub async fn doctor(
         return self::rebaseline(pool, ast, schema, false).await;
     }
     let mut conn = pool.acquire().await?;
-    let (state, decision) = push::read_and_decide(&mut conn, pool, ast, schema).await?;
+    let (state, decision) = match push::read_and_decide(&mut conn, ast, schema).await {
+        Ok(decided) => decided,
+        Err(e) => return Err(push::busy_if_waiting_on_a_writer(pool, e).await),
+    };
     Ok(doctor::report_of(ast, &state, &decision))
 }
 
@@ -56,7 +59,7 @@ pub async fn rebaseline(
 ) -> Result<DoctorReport> {
     // As a push does: these are ledger writes too.
     let mut tx = push::begin_writer(pool).await?;
-    let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
+    let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
     let mut report = doctor::report_of(ast, &state, &decision);
     let rows: BTreeMap<&ObjectKey, &LedgerRow> = state.ledger.iter().map(|r| (&r.key, r)).collect();
     let mut moved = Vec::new();

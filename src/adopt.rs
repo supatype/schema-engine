@@ -78,7 +78,7 @@ pub async fn run(
     } else {
         pool.begin().await?
     };
-    let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
+    let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
     let (outcome, changes, forgotten) = choose(ast, &state, &decision, request)?;
     if request.apply {
         ledger::upsert(&mut tx, &changes).await?;

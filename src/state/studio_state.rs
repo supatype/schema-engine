@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
-// Studio state lives in the `supatype` schema — separate from the internal
+// Studio state lives in the `supatype` schema, separate from the internal
 // `_supatype` bookkeeping schema so it is accessible via PostgREST when the
 // schema is listed in `db-schemas`.
 const SCHEMA: &str = "supatype";
@@ -66,8 +66,9 @@ GRANT EXECUTE ON FUNCTION {SCHEMA}.db_stats() TO anon, authenticated, service_ro
 pub fn create_daily_signups_function_sql() -> String {
     // plpgsql for the same reason as `storage_stats` below: it defers the table reference to
     // runtime. As `LANGUAGE sql` this validated `auth.users` at creation time, so the first push to
-    // a database GoTrue had not yet booted against failed outright — `relation "auth.users" does not
-    // exist`, from a Studio analytics helper, aborting a migration that had nothing to do with auth.
+    // a database GoTrue had not yet booted against failed outright with `relation "auth.users"
+    // does not exist`, from a Studio analytics helper, aborting a migration that had nothing to do
+    // with auth.
     // `supatype/postgres` bootstraps the auth schema in its image, which is why this only showed up
     // on a database Supatype did not create.
     format!(
@@ -162,11 +163,11 @@ pub async fn list_dashboard_views(pool: &PgPool) -> Result<Vec<DashboardView>> {
         .collect())
 }
 
-/// Everything Studio needs in the database, in order, applied by every push. Lives beside the
-/// statements so a new one is applied the moment it is added here.
-pub async fn bootstrap(pool: &PgPool) -> Result<()> {
-    use anyhow::Context as _;
-    for (what, sql) in [
+/// Everything Studio needs in the database, in order, each with what it creates. Part of the
+/// engine's bootstrap (`migration_history::bootstrap_internal_state`), whose version is the text
+/// of every statement it runs, so a statement added or changed here is applied by the next push.
+pub fn bootstrap_statements() -> Vec<(&'static str, String)> {
+    vec![
         ("supatype schema", create_studio_schema_sql().to_string()),
         (
             "supatype schema usage",
@@ -189,7 +190,13 @@ pub async fn bootstrap(pool: &PgPool) -> Result<()> {
             "supatype.daily_content_creates function",
             create_daily_content_creates_function_sql(),
         ),
-    ] {
+    ]
+}
+
+/// [`bootstrap_statements`], run on `pool` one by one.
+pub async fn bootstrap(pool: &PgPool) -> Result<()> {
+    use anyhow::Context as _;
+    for (what, sql) in bootstrap_statements() {
         sqlx::raw_sql(&sql)
             .execute(pool)
             .await
