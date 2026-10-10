@@ -178,6 +178,7 @@ jobs:
             --test richtext_trigger_tests \
             --test schema_isolation_tests \
             --test studio_members_tests \
+            --test studio_state_security_tests \
             --test table_adoption_tests \
             --test live_state_tests \
             --test storage_policy_sweep_tests \
