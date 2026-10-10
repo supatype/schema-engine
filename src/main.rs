@@ -367,6 +367,10 @@ async fn run(command: Command, input: String) -> Result<()> {
                 );
             }
 
+            // A reused name is refused before anything is planned (E10).
+            if let Some(name) = &name {
+                supatype_engine::state::migration_history::assert_name_unused(&pool, name).await?;
+            }
             // A refusal goes on stdout too, where the CLI reads the push result, so it can name
             // the tables and offer to adopt them. The message still reaches stderr via the error.
             let mut plan = match push::prepare(&pool, &ast, &schema).await {

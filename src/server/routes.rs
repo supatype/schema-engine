@@ -90,6 +90,12 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         tracing::warn!("{}", crate::state::migration_history::NO_CACHE_NOTICE);
     }
 
+    // A reused name is refused before anything is planned (E10).
+    if let Some(name) = &req.name {
+        crate::state::migration_history::assert_name_unused(&pool, name)
+            .await
+            .map_err(engine_error)?;
+    }
     // A refusal the caller can act on is a 409 naming the tables, not a 500.
     let plan = push::prepare(&pool, &ast, &req.schema)
         .await

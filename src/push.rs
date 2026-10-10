@@ -1360,6 +1360,7 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
     let rendered = render(&plan, opts)?;
     // Locked before anything is written, so a refusal records no failed migration.
     let mut tx = begin_writer(pool).await?;
+    migration_history::assert_name_unused(&mut *tx, &rendered.name).await?;
     let applied = match within_transaction(&mut tx, &plan, strict, &rendered).await {
         Ok(applied) => applied,
         Err(e) => {

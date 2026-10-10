@@ -811,15 +811,22 @@ pub async fn save_studio_metadata_if_present(
     Ok(())
 }
 
+/// Record a failed push, never touching a row already recorded: under `$1` when no migration has
+/// that name, and nothing otherwise (`ON CONFLICT DO NOTHING`). It once took the name over with
+/// `ON CONFLICT (name) DO UPDATE SET status = 'failed'`, marking an applied migration failed, so a
+/// rollback undid the push before it instead (E10).
 pub fn insert_failed_migration_sql() -> String {
     format!(
         "INSERT INTO {SCHEMA}.migrations \
          (name, hash, engine_version, sql_up, status, error_message) \
          VALUES ($1, $2, $3, $4, 'failed', $5) \
-         ON CONFLICT (name) DO UPDATE SET status = 'failed', error_message = EXCLUDED.error_message"
+         ON CONFLICT (name) DO NOTHING"
     )
 }
 
+/// Record a failed push under `name`, or, when a migration already has that name, under
+/// `<name>.failed.<time>`: a name of its own, so the failure is kept and the earlier row is not
+/// changed.
 pub async fn record_failed_migration(
     pool: &PgPool,
     name: &str,
@@ -827,15 +834,54 @@ pub async fn record_failed_migration(
     sql_up: &str,
     error: &str,
 ) -> Result<()> {
-    sqlx::query(&insert_failed_migration_sql())
+    let unique = format!(
+        "{name}.failed.{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")
+    );
+    for name in [name, unique.as_str()] {
+        let recorded = sqlx::query(&insert_failed_migration_sql())
+            .bind(name)
+            .bind(hash)
+            .bind(env!("ENGINE_VERSION"))
+            .bind(sql_up)
+            .bind(error)
+            .execute(pool)
+            .await?;
+        if recorded.rows_affected() == 1 {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("a migration named {unique} already exists")
+}
+
+/// Refuse a push named as a migration already recorded here, applied, failed or rolled back:
+/// history is looked up by name (`migrations --name`), so two rows cannot share one. Asked before
+/// planning, and again under the engine's lock before anything is written.
+pub async fn assert_name_unused<'e, E>(executor: E, name: &str) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let sql = format!(
+        "SELECT status || CASE WHEN rolled_back THEN ', rolled back' ELSE '' END \
+         FROM {SCHEMA}.migrations WHERE name = $1"
+    );
+    let found: Option<String> = match sqlx::query_scalar(&sql)
         .bind(name)
-        .bind(hash)
-        .bind(env!("ENGINE_VERSION"))
-        .bind(sql_up)
-        .bind(error)
-        .execute(pool)
-        .await?;
-    Ok(())
+        .fetch_optional(executor)
+        .await
+    {
+        Ok(found) => found,
+        // No history yet: every name is free.
+        Err(e) if sql_state(&e).as_deref() == Some("42P01") => None,
+        Err(e) => return Err(e).context("look up the migration name"),
+    };
+    match found {
+        Some(status) => anyhow::bail!(
+            "A migration named \"{name}\" is already recorded here ({status}), so nothing was \
+             applied. Give this push a name of its own, or leave the name out for a generated one."
+        ),
+        None => Ok(()),
+    }
 }
 
 /// Roll back an in-flight push transaction and best-effort record a failed migration row.
