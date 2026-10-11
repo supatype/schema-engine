@@ -1,0 +1,31 @@
+{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "OrganisationAccountWithAVeryLongDescriptiveName",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true, "default": { "kind": "genRandomUuid" }, "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "title": { "kind": "text", "required": true, "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+      },
+      "options": { "timestamps": true, "softDelete": false },
+      "annotations": { "db": { "tableName": "organisation_accounts_with_a_very_long_descriptive_name_xx" } }
+    },
+    {
+      "name": "MembershipInvitationRecordArchive",
+      "fields": {
+        "id": { "kind": "uuid", "primaryKey": true, "required": true, "default": { "kind": "genRandomUuid" }, "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+        "invitation_reference_code_for_external_auditing": { "kind": "text", "required": true, "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+        "invitingOrganisationAdministratorAccountId": {
+          "kind": "relation", "cardinality": "belongsTo", "target": "OrganisationAccountWithAVeryLongDescriptiveName", "onDelete": "cascade",
+          "annotations": { "db": { "foreignKey": "inviting_organisation_administrator_account_id" } }
+        }
+      },
+      "options": { "timestamps": true, "softDelete": false },
+      "annotations": { "db": {
+        "tableName": "membership_invitation_records_archive_for_compliance",
+        "indexes": [ { "fields": ["inviting_organisation_administrator_account_id"], "unique": false, "using": "btree" },
+                     { "fields": ["invitation_reference_code_for_external_auditing", "inviting_organisation_administrator_account_id"], "unique": false, "using": "btree" } ]
+      } }
+    }
+  ]
+}

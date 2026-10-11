@@ -423,10 +423,11 @@ async fn uniques_on(pool: &PgPool, table: &str) -> Vec<String> {
 }
 
 /// Names never depend on declaration order: a push of the same models in another order changes
-/// nothing. Adding a model whose name clashes with an existing one's is another matter, and
-/// accepted: `order` sorts before `order_item`, so it takes `order_item_code_key` and the existing
-/// `order_item.code` unique moves to `order_item_code_key1`, as it would had both been pushed
-/// together. Once both exist, reordering them renames nothing.
+/// nothing. Adding a model whose name clashes with an existing one's renames nothing either (F2d):
+/// `order` sorts before `order_item`, so from the schema alone it would take `order_item_code_key`
+/// and move the existing `order_item.code` unique to `order_item_code_key1`. The ledger records
+/// the existing name, so it keeps it and the new `order` takes the digit. Once both exist,
+/// reordering them renames nothing.
 #[tokio::test]
 async fn reordering_models_renames_nothing() {
     common::with_integration_pool(|pool| async move {
@@ -439,22 +440,22 @@ async fn reordering_models_renames_nothing() {
             ["order_item_code_key"]
         );
 
-        // A new clashing model: the one rename this can cause.
+        // A new clashing model: the new constraint takes the digit, the existing one stays.
         push_with_force(&pool, &schema(vec![order_model(), item()])).await;
-        assert_eq!(uniques_on(&pool, "order").await, ["order_item_code_key"]);
+        assert_eq!(uniques_on(&pool, "order").await, ["order_item_code_key1"]);
         assert_eq!(
             uniques_on(&pool, "order_item").await,
-            ["order_item_code_key1"]
+            ["order_item_code_key"]
         );
 
         // Reordered, in either direction: nothing to do.
         for models in [vec![item(), order_model()], vec![order_model(), item()]] {
             assert!(up_to_date(&push(&pool, &schema(models)).await.unwrap()));
         }
-        assert_eq!(uniques_on(&pool, "order").await, ["order_item_code_key"]);
+        assert_eq!(uniques_on(&pool, "order").await, ["order_item_code_key1"]);
         assert_eq!(
             uniques_on(&pool, "order_item").await,
-            ["order_item_code_key1"]
+            ["order_item_code_key"]
         );
     })
     .await;

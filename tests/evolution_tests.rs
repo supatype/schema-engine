@@ -2055,6 +2055,7 @@ fn test_rls_any_rule_generates_or_expression() {
         sso: None,
         publishing: None,
         warnings: vec![],
+        recorded_names: Default::default(),
     };
     let expr = access_rule_to_expr(&ast, &model, &rule, "public");
     assert!(expr.contains("OR"), "any() rule must produce OR expression");

@@ -262,6 +262,9 @@ fn classify(action: &Action, recorded: &BTreeSet<&ObjectKey>, out: &mut DoctorRe
         )),
         Action::Adopt { .. }
         | Action::Keep { .. }
+        | Action::Restate { .. }
+        | Action::Rename { .. }
+        | Action::Rebuild { .. }
         | Action::Replace { .. }
         | Action::Forget { .. } => {}
     }
@@ -285,11 +288,13 @@ fn unmanaged_objects(ast: &SchemaAst, state: &State, plan: &Plan) -> Vec<DoctorI
     let filter = UserObjects {
         schema: &state.db.schema,
         model_tables: ast.models.iter().map(|m| m.table_name()).collect(),
+        // A live object the push takes over under another name is known by that name too.
         known: state
             .ledger
             .iter()
-            .map(|r| &r.key)
-            .chain(plan.actions.iter().map(Action::key))
+            .map(|r| r.key.clone())
+            .chain(plan.actions.iter().map(|a| a.key().clone()))
+            .chain(plan.actions.iter().filter_map(Action::found_as))
             .collect(),
         constraint_names: state
             .db
@@ -316,7 +321,7 @@ fn unmanaged_objects(ast: &SchemaAst, state: &State, plan: &Plan) -> Vec<DoctorI
 struct UserObjects<'a> {
     schema: &'a str,
     model_tables: HashSet<&'a str>,
-    known: BTreeSet<&'a ObjectKey>,
+    known: BTreeSet<ObjectKey>,
     /// Primary key and unique constraints, whose indexes are theirs, not separate objects.
     constraint_names: HashSet<(&'a str, &'a str)>,
 }

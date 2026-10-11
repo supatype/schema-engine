@@ -18,6 +18,7 @@
 //!    It first re-reads the ledger and the live objects inside that transaction and refuses if
 //!    they are not what [`plan`] decided against.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
@@ -98,7 +99,7 @@ impl std::error::Error for EngineBusy {}
 
 /// What a push has read and decided, before anything is written.
 pub struct Plan<'a> {
-    pub ast: &'a SchemaAst,
+    pub ast: Cow<'a, SchemaAst>,
     pub schema: String,
     /// The CLI may edit this between `prepare` and `apply` (rename confirmations).
     pub diff: DiffOutput,
@@ -188,7 +189,7 @@ impl Plan<'_> {
             &self.reconcile.actions,
             force,
             &self.schema,
-            self.ast,
+            &self.ast,
         )
     }
 }
@@ -354,7 +355,8 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
     Ok(Plan {
-        ast,
+        // Rendered with the names the ledger records, as the decision was (F2d).
+        ast: with_recorded_names(ast, &state.ledger, schema),
         schema: schema.to_string(),
         diff,
         reconcile,
@@ -371,17 +373,56 @@ pub struct Decision {
     pub desired: Vec<crate::desired::DesiredObject>,
 }
 
+/// The schema a state was read from. A state built by hand (a test) may not name its schema.
+fn project_schema(state: &State) -> &str {
+    match state.db.schema.as_str() {
+        "" => "public",
+        named => named,
+    }
+}
+
+/// `ast` with the names the ledger records for its keys, checks and indexes, which keep them
+/// (F2d), or `ast` itself when the ledger records none. A released row is the user's, and its name
+/// is not one of ours.
+pub fn with_recorded_names<'a>(
+    ast: &'a SchemaAst,
+    ledger: &[LedgerRow],
+    schema: &str,
+) -> Cow<'a, SchemaAst> {
+    let mut recorded = crate::managed::RecordedNames::default();
+    for row in ledger
+        .iter()
+        .filter(|r| r.key.schema == schema && r.status != ledger::Status::Released)
+    {
+        let group = match row.key.kind {
+            ObjectKind::PrimaryKey => "pkey",
+            ObjectKind::Unique => "key",
+            ObjectKind::ForeignKey => "fkey",
+            ObjectKind::Check => "check",
+            ObjectKind::Index => "index",
+            _ => continue,
+        };
+        let columns = reconcile::parse_definition(&row.live_def)
+            .get("columns")
+            .copied();
+        recorded.record(&row.key.parent, group, &row.key.name, columns);
+    }
+    if recorded.is_empty() {
+        return Cow::Borrowed(ast);
+    }
+    let mut ast = ast.clone();
+    ast.recorded_names = recorded;
+    Cow::Owned(ast)
+}
+
 /// [`Decision`] without asking the database anything: an unstamped same-named check the database
 /// would deparse to ours is still a conflict here. `previous` is the schema of the last push, for
 /// telling a renamed table or column from a dropped and added one.
 pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> Result<Decision> {
-    let kept = serials_kept(ast, &state.db);
-    let ast = kept.as_ref().unwrap_or(ast);
-    // A state built by hand (a test) may not name its schema.
-    let schema = match state.db.schema.as_str() {
-        "" => "public",
-        named => named,
-    };
+    let schema = project_schema(state);
+    let recorded = with_recorded_names(ast, &state.ledger, schema);
+    let kept = serials_kept(&recorded, &state.db);
+    let ast = kept.as_ref().unwrap_or(&recorded);
     let mut diff = differ::diff_with_previous(ast, &state.db, previous)?;
     // D4: the column differ drops only a column the ledger records as ours. One someone added to
     // a managed table, one released with `adopt --release`, or one an older engine made that this
@@ -437,11 +478,27 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     reconcile.actions.extend(previously_declared_columns(
         state, previous, &desired, schema,
     ));
+    diff.warnings.extend(rebuild_warnings(&reconcile));
     Ok(Decision {
         diff,
         reconcile,
         desired,
     })
+}
+
+/// F2(a), said in the plan: each foreign key the push drops and makes again, unchanged, because
+/// the key it references is rebuilt.
+fn rebuild_warnings(plan: &reconcile::Plan) -> Vec<String> {
+    plan.actions
+        .iter()
+        .filter_map(|action| match action {
+            reconcile::Action::Rebuild { key, because, .. } => Some(format!(
+                "{key} references {because}, which this push drops and makes again: the foreign \
+                 key is dropped before it and made again after it, unchanged"
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `ast` with each `AutoIncrement` field whose column is a live `SERIAL` declared as the serial it
@@ -638,10 +695,7 @@ async fn upgrade_hand_edits(
         decision.diff.warnings.push(warning);
         return;
     };
-    let schema = match state.db.schema.as_str() {
-        "" => "public",
-        named => named,
-    };
+    let schema = project_schema(state);
     let plan = field_views::field_view_plan(previous, &state.db);
     let fields = match decision.diff.field_masking {
         FieldMaskingTier::Views => FieldEnforcement::Views(&plan),
@@ -1060,6 +1114,7 @@ fn reconcile_desired(
 ) -> Result<reconcile::Plan> {
     let created_by_parent = created_by_parent(diff, schema, ast)?;
     let dropped_tables = dropped_tables(diff, schema);
+    let renamed_tables = renamed_tables(diff, schema);
     Ok(reconcile::reconcile(reconcile::Inputs {
         desired,
         ledger,
@@ -1068,8 +1123,60 @@ fn reconcile_desired(
         dropped_tables: &dropped_tables,
         location,
         named_by_the_engine,
+        renamed_tables: &renamed_tables,
         kinds: MOVED_KINDS,
     }))
+}
+
+/// Refuse when the reconcile renames objects with a table rename the diff no longer holds: the CLI
+/// may edit the diff between `prepare` and `apply` (a declined rename), and those renames would then
+/// run against a table that was never renamed. Planning again decides them against the diff as it
+/// is.
+fn assert_renames_still_planned(plan: &Plan<'_>) -> Result<()> {
+    let renamed = renamed_tables(&plan.diff, &plan.schema);
+    let stale: Vec<String> = plan
+        .reconcile
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            reconcile::Action::Rename { key, from, .. }
+                if renamed
+                    .iter()
+                    .all(|(table, to)| table.name != from.parent || *to != key.parent) =>
+            {
+                Some(from.to_string())
+            }
+            _ => None,
+        })
+        .collect();
+    if stale.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "This push was planned with a table rename that is no longer part of it, so nothing was \
+         applied ({}). Run the push again to plan it against the renames you confirmed.",
+        stale.join(", ")
+    )
+}
+
+/// The tables the migration renames, keyed by their key under the old name, with the new name, so
+/// the reconcile renames what is on them rather than dropping and making it again.
+fn renamed_tables(diff: &DiffOutput, schema: &str) -> BTreeMap<ObjectKey, String> {
+    diff.operations
+        .iter()
+        .filter_map(|op| match op {
+            Operation::RenameTable { from, to, .. } => Some((
+                ObjectKey {
+                    kind: ObjectKind::Table,
+                    schema: schema.to_string(),
+                    parent: String::new(),
+                    name: from.clone(),
+                },
+                to.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Legacy ownership by engine naming (section 7): an older engine stamped nothing and the ledger
@@ -1105,6 +1212,9 @@ fn named_by_the_engine(
             named.extend(objects.into_iter().map(|d| d.key).filter(engine_named));
         }
     }
+    // And the names 0.6.0 gave what Postgres cut to 63 bytes, which no name this engine
+    // chooses matches (F8).
+    named.extend(crate::legacy_names::engine_0_6_names(previous, schema));
     named
 }
 
@@ -1127,7 +1237,10 @@ fn with_grants_of_nothing<'k>(
 /// What a live object's location says about whose it is when the ledger has no row (plan 3.4 and
 /// section 5). Only the engine writes labels under its provider or names bucket policies
 /// `storage_<label>_sel|ins|del`, so those are ours outright; the engine's own schemas hold only
-/// what an engine put there.
+/// what an engine put there. Not `api` (F12): it is the schema the API serves, where a project may
+/// keep views and functions of its own, so an object there is ours only when the ledger or the
+/// last push's schema records it ([`named_by_the_engine`]), and anything else under one of our
+/// names is a conflict the push refuses until it is adopted.
 fn location(key: &ObjectKey) -> reconcile::Location {
     let exclusive = match key.kind {
         ObjectKind::SecurityLabel => key.name == rls::MASK_PROVIDER,
@@ -1136,9 +1249,10 @@ fn location(key: &ObjectKey) -> reconcile::Location {
         }
         _ => false,
     };
+    let schema = key.schema.as_str();
     if exclusive {
         reconcile::Location::Exclusive
-    } else if catalog::OWNED_SCHEMAS.contains(&key.schema.as_str()) {
+    } else if catalog::OWNED_SCHEMAS.contains(&schema) && schema != field_views::VIEW_SCHEMA {
         reconcile::Location::Owned
     } else {
         reconcile::Location::Neutral
@@ -1226,6 +1340,7 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
             conflicts.join(", ")
         );
     }
+    assert_renames_still_planned(&plan)?;
 
     // Plan 3.5: access changed outside Supatype is put back only with consent.
     if !opts.overwrite_drift {
@@ -1258,12 +1373,12 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
 async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     // Rendered before anything is applied, so a schema whose versioned models have no stated
     // visibility fails the push rather than half-applying it.
-    let versions_sql = versions::render_versions_layer(plan.ast, &plan.schema)?;
-    let storage_sql = storage::generate(plan.ast)?;
+    let versions_sql = versions::render_versions_layer(&plan.ast, &plan.schema)?;
+    let storage_sql = storage::generate(&plan.ast)?;
     // AST-only changes (widgets, labels) still need admin_config and the snapshot so Studio and
     // tooling see the latest schema without a DDL migration.
-    let admin_cfg = admin::generate(plan.ast)?;
-    let schema_snap = serde_json::to_value(plan.ast)?;
+    let admin_cfg = admin::generate(&plan.ast)?;
+    let schema_snap = serde_json::to_value(&plan.ast)?;
 
     // These are writes too: under the engine's lock like any other, and only to the database the
     // plan found up to date.
@@ -1274,6 +1389,7 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
         .await
         .context("Failed to re-read the database before applying")?;
     plan.inputs.assert_current(&now)?;
+    restate_rows(&mut tx, &plan.reconcile, &now.fingerprints).await?;
 
     (&mut *tx)
         .execute(sqlx::raw_sql(&storage_sql))
@@ -1292,6 +1408,39 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     Ok(Outcome::UpToDate {
         warnings: plan.diff.warnings,
     })
+}
+
+/// F2(c) on a push with nothing to apply: each restated row rewritten to this push's statement,
+/// with the object as the catalog holds it now, so the ledger stops recording an older engine's
+/// wording. No migration changed anything, so no row is linked to one.
+async fn restate_rows(
+    tx: &mut PgConnection,
+    plan: &reconcile::Plan,
+    live: &[ObjectFingerprint],
+) -> Result<()> {
+    let live: BTreeMap<ObjectKey, &ObjectFingerprint> = live.iter().map(|f| (f.key(), f)).collect();
+    let rows: Vec<LedgerRow> = plan
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            reconcile::Action::Restate {
+                key,
+                create_sql,
+                status,
+                ..
+            } => live.get(key).map(|fp| LedgerRow {
+                key: key.clone(),
+                desired_fp: ledger::desired_fingerprint(key.kind, create_sql),
+                desired_sql: create_sql.clone(),
+                live_fp: fp.fingerprint.clone(),
+                live_def: fp.definition.clone(),
+                status: *status,
+                migration_id: None,
+            }),
+            _ => None,
+        })
+        .collect();
+    ledger::upsert(tx, &rows).await
 }
 
 /// Everything rendered for one push, kept together because the failure record needs the same
@@ -1406,8 +1555,8 @@ async fn within_transaction(
         .await
         .context("Failed to introspect after migration")?;
 
-    let schema_snap = serde_json::to_value(plan.ast).ok();
-    let admin_cfg = admin::generate(plan.ast).ok();
+    let schema_snap = serde_json::to_value(&plan.ast).ok();
+    let admin_cfg = admin::generate(&plan.ast).ok();
     let migration_id = migration_history::insert_applied_migration(
         &mut **tx,
         &rendered.name,
@@ -1439,7 +1588,7 @@ async fn within_transaction(
     // already applied in this transaction.
     if let Err(e) = migration_history::record_field_enforcement(
         tx,
-        migration_history::labelled_column_count(plan.ast),
+        migration_history::labelled_column_count(&plan.ast),
     )
     .await
     {
@@ -1447,7 +1596,7 @@ async fn within_transaction(
     }
 
     // Checked last, with the rows just written, so it reads the database as the next push will.
-    let check = differ::integrity::post_push(plan.ast, &after_push(after, tx).await?);
+    let check = differ::integrity::post_push(&plan.ast, &after_push(after, tx).await?);
     if strict && !check.settled {
         bail!(
             "Push rolled back: post-apply schema drift in strict mode ({})",
@@ -1543,6 +1692,8 @@ async fn record_ledger(
             reconcile::RowAfter::Remove => removed.push(key.clone()),
             reconcile::RowAfter::Leave => {}
         }
+        // A renamed object's row under its old name goes; its new one was just written.
+        removed.extend(action.found_as());
     }
     // What each row was before this push, so rolling the push back puts the ledger back too.
     let touched: Vec<ObjectKey> = rows

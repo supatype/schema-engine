@@ -767,6 +767,7 @@ mod tests {
                 dropped_tables: &none,
                 location: |_| Location::Neutral,
                 named_by_the_engine: &none,
+                renamed_tables: &BTreeMap::new(),
                 kinds: &[ObjectKind::Function],
             })
             .actions
