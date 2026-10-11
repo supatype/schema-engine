@@ -15,10 +15,12 @@
 //! PostgREST does not expose, so the data plane cannot read or write it. The reconcile that reads
 //! these rows is [`reconcile`]; this module is only the storage.
 
+pub mod compare;
 pub mod drift;
 pub mod probe;
 pub mod reconcile;
 pub mod undo;
+pub mod unrecorded;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

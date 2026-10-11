@@ -4,9 +4,9 @@
 //! extension reads. The labels were re-asserted on every push, and a sweep cleared every label
 //! under our provider that the push did not re-assert. Each label is a ledger object now: set by
 //! the reconcile, recorded, replaced when its rule changes, put back when it is taken off by hand,
-//! and taken off when its rule goes. A label under our provider with no row is ours by location
-//! (plan section 5): nothing else writes under it, so it is claimed or taken off, as the sweep
-//! took it off.
+//! and taken off when its rule goes. A label under our provider with no row is ours only where the
+//! last push's schema set it (an older engine's): anyone with the extension can write under the
+//! provider, and taking a person's own mask off would unmask the column (F15 (b), E23).
 
 mod common;
 
@@ -187,10 +187,12 @@ async fn a_label_taken_off_by_hand_is_put_back() {
 }
 
 /// What an older engine left: the labels it set, and no rows. The one the schema still asks for
-/// is claimed without being touched; one on a column no rule names is taken off, as the sweep
-/// took it off, and a rollback would put it back as it was.
+/// is claimed without being touched. One someone set by hand, on a column no rule of the last
+/// push's schema names, is theirs and left alone (F15 (b), E23). Once the rule goes from the
+/// schema, the label the last push's schema set is taken off, as the sweep took it off, and a
+/// rollback would put it back as it was.
 #[tokio::test]
-async fn labels_under_our_provider_with_no_row_are_ours() {
+async fn labels_under_our_provider_with_no_row_are_ours_only_where_a_push_set_them() {
     common::with_integration_pool(|pool| async move {
         if !common::mask_extension_available(&pool).await {
             return;
@@ -213,49 +215,68 @@ async fn labels_under_our_provider_with_no_row_are_ours() {
             .iter()
             .filter(|a| is_label(a))
             .collect();
-        assert_eq!(labels.len(), 2, "{labels:?}");
-        let kept = labels
-            .iter()
-            .find(|a| a.key().parent == "employees.salary")
-            .unwrap();
+        assert_eq!(labels.len(), 1, "{labels:?}");
+        let kept = labels[0];
+        assert_eq!(kept.key().parent, "employees.salary");
         assert!(
             matches!(kept, Action::Adopt { .. }) && kept.sql().is_empty(),
             "the label the schema asks for is claimed as it is: {kept:?}"
         );
-        let stale = labels
-            .iter()
-            .find(|a| a.key().parent == "employees.user_id")
+        push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
             .unwrap();
+        assert!(live_label(&pool, "user_id").await.is_some());
+        assert_eq!(labelled(&pool).await, ["employees.salary"]);
+
+        // An older engine's label, no row, and the rule gone from the schema: dropped.
+        exec(
+            &pool,
+            "DELETE FROM _supatype.managed_objects WHERE kind = 'security_label'",
+        )
+        .await
+        .unwrap();
+        let none = employees(SalaryRule::None);
+        let plan = push::prepare(&pool, &none, "public").await.unwrap();
+        let stale = plan
+            .reconcile
+            .actions
+            .iter()
+            .find(|a| is_label(a) && a.key().parent == "employees.salary")
+            .expect("the label the last push set");
         assert!(matches!(stale, Action::Drop { .. }), "{stale:?}");
         assert!(
             stale
                 .rollback_sql()
                 .iter()
-                .any(|s| s.contains(r#""employees"."user_id" IS 'MASK READ"#)),
+                .any(|s| s.contains(r#""employees"."salary" IS 'MASK READ"#)),
             "the rollback restores the label it took off: {:?}",
             stale.rollback_sql()
         );
-
+        assert!(
+            !plan
+                .reconcile
+                .actions
+                .iter()
+                .any(|a| is_label(a) && a.key().parent == "employees.user_id"),
+            "the label set by hand is not Supatype's"
+        );
         push::apply(&pool, plan, push::ApplyOptions::default())
             .await
             .unwrap();
-        assert_eq!(live_label(&pool, "user_id").await, None);
-        assert_eq!(
-            live_label(&pool, "salary").await.as_deref(),
-            Some(READ_LABEL)
-        );
-        assert_eq!(labelled(&pool).await, ["employees.salary"]);
-        assert!(up_to_date(&push(&pool, &read).await.unwrap()));
+        assert_eq!(live_label(&pool, "salary").await, None);
+        assert!(live_label(&pool, "user_id").await.is_some());
     })
     .await;
 }
 
-/// A label under our provider on a table rather than a column is ours by location like any other,
-/// so the reconcile drops it. Its key has no `table.column` parent, and rendering the drop
-/// panicked ("is on the reconcile with no drop statement") instead of taking the label off.
+/// A label under our provider on a table rather than a column, which the ledger records, is
+/// dropped when nothing declares it. Its key has no `table.column` parent, and rendering the drop
+/// panicked ("is on the reconcile with no drop statement") instead of taking the label off. With
+/// no row it is someone else's, and left alone (F15 (b)).
 #[test]
 fn a_table_label_under_our_provider_is_dropped_not_a_panic() {
     use supatype_engine::introspector::catalog::{CatalogState, DbSecurityLabel};
+    use supatype_engine::introspector::fingerprint::ObjectKey;
     use supatype_engine::state::database_state::DatabaseState;
 
     let ast = parser::parse(r#"{ "astVersion": 2, "models": [] }"#).unwrap();
@@ -273,14 +294,41 @@ fn a_table_label_under_our_provider_is_dropped_not_a_panic() {
         schema: "public".into(),
         ..DatabaseState::default()
     };
-    let state = push::State::of(db, catalog, vec![]);
-    let decision = push::decide(&ast, &state, None).unwrap();
+    let is_theirs =
+        |a: &Action| a.key().kind == ObjectKind::SecurityLabel && a.key().parent == "theirs";
+
+    let unrecorded = push::State::of(db.clone(), catalog.clone(), vec![]);
+    let decision = push::decide(&ast, &unrecorded, None).unwrap();
     assert!(
-        decision
-            .reconcile
-            .actions
-            .iter()
-            .any(|a| a.key().kind == ObjectKind::SecurityLabel && a.key().parent == "theirs"),
+        !decision.reconcile.actions.iter().any(is_theirs),
+        "a label no row records was claimed: {:?}",
+        decision.reconcile.actions
+    );
+
+    let live = &unrecorded.fingerprints;
+    let label = live
+        .iter()
+        .find(|f| f.kind == ObjectKind::SecurityLabel)
+        .expect("the label is read");
+    let row = LedgerRow {
+        key: ObjectKey {
+            kind: ObjectKind::SecurityLabel,
+            schema: "public".into(),
+            parent: "theirs".into(),
+            name: "supatype".into(),
+        },
+        desired_fp: String::new(),
+        desired_sql: "SECURITY LABEL FOR supatype ON TABLE \"public\".\"theirs\" IS 'MASK READ x';"
+            .into(),
+        live_fp: label.fingerprint.clone(),
+        live_def: label.definition.clone(),
+        status: ledger::Status::Managed,
+        migration_id: None,
+    };
+    let recorded = push::State::of(db, catalog, vec![row]);
+    let decision = push::decide(&ast, &recorded, None).unwrap();
+    assert!(
+        decision.reconcile.actions.iter().any(is_theirs),
         "{:?}",
         decision.reconcile.actions
     );

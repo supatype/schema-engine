@@ -2116,6 +2116,7 @@ ALTER TABLE "public"."speaker" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."sponsor" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."talk" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."ticket" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."_global_site_settings" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2132,6 +2133,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."attendee" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2147,6 +2149,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."chat_message" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2162,6 +2165,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."page" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2178,6 +2182,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."room" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2194,6 +2199,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."speaker" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2210,6 +2216,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."sponsor" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2226,6 +2233,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."talk" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -2242,6 +2250,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."ticket" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

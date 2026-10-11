@@ -1760,7 +1760,11 @@
         "grantee": "anon",
         "privileges": [
           "INSERT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1771,7 +1775,11 @@
           "INSERT",
           "SELECT",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1786,7 +1794,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1801,7 +1813,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1812,7 +1828,11 @@
           "INSERT",
           "SELECT",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1827,7 +1847,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1835,7 +1859,11 @@
         "grantee": "anon",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1846,7 +1874,11 @@
           "INSERT",
           "SELECT",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1861,7 +1893,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       }
     ],
     "columnGrants": [],

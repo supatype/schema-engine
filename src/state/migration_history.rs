@@ -491,11 +491,30 @@ fn snapshot_hash(schema_snapshot: &serde_json::Value) -> String {
 }
 
 /// The schema as it was at the last push, decoded. History, not a cache of the database: what
-/// tells a rename apart from a drop and an add.
-pub async fn load_latest_schema_ast(pool: &PgPool) -> Option<crate::parser::ast::SchemaAst> {
-    load_latest_schema_snapshot(pool)
-        .await
-        .and_then(|v| serde_json::from_value(v).ok())
+/// tells a rename apart from a drop and an add, and what an older engine's access objects are
+/// compared with (`ledger::unrecorded`). A snapshot that does not decode is said to, with the
+/// error (F10), rather than read as no snapshot; and no snapshot after a push was applied is told
+/// from a database nothing was ever pushed to, since only the first means something is unknown.
+pub async fn load_previous_schema(pool: &PgPool) -> crate::ledger::unrecorded::Previous {
+    use crate::ledger::unrecorded::Previous;
+    match load_latest_schema_snapshot(pool).await {
+        Some(snapshot) => match serde_json::from_value(snapshot) {
+            Ok(ast) => Previous::Found(Box::new(ast)),
+            Err(e) => Previous::Unreadable(e.to_string()),
+        },
+        None if any_push_applied(pool).await => Previous::Missing,
+        None => Previous::NeverPushed,
+    }
+}
+
+/// Whether a push was applied here and not rolled back. No history table is no push.
+async fn any_push_applied(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(&format!(
+        "SELECT EXISTS (SELECT 1 FROM {SCHEMA}.migrations WHERE rolled_back = false)"
+    ))
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
 }
 
 /// Latest applied schema AST snapshot (for kind-aware diffs when PG types are unchanged).

@@ -262,9 +262,20 @@ pub enum Action {
     Drop {
         key: ObjectKey,
         recorded_sql: Option<String>,
+        /// It was also changed outside Supatype since the last apply: dropping it discards that
+        /// change, so where it decides access a push asks first, as for a replacement (F15 (c)).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drifted: Option<HandEdit>,
     },
-    /// Owned, no longer desired, already gone. The row goes.
-    Forget { key: ObjectKey },
+    /// Owned, no longer desired, already gone, or going with the table the push drops. The row
+    /// goes.
+    Forget {
+        key: ObjectKey,
+        /// Going with its table, and changed outside Supatype since the last apply: the drop of
+        /// the table discards that change, so where it decides access a push asks first.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drifted: Option<HandEdit>,
+    },
     /// `released`: the user took it back. Left alone whatever the schema says.
     Released { key: ObjectKey },
 }
@@ -277,6 +288,10 @@ pub struct HandEdit {
     pub live_def: String,
     /// The live fingerprint, which `doctor --rebaseline` records as the new baseline.
     pub live_fp: String,
+    /// Why the object could not be compared with what Supatype made, when it could not: it is
+    /// then treated as changed (F16, fail closed), and `recorded_def` says it was not checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unchecked: Option<String>,
 }
 
 /// What an action leaves in the ledger once applied.
@@ -301,8 +316,20 @@ impl Action {
             | Action::Drift { key, .. }
             | Action::Keep { key, .. }
             | Action::Drop { key, .. }
-            | Action::Forget { key }
+            | Action::Forget { key, .. }
             | Action::Released { key } => key,
+        }
+    }
+
+    /// The change made outside Supatype that this action overwrites or discards along with an
+    /// owned object the schema also changed or stopped declaring: a `Replace`, `Drop` or `Forget`
+    /// whose object was edited by hand. A `Drift` is the edit itself, and carries it as its own.
+    pub fn hand_edit(&self) -> Option<&HandEdit> {
+        match self {
+            Action::Replace { drifted, .. }
+            | Action::Drop { drifted, .. }
+            | Action::Forget { drifted, .. } => drifted.as_ref(),
+            _ => None,
         }
     }
 
@@ -704,6 +731,16 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
     }
 }
 
+/// What changed outside Supatype since `row` was recorded, if the object `live` reads otherwise.
+fn hand_edit(row: &LedgerRow, live: &ObjectFingerprint) -> Option<HandEdit> {
+    (live.fingerprint != row.live_fp).then(|| HandEdit {
+        recorded_def: row.live_def.clone(),
+        live_def: live.definition.clone(),
+        live_fp: live.fingerprint.clone(),
+        unchecked: None,
+    })
+}
+
 pub fn reconcile(inputs: Inputs<'_>) -> Plan {
     let kinds: BTreeSet<ObjectKind> = inputs.kinds.iter().copied().collect();
     let desired: BTreeMap<&ObjectKey, &DesiredObject> = inputs
@@ -757,11 +794,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 if !row.intends(&d.create_sql) {
                     // Decided before drift, since the schema changed too; but a hand edit it would
                     // overwrite is still one, and must not escape the consent drift needs.
-                    let drifted = (l.fingerprint != row.live_fp).then(|| HandEdit {
-                        recorded_def: row.live_def.clone(),
-                        live_def: l.definition.clone(),
-                        live_fp: l.fingerprint.clone(),
-                    });
+                    let drifted = hand_edit(row, l);
                     changes.push(Action::Replace {
                         key,
                         create_sql: d.create_sql.clone(),
@@ -803,7 +836,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 })
             }
             // Never removed (D9): a row nothing desires any more is forgotten, not undone.
-            (None, Some(_))
+            (None, Some(l))
                 if !goes_with_its_table(&key)
                     && !never_removed(key.kind)
                     && !altered_by_the_differ(key.kind) =>
@@ -811,9 +844,14 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 removals.push(Action::Drop {
                     key,
                     recorded_sql: Some(row.desired_sql.clone()),
+                    drifted: hand_edit(row, l),
                 })
             }
-            (None, _) => removals.push(Action::Forget { key }),
+            (None, Some(l)) if goes_with_its_table(&key) => removals.push(Action::Forget {
+                drifted: hand_edit(row, l),
+                key,
+            }),
+            (None, _) => removals.push(Action::Forget { key, drifted: None }),
         }
     }
 
@@ -906,6 +944,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         removals.push(Action::Drop {
             key: key.clone(),
             recorded_sql: l.create_sql.clone(),
+            drifted: None,
         });
     }
 
@@ -1234,7 +1273,13 @@ mod tests {
         }
 
         let forgotten = run(&[], std::slice::from_ref(&r), &[], &[]);
-        assert_eq!(forgotten, [Action::Forget { key: d.key.clone() }]);
+        assert_eq!(
+            forgotten,
+            [Action::Forget {
+                key: d.key.clone(),
+                drifted: None
+            }]
+        );
 
         let released = row(&d, &l, Status::Released);
         let tightened = desired("posts_title_check", "length(title) > 3");
@@ -1320,7 +1365,13 @@ mod tests {
             kinds: &[ObjectKind::Check],
         });
         // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.
-        assert_eq!(plan.actions, [Action::Forget { key: d.key.clone() }]);
+        assert_eq!(
+            plan.actions,
+            [Action::Forget {
+                key: d.key.clone(),
+                drifted: None
+            }]
+        );
         assert!(plan.actions.iter().all(|a| a.sql().is_empty()));
     }
 
@@ -1361,7 +1412,7 @@ mod tests {
             named_by_the_engine: &BTreeSet::new(),
             kinds: &[ObjectKind::RlsAttributes],
         });
-        assert_eq!(plan.actions, [Action::Forget { key }]);
+        assert_eq!(plan.actions, [Action::Forget { key, drifted: None }]);
         assert!(plan.actions.iter().all(|a| a.sql().is_empty()));
     }
 

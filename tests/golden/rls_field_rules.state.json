@@ -2148,7 +2148,11 @@
         "privileges": [
           "INSERT",
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "api",
@@ -2159,195 +2163,14 @@
           "INSERT",
           "SELECT",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "api",
-        "table": "categories",
-        "grantee": "supatype_admin",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "MAINTAIN",
-          "REFERENCES",
-          "SELECT",
-          "TRIGGER",
-          "TRUNCATE",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "comments",
-        "grantee": "authenticated",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "comments",
-        "grantee": "service_role",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "comments",
-        "grantee": "supatype_admin",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "MAINTAIN",
-          "REFERENCES",
-          "SELECT",
-          "TRIGGER",
-          "TRUNCATE",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "posts",
-        "grantee": "anon",
-        "privileges": [
-          "SELECT"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "posts",
-        "grantee": "authenticated",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "posts",
-        "grantee": "service_role",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "posts",
-        "grantee": "supatype_admin",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "MAINTAIN",
-          "REFERENCES",
-          "SELECT",
-          "TRIGGER",
-          "TRUNCATE",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "tags",
-        "grantee": "anon",
-        "privileges": [
-          "INSERT",
-          "SELECT"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "tags",
-        "grantee": "authenticated",
-        "privileges": [
-          "INSERT",
-          "SELECT"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "tags",
-        "grantee": "service_role",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "tags",
-        "grantee": "supatype_admin",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "MAINTAIN",
-          "REFERENCES",
-          "SELECT",
-          "TRIGGER",
-          "TRUNCATE",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "users",
-        "grantee": "anon",
-        "privileges": [
-          "SELECT"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "users",
-        "grantee": "authenticated",
-        "privileges": [
-          "DELETE",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "users",
-        "grantee": "service_role",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "SELECT",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "api",
-        "table": "users",
-        "grantee": "supatype_admin",
-        "privileges": [
-          "DELETE",
-          "INSERT",
-          "MAINTAIN",
-          "REFERENCES",
-          "SELECT",
-          "TRIGGER",
-          "TRUNCATE",
-          "UPDATE"
-        ]
-      },
-      {
-        "schema": "public",
         "table": "categories",
         "grantee": "supatype_admin",
         "privileges": [
@@ -2359,7 +2182,260 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "comments",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "comments",
+        "grantee": "service_role",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "comments",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "posts",
+        "grantee": "anon",
+        "privileges": [
+          "SELECT"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "posts",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "posts",
+        "grantee": "service_role",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "posts",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "tags",
+        "grantee": "anon",
+        "privileges": [
+          "INSERT",
+          "SELECT"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "tags",
+        "grantee": "authenticated",
+        "privileges": [
+          "INSERT",
+          "SELECT"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "tags",
+        "grantee": "service_role",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "tags",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "users",
+        "grantee": "anon",
+        "privileges": [
+          "SELECT"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "users",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "SELECT",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "users",
+        "grantee": "service_role",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "api",
+        "table": "users",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2374,7 +2450,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2389,7 +2469,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2404,7 +2488,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2419,7 +2507,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       }
     ],
     "columnGrants": [],

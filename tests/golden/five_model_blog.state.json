@@ -1825,7 +1825,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1840,7 +1844,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1855,7 +1863,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1870,7 +1882,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1885,7 +1901,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       }
     ],
     "columnGrants": [],

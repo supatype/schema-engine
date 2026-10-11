@@ -1346,6 +1346,25 @@
     "tableGrants": [
       {
         "schema": "public",
+        "table": "course_tags",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "public",
         "table": "courses",
         "grantee": "supatype_admin",
         "privileges": [
@@ -1357,7 +1376,30 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "public",
+        "table": "enrollments",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1372,7 +1414,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -1387,7 +1433,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       }
     ],
     "columnGrants": [],

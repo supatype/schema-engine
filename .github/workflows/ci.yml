@@ -220,6 +220,8 @@ jobs:
             --test identity_generated_db_tests \
             --test table_ledger_tests \
             --test rebaseline_tests \
+            --test rebaseline_preview_tests \
+            --test security_consent_tests \
             --test rollback_ledger_tests \
             --test object_names_tests \
             --test sql_quoting_tests

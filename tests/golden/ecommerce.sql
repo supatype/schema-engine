@@ -521,6 +521,7 @@ ALTER TABLE "public"."customers" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."order_items" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."orders" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."products" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."customers" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -537,6 +538,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."order_items" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -551,6 +553,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."orders" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -566,6 +569,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."products" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

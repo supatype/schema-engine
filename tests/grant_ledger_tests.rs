@@ -113,7 +113,7 @@ async fn each_role_holds_exactly_what_the_rules_allow_and_nothing_else() {
             held(&pool, "authenticated").await,
             ["INSERT", "SELECT", "UPDATE"]
         );
-        assert_eq!(recorded(&pool).await, ["anon", "authenticated"]);
+        assert_eq!(recorded(&pool).await, ["anon", "authenticated", "PUBLIC"]);
         assert!(up_to_date(&push(&pool, &readable()).await.unwrap()));
 
         // Nothing declared: both roles hold nothing, which is recorded and stays up to date.
@@ -121,7 +121,7 @@ async fn each_role_holds_exactly_what_the_rules_allow_and_nothing_else() {
         push(&pool, &closed).await.unwrap();
         assert!(held(&pool, "anon").await.is_empty());
         assert!(held(&pool, "authenticated").await.is_empty());
-        assert_eq!(recorded(&pool).await, ["anon", "authenticated"]);
+        assert_eq!(recorded(&pool).await, ["anon", "authenticated", "PUBLIC"]);
         let again = push(&pool, &closed).await.unwrap();
         assert!(up_to_date(&again), "{again:?}");
     })
@@ -166,7 +166,7 @@ async fn a_grant_to_another_role_is_never_ours() {
 
         push(&pool, &posts(json!({}))).await.unwrap();
         assert_eq!(held(&pool, "report_reader").await, ["SELECT"]);
-        assert_eq!(recorded(&pool).await, ["anon", "authenticated"]);
+        assert_eq!(recorded(&pool).await, ["anon", "authenticated", "PUBLIC"]);
     })
     .await;
 }

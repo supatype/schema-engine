@@ -16,8 +16,13 @@
 //! merely leaves today's behaviour in place. `service_role` is never touched: it is
 //! the escape hatch that has to keep working when everything else is locked down.
 
+use std::collections::BTreeMap;
+
+use crate::differ::rls_diff::intersect_access;
 use crate::parser::accessors::{column_names_for, db_table_name, platform_access};
-use crate::parser::ast::{AccessRule, MembershipSource, ModelAst, Operand, SchemaAst};
+use crate::parser::ast::{
+    AccessAst, AccessRule, JunctionTableAst, MembershipSource, ModelAst, Operand, SchemaAst,
+};
 use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 
 /// Whether an unauthenticated caller could ever satisfy a rule.
@@ -81,7 +86,7 @@ pub const GRANTED_ROLES: [&str; 2] = ["anon", "authenticated"];
 
 /// The table privileges the access rules govern, in the order Postgres sorts their names, which
 /// is how the catalog reports a privilege set.
-const RULED: [&str; 4] = ["DELETE", "INSERT", "SELECT", "UPDATE"];
+pub const RULED: [&str; 4] = ["DELETE", "INSERT", "SELECT", "UPDATE"];
 
 /// Everything one API role may do on one model table: the ledger object (Phase 4.7c, D7).
 ///
@@ -122,23 +127,27 @@ impl TableGrant {
     /// Revoke everything, then grant exactly this set, applied only if the role exists: a
     /// self-hosted database may not have the API roles at all, and a `GRANT` to a role that does
     /// not exist would abort the whole migration. One block per role and table, so the ledger
-    /// attributes it to one object (`crate::desired::statements`).
+    /// attributes it to one object (`crate::desired::statements`). `PUBLIC` always exists and is
+    /// never granted anything, so its object is the one statement that takes everything away.
     pub fn create_sql(&self, schema: &str) -> String {
         let target = quote_qualified(schema, &self.table);
         let role = self.role;
+        if role == PUBLIC {
+            return format!("REVOKE ALL PRIVILEGES ON {target} FROM PUBLIC;");
+        }
         let mut body = execute(&format!("REVOKE ALL PRIVILEGES ON {target} FROM {role}"));
         if !self.privileges.is_empty() {
             let grant = format!("GRANT {} ON {target} TO {role}", self.privileges.join(", "));
             body.push_str(&execute(&grant));
         }
         for (op, excluded) in &self.narrowed {
-            let writable: Vec<&str> = self
-                .columns
-                .iter()
-                .filter(|c| !excluded.contains(c))
-                .map(String::as_str)
-                .collect();
-            body.push_str(&column_grant(schema, &self.table, op, role, &writable));
+            body.push_str(&column_grant(
+                schema,
+                &self.table,
+                op,
+                role,
+                &self.writable(excluded),
+            ));
         }
         let declare = if self.narrowed.is_empty() {
             ""
@@ -150,22 +159,69 @@ impl TableGrant {
             quote_literal(role)
         )
     }
+
+    /// The declared columns a narrowed privilege is granted on: every one but `excluded`.
+    fn writable(&self, excluded: &[String]) -> Vec<&str> {
+        self.columns
+            .iter()
+            .filter(|c| !excluded.contains(c))
+            .map(String::as_str)
+            .collect()
+    }
+
+    /// The privileges this grant leaves the role holding, as the catalog reports them: those on
+    /// the table, and those on each column a narrowed privilege is granted on, each list sorted.
+    pub fn held(&self) -> (Vec<String>, BTreeMap<String, Vec<String>>) {
+        let table = self.privileges.iter().map(|p| p.to_string()).collect();
+        let mut columns: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (op, excluded) in &self.narrowed {
+            for column in self.writable(excluded) {
+                columns
+                    .entry(column.to_string())
+                    .or_default()
+                    .push(op.to_string());
+            }
+        }
+        for privileges in columns.values_mut() {
+            privileges.sort();
+        }
+        (table, columns)
+    }
+
+    /// A grant of nothing: what `role` holds on `table` where nothing is granted at all.
+    fn nothing(table: &str, role: &'static str) -> TableGrant {
+        TableGrant {
+            table: table.to_string(),
+            role,
+            privileges: Vec::new(),
+            narrowed: Vec::new(),
+            columns: Vec::new(),
+        }
+    }
 }
 
 /// The statement that takes every privilege `role` holds on a table away, guarded on the role and
 /// the table existing: the drop of a [`TableGrant`].
 ///
-/// The role comes from the ledger row, so it is quoted like any other name read back.
+/// The role comes from the ledger row, so it is quoted like any other name read back. `PUBLIC` is
+/// a keyword rather than a role, so it is written bare and needs no guard of its own.
 pub fn revoke_all_sql(schema: &str, table: &str, role: &str) -> String {
     let target = quote_qualified(schema, table);
+    let (guard, grantee) = if role == PUBLIC {
+        (String::new(), PUBLIC.to_string())
+    } else {
+        (
+            format!(
+                "EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {})\n     AND ",
+                quote_literal(role)
+            ),
+            quote_ident(role),
+        )
+    };
     format!(
-        "DO $grants$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {})\n     AND to_regclass({}) IS NOT NULL THEN\n{}  END IF;\nEND\n$grants$;",
-        quote_literal(role),
+        "DO $grants$\nBEGIN\n  IF {guard}to_regclass({}) IS NOT NULL THEN\n{}  END IF;\nEND\n$grants$;",
         quote_literal(&target),
-        execute(&format!(
-            "REVOKE ALL PRIVILEGES ON {target} FROM {}",
-            quote_ident(role)
-        ))
+        execute(&format!("REVOKE ALL PRIVILEGES ON {target} FROM {grantee}"))
     )
 }
 
@@ -174,7 +230,12 @@ fn execute(sql: &str) -> String {
     format!("    EXECUTE {};\n", quote_literal(sql))
 }
 
-/// Every model table's [`TableGrant`] for each API role.
+/// The grantee every role is a member of. A table gives it nothing unless someone grants it, and
+/// a grant to it is a grant to `anon` as much as to anyone (E25), so each model and junction table
+/// records that it holds nothing, and a grant to it is drift on access like any other.
+pub const PUBLIC: &str = "PUBLIC";
+
+/// Every model and junction table's [`TableGrant`] for each API role, and for `PUBLIC`.
 ///
 /// `views` is tier 2 of field masking: the API reads the `api` views, so the privileges follow
 /// them and the base table holds nothing for the API roles, or `Accept-Profile` walks straight
@@ -187,21 +248,102 @@ fn execute(sql: &str) -> String {
 pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
     let mut out = Vec::new();
     for model in &ast.models {
+        let table = db_table_name(model);
         for role in GRANTED_ROLES {
             out.push(if views {
-                TableGrant {
-                    table: db_table_name(model).to_string(),
-                    role,
-                    privileges: Vec::new(),
-                    narrowed: Vec::new(),
-                    columns: Vec::new(),
-                }
+                TableGrant::nothing(table, role)
             } else {
                 model_grant(model, role)
             });
         }
+        out.push(TableGrant::nothing(table, PUBLIC));
+    }
+    for junction in &ast.junction_tables {
+        out.extend(junction_grants(ast, junction));
+        out.push(TableGrant::nothing(&junction.name, PUBLIC));
     }
     out
+}
+
+/// What each API role may do on a many-to-many junction table (E27): what the intersection of its
+/// parents' rules allows, the rule its policies are made from (`differ::rls_diff`), which no
+/// default privilege widens. Without these the table kept whatever the database's default
+/// privileges gave, `TRUNCATE` included. A junction has no fields of its own, so nothing is
+/// narrowed to columns, and tier 2 changes nothing: no view is made over it.
+///
+/// `SELECT` stays wherever another rule reads the junction as a membership source (`Rows`), since
+/// a policy's subquery reads it as the caller and would fail rather than find no row; its own
+/// read policy still decides which rows that subquery sees.
+fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGrant> {
+    let parent = |name: &str| ast.models.iter().find(|m| m.name == name);
+    let derived = match (parent(&junction.model_a), parent(&junction.model_b)) {
+        (Some(a), Some(b)) => intersect_access(a.access(), b.access()),
+        // Unresolved parents leave every operation denied, as its policies do.
+        _ => AccessAst::default(),
+    };
+    let read_by_a_rule = read_as_membership(ast, &junction.name);
+    GRANTED_ROLES
+        .iter()
+        .map(|&role| {
+            let privileges = RULED
+                .into_iter()
+                .filter(|&privilege| {
+                    allowed(role, rule_for(&derived, privilege))
+                        || (privilege == "SELECT" && read_by_a_rule)
+                })
+                .collect();
+            TableGrant {
+                privileges,
+                ..TableGrant::nothing(&junction.name, role)
+            }
+        })
+        .collect()
+}
+
+/// Whether any model's rule, a field rule included, reads `table` as a membership source.
+fn read_as_membership(ast: &SchemaAst, table: &str) -> bool {
+    ast.models.iter().any(|model| {
+        let access = platform_access(model);
+        let fields = access
+            .fields
+            .values()
+            .flat_map(|f| [f.read.as_ref(), f.write.as_ref()]);
+        [
+            access.read.as_ref(),
+            access.create.as_ref(),
+            access.update.as_ref(),
+            access.update_check.as_ref(),
+            access.delete.as_ref(),
+        ]
+        .into_iter()
+        .chain(fields)
+        .flatten()
+        .any(|rule| {
+            crate::generator::sql::rls::membership_index_targets(rule)
+                .iter()
+                .any(|(source, _)| source == table)
+        })
+    })
+}
+
+/// The rule that governs `privilege` under `access`.
+fn rule_for<'a>(access: &'a AccessAst, privilege: &str) -> Option<&'a AccessRule> {
+    match privilege {
+        "SELECT" => access.read.as_ref(),
+        "INSERT" => access.create.as_ref(),
+        "UPDATE" => access.update.as_ref(),
+        _ => access.delete.as_ref(),
+    }
+}
+
+/// Whether `role` keeps the privilege a `rule` governs: `authenticated` whenever the operation is
+/// declared, `anon` only where the rule can reach it.
+fn allowed(role: &str, rule: Option<&AccessRule>) -> bool {
+    match (role, rule) {
+        (_, None) => false,
+        ("anon", Some(rule)) => reachable_by_anon(rule),
+        (_, Some(_)) => true,
+    }
 }
 
 /// What `role` may do on `model`'s table under its rules. `authenticated` keeps a privilege
@@ -210,21 +352,10 @@ pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
 /// rule can reach it.
 fn model_grant(model: &ModelAst, role: &'static str) -> TableGrant {
     let access = platform_access(model);
-    let rule_for = |privilege: &str| match privilege {
-        "SELECT" => access.read.as_ref(),
-        "INSERT" => access.create.as_ref(),
-        "UPDATE" => access.update.as_ref(),
-        _ => access.delete.as_ref(),
-    };
     let mut privileges = Vec::new();
     let mut narrowed = Vec::new();
     for privilege in RULED {
-        let allowed = match (role, rule_for(privilege)) {
-            (_, None) => false,
-            ("anon", Some(rule)) => reachable_by_anon(rule),
-            (_, Some(_)) => true,
-        };
-        if !allowed {
+        if !allowed(role, rule_for(access, privilege)) {
             continue;
         }
         let mut excluded = unwritable_columns(model, privilege, role);

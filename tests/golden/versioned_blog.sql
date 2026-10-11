@@ -1303,6 +1303,7 @@ FOR SELECT USING (
 ALTER TABLE "public"."ledger" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."ledger" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -1318,6 +1319,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."posts" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -1334,6 +1336,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."tags" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

@@ -498,6 +498,22 @@ ALTER TABLE "public"."article_tags" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."articles" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."authors" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."article_tags" FROM PUBLIC;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."article_tags" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."article_tags" FROM authenticated';
+  END IF;
+END
+$grants$;
+REVOKE ALL PRIVILEGES ON "public"."articles" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -514,6 +530,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."authors" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -528,6 +545,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."tags" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

@@ -54,7 +54,7 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
             DesiredObject {
                 structure: structure(&key, &create_sql),
                 drop_sql: key.drop_sql().unwrap_or_default(),
-                security_relevant: super::security_relevant(key.kind),
+                security_relevant: super::security_relevant(&key),
                 depends_on: Vec::new(),
                 key,
                 create_sql,
@@ -65,7 +65,7 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
 
 /// The parts of `create_sql` the catalog will report for `key`, labelled as the fingerprint
 /// labels them (`ObjectKind::labels`).
-fn structure(key: &ObjectKey, create_sql: &str) -> BTreeMap<&'static str, String> {
+pub(crate) fn structure(key: &ObjectKey, create_sql: &str) -> BTreeMap<&'static str, String> {
     // The creating statement, found by a split that knows a `;` inside a dollar-quoted body is
     // not the end of one, and read past its leading comments, which may say anything.
     let statements = split_statements(create_sql);

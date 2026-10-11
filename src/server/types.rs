@@ -62,6 +62,9 @@ pub struct DbRequest {
     pub reclaim: Vec<String>,
     /// For `adopt` with `yes`: the conflicts the preview listed, named the same way. Only these are
     /// adopted, and nothing is if one is no longer a conflict. Absent, every conflict found is.
+    /// For `doctor` with `rebaseline`: the drifted objects the preview listed. The rebaseline
+    /// records only if the drift it finds is exactly these, and otherwise answers 409
+    /// `drift_changed` with `unseen` and `gone`. Absent, whatever drift there is is recorded.
     #[serde(default)]
     pub keys: Option<Vec<String>>,
     /// For `doctor`: record the drift it finds as the new baseline (plan 3.2).
@@ -128,6 +131,11 @@ pub struct ErrorResponse {
     /// The objects a refusal is about, when it is about access changed outside Supatype.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub objects: Option<Vec<crate::ledger::drift::DriftedObject>>,
+    /// For a `drift_changed` refusal: `unseen`, the objects drifted since the rebaseline's preview,
+    /// and `gone`, those the preview listed that are no longer drifted. Boxed so every other
+    /// response does not carry its size.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub drift_changed: Option<Box<crate::inspect::DriftChangedSincePreview>>,
 }
 
 #[derive(Serialize)]

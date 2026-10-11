@@ -24,10 +24,15 @@ pub struct DriftedObject {
     pub recorded: String,
     /// What the catalog holds now; `None` when it was removed.
     pub live: Option<String>,
+    /// Why it could not be compared with what Supatype made, when it could not (F16): it is then
+    /// treated as changed, and `recorded` says it was not checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unchecked: Option<String>,
 }
 
 /// The objects that decide access and were changed or removed outside Supatype, whether the push
-/// puts them back or replaces them because the schema changed them as well.
+/// puts them back, replaces them because the schema changed them as well, or drops them because
+/// the schema no longer declares them or their table (F15 (c)).
 pub fn security_drift(plan: &Plan) -> Vec<DriftedObject> {
     plan.actions
         .iter()
@@ -42,26 +47,27 @@ pub fn security_drift(plan: &Plan) -> Vec<DriftedObject> {
                 key: key.clone(),
                 recorded: recorded_def.clone(),
                 live: Some(live_def.clone()),
-            }),
-            // The schema changed it too, so the reconcile replaces rather than puts back; the
-            // hand edit is overwritten all the same.
-            Action::Replace {
-                key,
-                drifted: Some(edit),
-                ..
-            } if security_relevant(key.kind) => Some(DriftedObject {
-                key: key.clone(),
-                recorded: edit.recorded_def.clone(),
-                live: Some(edit.live_def.clone()),
+                unchecked: None,
             }),
             Action::Recreate {
                 key, create_sql, ..
-            } if security_relevant(key.kind) => Some(DriftedObject {
+            } if security_relevant(key) => Some(DriftedObject {
                 key: key.clone(),
                 recorded: create_sql.clone(),
                 live: None,
+                unchecked: None,
             }),
-            _ => None,
+            // The schema changed it too, so the reconcile replaces or drops it rather than puts
+            // it back; the hand edit is lost all the same.
+            action => action
+                .hand_edit()
+                .filter(|_| security_relevant(action.key()))
+                .map(|edit| DriftedObject {
+                    key: action.key().clone(),
+                    recorded: edit.recorded_def.clone(),
+                    live: Some(edit.live_def.clone()),
+                    unchecked: edit.unchecked.clone(),
+                }),
         })
         .collect()
 }
@@ -78,20 +84,17 @@ impl std::fmt::Display for SecurityDrift {
         let objects = self
             .objects
             .iter()
-            .map(|o| {
-                let what = if o.live.is_some() {
-                    "changed"
-                } else {
-                    "removed"
-                };
-                format!("{} ({what})", o.key)
+            .map(|o| match (&o.unchecked, &o.live) {
+                (Some(reason), _) => format!("{} (not checked: {reason})", o.key),
+                (None, Some(_)) => format!("{} (changed)", o.key),
+                (None, None) => format!("{} (removed)", o.key),
             })
             .collect::<Vec<_>>()
             .join(", ");
         write!(
             f,
-            "{} object(s) that decide who may read or write were changed outside Supatype: \
-             {objects}.\n\nNothing was applied. A push that is not interactive does not overwrite \
+            "{} object(s) that decide who may read or write were changed outside Supatype, or \
+             could not be checked for changes: {objects}.\n\nNothing was applied. A push that is not interactive does not overwrite \
              them, because the change may be deliberate and a rollback could not bring it back. \
              Run the push interactively to review the difference, or pass --overwrite-drift to put \
              Supatype's definitions back.",
@@ -124,7 +127,7 @@ mod tests {
             live_def: "after".into(),
             live_fp: "after-fp".into(),
             create_sql: "CREATE".into(),
-            security_relevant: security_relevant(kind),
+            security_relevant: security_relevant(&key(kind)),
             inline: false,
             status: Status::Managed,
         }
@@ -224,6 +227,7 @@ mod tests {
                 key: key(ObjectKind::Policy),
                 recorded: "using=true".into(),
                 live: Some("using=false".into()),
+                unchecked: None,
             }],
             "the hand edit was overwritten without consent"
         );
@@ -258,11 +262,13 @@ mod tests {
                     key: key(ObjectKind::Policy),
                     recorded: "before".into(),
                     live: Some("after".into()),
+                    unchecked: None,
                 },
                 DriftedObject {
                     key: key(ObjectKind::TableGrant),
                     recorded: "CREATE".into(),
                     live: None,
+                    unchecked: None,
                 },
             ]
         );

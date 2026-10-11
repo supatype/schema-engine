@@ -2193,6 +2193,7 @@ mod tests {
         let actions = [reconcile::Action::Drop {
             key: function.clone(),
             recorded_sql: None,
+            drifted: None,
         }];
         let up = Migration::render(&diff, &actions, true, "public", &ast)
             .unwrap()

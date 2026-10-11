@@ -334,7 +334,14 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
     let report = if req.rebaseline {
-        crate::inspect::rebaseline(&pool, &ast, &req.schema, req.accept_access_drift).await
+        crate::inspect::rebaseline_previewed(
+            &pool,
+            &ast,
+            &req.schema,
+            req.accept_access_drift,
+            req.keys.as_deref(),
+        )
+        .await
     } else {
         crate::inspect::doctor(&pool, &ast, &req.schema, false).await
     }
@@ -371,8 +378,21 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
 /// a caller can act on; anything else as [`engine_error`].
 fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
     use crate::generator::sql::migration::{UnmanagedModelTables, UNMANAGED_MODEL_TABLES};
+    use crate::inspect::{DriftChangedSincePreview, DRIFT_CHANGED};
     use crate::ledger::drift::{SecurityDrift, SECURITY_DRIFT};
     use crate::push::{EngineBusy, ENGINE_BUSY};
+    if let Some(changed) = e.downcast_ref::<DriftChangedSincePreview>() {
+        error!("rebaseline refused: the drift changed since the preview");
+        return (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: changed.to_string(),
+                reason: Some(DRIFT_CHANGED),
+                drift_changed: Some(Box::new(changed.clone())),
+                ..Default::default()
+            }),
+        );
+    }
     if let Some(busy) = e.downcast_ref::<EngineBusy>() {
         error!("refused: the engine is busy");
         return (
