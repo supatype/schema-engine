@@ -1521,37 +1521,43 @@
         "schema": "auth",
         "table": "users",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "course_tags",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "courses",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "enrollments",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "students",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "tags",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       }
     ],
     "policies": [],

@@ -1266,19 +1266,22 @@
         "schema": "auth",
         "table": "users",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "categories",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "employees",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       }
     ],
     "policies": [

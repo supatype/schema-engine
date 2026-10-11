@@ -19,7 +19,7 @@ const KEEPALIVES: &str = "SELECT set_config('tcp_keepalives_idle', '30', false),
                                  set_config('tcp_keepalives_interval', '10', false), \
                                  set_config('tcp_keepalives_count', '3', false)";
 
-/// How long a preview's read (`diff`, `migrate`, `doctor`) waits for a lock. A preview takes none
+/// How long a preview's read (`diff`, `doctor`) waits for a lock. A preview takes none
 /// of the engine's locks, so a lock it meets is a writer's: better to say so in seconds than to
 /// wait as long as the writer runs (A4-N1). A writer's own transaction sets its own, longer,
 /// timeout with `SET LOCAL`, which wins over this one.

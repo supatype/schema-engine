@@ -61,18 +61,18 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     Ok(Json(plan.to_json().map_err(engine_error)?))
 }
 
-// ── Migrate (DB: generate SQL only, does not apply) ────────────────────────
+// ── Migrate (DB: generate SQL only, rehearsed and rolled back) ─────────────
 
 pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> {
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
-    let pool = connect_preview_db(&url).await?;
-    // The same plan a push would apply, returned as a file instead.
-    let plan = crate::push::plan(&pool, &ast, &req.schema)
+    // A writer, under the engine's lock, though everything it writes is rolled back.
+    let pool = connect_db(&url).await?;
+    // The push, written out: applying the file by hand records what the push would.
+    let sql = crate::migrate_file::render(&pool, &ast, &req.schema, req.force)
         .await
         .map_err(refusal_error)?;
-    let sql = plan.migration(req.force).map_err(engine_error)?.file();
     Ok(Json(SqlResponse { sql }))
 }
 
@@ -451,7 +451,7 @@ async fn connect_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse
         .map_err(|e| engine_error(format!("{e:#}")))
 }
 
-/// [`connect_db`] for a preview (`diff`, `migrate`, `doctor`), whose reads give up on a lock
+/// [`connect_db`] for a preview (`diff`, `doctor`), whose reads give up on a lock
 /// within seconds (`crate::db::connect_for_preview`).
 async fn connect_preview_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse>)> {
     crate::db::connect_for_preview(url)

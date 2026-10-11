@@ -277,8 +277,9 @@ pub async fn list_dashboard_views(pool: &PgPool) -> Result<Vec<DashboardView>> {
 }
 
 /// Everything Studio needs in the database, in order, each with what it creates. Part of the
-/// engine's bootstrap (`migration_history::bootstrap_internal_state`), whose version is the text
-/// of every statement it runs, so a statement added or changed here is applied by the next push.
+/// engine's bootstrap (`migration_history::bootstrap_internal_state`, and the `migrate` file that
+/// carries it), whose version is the text of every statement it runs, so a statement added or
+/// changed here is applied by the next push.
 /// The caller gate comes before the table whose policy and the functions whose bodies call it.
 pub fn bootstrap_statements() -> Vec<(&'static str, String)> {
     vec![

@@ -582,5 +582,9 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."customers" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."order_items" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."orders" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."products" REPLICA IDENTITY FULL;
 
 COMMIT;

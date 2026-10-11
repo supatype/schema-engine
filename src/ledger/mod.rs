@@ -127,6 +127,67 @@ pub fn create_table_sql() -> String {
     )
 }
 
+/// The kinds keyed by the table they sit on: the row's `parent` is the table, or for a security
+/// label `table` or `table.column`.
+pub(crate) const ON_A_TABLE: &[ObjectKind] = &[
+    ObjectKind::Column,
+    ObjectKind::PrimaryKey,
+    ObjectKind::ForeignKey,
+    ObjectKind::Unique,
+    ObjectKind::Check,
+    ObjectKind::Index,
+    ObjectKind::Trigger,
+    ObjectKind::Policy,
+    ObjectKind::RlsAttributes,
+    ObjectKind::TableGrant,
+    ObjectKind::SecurityLabel,
+    ObjectKind::ReplicaIdentity,
+];
+
+/// The table `key` sits on, for a kind in [`ON_A_TABLE`]; `None` for any other kind.
+pub(crate) fn table_of(key: &ObjectKey) -> Option<&str> {
+    if !ON_A_TABLE.contains(&key.kind) {
+        return None;
+    }
+    let table = match key.kind {
+        ObjectKind::SecurityLabel => key.parent.split('.').next().unwrap_or_default(),
+        _ => key.parent.as_str(),
+    };
+    (!table.is_empty()).then_some(table)
+}
+
+/// A ledger row's table, in SQL: a security label's parent is `table` or `table.column`.
+const TABLE_OF_ROW: &str =
+    "CASE WHEN kind = 'security_label' THEN split_part(parent, '.', 1) ELSE parent END";
+
+/// Removes every released row on a table that no longer exists and that the schema does not
+/// declare. A push never touches a released row, so one whose table was dropped (by hand, or by
+/// rolling back the push that made it under an engine before the rollback refused that) would
+/// stay forever, describing nothing. A row on a declared table that does not exist yet is an
+/// object released before the push that makes its table, and stays.
+pub async fn forget_released_on_missing_tables(
+    conn: &mut PgConnection,
+    schema: &str,
+    declared: &[&str],
+) -> Result<()> {
+    let kinds: Vec<&str> = ON_A_TABLE.iter().map(|k| k.as_str()).collect();
+    sqlx::query(&format!(
+        "DELETE FROM {SCHEMA}.managed_objects m
+          WHERE status = 'released'
+            AND kind = ANY($1)
+            AND parent <> ''
+            AND NOT (schema_name = $2 AND {TABLE_OF_ROW} = ANY($3))
+            AND to_regclass(format('%I.%I', schema_name, {TABLE_OF_ROW})) IS NULL"
+    ))
+    .bind(&kinds)
+    .bind(schema)
+    .bind(declared)
+    .execute(&mut *conn)
+    .await
+    .context("remove released ledger rows whose table is gone")?;
+    Ok(())
+}
+
 type Row = (
     String,
     String,
