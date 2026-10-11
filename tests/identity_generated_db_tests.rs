@@ -513,6 +513,47 @@ async fn a_serial_satisfies_auto_increment_on_every_push() {
     .await;
 }
 
+/// Decision D8: a new `AutoIncrement` column takes its table's style. On a table numbered by a
+/// serial it is a serial too, numbering the rows already there, so the table does not mix the two
+/// (E37); on a new table, or one numbered by an identity, it is an identity column.
+#[tokio::test]
+async fn a_new_auto_increment_column_on_a_serial_table_is_a_serial() {
+    common::with_integration_pool(|pool| async move {
+        converges(&pool, &serial_posts()).await;
+        exec(
+            &pool,
+            "INSERT INTO public.posts (title) VALUES ('a'), ('b'), ('c')",
+        )
+        .await
+        .unwrap();
+
+        let declared = posts(json!({
+            "id": { "kind": "serial", "primaryKey": true, "required": true,
+                    "annotations": { "db": { "pgType": "SERIAL" } } },
+            "title": text(json!({})),
+            "added": int(json!({ "identity": "byDefault", "autoIncrement": true })),
+        }));
+        converges(&pool, &declared).await;
+        let (identity, _, _) = how_filled(&pool, "added").await;
+        assert_eq!(identity, "NO", "a serial table gained an identity column");
+        let default: Option<String> = one(
+            &pool,
+            "SELECT column_default::text FROM information_schema.columns
+              WHERE table_name = 'posts' AND column_name = 'added'",
+        )
+        .await;
+        assert!(
+            default
+                .as_deref()
+                .is_some_and(|d| d.starts_with("nextval(")),
+            "{default:?}"
+        );
+        numbered(&pool).await;
+        assert!(is_clean(&common::doctor(&pool, &declared).await));
+    })
+    .await;
+}
+
 /// An explicit `Identity` on a serial asks for the conversion: the serial's default and sequence go
 /// and the identity numbers on past the rows there.
 #[tokio::test]
