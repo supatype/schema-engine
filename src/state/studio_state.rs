@@ -275,12 +275,12 @@ pub async fn list_dashboard_views(pool: &PgPool) -> Result<Vec<DashboardView>> {
         .collect())
 }
 
-/// Everything Studio needs in the database, in order, applied by every push. Lives beside the
-/// statements so a new one is applied the moment it is added here. The caller gate comes before
-/// the table whose policy and the functions whose bodies call it.
-pub async fn bootstrap(pool: &PgPool) -> Result<()> {
-    use anyhow::Context as _;
-    for (what, sql) in [
+/// Everything Studio needs in the database, in order, applied by every push and carried by a
+/// `migrate` file. Lives beside the statements so a new one is applied the moment it is added
+/// here. The caller gate comes before the table whose policy and the functions whose bodies call
+/// it.
+pub fn bootstrap_statements() -> Vec<(&'static str, String)> {
+    vec![
         ("supatype schema", create_studio_schema_sql().to_string()),
         (
             "supatype schema usage",
@@ -311,7 +311,13 @@ pub async fn bootstrap(pool: &PgPool) -> Result<()> {
             "supatype.daily_content_creates function",
             create_daily_content_creates_function_sql(),
         ),
-    ] {
+    ]
+}
+
+/// [`bootstrap_statements`], applied.
+pub async fn bootstrap(pool: &PgPool) -> Result<()> {
+    use anyhow::Context as _;
+    for (what, sql) in bootstrap_statements() {
         sqlx::raw_sql(&sql)
             .execute(pool)
             .await

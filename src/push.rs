@@ -180,6 +180,11 @@ impl Plan<'_> {
         Ok(json)
     }
 
+    /// Whether applying this plan writes a migration: a DDL operation or a reconcile change.
+    pub fn has_changes(&self) -> bool {
+        !self.diff.operations.is_empty() || self.reconcile.has_changes()
+    }
+
     /// The one migration this plan is: what `supatype migrate` prints, what `apply` runs and what
     /// the history records.
     pub fn migration(&self, force: bool) -> Result<Migration> {
@@ -337,16 +342,26 @@ fn dropped_tables(diff: &DiffOutput, schema: &str) -> BTreeSet<ObjectKey> {
 /// [`migration::UnmanagedModelTables`], so a caller can name the tables).
 pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result<Plan<'a>> {
     let mut conn = pool.acquire().await?;
+    let previous = migration_history::load_latest_schema_ast(pool).await;
+    plan_on(&mut conn, ast, schema, previous.as_ref()).await
+}
+
+/// [`plan`] on `conn` alone, against `previous`, the schema of the last push: for a caller that
+/// has bootstrapped in a transaction of its own, whose locks a second connection would wait on.
+pub(crate) async fn plan_on<'a>(
+    conn: &mut PgConnection,
+    ast: &'a SchemaAst,
+    schema: &str,
+    previous: Option<&SchemaAst>,
+) -> Result<Plan<'a>> {
     // Always the live catalog. A snapshot from the last push cannot see what changed outside
     // Supatype since, so `diff` showed one plan and push applied another.
     // Which tables are ours is the ledger's to say (Phase 4.11), so the table and column differs
     // drop, rename and attach rules only where it does: `read_state` puts that in the state.
-    let (
-        state,
-        Decision {
-            diff, reconcile, ..
-        },
-    ) = read_and_decide(&mut conn, pool, ast, schema).await?;
+    let state = read_state(conn, schema).await?;
+    let Decision {
+        diff, reconcile, ..
+    } = decide_probed(conn, ast, &state, previous).await?;
 
     // An unchanged schema produces an empty diff, so the renderer's own check would never run and
     // the push would report success while a declared table sat in the API with none of its rules
@@ -1228,7 +1243,9 @@ pub async fn prepare<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Res
     plan(pool, ast, schema).await
 }
 
-pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<Outcome> {
+/// Refuses a plan with a conflict: an object under a name the schema needs that Supatype did not
+/// create.
+fn refuse_conflicts(plan: &Plan<'_>) -> Result<()> {
     let conflicts: Vec<String> = plan
         .reconcile
         .conflicts()
@@ -1242,6 +1259,11 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
             conflicts.join(", ")
         );
     }
+    Ok(())
+}
+
+pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<Outcome> {
+    refuse_conflicts(&plan)?;
 
     // Plan 3.5: access changed outside Supatype is put back only with consent.
     if !opts.overwrite_drift {
@@ -1251,7 +1273,7 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
         }
     }
 
-    let outcome = if plan.diff.operations.is_empty() && !plan.reconcile.has_changes() {
+    let outcome = if !plan.has_changes() {
         up_to_date(pool, plan).await?
     } else {
         apply_migration(pool, plan, opts).await?
@@ -1385,9 +1407,37 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
     })
 }
 
+/// The migration a push would apply, applied in `tx` exactly as [`apply_migration`] applies it,
+/// history, ledger and Studio metadata included, for a caller that then rolls `tx` back and keeps
+/// what was written (`migrate_file`). Returns the migration and the id its history row took.
+pub(crate) async fn rehearse(
+    tx: &mut Transaction<'_, Postgres>,
+    plan: &Plan<'_>,
+    force: bool,
+    name: String,
+) -> Result<(Migration, i32)> {
+    refuse_conflicts(plan)?;
+    let rendered = render(
+        plan,
+        ApplyOptions {
+            force,
+            name: Some(name),
+            ..Default::default()
+        },
+    )?;
+    let applied = within_transaction(tx, plan, false, &rendered).await?;
+    if let Some((admin_cfg, schema_snap)) = applied.studio_metadata.as_ref() {
+        migration_history::save_studio_metadata_if_present(&mut **tx, admin_cfg, schema_snap)
+            .await?;
+    }
+    Ok((rendered.migration, applied.migration_id))
+}
+
 struct Applied {
     drift_warnings: Vec<String>,
     studio_metadata: Option<(serde_json::Value, serde_json::Value)>,
+    /// The history row this push wrote.
+    migration_id: i32,
 }
 
 /// The writes, in order. Any error here rolls the whole transaction back and records a failed
@@ -1474,6 +1524,7 @@ async fn within_transaction(
     Ok(Applied {
         drift_warnings: check.warnings,
         studio_metadata: admin_cfg.zip(schema_snap),
+        migration_id,
     })
 }
 

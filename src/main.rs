@@ -54,7 +54,8 @@ enum Command {
         #[arg(long, default_value = "public")]
         schema: String,
     },
-    /// Generate SQL migration from a diff (print only, does not apply)
+    /// Print the migration a push would apply, with the history and ledger writes that make
+    /// applying it by hand a push. Runs it in a transaction that is rolled back; applies nothing.
     Migrate {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
@@ -324,9 +325,9 @@ async fn run(command: Command, input: String) -> Result<()> {
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            // The same plan a push would apply, printed as a file instead.
-            let plan = supatype_engine::push::plan(&pool, &ast, &schema).await?;
-            println!("{}", plan.migration(force)?.file());
+            // The push, written out: applying the file by hand records what the push would.
+            let file = supatype_engine::migrate_file::render(&pool, &ast, &schema, force).await?;
+            println!("{file}");
         }
         Command::Push {
             database_url,

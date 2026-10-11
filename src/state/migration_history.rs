@@ -390,9 +390,13 @@ pub fn backfill_schema_state_project_schema_sql() -> String {
 /// A database with no recorded schema (a fresh one) passes, and [`save_schema_state`] records the
 /// schema at the end of that push. One written by an engine from before this column has its schema
 /// recorded from its snapshot by the bootstrap ([`backfill_schema_state_project_schema_sql`]).
-pub async fn assert_project_schema(pool: &PgPool, schema: &str) -> Result<()> {
+pub async fn assert_project_schema(
+    executor: impl sqlx::PgExecutor<'_>,
+    schema: &str,
+) -> Result<()> {
     let sql = format!("SELECT project_schema FROM {SCHEMA}.schema_state WHERE id = 1");
-    let recorded: Option<Option<String>> = sqlx::query_scalar(&sql).fetch_optional(pool).await?;
+    let recorded: Option<Option<String>> =
+        sqlx::query_scalar(&sql).fetch_optional(executor).await?;
     match recorded.flatten() {
         Some(existing) if existing != schema => anyhow::bail!(
             "This database already holds the project schema \"{existing}\", and this push is for \
@@ -493,20 +497,32 @@ fn snapshot_hash(schema_snapshot: &serde_json::Value) -> String {
 /// The schema as it was at the last push, decoded. History, not a cache of the database: what
 /// tells a rename apart from a drop and an add.
 pub async fn load_latest_schema_ast(pool: &PgPool) -> Option<crate::parser::ast::SchemaAst> {
-    load_latest_schema_snapshot(pool)
+    let mut conn = pool.acquire().await.ok()?;
+    load_latest_schema_ast_on(&mut conn).await
+}
+
+/// [`load_latest_schema_ast`] on `conn`. Each read that fails (no history table yet) counts as no
+/// schema, so in a transaction it must only run once `_supatype` exists, or the failed read
+/// aborts that transaction.
+pub async fn load_latest_schema_ast_on(
+    conn: &mut sqlx::PgConnection,
+) -> Option<crate::parser::ast::SchemaAst> {
+    load_latest_schema_snapshot(conn)
         .await
         .and_then(|v| serde_json::from_value(v).ok())
 }
 
 /// Latest applied schema AST snapshot (for kind-aware diffs when PG types are unchanged).
-pub async fn load_latest_schema_snapshot(pool: &PgPool) -> Option<serde_json::Value> {
+pub async fn load_latest_schema_snapshot(
+    conn: &mut sqlx::PgConnection,
+) -> Option<serde_json::Value> {
     let sql = format!(
         "SELECT schema_snapshot FROM {SCHEMA}.migrations \
          WHERE rolled_back = false AND schema_snapshot IS NOT NULL \
          ORDER BY applied_at DESC LIMIT 1"
     );
     if let Ok(Some((v,))) = sqlx::query_as::<_, (serde_json::Value,)>(&sql)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
     {
         return Some(v);
@@ -516,7 +532,7 @@ pub async fn load_latest_schema_snapshot(pool: &PgPool) -> Option<serde_json::Va
         "SELECT ast_snapshot FROM {SCHEMA}.schema_state WHERE id = 1 AND ast_snapshot IS NOT NULL"
     );
     sqlx::query_as::<_, (serde_json::Value,)>(&fallback)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .ok()
         .flatten()
@@ -1091,6 +1107,34 @@ pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bo
     Ok(true)
 }
 
+/// Everything the engine owns inside `_supatype`, created or repaired, in order. Each statement
+/// is idempotent. A push runs them one by one ([`bootstrap_internal_state`]); a `migrate` file
+/// carries them, so applying it by hand bootstraps as a push would.
+pub fn bootstrap_statements() -> Vec<String> {
+    let mut statements = vec![
+        create_internal_schema_sql().to_string(),
+        create_migrations_table_sql(),
+        // Created in the same bootstrap as `migrations`, so a seed run never has to create
+        // its own table mid-transaction.
+        crate::seed::ledger::create_seeds_table_sql(),
+        crate::seed::ledger::create_seeds_index_sql(),
+        create_studio_members_table_sql(),
+        ensure_studio_members_platform_identity_sql(),
+        create_studio_audit_table_sql(),
+        ensure_studio_audit_columns_sql(),
+        create_schema_state_table_sql(),
+        ensure_schema_state_studio_columns_sql(),
+        ensure_schema_state_capabilities_column_sql(),
+        ensure_schema_state_project_schema_column_sql(),
+        backfill_schema_state_project_schema_sql(),
+    ];
+    statements.extend(ensure_all_migration_columns_sql());
+    // After `migrations`, which both reference.
+    statements.push(crate::ledger::create_table_sql());
+    statements.push(crate::ledger::undo::create_table_sql());
+    statements
+}
+
 /// Create and repair everything the engine owns inside `_supatype`, and re-apply
 /// the auth helper functions.
 ///
@@ -1101,32 +1145,9 @@ pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bo
 /// accumulating (a migrations table with no `hash`, RLS state that never
 /// converged, Studio metadata written on only one code path).
 pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(create_internal_schema_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&create_migrations_table_sql())
-        .execute(pool)
-        .await?;
-    // Created in the same bootstrap as `migrations`, so a seed run never has to create
-    // its own table mid-transaction.
-    sqlx::raw_sql(&crate::seed::ledger::create_seeds_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&crate::seed::ledger::create_seeds_index_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&create_studio_members_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_studio_members_platform_identity_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&create_studio_audit_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_studio_audit_columns_sql())
-        .execute(pool)
-        .await?;
+    for sql in bootstrap_statements() {
+        sqlx::raw_sql(&sql).execute(pool).await?;
+    }
     // Migrating an existing project: carry forward the admins who only have the
     // old `app_metadata.role` claim, before that claim stops meaning anything.
     if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql())
@@ -1135,32 +1156,6 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     {
         eprintln!("Warning: failed to seed Studio membership from existing admin roles: {e}");
     }
-    sqlx::raw_sql(&create_schema_state_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_schema_state_studio_columns_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_schema_state_capabilities_column_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_schema_state_project_schema_column_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&backfill_schema_state_project_schema_sql())
-        .execute(pool)
-        .await?;
-
-    for sql in ensure_all_migration_columns_sql() {
-        sqlx::raw_sql(&sql).execute(pool).await?;
-    }
-    // After `migrations`, which both reference.
-    sqlx::raw_sql(&crate::ledger::create_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&crate::ledger::undo::create_table_sql())
-        .execute(pool)
-        .await?;
 
     // Helper functions are cosmetic to a migration's success, so a failure here
     // must not abort the push.
