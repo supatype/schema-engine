@@ -439,15 +439,50 @@ pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String>
 /// every time, and recorded on the ledger with it (F14). The base tables hold nothing for these
 /// roles then ([`table_grants`]).
 pub fn view_grants(model: &ModelAst, view_schema: &str) -> String {
-    let target = quote_qualified(view_schema, db_table_name(model));
+    grants_on_view(view_schema, db_table_name(model), |role| {
+        let grant = model_grant(model, role);
+        RULED
+            .into_iter()
+            .filter(|privilege| {
+                grant.privileges.contains(privilege)
+                    || grant.narrowed.iter().any(|(op, _)| op == privilege)
+            })
+            .collect()
+    })
+}
+
+/// Tier 2's privileges on a many-to-many junction's `api` view: for each API role what it holds on
+/// the junction under tier 1 ([`junction_grants`]), and for `service_role` every row verb.
+pub fn junction_view_grants(
+    ast: &SchemaAst,
+    junction: &JunctionTableAst,
+    view_schema: &str,
+) -> String {
+    let grants = junction_grants(ast, junction);
+    grants_on_view(view_schema, &junction.name, |role| {
+        grants
+            .iter()
+            .find(|g| g.role == role)
+            .map(|g| g.privileges.clone())
+            .unwrap_or_default()
+    })
+}
+
+/// Each API role granted exactly what `held` says it holds on a view and refused the rest of the
+/// row verbs, and `service_role` granted all of them.
+fn grants_on_view(
+    view_schema: &str,
+    view: &str,
+    held: impl Fn(&'static str) -> Vec<&'static str>,
+) -> String {
+    let target = quote_qualified(view_schema, view);
     let mut blocks = Vec::new();
     for role in GRANTED_ROLES {
-        let grant = model_grant(model, role);
+        let granted = held(role);
         let statements: Vec<String> = RULED
             .iter()
             .map(|privilege| {
-                let narrowed = grant.narrowed.iter().any(|(op, _)| op == privilege);
-                if grant.privileges.contains(privilege) || narrowed {
+                if granted.contains(privilege) {
                     format!("GRANT {privilege} ON {target} TO {role}")
                 } else {
                     format!("REVOKE {privilege} ON {target} FROM {role}")
@@ -469,43 +504,16 @@ pub fn view_grants(model: &ModelAst, view_schema: &str) -> String {
 /// The role whose access the rules never narrow: the escape hatch.
 const SERVICE_ROLE: &str = "service_role";
 
-/// What the owner of tier 2's views holds on a model table: every row verb. Nobody connects as it,
-/// and row-level security applies to it with the caller's JWT, so each caller still reaches only
-/// the rows their rules allow.
-pub fn api_owner_grant(model: &ModelAst) -> TableGrant {
+/// What the owner of tier 2's views holds on the table behind one, a model's or a junction's: every
+/// row verb. Nobody connects as it, and row-level security applies to it with the caller's JWT, so
+/// each caller still reaches only the rows their rules allow. A junction's view needs it as a
+/// model's does, and a view whose rule reads a junction as a membership source reads it with the
+/// owner's rights, as an API role does under tier 1.
+pub fn api_owner_grant(table: &str) -> TableGrant {
     TableGrant {
-        table: db_table_name(model).to_string(),
-        role: crate::generator::sql::field_views::API_OWNER,
         privileges: RULED.to_vec(),
-        narrowed: Vec::new(),
-        columns: Vec::new(),
+        ..TableGrant::nothing(table, crate::generator::sql::field_views::API_OWNER)
     }
-}
-
-/// What the owner of tier 2's views holds on each junction table that any API role may use: what
-/// any of them may do there ([`junction_grants`]). No view is made over a junction, but a view reads
-/// one with its owner's rights wherever a rule reads it as a membership source, as an API role does
-/// under tier 1; row-level security on the junction still decides which rows that is. A junction no
-/// API role may use gives the owner nothing either, and records nothing.
-pub fn api_owner_junction_grants(ast: &SchemaAst) -> Vec<TableGrant> {
-    ast.junction_tables
-        .iter()
-        .filter_map(|junction| {
-            let mut privileges: Vec<&'static str> = junction_grants(ast, junction)
-                .into_iter()
-                .flat_map(|g| g.privileges)
-                .collect();
-            privileges.sort_unstable();
-            privileges.dedup();
-            (!privileges.is_empty()).then(|| TableGrant {
-                privileges,
-                ..TableGrant::nothing(
-                    &junction.name,
-                    crate::generator::sql::field_views::API_OWNER,
-                )
-            })
-        })
-        .collect()
 }
 
 /// The privileges for one role, applied only if the role exists.

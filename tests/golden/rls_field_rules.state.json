@@ -2367,7 +2367,7 @@
         "name": "comments",
         "materialized": false,
         "definition": " SELECT id,\n    body,\n    post_id,\n    author_id,\n    created_at,\n    updated_at\n   FROM public.comments;",
-        "comment": "@graphql({\"primary_key_columns\":[\"id\"]})",
+        "comment": "@graphql({\"primary_key_columns\":[\"id\"],\"foreign_keys\":[{\"local_columns\":[\"post_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"posts\",\"foreign_columns\":[\"id\"]},{\"local_columns\":[\"author_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"users\",\"foreign_columns\":[\"id\"]}]})",
         "options": [
           "security_barrier=true"
         ],
@@ -2378,7 +2378,7 @@
         "name": "posts",
         "materialized": false,
         "definition": " SELECT id,\n    title,\n    slug,\n    content,\n    author_id,\n    category_id,\n    created_at,\n    updated_at\n   FROM public.posts;",
-        "comment": "@graphql({\"primary_key_columns\":[\"id\"]})",
+        "comment": "@graphql({\"primary_key_columns\":[\"id\"],\"foreign_keys\":[{\"local_columns\":[\"author_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"users\",\"foreign_columns\":[\"id\"]},{\"local_columns\":[\"category_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"categories\",\"foreign_columns\":[\"id\"]}]})",
         "options": [
           "security_barrier=true"
         ],

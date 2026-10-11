@@ -49,8 +49,10 @@
 
 use crate::generator::sql::auth_functions::CLAIMS_SCHEMA;
 use crate::generator::sql::rls::AUTH_ROLE;
-use crate::parser::accessors::{db_table_name, platform_access};
-use crate::parser::ast::{ModelAst, SchemaAst};
+use crate::parser::accessors::{
+    db_foreign_key, db_table_name, default_foreign_key_column, platform_access,
+};
+use crate::parser::ast::{FieldAst, JunctionTableAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
 use crate::state::database_state::DatabaseState;
 
@@ -324,7 +326,32 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
             key,
         });
     }
+    plan.extend(
+        ast.junction_tables
+            .iter()
+            .map(|j| junction_view_plan(j, db)),
+    );
     plan
+}
+
+/// A many-to-many junction's view: its two key columns, which are also its primary key. Without
+/// one, tier 2 would serve no many-to-many relation at all, over REST or GraphQL, where tier 1
+/// serves the junction table.
+fn junction_view_plan(junction: &JunctionTableAst, db: &DatabaseState) -> FieldViewTable {
+    let declared = vec![junction.fk_a.clone(), junction.fk_b.clone()];
+    let columns = match db.tables.iter().find(|t| t.name == junction.name) {
+        Some(t) => t.columns.iter().map(|c| c.name.clone()).collect(),
+        None => declared.clone(),
+    };
+    let key = match primary_key_columns(db, &junction.name) {
+        k if !k.is_empty() => k,
+        _ => declared,
+    };
+    FieldViewTable {
+        table: junction.name.clone(),
+        columns,
+        key,
+    }
 }
 
 /// SQL for the whole `api` view layer, plus the triggers that carry the write contract.
@@ -333,7 +360,8 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
 /// is not exposed to PostgREST at all. It cannot be, because a client picks its schema per request
 /// with `Accept-Profile`, so leaving `public` on the list lets any caller read the unmasked table and
 /// makes the mask opt-out. With only `api` exposed, a model without a view simply disappears from the
-/// API, so the unmasked ones are passed through verbatim.
+/// API, so the unmasked ones are passed through verbatim. So is every many-to-many junction, for the
+/// same reason.
 ///
 /// Driven by the **database's** columns rather than the AST's, so a table carrying columns the schema
 /// does not declare (an adopted table, say) keeps serving them instead of losing them from the API
@@ -347,9 +375,12 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
 
     for entry in plan {
         let Some(model) = ast.models.iter().find(|m| db_table_name(m) == entry.table) else {
+            if let Some(junction) = ast.junction_tables.iter().find(|j| j.name == entry.table) {
+                out.push_str(&render_junction_view(ast, junction, entry, plan, schema));
+            }
             continue;
         };
-        out.push_str(&render_view(ast, model, entry, schema));
+        out.push_str(&render_view(ast, model, entry, plan, schema));
         if platform_access(model).fields.is_empty() {
             // Nothing masked: the view is a plain projection, which Postgres updates by itself.
             continue;
@@ -375,27 +406,76 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
         };
         out.push_str(&trigger.render());
     }
-    for grant in crate::generator::sql::grants::api_owner_junction_grants(ast) {
-        out.push_str(&grant.create_sql(schema));
-        out.push_str("\n\n");
-    }
 
     out
 }
 
-/// One table's view: the masked projection, owned by [`API_OWNER`], with the base table's
-/// defaults, its GraphQL identity, and its privileges.
-fn render_view(ast: &SchemaAst, model: &ModelAst, entry: &FieldViewTable, schema: &str) -> String {
-    let view = quote_qualified(VIEW_SCHEMA, &entry.table);
+/// One model's view: the masked projection, owned by [`API_OWNER`], with the base table's
+/// defaults, its GraphQL identity and relations, and its privileges.
+fn render_view(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    entry: &FieldViewTable,
+    plan: &[FieldViewTable],
+    schema: &str,
+) -> String {
     let projections: Vec<String> = entry
         .columns
         .iter()
         .map(|column| projection(ast, model, schema, &entry.table, column))
         .collect();
-    // Dropped and recreated, not `CREATE OR REPLACE`: replace refuses anything but appending
-    // columns at the end, so a renamed or removed column would break every later push. The `api`
-    // schema is generated in full by Supatype, so there is nothing of the operator's to lose, and
-    // the trigger, which belongs to the view, is recreated with it.
+    let mut out = view_head(entry, &projections, schema);
+    out.push_str(&graphql_comment_sql(
+        entry,
+        &model_foreign_keys(ast, model),
+        plan,
+    ));
+    out.push_str(&crate::generator::sql::grants::view_grants(
+        model,
+        VIEW_SCHEMA,
+    ));
+    out.push_str(&view_tail(entry, schema));
+    out
+}
+
+/// A many-to-many junction's view: every column as it is, since a junction has no field rules,
+/// with what a model's view has besides, and the privileges each API role holds on the junction
+/// under tier 1. Postgres updates a plain projection by itself, so it needs no write trigger.
+fn render_junction_view(
+    ast: &SchemaAst,
+    junction: &JunctionTableAst,
+    entry: &FieldViewTable,
+    plan: &[FieldViewTable],
+    schema: &str,
+) -> String {
+    let projections: Vec<String> = entry
+        .columns
+        .iter()
+        .map(|column| format!("    {}.{}", quote_ident(&entry.table), quote_ident(column)))
+        .collect();
+    let mut out = view_head(entry, &projections, schema);
+    out.push_str(&graphql_comment_sql(
+        entry,
+        &junction_foreign_keys(ast, junction),
+        plan,
+    ));
+    out.push_str(&crate::generator::sql::grants::junction_view_grants(
+        ast,
+        junction,
+        VIEW_SCHEMA,
+    ));
+    out.push_str(&view_tail(entry, schema));
+    out
+}
+
+/// The view itself over `projections`, owned by [`API_OWNER`], with the base table's defaults.
+///
+/// Dropped and recreated, not `CREATE OR REPLACE`: replace refuses anything but appending columns
+/// at the end, so a renamed or removed column would break every later push. The `api` schema is
+/// generated in full by Supatype, so there is nothing of the operator's to lose, and the trigger,
+/// which belongs to the view, is recreated with it.
+fn view_head(entry: &FieldViewTable, projections: &[String], schema: &str) -> String {
+    let view = quote_qualified(VIEW_SCHEMA, &entry.table);
     let mut out = format!(
         "DROP VIEW IF EXISTS {view};\n\
          CREATE VIEW {view} WITH (security_barrier = true) AS\n\
@@ -406,16 +486,15 @@ fn render_view(ast: &SchemaAst, model: &ModelAst, entry: &FieldViewTable, schema
         quote_ident(API_OWNER),
     );
     out.push_str(&view_setup(schema, &entry.table));
-    if let Some(comment) = graphql_comment(&entry.key) {
-        out.push_str(&format!("COMMENT ON VIEW {view} IS {comment};\n"));
-    }
-    out.push_str(&crate::generator::sql::grants::view_grants(
-        model,
-        VIEW_SCHEMA,
-    ));
-    out.push_str(&crate::generator::sql::grants::api_owner_grant(model).create_sql(schema));
-    out.push_str("\n\n");
     out
+}
+
+/// What the owner holds on the table behind a view, which closes the view's block.
+fn view_tail(entry: &FieldViewTable, schema: &str) -> String {
+    format!(
+        "{}\n\n",
+        crate::generator::sql::grants::api_owner_grant(&entry.table).create_sql(schema)
+    )
 }
 
 /// One column of the view: the base column, or NULL for a caller its read rule refuses.
@@ -477,14 +556,117 @@ fn view_setup(schema: &str, table: &str) -> String {
     )
 }
 
-/// The comment pg_graphql reads a view's primary key from: a view has none of its own, and without
-/// one pg_graphql does not reflect it at all. `None` for a keyless view, which it then leaves out.
-fn graphql_comment(key: &[String]) -> Option<String> {
-    if key.is_empty() {
-        return None;
+/// The comment pg_graphql reads a view's primary key and foreign keys from: a view has neither of
+/// its own, and without a key pg_graphql does not reflect it at all, nor without the foreign keys
+/// any relation between views (TRAIN-FIX-N1). Nothing for a keyless view, which it then leaves out.
+///
+/// A foreign key is written only where both ends are served: its columns are in this view, and
+/// the view it points at is in the plan with a key, since pg_graphql reflects no other.
+fn graphql_comment_sql(
+    entry: &FieldViewTable,
+    foreign_keys: &[ViewForeignKey],
+    plan: &[FieldViewTable],
+) -> String {
+    if entry.key.is_empty() {
+        return String::new();
     }
-    let spec = serde_json::json!({ "primary_key_columns": key });
-    Some(quote_literal(&format!("@graphql({spec})")))
+    let served: Vec<serde_json::Value> = foreign_keys
+        .iter()
+        .filter(|fk| fk.is_served(entry, plan))
+        .map(ViewForeignKey::directive)
+        .collect();
+    let mut spec = serde_json::json!({ "primary_key_columns": entry.key });
+    if !served.is_empty() {
+        spec["foreign_keys"] = serde_json::Value::Array(served);
+    }
+    format!(
+        "COMMENT ON VIEW {} IS {};\n",
+        quote_qualified(VIEW_SCHEMA, &entry.table),
+        quote_literal(&format!("@graphql({spec})"))
+    )
+}
+
+/// One foreign key between two `api` views, in pg_graphql's comment directive for views.
+///
+/// Read from the schema rather than the catalog, so the first push, which creates the tables a few
+/// statements earlier, writes them too. pg_graphql names it as it names the same key between
+/// tables, so a tier 2 query is a tier 1 query: the to-one field after the table it points at, the
+/// reverse collection after the referencing table. One shape differs, and no directive can change
+/// it: a one-to-one key's reverse. pg_graphql makes it a single row only when it finds a unique
+/// index on the key, and a view has no index, so under tier 2 it is a collection (`badgeCollection`
+/// where tier 1 has `badge`). Naming the collection as tier 1 names the row would not make the
+/// query the same, only the error less clear.
+struct ViewForeignKey {
+    local_columns: Vec<String>,
+    foreign_table: String,
+    foreign_columns: Vec<String>,
+}
+
+impl ViewForeignKey {
+    fn directive(&self) -> serde_json::Value {
+        serde_json::json!({
+            "local_columns": self.local_columns,
+            "foreign_schema": VIEW_SCHEMA,
+            "foreign_table": self.foreign_table,
+            "foreign_columns": self.foreign_columns,
+        })
+    }
+
+    fn is_served(&self, entry: &FieldViewTable, plan: &[FieldViewTable]) -> bool {
+        let covers = |view: &FieldViewTable, columns: &[String]| {
+            columns.iter().all(|c| view.columns.contains(c))
+        };
+        covers(entry, &self.local_columns)
+            && plan.iter().any(|view| {
+                view.table == self.foreign_table
+                    && !view.key.is_empty()
+                    && covers(view, &self.foreign_columns)
+            })
+    }
+}
+
+/// The foreign keys a model's table holds, one per `belongsTo` relation to another model, a
+/// self-reference included. A key into a system table (`auth.users`) has no view to point at.
+fn model_foreign_keys(ast: &SchemaAst, model: &ModelAst) -> Vec<ViewForeignKey> {
+    model
+        .fields
+        .iter()
+        .filter_map(|(field_name, field)| {
+            let FieldAst::Relation(rel) = field else {
+                return None;
+            };
+            if !matches!(rel.cardinality, RelationCardinality::BelongsTo) {
+                return None;
+            }
+            let target = ast.models.iter().find(|m| m.name == rel.target)?;
+            let column = db_foreign_key(field, field_name)
+                .unwrap_or_else(|| default_foreign_key_column(field_name));
+            Some(ViewForeignKey {
+                local_columns: vec![column],
+                foreign_table: db_table_name(target).to_string(),
+                foreign_columns: vec![rel.references.clone().unwrap_or_else(|| "id".into())],
+            })
+        })
+        .collect()
+}
+
+/// A junction's two foreign keys, each to its model's primary key, as the junction table has them.
+fn junction_foreign_keys(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<ViewForeignKey> {
+    [
+        (&junction.fk_a, &junction.model_a),
+        (&junction.fk_b, &junction.model_b),
+    ]
+    .into_iter()
+    .filter_map(|(column, model_name)| {
+        let parent = ast.models.iter().find(|m| &m.name == model_name)?;
+        let (key, _) = crate::differ::table_diff::versions_record_id(parent);
+        Some(ViewForeignKey {
+            local_columns: vec![column.clone()],
+            foreign_table: db_table_name(parent).to_string(),
+            foreign_columns: vec![key],
+        })
+    })
+    .collect()
 }
 
 /// The `INSTEAD OF` trigger that makes a masked view writable, and enforces the write rules.
