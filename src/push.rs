@@ -1209,6 +1209,15 @@ pub async fn prepare<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Res
         .context("Failed to bootstrap _supatype internal state")?;
     migration_history::assert_project_schema(pool, schema).await?;
     studio_state::bootstrap(pool).await?;
+    let declared: Vec<&str> = ast
+        .models
+        .iter()
+        .map(|m| m.table_name())
+        .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
+        .collect();
+    let mut conn = pool.acquire().await?;
+    ledger::forget_released_on_missing_tables(&mut conn, schema, &declared).await?;
+    drop(conn);
     plan(pool, ast, schema).await
 }
 

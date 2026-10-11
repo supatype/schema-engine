@@ -317,3 +317,122 @@ async fn rolling_back_leaves_what_was_released_since_the_push() {
     })
     .await;
 }
+
+/// `posts`, and a `tags` table with columns `a` and `c` made by the same push.
+fn posts_and_tags() -> SchemaAst {
+    let mut doc = serde_json::to_value(posts("title")).unwrap();
+    let text = || {
+        json!({ "kind": "text", "required": false,
+        "annotations": { "db": { "pgType": "TEXT", "unique": false } } })
+    };
+    doc["models"].as_array_mut().unwrap().push(json!({
+        "name": "Tag",
+        "fields": {
+            "id": { "kind": "integer", "primaryKey": true, "required": true,
+                    "annotations": { "db": { "pgType": "INTEGER", "unique": false } } },
+            "a": text(),
+            "c": text()
+        },
+        "options": { "timestamps": false, "softDelete": false, "singleton": false },
+        "annotations": { "db": { "tableName": "tags" },
+                         "platform": { "access": { "read": { "type": "public" } } } }
+    }));
+    serde_json::from_value(doc).expect("the AST round-trips")
+}
+
+async fn table_exists(pool: &PgPool, name: &str) -> bool {
+    sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(format!("public.{name}"))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Every ledger row on `tags`, as `kind:parent.name status`.
+async fn rows_on_tags(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT kind || ':' || parent || '.' || name || ' ' || status
+           FROM _supatype.managed_objects
+          WHERE parent = 'tags' OR (kind = 'table' AND name = 'tags')
+          ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// E35: the push that made `tags` is rolled back after a column of `tags` was released. Dropping
+/// the table would drop the released column with its data, so the rollback is refused, naming
+/// the column, and nothing changes.
+#[tokio::test]
+async fn rolling_back_the_push_that_made_a_table_refuses_when_a_column_of_it_was_released() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        let ast = posts_and_tags();
+        push(&pool, &ast).await.unwrap();
+        release(&pool, &ast, &["column:tags.c"]).await;
+        exec(
+            &pool,
+            "INSERT INTO public.tags (id, a, c) VALUES (1, 'a', 'released data')",
+        )
+        .await
+        .unwrap();
+        let before = ledger(&pool).await;
+
+        let err = migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect_err("the rollback would drop a released column with its table");
+        let message = format!("{err:#}");
+        assert!(message.contains("public.tags.c"), "{message}");
+        assert!(message.contains("released"), "{message}");
+
+        let c: String = sqlx::query_scalar("SELECT c FROM public.tags WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("the table and the released column's data are still there");
+        assert_eq!(c, "released data");
+        assert_eq!(
+            ledger(&pool).await,
+            before,
+            "a refused rollback wrote the ledger"
+        );
+
+        // Handed back, the column is the push's again, and the rollback goes ahead.
+        let reclaim = ["column:tags.c".to_string()];
+        supatype_engine::adopt::run(
+            &pool,
+            &ast,
+            "public",
+            supatype_engine::adopt::Request {
+                reclaim: &reclaim,
+                apply: true,
+                keys: Some(&[]),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("with nothing released on it, the table goes");
+        assert!(!table_exists(&pool, "tags").await);
+        assert_eq!(rows_on_tags(&pool).await, Vec::<String>::new());
+    })
+    .await;
+}
+
+/// A released row whose table is gone describes nothing: the next push removes it. An engine
+/// before this one left such a row when it rolled back the push that made the table.
+#[tokio::test]
+async fn a_released_row_whose_table_is_gone_is_removed_by_the_next_push() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts_and_tags();
+        push(&pool, &ast).await.unwrap();
+        release(&pool, &ast, &["column:tags.c"]).await;
+        exec(&pool, "DROP TABLE public.tags CASCADE").await.unwrap();
+
+        push(&pool, &posts("title")).await.unwrap();
+        assert_eq!(rows_on_tags(&pool).await, Vec::<String>::new());
+    })
+    .await;
+}

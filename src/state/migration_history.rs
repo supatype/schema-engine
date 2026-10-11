@@ -967,9 +967,12 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
         (&mut *tx).execute(sqlx::raw_sql(&sql)).await?;
     }
     // What was released or recorded again since the push is no longer the push's to undo: its
-    // statements are left out, as `restore` leaves its row.
+    // statements are left out, as `restore` leaves its row. A released one on a table the rollback
+    // drops would go with the table whatever is left out, so that rollback is refused before
+    // anything runs; one recorded again but still Supatype's goes with its table, row and all.
     let leave = crate::ledger::undo::rewritten_since(&mut tx, latest.id).await?;
-    let (sql_down, left) = crate::ledger::undo::leaving_alone(&sql_down, schema, &leave);
+    let sparing = crate::ledger::undo::sparing(&latest.name, &sql_down, schema, &leave)?;
+    let (sql_down, left) = crate::ledger::undo::leaving_alone(&sql_down, schema, &sparing.leave);
 
     (&mut *tx)
         .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
@@ -977,6 +980,7 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
         .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
 
     crate::ledger::undo::restore(&mut tx, latest.id).await?;
+    crate::ledger::delete(&mut tx, &sparing.with_their_table).await?;
 
     let mark_sql = format!(
         "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = $1"
