@@ -174,6 +174,35 @@ impl ObjectKey {
         })
     }
 
+    /// The statement that renames this object to `to`, on the table its key names, for the kinds
+    /// a push renames rather than drops and makes again (F2, F8): a constraint, an index and a
+    /// trigger. A primary key's or unique constraint's index is renamed with it. `None` for any
+    /// other kind.
+    pub fn rename_sql(&self, to: &str) -> Option<String> {
+        let ObjectKey {
+            kind,
+            schema,
+            parent,
+            name,
+        } = self;
+        let on_parent = quote_qualified(schema, parent);
+        let (from, to) = (quote_ident(name), quote_ident(to));
+        Some(match kind {
+            ObjectKind::PrimaryKey
+            | ObjectKind::ForeignKey
+            | ObjectKind::Unique
+            | ObjectKind::Check => {
+                format!("ALTER TABLE {on_parent} RENAME CONSTRAINT {from} TO {to};")
+            }
+            ObjectKind::Index => format!(
+                "ALTER INDEX {} RENAME TO {to};",
+                quote_qualified(schema, name)
+            ),
+            ObjectKind::Trigger => format!("ALTER TRIGGER {from} ON {on_parent} RENAME TO {to};"),
+            _ => return None,
+        })
+    }
+
     /// `COMMENT ON <this object> IS <text>`, `NULL` when `text` is `None`, for the kinds whose
     /// comment Postgres keeps. Used to take an older engine's stamp out of a comment while keeping
     /// whatever the user wrote beside it (plan section 6). The table, constraint and index forms

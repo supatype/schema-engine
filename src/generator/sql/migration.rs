@@ -436,9 +436,12 @@ impl Migration {
                 _ => None,
             })
             .collect();
-        let (late, early): (Vec<&reconcile::Action>, Vec<&reconcile::Action>) = reconcile
+        let (late, mut early): (Vec<&reconcile::Action>, Vec<&reconcile::Action>) = reconcile
             .iter()
             .partition(|a| a.removal_is_late(&dropped_tables));
+        // Dependents first across every removal, not only among the drops: a foreign key a push
+        // replaces or rebuilds goes before the key it references, which may itself be replaced.
+        early.sort_by_key(|a| std::cmp::Reverse(reconcile::creation_rank(a.key().kind)));
         let removals: Vec<String> = early.iter().filter_map(|a| a.removal_sql()).collect();
         let late_removals: Vec<String> = late.iter().filter_map(|a| a.removal_sql()).collect();
         let additions: Vec<String> = reconcile

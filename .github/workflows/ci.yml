@@ -224,5 +224,6 @@ jobs:
             --test rebaseline_tests \
             --test rollback_ledger_tests \
             --test object_names_tests \
+            --test name_stability_tests \
             --test sql_quoting_tests \
             --test concurrency_tests

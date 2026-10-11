@@ -16,6 +16,9 @@
 //! Only the kinds in `kinds` are reconciled. A kind moves onto the reconcile one PR at a time
 //! (plan section 9); until it moves, its old differ stays authoritative and its rows do not exist.
 
+mod matching;
+mod rebuild;
+
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -47,6 +50,10 @@ pub struct Inputs<'a> {
     /// schema asks for it and its definition differs, dropped when it no longer does. Nothing else
     /// is claimed this way.
     pub named_by_the_engine: &'a BTreeSet<ObjectKey>,
+    /// Tables this push renames, keyed by the table's key under its old name, with its new name.
+    /// An object the ledger records on one is the same object on the renamed table (F2): it is
+    /// renamed with it, never dropped and made again.
+    pub renamed_tables: &'a BTreeMap<ObjectKey, String>,
     pub kinds: &'a [ObjectKind],
 }
 
@@ -135,7 +142,7 @@ fn remade_by_its_parent(kind: ObjectKind) -> bool {
 
 /// The order kinds are created in, dependencies first; drops run in reverse. A trigger needs its
 /// function and its table, a foreign key its two tables, a column its type.
-fn creation_rank(kind: ObjectKind) -> u8 {
+pub fn creation_rank(kind: ObjectKind) -> u8 {
     match kind {
         ObjectKind::Schema => 0,
         ObjectKind::EnumType => 1,
@@ -256,6 +263,34 @@ pub enum Action {
         create_sql: String,
         status: Status,
     },
+    /// Owned, desired, present and unchanged since the last apply, with exactly the structure this
+    /// push wants, while the `CREATE` recorded for it is worded differently (an older engine's
+    /// template). Nothing is executed: the row is rewritten to this push's statement.
+    Restate {
+        key: ObjectKey,
+        create_sql: String,
+        previous_sql: String,
+        status: Status,
+    },
+    /// Owned, on a table this push renames, and the same object as the one desired on the table's
+    /// new name: renamed in place to the name the schema now gives it, never dropped and made
+    /// again. Its row moves from `from` to `key`.
+    Rename {
+        key: ObjectKey,
+        from: ObjectKey,
+        create_sql: String,
+        status: Status,
+    },
+    /// A foreign key on a primary key or unique constraint this push drops and makes again.
+    /// Postgres refuses to drop a key a foreign key depends on, so the foreign key is dropped
+    /// before `because` and made again after it, unchanged. `status` is its row's, or `None` for
+    /// one Supatype does not own, which is put back exactly as it was and gets no row.
+    Rebuild {
+        key: ObjectKey,
+        create_sql: String,
+        status: Option<Status>,
+        because: ObjectKey,
+    },
     /// Owned, no longer desired, present. `recorded_sql` is the `CREATE` the ledger held, which is
     /// what a rollback re-runs, or for an object with no row the live definition the catalog renders;
     /// `None` when neither has one (a stamped check).
@@ -300,6 +335,9 @@ impl Action {
             | Action::Replace { key, .. }
             | Action::Drift { key, .. }
             | Action::Keep { key, .. }
+            | Action::Restate { key, .. }
+            | Action::Rename { key, .. }
+            | Action::Rebuild { key, .. }
             | Action::Drop { key, .. }
             | Action::Forget { key }
             | Action::Released { key } => key,
@@ -315,8 +353,28 @@ impl Action {
             | Action::Recreate { create_sql, .. }
             | Action::Replace { create_sql, .. }
             | Action::Drift { create_sql, .. }
-            | Action::Keep { create_sql, .. } => Some(create_sql),
+            | Action::Keep { create_sql, .. }
+            | Action::Restate { create_sql, .. }
+            | Action::Rename { create_sql, .. }
+            | Action::Rebuild { create_sql, .. } => Some(create_sql),
             Action::Drop { .. } | Action::Forget { .. } | Action::Released { .. } => None,
+        }
+    }
+
+    /// The key of the live object this action takes over under another name: a renamed object's
+    /// key before the rename, whose row (if it has one) goes when the action's own is written.
+    pub fn found_as(&self) -> Option<ObjectKey> {
+        match self {
+            Action::Rename { from, .. } => Some(from.clone()),
+            Action::Adopt {
+                key,
+                renamed_from: Some(from),
+                ..
+            } => Some(ObjectKey {
+                name: from.clone(),
+                ..key.clone()
+            }),
+            _ => None,
         }
     }
 
@@ -334,11 +392,20 @@ impl Action {
             Action::Replace { key, .. } | Action::Drift { key, .. } | Action::Drop { key, .. } => {
                 Some(drop_for(key))
             }
+            // Said in the migration itself, so whoever reads it sees why a key that did not
+            // change is dropped.
+            Action::Rebuild { key, because, .. } => Some(format!(
+                "-- {key} depends on {because}, which this push drops and makes again: \
+                 dropped first and made again after it, unchanged\n{}",
+                drop_for(key)
+            )),
             Action::Create { .. }
             | Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Recreate { .. }
             | Action::Keep { .. }
+            | Action::Restate { .. }
+            | Action::Rename { .. }
             | Action::Forget { .. }
             | Action::Released { .. } => None,
         }
@@ -395,7 +462,8 @@ impl Action {
                 create_sql,
                 inline: false,
                 ..
-            } => vec![create_sql.clone()],
+            }
+            | Action::Rebuild { create_sql, .. } => vec![create_sql.clone()],
             Action::Adopt {
                 key,
                 reason,
@@ -405,13 +473,16 @@ impl Action {
             } => {
                 let rename = renamed_from
                     .as_deref()
-                    .map(|from| rename_constraint_sql(key, from, &key.name));
+                    .and_then(|from| rename_sql(key, from, &key.name));
                 let unstamp = (*reason == AdoptReason::Stamped).then(|| {
                     key.comment_sql(
                         crate::managed::comment_without_stamp(comment.as_deref()).as_deref(),
                     )
                 });
                 rename.into_iter().chain(unstamp.flatten()).collect()
+            }
+            Action::Rename { key, from, .. } => {
+                rename_sql(key, &from.name, &key.name).into_iter().collect()
             }
             Action::Create { inline: true, .. }
             | Action::Recreate { inline: true, .. }
@@ -420,6 +491,7 @@ impl Action {
             | Action::Conflict { .. }
             | Action::Drop { .. }
             | Action::Keep { .. }
+            | Action::Restate { .. }
             | Action::Forget { .. }
             | Action::Released { .. } => Vec::new(),
         }
@@ -467,14 +539,16 @@ impl Action {
                         name: from.clone(),
                         ..key.clone()
                     };
-                    let rename = rename_constraint_sql(key, &key.name, from);
-                    Some(match old.comment_sql(comment.as_deref()) {
-                        Some(comment) => format!("{rename}\n{comment}"),
-                        None => rename,
-                    })
+                    let rename = rename_sql(key, &key.name, from);
+                    let comment = old.comment_sql(comment.as_deref());
+                    let both: Vec<String> = rename.into_iter().chain(comment).collect();
+                    (!both.is_empty()).then(|| both.join("\n"))
                 }
                 None => key.comment_sql(comment.as_deref()),
             },
+            // Its old name back, on the table under its new name: the operations' rollback, which
+            // renames the table back, runs after this.
+            Action::Rename { key, from, .. } => rename_sql(key, &key.name, &from.name),
             action if never_removed(action.key().kind) => None,
             // The differ's rollback undoes what the differ did.
             action if altered_by_the_differ(action.key().kind) => None,
@@ -486,16 +560,18 @@ impl Action {
             Action::Create { key, .. }
             | Action::Recreate { key, .. }
             | Action::Replace { key, .. }
-            | Action::Drift { key, .. } => Some(drop_for(key)),
+            | Action::Drift { key, .. }
+            | Action::Rebuild { key, .. } => Some(drop_for(key)),
             // An adoption under another name is undone by giving the object its name back.
             Action::Adopt {
                 key,
                 renamed_from: Some(from),
                 ..
-            } => Some(rename_constraint_sql(key, &key.name, from)),
+            } => rename_sql(key, &key.name, from),
             Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Keep { .. }
+            | Action::Restate { .. }
             | Action::Drop { .. }
             | Action::Forget { .. }
             | Action::Released { .. } => None,
@@ -510,13 +586,17 @@ impl Action {
             action if altered_by_the_differ(action.key().kind) => None,
             action if never_removed(action.key().kind) => None,
             Action::Replace { previous_sql, .. } => Some(previous_sql.clone()),
-            Action::Drift { create_sql, .. } => Some(create_sql.clone()),
+            Action::Drift { create_sql, .. } | Action::Rebuild { create_sql, .. } => {
+                Some(create_sql.clone())
+            }
             Action::Drop { recorded_sql, .. } => recorded_sql.clone(),
             Action::Create { .. }
             | Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Recreate { .. }
             | Action::Keep { .. }
+            | Action::Restate { .. }
+            | Action::Rename { .. }
             | Action::Forget { .. }
             | Action::Released { .. } => None,
         }
@@ -530,9 +610,13 @@ impl Action {
             .collect()
     }
 
-    /// Whether the action changes the database or the ledger.
+    /// Whether the action changes the database or the ledger. A restatement only rewrites a row's
+    /// wording, which an up-to-date push records without a migration.
     pub fn is_change(&self) -> bool {
-        !matches!(self, Action::Keep { .. } | Action::Released { .. })
+        !matches!(
+            self,
+            Action::Keep { .. } | Action::Restate { .. } | Action::Released { .. }
+        )
     }
 
     pub fn row_after(&self) -> RowAfter<'_> {
@@ -554,12 +638,25 @@ impl Action {
             }
             | Action::Keep {
                 create_sql, status, ..
+            }
+            | Action::Restate {
+                create_sql, status, ..
+            }
+            | Action::Rename {
+                create_sql, status, ..
+            }
+            | Action::Rebuild {
+                create_sql,
+                status: Some(status),
+                ..
             } => RowAfter::Write {
                 create_sql,
                 status: *status,
             },
             Action::Drop { .. } | Action::Forget { .. } => RowAfter::Remove,
-            Action::Conflict { .. } | Action::Released { .. } => RowAfter::Leave,
+            Action::Conflict { .. }
+            | Action::Released { .. }
+            | Action::Rebuild { status: None, .. } => RowAfter::Leave,
         }
     }
 }
@@ -626,49 +723,30 @@ fn structure_matches(desired: &DesiredObject, live: &ObjectFingerprint) -> bool 
         .all(|(label, want)| parts.get(*label) == Some(&want.as_str()))
 }
 
-/// `ALTER TABLE ... RENAME CONSTRAINT` for a constraint on `key`'s table, from `from` to `to`.
-fn rename_constraint_sql(key: &ObjectKey, from: &str, to: &str) -> String {
-    format!(
-        "ALTER TABLE {} RENAME CONSTRAINT {} TO {};",
-        quote_qualified(&key.schema, &key.parent),
-        quote_ident(from),
-        quote_ident(to)
-    )
-}
-
-/// A live unique constraint on the same table and columns as `d`, under another name, that no row
-/// records and nothing else desires: what an older engine (or the user) made for the same field.
-/// The differ this replaced matched a unique by its columns, so an older engine's constraint under
-/// a name of its own is the same object, and adding ours beside it would duplicate the index. The
-/// caller renames it to ours only when it is ours (stamped, ours by location or naming, or recorded
-/// under that name on a table since renamed); a user's is a conflict. Once the ledger has a row, a
-/// constraint is matched by name alone.
-fn unique_by_columns<'l>(
-    d: &DesiredObject,
-    live: &BTreeMap<ObjectKey, &'l ObjectFingerprint>,
-    ledger: &BTreeMap<&ObjectKey, &LedgerRow>,
-    desired: &BTreeMap<&ObjectKey, &DesiredObject>,
-    taken: &BTreeSet<ObjectKey>,
-) -> Option<(&'l ObjectFingerprint, ObjectKey)> {
-    if d.key.kind != ObjectKind::Unique {
+/// The statement that renames the object `on` names from `from` to `to`, on its table as the
+/// table is named when the statement runs. `None` when the names are the same, or for a kind with
+/// no rename.
+fn rename_sql(on: &ObjectKey, from: &str, to: &str) -> Option<String> {
+    if from == to {
         return None;
     }
-    live.iter()
-        .find(|(k, l)| {
-            k.kind == ObjectKind::Unique
-                && k.schema == d.key.schema
-                && k.parent == d.key.parent
-                && !ledger.contains_key(k)
-                && !desired.contains_key(k)
-                && !taken.contains(*k)
-                && structure_matches(d, l)
-        })
-        .map(|(k, l)| (*l, k.clone()))
+    ObjectKey {
+        name: from.to_string(),
+        ..on.clone()
+    }
+    .rename_sql(to)
 }
 
 fn drop_for(key: &ObjectKey) -> String {
     key.drop_sql()
         .unwrap_or_else(|| panic!("{key} is on the reconcile with no drop statement"))
+}
+
+/// Whether a same-named live object whose structure matches may be adopted on that alone (D2). Not
+/// a view: the one part a view's statement predicts is that it is not materialized, which says
+/// nothing about what it shows, so a user's view under our name is theirs until `adopt`.
+fn adopted_on_structure(kind: ObjectKind) -> bool {
+    kind != ObjectKind::View
 }
 
 /// A desired object found live with no ledger row (section 7). Ours when its name says so (a
@@ -694,6 +772,11 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         renamed_from: None,
         status,
     };
+    let conflict = || Action::Conflict {
+        key: key.clone(),
+        create_sql: d.create_sql.clone(),
+        live_def: l.definition.clone(),
+    };
     if adopted_by_declaring(key.kind) {
         return adopt(AdoptReason::Declared, Status::Managed);
     }
@@ -708,14 +791,10 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
         return if ours_by_location {
             adopt(AdoptReason::OwnedSchema, Status::Managed)
         } else {
-            Action::Conflict {
-                key: key.clone(),
-                create_sql: d.create_sql.clone(),
-                live_def: l.definition.clone(),
-            }
+            conflict()
         };
     }
-    if structure_matches(d, l) {
+    if structure_matches(d, l) && (ours_by_location || adopted_on_structure(key.kind)) {
         return if ours_by_location {
             adopt(AdoptReason::OwnedSchema, Status::Managed)
         } else {
@@ -724,11 +803,7 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
     }
     match l.create_sql.as_deref() {
         Some(previous_sql) if ours_by_location => replace(previous_sql),
-        _ => Action::Conflict {
-            key: key.clone(),
-            create_sql: d.create_sql.clone(),
-            live_def: l.definition.clone(),
-        },
+        _ => conflict(),
     }
 }
 
@@ -815,210 +890,256 @@ fn changed_since_recorded(row: &LedgerRow, live: &ObjectFingerprint) -> bool {
             .any(|(label, value)| now.get(label) != Some(value))
 }
 
-pub fn reconcile(inputs: Inputs<'_>) -> Plan {
-    let kinds: BTreeSet<ObjectKind> = inputs.kinds.iter().copied().collect();
-    let desired: BTreeMap<&ObjectKey, &DesiredObject> = inputs
-        .desired
+/// The reconcile's three sides, for the kinds it owns, each keyed the same way.
+struct Sides<'a> {
+    desired: BTreeMap<&'a ObjectKey, &'a DesiredObject>,
+    ledger: BTreeMap<&'a ObjectKey, &'a LedgerRow>,
+    live: BTreeMap<ObjectKey, &'a ObjectFingerprint>,
+}
+
+impl<'a> Sides<'a> {
+    fn of(inputs: &Inputs<'a>) -> Sides<'a> {
+        let kinds: BTreeSet<ObjectKind> = inputs.kinds.iter().copied().collect();
+        Sides {
+            desired: inputs
+                .desired
+                .iter()
+                .filter(|d| kinds.contains(&d.key.kind))
+                .map(|d| (&d.key, d))
+                .collect(),
+            ledger: inputs
+                .ledger
+                .iter()
+                .filter(|r| kinds.contains(&r.key.kind))
+                .map(|r| (&r.key, r))
+                .collect(),
+            live: inputs
+                .live
+                .iter()
+                .filter(|f| kinds.contains(&f.kind))
+                .map(|f| (f.key(), f))
+                .collect(),
+        }
+    }
+}
+
+/// Whether `key` is on a table this push drops, and so goes with it.
+fn goes_with_its_table(inputs: &Inputs<'_>, key: &ObjectKey) -> bool {
+    inputs.dropped_tables.contains(&ObjectKey {
+        kind: ObjectKind::Table,
+        schema: key.schema.clone(),
+        parent: String::new(),
+        name: key.parent.clone(),
+    })
+}
+
+/// What a push does about an object the ledger records (plan 3.3).
+fn recorded(
+    inputs: &Inputs<'_>,
+    row: &LedgerRow,
+    d: Option<&DesiredObject>,
+    l: Option<&ObjectFingerprint>,
+) -> Action {
+    let key = row.key.clone();
+    let status = row.status;
+    if status == Status::Released {
+        return Action::Released { key };
+    }
+    match (d, l) {
+        (Some(d), None) => Action::Recreate {
+            inline: inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind),
+            key,
+            create_sql: d.create_sql.clone(),
+            status,
+        },
+        (Some(d), Some(l)) => recorded_and_present(inputs, row, d, l),
+        // A column adopted while the schema does not declare it stays recorded as long as it
+        // is there: the push keeps it, and a narrowed write grant includes it (#63).
+        (None, Some(_))
+            if key.kind == ObjectKind::Column
+                && status == Status::Adopted
+                && !goes_with_its_table(inputs, &key) =>
+        {
+            Action::Keep {
+                key,
+                create_sql: row.desired_sql.clone(),
+                status,
+            }
+        }
+        // Never removed (D9): a row nothing desires any more is forgotten, not undone.
+        (None, Some(_))
+            if !goes_with_its_table(inputs, &key)
+                && !never_removed(key.kind)
+                && !altered_by_the_differ(key.kind) =>
+        {
+            Action::Drop {
+                key,
+                recorded_sql: Some(row.desired_sql.clone()),
+            }
+        }
+        (None, _) => Action::Forget { key },
+    }
+}
+
+/// An object the ledger records that the schema asks for and the catalog holds: kept, restated,
+/// put back after drift, or replaced.
+fn recorded_and_present(
+    inputs: &Inputs<'_>,
+    row: &LedgerRow,
+    d: &DesiredObject,
+    l: &ObjectFingerprint,
+) -> Action {
+    let key = row.key.clone();
+    let status = row.status;
+    let create_sql = d.create_sql.clone();
+    let inline = (inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind))
+        && remade_by_its_parent(key.kind);
+    // Compared on the parts the row carries, so a row an older engine wrote before a part entered
+    // the fingerprint is neither drift nor a reason to refuse a restatement.
+    let unchanged = !changed_since_recorded(row, l);
+    if row.intends(&d.create_sql) {
+        if unchanged {
+            return Action::Keep {
+                key,
+                create_sql,
+                status,
+            };
+        }
+        return Action::Drift {
+            key,
+            recorded_def: row.live_def.clone(),
+            live_def: l.definition.clone(),
+            live_fp: l.fingerprint.clone(),
+            create_sql,
+            security_relevant: d.security_relevant || acl_changed(row, l),
+            inline,
+            status,
+        };
+    }
+    if unchanged && restated(inputs, d, l) {
+        return Action::Restate {
+            key,
+            create_sql,
+            previous_sql: row.desired_sql.clone(),
+            status,
+        };
+    }
+    // Decided before drift, since the schema changed too; but a hand edit it would overwrite is
+    // still one, and must not escape the consent drift needs.
+    let drifted = (!unchanged).then(|| HandEdit {
+        recorded_def: row.live_def.clone(),
+        live_def: l.definition.clone(),
+        live_fp: l.fingerprint.clone(),
+    });
+    Action::Replace {
+        key,
+        create_sql,
+        previous_sql: row.desired_sql.clone(),
+        inline,
+        status,
+        drifted,
+    }
+}
+
+/// F2(c): a replacement is decided on structure, not on the wording of the `CREATE`. A key or
+/// index whose structure says everything a statement can set about it, and that is already shaped
+/// as this push wants it, needs no statement however differently this engine words its `CREATE`
+/// (an upgrade whose template moved a space): only its row is rewritten. The catch-all
+/// `definition` part is the catalog's own rendering, which no statement is compared with.
+fn restated(inputs: &Inputs<'_>, d: &DesiredObject, l: &ObjectFingerprint) -> bool {
+    let kind = d.key.kind;
+    matches!(
+        kind,
+        ObjectKind::PrimaryKey | ObjectKind::Unique | ObjectKind::ForeignKey | ObjectKind::Index
+    ) && kind
+        .labels()
         .iter()
-        .filter(|d| kinds.contains(&d.key.kind))
-        .map(|d| (&d.key, d))
-        .collect();
-    let ledger: BTreeMap<&ObjectKey, &LedgerRow> = inputs
-        .ledger
-        .iter()
-        .filter(|r| kinds.contains(&r.key.kind))
-        .map(|r| (&r.key, r))
-        .collect();
-    let live: BTreeMap<ObjectKey, &ObjectFingerprint> = inputs
+        .all(|label| *label == "definition" || d.structure.contains_key(label))
+        && matching::structure_matches_renamed(d, l, inputs.renamed_tables)
+}
+
+/// The desired objects no row records: created, claimed (section 7), or found under a name of
+/// their own. Returns the live keys found that way, which nothing may then drop as undeclared.
+fn unrecorded(
+    inputs: &Inputs<'_>,
+    sides: &Sides<'_>,
+    moved_to: &BTreeSet<ObjectKey>,
+    changes: &mut Vec<Action>,
+) -> BTreeSet<ObjectKey> {
+    let mut found = BTreeSet::new();
+    for (&key, d) in &sides.desired {
+        if sides.ledger.contains_key(key) || moved_to.contains(key) {
+            continue;
+        }
+        let action =
+            match sides.live.get(key) {
+                Some(l) => claim(inputs, key.clone(), d, l),
+                None => matching::under_another_name(inputs, sides, d, &mut found).unwrap_or_else(
+                    || Action::Create {
+                        inline: inputs.created_by_parent.contains(key)
+                            || altered_by_the_differ(key.kind),
+                        key: key.clone(),
+                        create_sql: d.create_sql.clone(),
+                        status: Status::Managed,
+                    },
+                ),
+            };
+        changes.push(action);
+    }
+    found
+}
+
+/// Objects of a moved kind that nothing declares any more and that are ours by their own record
+/// (an older engine's stamp, section 7, last paragraph) or by where they live (section 5): they
+/// are dropped, as the stamp-reading differs and the sweeps dropped them. The live definition,
+/// where the catalog renders one, is what a rollback restores.
+fn undeclared(inputs: &Inputs<'_>, sides: &Sides<'_>, found: &BTreeSet<ObjectKey>) -> Vec<Action> {
+    sides
         .live
         .iter()
-        .filter(|f| kinds.contains(&f.kind))
-        .map(|f| (f.key(), f))
-        .collect();
-
-    let goes_with_its_table = |key: &ObjectKey| {
-        inputs.dropped_tables.contains(&ObjectKey {
-            kind: ObjectKind::Table,
-            schema: key.schema.clone(),
-            parent: String::new(),
-            name: key.parent.clone(),
+        .filter(|(key, l)| {
+            (l.stamped()
+                || (inputs.location)(key) == Location::Exclusive
+                || inputs.named_by_the_engine.contains(*key))
+                && !sides.ledger.contains_key(*key)
+                && !sides.desired.contains_key(*key)
+                && !found.contains(*key)
+                && !goes_with_its_table(inputs, key)
+                // A stamped table nothing declares is the table differ's to drop, behind its gate.
+                && !altered_by_the_differ(key.kind)
         })
-    };
+        .map(|(key, l)| Action::Drop {
+            key: key.clone(),
+            recorded_sql: l.create_sql.clone(),
+        })
+        .collect()
+}
+
+pub fn reconcile(inputs: Inputs<'_>) -> Plan {
+    let sides = Sides::of(&inputs);
+    let moved = matching::moved_with_their_tables(&inputs, &sides);
 
     let mut removals = Vec::new();
     let mut changes = Vec::new();
-
-    for (&key, row) in &ledger {
-        let key = key.clone();
-        if row.status == Status::Released {
-            changes.push(Action::Released { key });
+    for (&key, row) in &sides.ledger {
+        if moved.from.contains(key) {
             continue;
         }
-        let status = row.status;
-        let inline = inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind);
-        let replaced_inline = inline && remade_by_its_parent(key.kind);
-        match (desired.get(&key), live.get(&key)) {
-            (Some(d), None) => changes.push(Action::Recreate {
-                key,
-                create_sql: d.create_sql.clone(),
-                inline,
-                status,
-            }),
-            (Some(d), Some(l)) => {
-                if !row.intends(&d.create_sql) {
-                    // Decided before drift, since the schema changed too; but a hand edit it would
-                    // overwrite is still one, and must not escape the consent drift needs.
-                    let drifted = changed_since_recorded(row, l).then(|| HandEdit {
-                        recorded_def: row.live_def.clone(),
-                        live_def: l.definition.clone(),
-                        live_fp: l.fingerprint.clone(),
-                    });
-                    changes.push(Action::Replace {
-                        key,
-                        create_sql: d.create_sql.clone(),
-                        previous_sql: row.desired_sql.clone(),
-                        inline: replaced_inline,
-                        status,
-                        drifted,
-                    });
-                } else if changed_since_recorded(row, l) {
-                    changes.push(Action::Drift {
-                        key,
-                        recorded_def: row.live_def.clone(),
-                        live_def: l.definition.clone(),
-                        live_fp: l.fingerprint.clone(),
-                        create_sql: d.create_sql.clone(),
-                        security_relevant: d.security_relevant || acl_changed(row, l),
-                        inline: replaced_inline,
-                        status,
-                    });
-                } else {
-                    changes.push(Action::Keep {
-                        key,
-                        create_sql: d.create_sql.clone(),
-                        status,
-                    });
-                }
-            }
-            // A column adopted while the schema does not declare it stays recorded as long as it
-            // is there: the push keeps it, and a narrowed write grant includes it (#63).
-            (None, Some(_))
-                if key.kind == ObjectKind::Column
-                    && status == Status::Adopted
-                    && !goes_with_its_table(&key) =>
-            {
-                changes.push(Action::Keep {
-                    key,
-                    create_sql: row.desired_sql.clone(),
-                    status,
-                })
-            }
-            // Never removed (D9): a row nothing desires any more is forgotten, not undone.
-            (None, Some(_))
-                if !goes_with_its_table(&key)
-                    && !never_removed(key.kind)
-                    && !altered_by_the_differ(key.kind) =>
-            {
-                removals.push(Action::Drop {
-                    key,
-                    recorded_sql: Some(row.desired_sql.clone()),
-                })
-            }
-            (None, _) => removals.push(Action::Forget { key }),
+        let action = recorded(
+            &inputs,
+            row,
+            sides.desired.get(key).copied(),
+            sides.live.get(key).copied(),
+        );
+        match action {
+            Action::Drop { .. } | Action::Forget { .. } => removals.push(action),
+            _ => changes.push(action),
         }
     }
-
-    // Live objects matched to a desired one under a name of their own (a unique constraint matched
-    // by its columns): ours are taken over and renamed, a user's is refused until adopted. Either
-    // way not dropped as no longer desired, nor matched to a second desired object.
-    let mut renamed = BTreeSet::new();
-    for (&key, d) in &desired {
-        if ledger.contains_key(key) {
-            continue;
-        }
-        let key = key.clone();
-        let found = live.get(&key).copied();
-        let by_columns = match found {
-            None => unique_by_columns(d, &live, &ledger, &desired, &renamed),
-            Some(_) => None,
-        };
-        match (found, by_columns) {
-            (Some(l), _) => changes.push(claim(&inputs, key, d, l)),
-            (None, Some((l, from))) => {
-                // A row under the same name on another table is this constraint before its table
-                // was renamed: a unique constraint's name is its index's, unique in the schema.
-                // Not a released row: that one is the user's, wherever it is.
-                let recorded_elsewhere = ledger.iter().any(|(k, row)| {
-                    row.status != Status::Released
-                        && k.kind == from.kind
-                        && k.schema == from.schema
-                        && k.name == from.name
-                });
-                let ours = recorded_elsewhere
-                    || (inputs.location)(&from) != Location::Neutral
-                    || inputs.named_by_the_engine.contains(&from);
-                let reason = match (l.stamped(), ours) {
-                    (true, _) => AdoptReason::Stamped,
-                    (false, true) => AdoptReason::OwnedSchema,
-                    // A user's own constraint on the columns ours would cover is theirs: the push
-                    // refuses until `adopt` hands it over, keyed by its own name so adopt can
-                    // record it. The push after that replaces it with ours, as any adopted
-                    // object is brought to the schema.
-                    (false, false) => {
-                        changes.push(Action::Conflict {
-                            key: from.clone(),
-                            create_sql: d.create_sql.clone(),
-                            live_def: l.definition.clone(),
-                        });
-                        renamed.insert(from);
-                        continue;
-                    }
-                };
-                changes.push(Action::Adopt {
-                    key,
-                    reason,
-                    create_sql: d.create_sql.clone(),
-                    comment: l.comment.clone(),
-                    renamed_from: Some(from.name.clone()),
-                    status: Status::Managed,
-                });
-                renamed.insert(from);
-            }
-            (None, None) => {
-                let inline =
-                    inputs.created_by_parent.contains(&key) || altered_by_the_differ(key.kind);
-                changes.push(Action::Create {
-                    key,
-                    create_sql: d.create_sql.clone(),
-                    inline,
-                    status: Status::Managed,
-                });
-            }
-        }
-    }
-
-    // Objects of a moved kind that nothing declares any more and that are ours by their own record
-    // (an older engine's stamp, section 7, last paragraph) or by where they live (section 5): they
-    // are dropped, as the stamp-reading differs and the sweeps dropped them. The live definition,
-    // where the catalog renders one, is what a rollback restores.
-    for (key, l) in &live {
-        if !(l.stamped()
-            || (inputs.location)(key) == Location::Exclusive
-            || inputs.named_by_the_engine.contains(key))
-            || ledger.contains_key(key)
-            || desired.contains_key(key)
-            || renamed.contains(key)
-            || goes_with_its_table(key)
-            // A stamped table nothing declares is the table differ's to drop, behind its gate.
-            || altered_by_the_differ(key.kind)
-        {
-            continue;
-        }
-        removals.push(Action::Drop {
-            key: key.clone(),
-            recorded_sql: l.create_sql.clone(),
-        });
-    }
+    changes.extend(moved.actions);
+    let found = unrecorded(&inputs, &sides, &moved.to, &mut changes);
+    removals.extend(undeclared(&inputs, &sides, &found));
+    rebuild::dependents(&inputs, &sides, &removals, &mut changes);
 
     // Dependencies first for the changes, dependents first for the removals, then key order.
     removals.sort_by_key(|a| (Reverse(creation_rank(a.key().kind)), a.key().clone()));
@@ -1100,6 +1221,7 @@ mod tests {
             dropped_tables: &BTreeSet::new(),
             location: no_location,
             named_by_the_engine: &BTreeSet::new(),
+            renamed_tables: &BTreeMap::new(),
             kinds: &[ObjectKind::Check],
         })
         .actions
@@ -1216,6 +1338,7 @@ mod tests {
             dropped_tables: &none,
             location: no_location,
             named_by_the_engine: &none,
+            renamed_tables: &BTreeMap::new(),
             kinds: &kinds,
         });
         assert!(
@@ -1239,6 +1362,7 @@ mod tests {
             dropped_tables: &none,
             location: no_location,
             named_by_the_engine: &none,
+            renamed_tables: &BTreeMap::new(),
             kinds: &kinds,
         });
         assert!(
@@ -1428,6 +1552,7 @@ mod tests {
             dropped_tables: &dropped,
             location: no_location,
             named_by_the_engine: &none,
+            renamed_tables: &BTreeMap::new(),
             kinds: &[ObjectKind::Check],
         });
         // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.
@@ -1470,6 +1595,7 @@ mod tests {
             dropped_tables: &BTreeSet::new(),
             location: no_location,
             named_by_the_engine: &BTreeSet::new(),
+            renamed_tables: &BTreeMap::new(),
             kinds: &[ObjectKind::RlsAttributes],
         });
         assert_eq!(plan.actions, [Action::Forget { key }]);
@@ -1510,6 +1636,7 @@ mod tests {
                 dropped_tables: &none,
                 location: no_location,
                 named_by_the_engine: &none,
+                renamed_tables: &BTreeMap::new(),
                 kinds: &[ObjectKind::Index, ObjectKind::Function],
             })
             .actions
@@ -1563,6 +1690,7 @@ mod tests {
             dropped_tables: &none,
             location: no_location,
             named_by_the_engine: &none,
+            renamed_tables: &BTreeMap::new(),
             kinds: &[ObjectKind::Function],
         })
         .actions;
@@ -1601,6 +1729,7 @@ mod tests {
             dropped_tables: &none,
             location: no_location,
             named_by_the_engine: &none,
+            renamed_tables: &BTreeMap::new(),
             kinds: &[ObjectKind::Unique],
         })
         .actions
@@ -1709,6 +1838,7 @@ mod tests {
             dropped_tables: &none,
             location: no_location,
             named_by_the_engine: &named,
+            renamed_tables: &BTreeMap::new(),
             kinds: &[ObjectKind::Unique],
         })
         .actions;
@@ -1794,6 +1924,7 @@ mod tests {
                 dropped_tables: &none,
                 location: no_location,
                 named_by_the_engine: named,
+                renamed_tables: &BTreeMap::new(),
                 kinds: &[ObjectKind::Function],
             })
             .actions
@@ -1816,5 +1947,458 @@ mod tests {
             actions.iter().all(|a| *a.key() != user.key()),
             "a user's function is left alone: {actions:?}"
         );
+    }
+
+    /// A key on `parent` with the given structure parts, desired as `create_sql` and live with
+    /// exactly those parts.
+    fn key_object(
+        kind: ObjectKind,
+        parent: &str,
+        name: &str,
+        parts: &[(&'static str, &str)],
+        create_sql: &str,
+    ) -> (DesiredObject, ObjectFingerprint) {
+        let key = ObjectKey {
+            kind,
+            schema: "public".into(),
+            parent: parent.into(),
+            name: name.into(),
+        };
+        let d = DesiredObject {
+            structure: parts.iter().map(|(l, v)| (*l, v.to_string())).collect(),
+            create_sql: create_sql.into(),
+            drop_sql: key.drop_sql().unwrap_or_default(),
+            depends_on: Vec::new(),
+            security_relevant: false,
+            key: key.clone(),
+        };
+        let definition = parts
+            .iter()
+            .map(|(l, v)| format!("{l}={v}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let l = ObjectFingerprint {
+            kind,
+            schema: key.schema.clone(),
+            parent: key.parent.clone(),
+            name: key.name.clone(),
+            fingerprint: hash(kind, &[&definition]),
+            definition,
+            comment: None,
+            create_sql: None,
+        };
+        (d, l)
+    }
+
+    fn run_with(
+        desired: &[DesiredObject],
+        ledger: &[LedgerRow],
+        live: &[ObjectFingerprint],
+        named: &BTreeSet<ObjectKey>,
+        renamed: &BTreeMap<ObjectKey, String>,
+    ) -> Vec<Action> {
+        let none = BTreeSet::new();
+        reconcile(Inputs {
+            desired,
+            ledger,
+            live,
+            created_by_parent: &none,
+            dropped_tables: &none,
+            location: no_location,
+            named_by_the_engine: named,
+            renamed_tables: renamed,
+            kinds: &[
+                ObjectKind::PrimaryKey,
+                ObjectKind::Unique,
+                ObjectKind::ForeignKey,
+                ObjectKind::Index,
+                ObjectKind::Trigger,
+                ObjectKind::View,
+                ObjectKind::Function,
+            ],
+        })
+        .actions
+    }
+
+    fn pk(table: &str) -> (DesiredObject, ObjectFingerprint) {
+        key_object(
+            ObjectKind::PrimaryKey,
+            table,
+            &format!("{table}_pkey"),
+            &[("columns", "id")],
+            &format!(
+                "ALTER TABLE \"public\".\"{table}\" ADD CONSTRAINT \"{table}_pkey\" PRIMARY KEY (\"id\");"
+            ),
+        )
+    }
+
+    fn fk_to(target: &str) -> (DesiredObject, ObjectFingerprint) {
+        let refs = format!("public.{target}");
+        key_object(
+            ObjectKind::ForeignKey,
+            "comments",
+            "comments_post_id_fkey",
+            &[
+                ("columns", "post_id"),
+                ("references", refs.as_str()),
+                ("referenced_columns", "id"),
+                ("on_delete", "NO ACTION"),
+                ("on_update", "NO ACTION"),
+                ("match_type", "SIMPLE"),
+                ("deferrable", "f"),
+                ("initially_deferred", "f"),
+            ],
+            &format!(
+                "ALTER TABLE \"public\".\"comments\" ADD CONSTRAINT \"comments_post_id_fkey\" FOREIGN KEY (\"post_id\") REFERENCES \"public\".\"{target}\" (\"id\");"
+            ),
+        )
+    }
+
+    fn table_key(name: &str) -> ObjectKey {
+        ObjectKey {
+            kind: ObjectKind::Table,
+            schema: "public".into(),
+            parent: String::new(),
+            name: name.into(),
+        }
+    }
+
+    /// F2(b): the primary key of a table this push renames is renamed after the table, and back
+    /// before it on rollback; its row moves. A foreign key that references it, whose statement now
+    /// names the new table, is only restated: once the table is renamed it points there.
+    #[test]
+    fn a_renamed_tables_key_is_renamed_and_the_key_on_it_restated() {
+        let (old_pk, old_live) = pk("posts");
+        let (new_pk, _) = pk("postings");
+        let (old_fk, fk_live) = fk_to("posts");
+        let (new_fk, _) = fk_to("postings");
+        let ledger = [
+            row(&old_pk, &old_live, Status::Managed),
+            row(&old_fk, &fk_live, Status::Managed),
+        ];
+        let renamed = BTreeMap::from([(table_key("posts"), "postings".to_string())]);
+        let actions = run_with(
+            &[new_pk.clone(), new_fk.clone()],
+            &ledger,
+            &[old_live, fk_live],
+            &BTreeSet::new(),
+            &renamed,
+        );
+        match &actions[..] {
+            [rename @ Action::Rename { key, from, .. }, Action::Restate { key: fk, .. }] => {
+                assert_eq!((key, from, fk), (&new_pk.key, &old_pk.key, &new_fk.key));
+                assert_eq!(
+                    rename.sql(),
+                    ["ALTER TABLE \"public\".\"postings\" RENAME CONSTRAINT \"posts_pkey\" TO \"postings_pkey\";"]
+                );
+                assert_eq!(
+                    rename.rollback_sql(),
+                    ["ALTER TABLE \"public\".\"postings\" RENAME CONSTRAINT \"postings_pkey\" TO \"posts_pkey\";"]
+                );
+                assert_eq!(rename.found_as().as_ref(), Some(&old_pk.key));
+            }
+            other => panic!("renamed and restated, never dropped: {other:?}"),
+        }
+        // Without the table rename the old key is dropped and the new one made, as before.
+        let unrenamed = run_with(
+            std::slice::from_ref(&new_pk),
+            &ledger[..1],
+            &[pk("posts").1],
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        );
+        assert!(
+            matches!(&unrenamed[..], [Action::Drop { .. }, Action::Create { .. }]),
+            "{unrenamed:?}"
+        );
+    }
+
+    /// F2(c): a recorded statement worded differently from this push's, for an object unchanged
+    /// since the last apply and shaped as desired, is restated: no SQL, the row rewritten. Changed
+    /// by hand since, it is replaced, as before.
+    #[test]
+    fn a_reworded_statement_is_restated_unless_the_object_changed() {
+        let (d, l) = pk("posts");
+        let mut r = row(&d, &l, Status::Managed);
+        r.desired_sql = d.create_sql.replace(" (", "(");
+        r.desired_fp = desired_fingerprint(ObjectKind::PrimaryKey, &r.desired_sql);
+        let none = BTreeSet::new();
+        let restated = run_with(
+            std::slice::from_ref(&d),
+            std::slice::from_ref(&r),
+            std::slice::from_ref(&l),
+            &none,
+            &BTreeMap::new(),
+        );
+        assert!(
+            matches!(&restated[..], [Action::Restate { previous_sql, .. }] if *previous_sql == r.desired_sql),
+            "{restated:?}"
+        );
+        assert!(restated[0].sql().is_empty() && !restated[0].is_change());
+        assert_eq!(
+            restated[0].row_after(),
+            RowAfter::Write {
+                create_sql: &d.create_sql,
+                status: Status::Managed
+            }
+        );
+
+        r.live_fp = "edited".into();
+        let replaced = run_with(
+            std::slice::from_ref(&d),
+            std::slice::from_ref(&r),
+            std::slice::from_ref(&l),
+            &none,
+            &BTreeMap::new(),
+        );
+        assert!(
+            matches!(
+                &replaced[..],
+                [Action::Replace {
+                    drifted: Some(_),
+                    ..
+                }]
+            ),
+            "{replaced:?}"
+        );
+    }
+
+    /// F2(a): a primary key put back after drift takes the foreign keys on it with it: ours, kept
+    /// otherwise, is rebuilt from its statement and keeps its row; a user's is rebuilt as the
+    /// catalog renders it and gets none. Each is dropped before the key and made again after it.
+    #[test]
+    fn a_rebuilt_key_rebuilds_the_foreign_keys_on_it() {
+        let (d, l) = pk("posts");
+        let mut r = row(&d, &l, Status::Managed);
+        r.live_fp = "edited".into();
+        let (fk, fk_live) = fk_to("posts");
+        let fk_row = row(&fk, &fk_live, Status::Managed);
+        let mut theirs = fk_live.clone();
+        theirs.name = "likes_post_fk".into();
+        theirs.parent = "likes".into();
+        theirs
+            .definition
+            .push_str("\ndefinition=FOREIGN KEY (post_id) REFERENCES public.posts(id)");
+        let actions = run_with(
+            &[d.clone(), fk.clone()],
+            &[r, fk_row],
+            &[l, fk_live, theirs.clone()],
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        );
+        let rebuilt: Vec<(&ObjectKey, Option<Status>)> = actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::Rebuild {
+                    key,
+                    status,
+                    because,
+                    ..
+                } => {
+                    assert_eq!(because, &d.key);
+                    Some((key, *status))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            rebuilt,
+            [(&fk.key, Some(Status::Managed)), (&theirs.key(), None)],
+            "{actions:?}"
+        );
+        let user = actions.iter().find(|a| *a.key() == theirs.key()).unwrap();
+        assert_eq!(
+            user.addition_sql(),
+            ["ALTER TABLE \"public\".\"likes\" ADD CONSTRAINT \"likes_post_fk\" FOREIGN KEY (post_id) REFERENCES public.posts(id);"]
+        );
+        assert!(user.removal_sql().unwrap().starts_with("-- "));
+        assert_eq!(user.row_after(), RowAfter::Leave);
+    }
+
+    /// F8: a trigger 0.6.0 named, cut by Postgres, with no row: named by the engine and shaped as
+    /// the desired one, so it is renamed, not left beside a second copy.
+    #[test]
+    fn an_older_engines_cut_name_is_renamed_to_ours() {
+        let parts = [
+            ("timing", "BEFORE"),
+            ("events", "UPDATE"),
+            ("function", "_platform.set_updated_at"),
+        ];
+        let (d, _) = key_object(
+            ObjectKind::Trigger,
+            "posts",
+            "posts_upd_updated_at_trigger",
+            &parts,
+            "CREATE OR REPLACE TRIGGER \"posts_upd_updated_at_trigger\" BEFORE UPDATE ON \"public\".\"posts\" FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();",
+        );
+        let (_, old) = key_object(
+            ObjectKind::Trigger,
+            "posts",
+            "posts_updated_at_tri",
+            &parts,
+            "",
+        );
+        let named = BTreeSet::from([old.key()]);
+        let actions = run_with(
+            std::slice::from_ref(&d),
+            &[],
+            std::slice::from_ref(&old),
+            &named,
+            &BTreeMap::new(),
+        );
+        match &actions[..] {
+            [a @ Action::Adopt {
+                renamed_from: Some(from),
+                status: Status::Managed,
+                ..
+            }] => {
+                assert_eq!(from, "posts_updated_at_tri");
+                assert_eq!(
+                    a.sql(),
+                    ["ALTER TRIGGER \"posts_updated_at_tri\" ON \"public\".\"posts\" RENAME TO \"posts_upd_updated_at_trigger\";"]
+                );
+            }
+            other => panic!("renamed, not duplicated: {other:?}"),
+        }
+        // Not the engine's name: a user's trigger, left alone, and ours made beside it.
+        let user = run_with(
+            std::slice::from_ref(&d),
+            &[],
+            std::slice::from_ref(&old),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        );
+        assert!(matches!(&user[..], [Action::Create { .. }]), "{user:?}");
+    }
+
+    /// F12: a view's structure says only that it is not materialized, so a same-named view that is
+    /// not ours by location or naming is a conflict, never adopted on that alone.
+    #[test]
+    fn a_users_view_under_our_name_is_a_conflict() {
+        let (d, l) = key_object(
+            ObjectKind::View,
+            "",
+            "users",
+            &[("materialized", "f")],
+            "CREATE VIEW \"api\".\"users\" AS SELECT 1;",
+        );
+        let none = BTreeSet::new();
+        let refused = run_with(
+            std::slice::from_ref(&d),
+            &[],
+            std::slice::from_ref(&l),
+            &none,
+            &BTreeMap::new(),
+        );
+        assert!(
+            matches!(&refused[..], [Action::Conflict { .. }]),
+            "{refused:?}"
+        );
+        let named = BTreeSet::from([d.key.clone()]);
+        let ours = run_with(
+            std::slice::from_ref(&d),
+            &[],
+            std::slice::from_ref(&l),
+            &named,
+            &BTreeMap::new(),
+        );
+        assert!(
+            matches!(
+                &ours[..],
+                [Action::Adopt {
+                    reason: AdoptReason::OwnedSchema,
+                    ..
+                }]
+            ),
+            "{ours:?}"
+        );
+    }
+
+    /// A row as an older engine wrote it, fingerprinting only `parts` of the object.
+    fn older_row(d: &DesiredObject, l: &ObjectFingerprint, parts: &[&str]) -> LedgerRow {
+        let live_def = l
+            .definition
+            .lines()
+            .filter(|line| parts.iter().any(|p| line.starts_with(&format!("{p}="))))
+            .collect::<Vec<_>>()
+            .join("\n");
+        LedgerRow {
+            live_fp: hash(d.key.kind, &[&live_def]),
+            live_def,
+            ..row(d, l, Status::Managed)
+        }
+    }
+
+    /// ENG-TIER2 added a view's options and owner to its fingerprint. A row an older engine wrote
+    /// without them is compared on the parts it carries, through every path the reconcile takes: an
+    /// unchanged view is kept, a changed one is replaced with no hand edit to consent to, and a
+    /// part the row does carry that changed is still drift.
+    #[test]
+    fn an_older_engines_view_row_is_compared_on_the_parts_it_carries() {
+        let parts = [
+            ("materialized", "f"),
+            ("definition", "SELECT 1"),
+            ("options", "security_barrier=true"),
+            ("owner", "supatype_api"),
+        ];
+        let create = "CREATE VIEW \"public\".\"posts\" AS SELECT 1;";
+        let (d, l) = key_object(ObjectKind::View, "", "posts", &parts, create);
+        let older = older_row(&d, &l, &["materialized", "definition"]);
+        let none = BTreeSet::new();
+        let renamed = BTreeMap::new();
+        let run = |d: &DesiredObject, l: &ObjectFingerprint| {
+            run_with(
+                std::slice::from_ref(d),
+                std::slice::from_ref(&older),
+                std::slice::from_ref(l),
+                &none,
+                &renamed,
+            )
+        };
+
+        let kept = run(&d, &l);
+        assert!(matches!(&kept[..], [Action::Keep { .. }]), "{kept:?}");
+
+        let changed = DesiredObject {
+            create_sql: "CREATE VIEW \"public\".\"posts\" AS SELECT 1 AS one;".into(),
+            ..d.clone()
+        };
+        let replaced = run(&changed, &l);
+        assert!(
+            matches!(&replaced[..], [Action::Replace { drifted: None, .. }]),
+            "{replaced:?}"
+        );
+
+        let (_, edited) = key_object(
+            ObjectKind::View,
+            "",
+            "posts",
+            &[parts[0], ("definition", "SELECT 2"), parts[2], parts[3]],
+            create,
+        );
+        let drift = run(&d, &edited);
+        assert!(matches!(&drift[..], [Action::Drift { .. }]), "{drift:?}");
+    }
+
+    /// The same for a function's `acl`: an older row without it is no hand edit, and so neither a
+    /// drift nor a security-relevant one.
+    #[test]
+    fn an_older_engines_function_row_without_its_acl_is_kept() {
+        let parts = [
+            ("returns", "boolean"),
+            ("body", "SELECT true"),
+            ("acl", "authenticated=X"),
+        ];
+        let create = "CREATE FUNCTION \"public\".\"can_read\"() RETURNS boolean AS 'SELECT true';";
+        let (d, l) = key_object(ObjectKind::Function, "", "can_read()", &parts, create);
+        let older = older_row(&d, &l, &["returns", "body"]);
+        let actions = run_with(
+            std::slice::from_ref(&d),
+            std::slice::from_ref(&older),
+            std::slice::from_ref(&l),
+            &BTreeSet::new(),
+            &BTreeMap::new(),
+        );
+        assert!(matches!(&actions[..], [Action::Keep { .. }]), "{actions:?}");
     }
 }

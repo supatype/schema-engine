@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{FieldAst, IndexAst, ModelAst, SchemaAst};
+use crate::parser::ast::{FieldAst, IndexAst, JunctionTableAst, ModelAst, SchemaAst};
 use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 
 pub const MANAGED_PREFIX: &str = "supatype:managed";
@@ -154,6 +154,180 @@ fn choose_free(
             return name;
         }
         pass += 1;
+    }
+}
+
+/// Whether `name` is one [`choose_free`] can give for `name1`, `name2` and `label`: the plain name,
+/// or the name with some pass's number appended to the label.
+fn in_sequence(name: &str, name1: &str, name2: Option<&str>, label: &str) -> bool {
+    if make_object_name(name1, name2, label) == name {
+        return true;
+    }
+    let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    // The label may end in a digit of its own (`check_1`), so every split of the trailing digits
+    // into label and pass is tried.
+    (1..=digits).any(|count| {
+        let pass = &name[name.len() - count..];
+        !pass.starts_with('0') && make_object_name(name1, name2, &format!("{label}{pass}")) == name
+    })
+}
+
+/// One name the ledger records on a table, with the columns its object covers where the catalog
+/// says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordedName {
+    name: String,
+    columns: Option<String>,
+}
+
+/// The names the ledger records for the keys, checks and indexes on the schema's tables (F2d). A
+/// name already recorded is kept: [`ObjectNames::for_schema`] gives an object the recorded name
+/// its own name sequence holds before choosing, and chooses a digit only for an object with none.
+/// So adding a model whose names clash with an existing one's leaves the existing names alone and
+/// gives the new object the digit, where choosing from the schema alone moved the old one's.
+///
+/// Filled by a push from the ledger of the database it pushes to, never parsed or serialized.
+/// Grouped by table and by the kind of name: `pkey`, `key`, `fkey`, `check` (a type check, bounds
+/// or model rule) and `index`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RecordedNames {
+    names: HashMap<(String, &'static str), Vec<RecordedName>>,
+}
+
+impl RecordedNames {
+    /// Records `name` for an object of `group` on `table`, covering `columns` when known.
+    pub fn record(&mut self, table: &str, group: &'static str, name: &str, columns: Option<&str>) {
+        self.names
+            .entry((table.to_string(), group))
+            .or_default()
+            .push(RecordedName {
+                name: name.to_string(),
+                columns: columns.map(str::to_string),
+            });
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// Takes the recorded name on `table` in `group` that the sequence of `name1`, `name2` and
+    /// `label` holds, for an object covering `columns` where both sides know them. Each recorded
+    /// name is taken once.
+    fn take(
+        &mut self,
+        table: &str,
+        group: &'static str,
+        columns: Option<&str>,
+        name: Seq<'_>,
+    ) -> Option<String> {
+        let recorded = self.names.get_mut(&(table.to_string(), group))?;
+        let at = recorded.iter().position(|r| {
+            let same_columns = match (columns, r.columns.as_deref()) {
+                (Some(want), Some(have)) => want == have,
+                _ => true,
+            };
+            same_columns && in_sequence(&r.name, name.name1, name.name2, name.label)
+        })?;
+        Some(recorded.remove(at).name)
+    }
+}
+
+/// The parts [`make_object_name`] builds a name from.
+#[derive(Clone, Copy)]
+struct Seq<'a> {
+    name1: &'a str,
+    name2: Option<&'a str>,
+    label: &'a str,
+}
+
+/// The two namespaces names are chosen in, with the names the ledger records, which are claimed
+/// first and given back to the objects they belong to.
+struct Choosers {
+    relations: NameChooser,
+    constraints: NameChooser,
+    recorded: RecordedNames,
+}
+
+impl Choosers {
+    fn new(recorded: &RecordedNames, tables: &HashSet<&str>) -> Choosers {
+        let mut choosers = Choosers {
+            relations: NameChooser::default(),
+            constraints: NameChooser::default(),
+            recorded: RecordedNames::default(),
+        };
+        for ((table, group), names) in &recorded.names {
+            if !tables.contains(table.as_str()) {
+                continue;
+            }
+            for r in names {
+                if matches!(*group, "pkey" | "key" | "index") {
+                    choosers.relations.claim(&r.name);
+                }
+                if *group != "index" {
+                    choosers.constraints.claim(&r.name);
+                }
+                choosers
+                    .recorded
+                    .record(table, group, &r.name, r.columns.as_deref());
+            }
+        }
+        choosers
+    }
+
+    /// A primary key's or unique constraint's name: an index and a constraint at once.
+    fn key(
+        &mut self,
+        table: &str,
+        group: &'static str,
+        column: Option<&str>,
+        label: &str,
+    ) -> String {
+        let seq = Seq {
+            name1: table,
+            name2: column,
+            label,
+        };
+        self.recorded
+            .take(table, group, column, seq)
+            .unwrap_or_else(|| {
+                choose_free(
+                    &mut [&mut self.relations, &mut self.constraints],
+                    table,
+                    column,
+                    label,
+                )
+            })
+    }
+
+    /// An index's name.
+    fn relation(&mut self, table: &str, name2: Option<&str>, label: &str) -> String {
+        let seq = Seq {
+            name1: table,
+            name2,
+            label,
+        };
+        self.recorded
+            .take(table, "index", None, seq)
+            .unwrap_or_else(|| self.relations.choose(table, name2, label))
+    }
+
+    /// A foreign key's or check's name, covering `column` where it has one.
+    fn constraint(
+        &mut self,
+        table: &str,
+        group: &'static str,
+        column: Option<&str>,
+        label: &str,
+    ) -> String {
+        let seq = Seq {
+            name1: table,
+            name2: column,
+            label,
+        };
+        let columns = (group == "fkey").then_some(column).flatten();
+        self.recorded
+            .take(table, group, columns, seq)
+            .unwrap_or_else(|| self.constraints.choose(table, column, label))
     }
 }
 
@@ -346,187 +520,206 @@ fn index_owner(index: &IndexAst) -> String {
     )
 }
 
+/// The names claimed before any is chosen: the tables, the names the schema states outright and
+/// the versions tables' fixed names.
+fn claim_stated_names(models: &[&ModelAst], junctions: &[&JunctionTableAst], ch: &mut Choosers) {
+    use crate::parser::accessors::{versions_of, versions_table_name};
+    for model in models {
+        ch.relations.claim(model.table_name());
+        if versions_of(model).is_some() {
+            let vt = versions_table_name(model.table_name());
+            ch.relations.claim(&vt);
+            for key in [primary_key_name(&vt), versions_record_key_name(&vt)] {
+                ch.relations.claim(&key);
+                ch.constraints.claim(&key);
+            }
+            ch.relations.claim(&versions_record_index_name(&vt));
+            ch.constraints.claim(&foreign_key_name(&vt, "record_id"));
+            ch.constraints.claim(&type_check_name(&vt, "status"));
+        }
+        for index in model.indexes() {
+            if let Some(name) = &index.name {
+                ch.relations.claim(&clip_identifier(name));
+            }
+        }
+    }
+    for junction in junctions {
+        ch.relations.claim(&junction.name);
+    }
+}
+
+/// The columns a model's unique constraints cover, in order of their fields' names: a unique
+/// field's columns, and a one-to-one relation's foreign key column.
+pub(crate) fn unique_columns(model: &ModelAst) -> Vec<String> {
+    use crate::parser::accessors::{
+        column_names_for, db_foreign_key, db_unique, default_foreign_key_column,
+    };
+    use crate::parser::ast::RelationCardinality;
+    let mut out = Vec::new();
+    for (field_name, field) in sorted_fields(model) {
+        let unique_fk = matches!(
+            field,
+            FieldAst::Relation(rel)
+                if matches!(rel.cardinality, RelationCardinality::BelongsTo) && rel.unique_fk
+        );
+        if unique_fk {
+            out.push(
+                db_foreign_key(field, field_name)
+                    .unwrap_or_else(|| default_foreign_key_column(field_name)),
+            );
+        } else if db_unique(field) && !matches!(field, FieldAst::Relation(_)) {
+            out.extend(column_names_for(field_name, field));
+        }
+    }
+    out.retain(|c| !c.is_empty());
+    out
+}
+
 impl ObjectNames {
     pub fn for_schema(ast: &SchemaAst) -> Self {
-        use crate::parser::accessors::implicit_model_indexes;
-        use crate::parser::accessors::{
-            column_names_for, db_foreign_key, db_unique, default_foreign_key_column, versions_of,
-            versions_table_name,
-        };
-        use crate::parser::ast::RelationCardinality;
-
         let mut names = ObjectNames::default();
         // Declaration order decides nothing: the tables are named in order of their names, and
         // each table's columns and indexes in order of theirs, so reordering models or fields
-        // renames nothing (a model added with a clashing name still can, as it would in Postgres).
+        // renames nothing. A model added with a clashing name moves no name the ledger records
+        // (F2d): the new object takes the digit.
         let models = sorted_models(ast);
         let mut junctions: Vec<_> = ast.junction_tables.iter().collect();
         junctions.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut relations = NameChooser::default();
-        let mut constraints = NameChooser::default();
-
+        let tables: HashSet<&str> = models
+            .iter()
+            .map(|m| m.table_name())
+            .chain(junctions.iter().map(|j| j.name.as_str()))
+            .collect();
+        let mut ch = Choosers::new(&ast.recorded_names, &tables);
+        claim_stated_names(&models, &junctions, &mut ch);
         for model in &models {
-            relations.claim(model.table_name());
-            if versions_of(model).is_some() {
-                let vt = versions_table_name(model.table_name());
-                relations.claim(&vt);
-                for key in [primary_key_name(&vt), versions_record_key_name(&vt)] {
-                    relations.claim(&key);
-                    constraints.claim(&key);
-                }
-                relations.claim(&versions_record_index_name(&vt));
-                constraints.claim(&foreign_key_name(&vt, "record_id"));
-                constraints.claim(&type_check_name(&vt, "status"));
-            }
-            for index in model.indexes() {
-                if let Some(name) = &index.name {
-                    relations.claim(&clip_identifier(name));
-                }
-            }
+            names.sequences(model, &mut ch);
         }
-        for junction in &junctions {
-            relations.claim(&junction.name);
-        }
-
-        let serial = crate::parser::accessors::owns_sequence;
         for model in &models {
-            let table = model.table_name();
-            for (field_name, field) in sorted_fields(model) {
-                if !serial(field) {
-                    continue;
-                }
-                for column in column_names_for(field_name, field) {
-                    names.pick(table, "seq", &column, || {
-                        relations.choose(table, Some(&column), "seq")
-                    });
-                }
-            }
-        }
-
-        for model in &models {
-            let table = model.table_name();
-            if model.fields.values().any(engine::field_is_primary_key) {
-                names.pick(table, "pkey", "", || {
-                    choose_free(&mut [&mut relations, &mut constraints], table, None, "pkey")
-                });
-            }
-            for (field_name, field) in sorted_fields(model) {
-                let unique_fk = matches!(
-                    field,
-                    FieldAst::Relation(rel)
-                        if matches!(rel.cardinality, RelationCardinality::BelongsTo) && rel.unique_fk
-                );
-                let columns = if unique_fk {
-                    vec![db_foreign_key(field, field_name)
-                        .unwrap_or_else(|| default_foreign_key_column(field_name))]
-                } else if db_unique(field) && !matches!(field, FieldAst::Relation(_)) {
-                    column_names_for(field_name, field)
-                } else {
-                    continue;
-                };
-                for column in columns.into_iter().filter(|c| !c.is_empty()) {
-                    names.pick(table, "key", &column, || {
-                        choose_free(
-                            &mut [&mut relations, &mut constraints],
-                            table,
-                            Some(&column),
-                            "key",
-                        )
-                    });
-                }
-            }
-            for index in sorted_indexes(model.indexes().iter()) {
-                if index.name.is_none() {
-                    names.pick(table, "index", &index_owner(index), || {
-                        relations.choose(table, Some(&name_addition(&index.fields)), "idx")
-                    });
-                }
-            }
-            // The indexes nobody declares: a named one is a Blocks GIN, the rest Postgres's own.
-            let implicit = implicit_model_indexes(model);
-            for index in sorted_indexes(implicit.iter()) {
-                let label = if index.name.is_some() {
-                    "gin_idx"
-                } else {
-                    "idx"
-                };
-                names.pick(table, "index", &index_owner(index), || {
-                    relations.choose(table, Some(&name_addition(&index.fields)), label)
-                });
-            }
-            if model.options.singleton {
-                names.pick(table, "singleton", "", || {
-                    relations.choose(table, None, "singleton_idx")
-                });
-            }
+            names.keys_and_indexes(model, &mut ch);
         }
         for junction in &junctions {
             names.pick(&junction.name, "pkey", "", || {
-                choose_free(
-                    &mut [&mut relations, &mut constraints],
-                    &junction.name,
-                    None,
-                    "pkey",
-                )
+                ch.key(&junction.name, "pkey", None, "pkey")
             });
         }
-
         // Foreign keys, the checks a field type carries, declared bounds and model rules, each free
         // of every constraint name in the schema.
         for model in &models {
-            let table = model.table_name();
-            for (field_name, field) in sorted_fields(model) {
-                if let FieldAst::Relation(rel) = field {
-                    if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                        let column = db_foreign_key(field, field_name)
-                            .unwrap_or_else(|| default_foreign_key_column(field_name));
-                        names.pick(table, "fkey", &column, || {
-                            constraints.choose(table, Some(&column), "fkey")
-                        });
-                    }
-                }
-            }
-            for (field_name, field) in sorted_fields(model) {
-                let type_check = matches!(
-                    field,
-                    FieldAst::Email(_)
-                        | FieldAst::Url(_)
-                        | FieldAst::Enum(_)
-                        | FieldAst::Publishable
-                );
-                let columns = match field {
-                    FieldAst::Publishable => vec!["status".to_string()],
-                    _ => column_names_for(field_name, field),
-                };
-                for column in columns.into_iter().filter(|c| !c.is_empty()) {
-                    if type_check {
-                        names.pick(table, "check", &column, || {
-                            constraints.choose(table, Some(&column), "check")
-                        });
-                    }
-                    if engine::has_bounds(field, &column) {
-                        names.pick(table, "bounds", &column, || {
-                            constraints.choose(table, Some(&column), "bounds")
-                        });
-                    }
-                }
-            }
-            for index in 0..model.annotations.db.constraints.len() {
-                let label = model_constraint_label(index);
-                names.pick(table, "rule", &index.to_string(), || {
-                    constraints.choose(table, None, &label)
-                });
-            }
+            names.model_constraints(model, &mut ch);
         }
         for junction in &junctions {
             for column in [&junction.fk_a, &junction.fk_b] {
                 names.pick(&junction.name, "fkey", column, || {
-                    constraints.choose(&junction.name, Some(column), "fkey")
+                    ch.constraint(&junction.name, "fkey", Some(column), "fkey")
                 });
             }
         }
         names.functions_and_triggers(ast);
         names
+    }
+
+    /// The sequences a model's serial columns own: Postgres names each when it creates the table,
+    /// before anything else on it.
+    fn sequences(&mut self, model: &ModelAst, ch: &mut Choosers) {
+        use crate::parser::accessors::{column_names_for, owns_sequence};
+        let table = model.table_name();
+        for (field_name, field) in sorted_fields(model) {
+            if !owns_sequence(field) {
+                continue;
+            }
+            for column in column_names_for(field_name, field) {
+                self.pick(table, "seq", &column, || {
+                    ch.relations.choose(table, Some(&column), "seq")
+                });
+            }
+        }
+    }
+
+    /// A model's primary key, unique constraints and indexes, declared and implicit.
+    fn keys_and_indexes(&mut self, model: &ModelAst, ch: &mut Choosers) {
+        use crate::parser::accessors::implicit_model_indexes;
+        let table = model.table_name();
+        if model.fields.values().any(engine::field_is_primary_key) {
+            self.pick(table, "pkey", "", || ch.key(table, "pkey", None, "pkey"));
+        }
+        for column in unique_columns(model) {
+            self.pick(table, "key", &column, || {
+                ch.key(table, "key", Some(&column), "key")
+            });
+        }
+        for index in sorted_indexes(model.indexes().iter()) {
+            if index.name.is_none() {
+                self.pick(table, "index", &index_owner(index), || {
+                    ch.relation(table, Some(&name_addition(&index.fields)), "idx")
+                });
+            }
+        }
+        // The indexes nobody declares: a named one is a Blocks GIN, the rest Postgres's own.
+        let implicit = implicit_model_indexes(model);
+        for index in sorted_indexes(implicit.iter()) {
+            let label = if index.name.is_some() {
+                "gin_idx"
+            } else {
+                "idx"
+            };
+            self.pick(table, "index", &index_owner(index), || {
+                ch.relation(table, Some(&name_addition(&index.fields)), label)
+            });
+        }
+        if model.options.singleton {
+            self.pick(table, "singleton", "", || {
+                ch.relation(table, None, "singleton_idx")
+            });
+        }
+    }
+
+    /// A model's foreign keys, type checks, declared bounds and model rules.
+    fn model_constraints(&mut self, model: &ModelAst, ch: &mut Choosers) {
+        use crate::parser::accessors::{
+            column_names_for, db_foreign_key, default_foreign_key_column,
+        };
+        use crate::parser::ast::RelationCardinality;
+        let table = model.table_name();
+        for (field_name, field) in sorted_fields(model) {
+            if let FieldAst::Relation(rel) = field {
+                if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
+                    let column = db_foreign_key(field, field_name)
+                        .unwrap_or_else(|| default_foreign_key_column(field_name));
+                    self.pick(table, "fkey", &column, || {
+                        ch.constraint(table, "fkey", Some(&column), "fkey")
+                    });
+                }
+            }
+        }
+        for (field_name, field) in sorted_fields(model) {
+            let type_check = matches!(
+                field,
+                FieldAst::Email(_) | FieldAst::Url(_) | FieldAst::Enum(_) | FieldAst::Publishable
+            );
+            let columns = match field {
+                FieldAst::Publishable => vec!["status".to_string()],
+                _ => column_names_for(field_name, field),
+            };
+            for column in columns.into_iter().filter(|c| !c.is_empty()) {
+                if type_check {
+                    self.pick(table, "check", &column, || {
+                        ch.constraint(table, "check", Some(&column), "check")
+                    });
+                }
+                if engine::has_bounds(field, &column) {
+                    self.pick(table, "bounds", &column, || {
+                        ch.constraint(table, "check", Some(&column), "bounds")
+                    });
+                }
+            }
+        }
+        for index in 0..model.annotations.db.constraints.len() {
+            let label = model_constraint_label(index);
+            self.pick(table, "rule", &index.to_string(), || {
+                ch.constraint(table, "check", None, &label)
+            });
+        }
     }
 
     /// The generated functions and triggers. A trigger is named on its table, and a function in its
@@ -827,4 +1020,51 @@ pub fn comment_on_index(schema: &str, index: &str, text: Option<&str>) -> String
         quote_qualified(schema, index),
         comment_value(text)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn two_tables(first: &str, second: &str) -> SchemaAst {
+        let model = |name: &str, table: &str| {
+            format!(
+                r#"{{"name":"{name}","fields":{{"id":{{"kind":"uuid","primaryKey":true,"required":true,"annotations":{{"db":{{"pgType":"UUID"}}}}}}}},"options":{{}},"annotations":{{"db":{{"tableName":"{table}"}}}}}}"#
+            )
+        };
+        let doc = format!(
+            r#"{{"astVersion":2,"models":[{},{}]}}"#,
+            model("A", first),
+            model("B", second)
+        );
+        crate::parser::parse(&doc).expect("parses")
+    }
+
+    #[test]
+    fn a_name_in_a_sequence_is_recognised_with_or_without_its_digit() {
+        assert!(in_sequence("t_pkey", "t", None, "pkey"));
+        assert!(in_sequence("t_pkey12", "t", None, "pkey"));
+        assert!(in_sequence("t_check_11", "t", None, "check_1"));
+        assert!(!in_sequence("t_pkey01", "t", None, "pkey"));
+        assert!(!in_sequence("u_pkey", "t", None, "pkey"));
+    }
+
+    /// F2(d): two tables whose names agree for 58 bytes want the same primary key name. From the
+    /// schema alone the one that sorts first takes it; with the other's name recorded, the
+    /// recorded one keeps it and the first takes the digit.
+    #[test]
+    fn a_recorded_name_is_kept_and_the_new_object_takes_the_digit() {
+        let base = "o".repeat(58);
+        let (first, second) = (format!("{base}aa"), format!("{base}bb"));
+        let mut ast = two_tables(&first, &second);
+        let plain = ObjectNames::for_schema(&ast);
+        assert_eq!(plain.primary_key(&first), format!("{base}_pkey"));
+        assert_eq!(plain.primary_key(&second), format!("{}_pkey1", &base[..57]));
+
+        ast.recorded_names
+            .record(&second, "pkey", &format!("{base}_pkey"), Some("id"));
+        let kept = ObjectNames::for_schema(&ast);
+        assert_eq!(kept.primary_key(&second), format!("{base}_pkey"));
+        assert_eq!(kept.primary_key(&first), format!("{}_pkey1", &base[..57]));
+    }
 }
