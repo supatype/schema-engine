@@ -444,5 +444,10 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."course_tags" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."courses" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."enrollments" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."students" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."tags" REPLICA IDENTITY FULL;
 
 COMMIT;

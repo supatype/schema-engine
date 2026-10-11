@@ -318,5 +318,6 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."documents" REPLICA IDENTITY FULL;
 
 COMMIT;

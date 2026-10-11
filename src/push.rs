@@ -45,7 +45,7 @@ use crate::state::{migration_history, studio_state};
 /// views since 4.6, security labels since 4.7a, policies since 4.7b, grants since 4.7c, RLS
 /// enablement since 4.8, columns since 4.9 (recorded; the column differ alters them), primary keys,
 /// the engine's schemas and serial sequences since 4.10, tables (recorded; the table differ makes,
-/// renames and drops them) and unique constraints since 4.11.
+/// renames and drops them) and unique constraints since 4.11, and a table's replica identity (F68).
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -64,6 +64,7 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Sequence,
     ObjectKind::Table,
     ObjectKind::Unique,
+    ObjectKind::ReplicaIdentity,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,

@@ -141,6 +141,7 @@ pub(crate) const ON_A_TABLE: &[ObjectKind] = &[
     ObjectKind::RlsAttributes,
     ObjectKind::TableGrant,
     ObjectKind::SecurityLabel,
+    ObjectKind::ReplicaIdentity,
 ];
 
 /// The table `key` sits on, for a kind in [`ON_A_TABLE`]; `None` for any other kind.

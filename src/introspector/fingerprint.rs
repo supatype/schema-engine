@@ -47,11 +47,14 @@ pub enum ObjectKind {
     TableGrant,
     SecurityLabel,
     CronJob,
+    /// A table's `REPLICA IDENTITY`, which decides what the WAL carries of a row an `UPDATE` or
+    /// `DELETE` touches: realtime judges a `DELETE` from the whole old row (F68).
+    ReplicaIdentity,
 }
 
 impl ObjectKind {
     /// Every kind, in declaration order.
-    pub const ALL: [ObjectKind; 18] = [
+    pub const ALL: [ObjectKind; 19] = [
         ObjectKind::Schema,
         ObjectKind::Table,
         ObjectKind::Column,
@@ -70,6 +73,7 @@ impl ObjectKind {
         ObjectKind::TableGrant,
         ObjectKind::SecurityLabel,
         ObjectKind::CronJob,
+        ObjectKind::ReplicaIdentity,
     ];
 
     /// The kind written as `snake_case` text: the serde form, the ledger's `kind` column and the
@@ -98,6 +102,7 @@ impl ObjectKind {
             ObjectKind::TableGrant => "table_grant",
             ObjectKind::SecurityLabel => "security_label",
             ObjectKind::CronJob => "cron_job",
+            ObjectKind::ReplicaIdentity => "replica_identity",
         }
     }
 }
@@ -401,6 +406,7 @@ impl ObjectKind {
             ObjectKind::TableGrant => &["privileges", "columns"],
             ObjectKind::SecurityLabel => &["label"],
             ObjectKind::CronJob => &["schedule", "command", "active"],
+            ObjectKind::ReplicaIdentity => &["identity"],
         }
     }
 }
@@ -672,6 +678,29 @@ pub fn rls_enable_sql(schema: &str, table: &str) -> String {
     )
 }
 
+/// The name a replica identity object goes by: one per table, keyed by the table as its parent.
+pub const REPLICA_IDENTITY: &str = "replica_identity";
+
+/// What a model table's replica identity is: `FULL`, so the WAL carries the whole old row of an
+/// `UPDATE` or `DELETE`, which realtime needs to judge whether a subscriber could see it (F68).
+pub const REPLICA_IDENTITY_FULL: &str = "f";
+
+/// The statement that sets a table's replica identity to `letter`, as `pg_class.relreplident`
+/// spells it: `d`efault, `f`ull or `n`othing. `None` for `i`, an index the letter does not name, so
+/// a rollback cannot put that one back.
+pub fn replica_identity_sql(schema: &str, table: &str, letter: &str) -> Option<String> {
+    let identity = match letter {
+        "d" => "DEFAULT",
+        "f" => "FULL",
+        "n" => "NOTHING",
+        _ => return None,
+    };
+    Some(format!(
+        "ALTER TABLE {} REPLICA IDENTITY {identity};",
+        quote_qualified(schema, table)
+    ))
+}
+
 /// Every fingerprint the two states support, sorted by kind, schema, parent and name.
 pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFingerprint> {
     let schema = db.schema.as_str();
@@ -917,6 +946,17 @@ fn policy_and_catalog_entries(
             &[flag(a.enabled)],
         );
         fingerprint.create_sql = Some(rls_enable_sql(&a.schema, &a.table));
+        out.push(fingerprint);
+
+        // The letter `pg_class.relreplident` holds, read in the same pass.
+        let mut fingerprint = entry(
+            ObjectKind::ReplicaIdentity,
+            &a.schema,
+            &a.table,
+            REPLICA_IDENTITY,
+            &[a.replica_identity.as_str()],
+        );
+        fingerprint.create_sql = replica_identity_sql(&a.schema, &a.table, &a.replica_identity);
         out.push(fingerprint);
     }
 

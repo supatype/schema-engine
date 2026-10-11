@@ -49,7 +49,8 @@ use crate::generator::sql::{
 };
 use crate::introspector::constraints::ForeignKeyOptions;
 use crate::introspector::fingerprint::{
-    definition_value, normalise_sql, rls_enable_sql, ObjectKind,
+    definition_value, normalise_sql, replica_identity_sql, rls_enable_sql, ObjectKind,
+    REPLICA_IDENTITY, REPLICA_IDENTITY_FULL,
 };
 use crate::managed::{
     comment_on_constraint, comment_on_index, comment_on_table, comment_value,
@@ -167,6 +168,7 @@ impl ObjectKey {
             ObjectKind::TableGrant => revoke_all_sql(schema, parent, name),
             ObjectKind::Schema
             | ObjectKind::RlsAttributes
+            | ObjectKind::ReplicaIdentity
             | ObjectKind::EnumType
             | ObjectKind::Sequence => return None,
         })
@@ -202,6 +204,7 @@ impl ObjectKey {
             ObjectKind::Schema
             | ObjectKind::Function
             | ObjectKind::RlsAttributes
+            | ObjectKind::ReplicaIdentity
             | ObjectKind::EnumType
             | ObjectKind::Sequence
             | ObjectKind::TableGrant
@@ -239,11 +242,15 @@ pub fn sequence_owned_by_sql(schema: &str, name: &str, table: &str, column: &str
 /// off automatically, because a table with RLS on and no policies denies everything and turning it
 /// off is a decision no reconcile should make; and a schema or sequence (plan section 15: created if
 /// missing, never dropped), since a schema may hold what is not ours and a sequence goes with its
-/// column. A row nothing desires any more is forgotten.
+/// column. A table's replica identity is not set back either: realtime may rely on it. A row nothing
+/// desires any more is forgotten.
 pub fn never_removed(kind: ObjectKind) -> bool {
     matches!(
         kind,
-        ObjectKind::RlsAttributes | ObjectKind::Schema | ObjectKind::Sequence
+        ObjectKind::RlsAttributes
+            | ObjectKind::ReplicaIdentity
+            | ObjectKind::Schema
+            | ObjectKind::Sequence
     )
 }
 
@@ -310,6 +317,7 @@ pub fn desired_objects_for(
         b.model_indexes(model)?;
         b.model_policies(model)?;
         b.rls_enabled(model.table_name());
+        b.replica_identity_full(model.table_name());
         b.model_triggers(model);
         if versions_of(model).is_some() {
             b.versions_table(model)?;
@@ -322,6 +330,7 @@ pub fn desired_objects_for(
     for junction in &ast.junction_tables {
         b.junction(junction)?;
         b.rls_enabled(&junction.name);
+        b.replica_identity_full(&junction.name);
     }
     let mut out = b.out;
     out.sort_by(|a, c| a.key.cmp(&c.key));
@@ -846,6 +855,17 @@ impl<'a> Builder<'a> {
         let key = self.key(ObjectKind::RlsAttributes, table, "rls");
         let structure = BTreeMap::from([("enabled", flag(true))]);
         let create = rls_enable_sql(self.schema, table);
+        self.push(key, structure, create, vec![self.table_key(table)]);
+    }
+
+    /// `REPLICA IDENTITY FULL` on a model or junction table (F68), so the WAL carries the whole
+    /// old row of an `UPDATE` or `DELETE`: realtime delivers a `DELETE` only to a subscriber whose
+    /// rules let them see that row, and without it delivers none. Never set back automatically.
+    fn replica_identity_full(&mut self, table: &str) {
+        let key = self.key(ObjectKind::ReplicaIdentity, table, REPLICA_IDENTITY);
+        let structure = BTreeMap::from([("identity", REPLICA_IDENTITY_FULL.to_string())]);
+        let create = replica_identity_sql(self.schema, table, REPLICA_IDENTITY_FULL)
+            .expect("FULL has a statement");
         self.push(key, structure, create, vec![self.table_key(table)]);
     }
 

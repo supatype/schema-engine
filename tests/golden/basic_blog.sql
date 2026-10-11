@@ -428,5 +428,7 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."posts" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."users" REPLICA IDENTITY FULL;
 
 COMMIT;

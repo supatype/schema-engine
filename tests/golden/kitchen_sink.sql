@@ -351,5 +351,6 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."kitchen_sink" REPLICA IDENTITY FULL;
 
 COMMIT;

@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use crate::generator::sql::auth_functions;
-use crate::introspector::fingerprint::ObjectKind;
+use crate::introspector::fingerprint::{ObjectKind, REPLICA_IDENTITY};
 
 use super::ObjectKey;
 
@@ -522,6 +522,9 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
         {
             return Attribution::Object(key(ObjectKind::RlsAttributes, &s, &t, "rls"));
         }
+        if rest_u.starts_with("REPLICA IDENTITY ") {
+            return Attribution::Object(key(ObjectKind::ReplicaIdentity, &s, &t, REPLICA_IDENTITY));
+        }
         if let Some(c) = rest.trim_start().strip_prefix("ADD CONSTRAINT ") {
             let (name_parts, body) = match qualified_name(c) {
                 Some(x) => x,
@@ -890,6 +893,7 @@ mod tests {
             ("COMMENT ON INDEX \"public\".\"posts_x_idx\" IS 'm';", ObjectKind::Index, "public", "posts", "posts_x_idx"),
             ("ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"posts_a_fkey\" FOREIGN KEY (\"a\") REFERENCES \"public\".\"u\" (\"id\");", ObjectKind::ForeignKey, "public", "posts", "posts_a_fkey"),
             ("ALTER TABLE \"public\".\"posts\" ENABLE ROW LEVEL SECURITY;", ObjectKind::RlsAttributes, "public", "posts", "rls"),
+            ("ALTER TABLE \"public\".\"posts\" REPLICA IDENTITY FULL;", ObjectKind::ReplicaIdentity, "public", "posts", "replica_identity"),
             ("CREATE OR REPLACE FUNCTION \"public\".\"can_read_posts\"(\"posts\" \"public\".\"posts\") RETURNS boolean LANGUAGE sql STABLE AS $can$ SELECT TRUE $can$;", ObjectKind::Function, "public", "", "can_read_posts(public.posts)"),
             ("GRANT EXECUTE ON FUNCTION _supatype.\"publish\"(text, text) TO authenticated, service_role;", ObjectKind::Function, "_supatype", "", "publish(text, text)"),
             ("CREATE OR REPLACE TRIGGER \"posts_updated_at_trigger\" BEFORE UPDATE ON \"public\".\"posts\" FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();", ObjectKind::Trigger, "public", "posts", "posts_updated_at_trigger"),

@@ -95,15 +95,16 @@ fn adopted_by_declaring(kind: ObjectKind) -> bool {
 /// up to date. Its expression is what a takeover would have to compare, and replacing it costs one
 /// statement. A grant is named by its table and role, and only the API roles on model tables are
 /// ever desired, whose privileges the engine always re-asserted (D7): an upgrade takes them over
-/// and leaves them holding exactly what the rules allow. Row-level security is named by its table,
-/// and only tables the schema owns ask for it. A schema is named by itself, and only the engine's
-/// own schemas are desired.
+/// and leaves them holding exactly what the rules allow. Row-level security and a replica identity
+/// are named by their table, and only tables the schema owns ask for them. A schema is named by
+/// itself, and only the engine's own schemas are desired.
 fn claimed_by_name(kind: ObjectKind) -> bool {
     matches!(
         kind,
         ObjectKind::Policy
             | ObjectKind::TableGrant
             | ObjectKind::RlsAttributes
+            | ObjectKind::ReplicaIdentity
             | ObjectKind::Schema
     )
 }
@@ -111,7 +112,8 @@ fn claimed_by_name(kind: ObjectKind) -> bool {
 /// The kinds whose `CREATE` replaces what is there, so a new definition needs no drop first:
 /// functions and triggers (`CREATE OR REPLACE`; dropping first would fail anyway, as a trigger
 /// depends on its function), and grants, whose statement revokes everything before it grants the
-/// exact set, and RLS enablement and schemas, whose statements simply assert them. Not views: `CREATE OR REPLACE VIEW` refuses anything but appending columns, so a
+/// exact set, and RLS enablement, a replica identity and schemas, whose statements simply assert
+/// them. Not views: `CREATE OR REPLACE VIEW` refuses anything but appending columns, so a
 /// changed view is dropped and made again.
 fn replaced_in_place(kind: ObjectKind) -> bool {
     matches!(
@@ -120,6 +122,7 @@ fn replaced_in_place(kind: ObjectKind) -> bool {
             | ObjectKind::Trigger
             | ObjectKind::TableGrant
             | ObjectKind::RlsAttributes
+            | ObjectKind::ReplicaIdentity
             | ObjectKind::Schema
     )
 }
@@ -155,6 +158,7 @@ fn creation_rank(kind: ObjectKind) -> u8 {
         ObjectKind::TableGrant => 15,
         ObjectKind::SecurityLabel => 16,
         ObjectKind::CronJob => 17,
+        ObjectKind::ReplicaIdentity => 18,
     }
 }
 

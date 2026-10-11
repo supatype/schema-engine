@@ -1872,31 +1872,36 @@
         "schema": "auth",
         "table": "users",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "customers",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "order_items",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "orders",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "products",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       }
     ],
     "policies": [
