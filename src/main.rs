@@ -73,7 +73,7 @@ enum Command {
         force: bool,
         #[arg(long, help = "Human-readable name for the migration record")]
         name: Option<String>,
-        #[arg(long, help = "Skip interactive rename confirmation prompts (for CI)")]
+        #[arg(long, help = "Skip interactive confirmation prompts (for CI)")]
         non_interactive: bool,
         /// No longer does anything: the database is always read live. Accepted for one release so
         /// scripts that pass it keep working, and says so.
@@ -373,7 +373,7 @@ async fn run(command: Command, input: String) -> Result<()> {
 
             // A refusal goes on stdout too, where the CLI reads the push result, so it can name
             // the tables and offer to adopt them. The message still reaches stderr via the error.
-            let mut plan = match push::prepare(&pool, &ast, &schema).await {
+            let plan = match push::prepare(&pool, &ast, &schema).await {
                 Ok(plan) => plan,
                 Err(e) => {
                     if let Some(refusal) = e.downcast_ref::<UnmanagedModelTables>() {
@@ -390,10 +390,11 @@ async fn run(command: Command, input: String) -> Result<()> {
                 }
             };
 
-            // Interactive rename confirmation (skipped in CI with --non-interactive)
+            // Interactive confirmations (skipped in CI with --non-interactive). Nothing here edits
+            // the plan: a rename is declared in the schema, never asked about (D1), so the diff and
+            // the reconcile applied are the ones decided together.
             let mut overwrite_drift = overwrite_drift;
             if !non_interactive {
-                plan.diff = confirm_renames(plan.diff)?;
                 confirm_risky_changes(&plan.diff)?;
                 overwrite_drift = overwrite_drift || confirm_security_drift(&plan.reconcile)?;
             }
@@ -651,128 +652,6 @@ async fn run(command: Command, input: String) -> Result<()> {
     Ok(())
 }
 
-/// For each rename operation, prompt the user to confirm it's a rename.
-/// If the user declines, the rename is converted to the destructive drop + create equivalent.
-fn confirm_renames(
-    mut diff: supatype_engine::differ::DiffOutput,
-) -> Result<supatype_engine::differ::DiffOutput> {
-    use std::io::BufRead;
-    use supatype_engine::differ::{Operation, Risk};
-
-    let mut final_ops: Vec<Operation> = Vec::new();
-
-    for op in diff.operations {
-        match &op {
-            Operation::RenameTable { from, to, .. } => {
-                prompt_rename(
-                    &format!("Table '{}' → '{}'", from.bold(), to.bold()),
-                    "All existing data will be preserved via ALTER TABLE RENAME.",
-                )?;
-
-                let mut line = String::new();
-                io::stdin().lock().read_line(&mut line)?;
-                let answer = line.trim().to_lowercase();
-
-                if answer == "n" || answer == "no" {
-                    final_ops.push(Operation::DropTable {
-                        table: from.clone(),
-                        risk: Risk::Destructive,
-                    });
-                    eprintln!(
-                        "  {} Rename declined for '{}' → '{}'. Re-run {} to apply the DROP + CREATE.",
-                        "!".red().bold(),
-                        from.bold(),
-                        to.bold(),
-                        "supatype push".cyan()
-                    );
-                } else {
-                    final_ops.push(op);
-                }
-            }
-            Operation::RenameColumn {
-                table, from, to, ..
-            } => {
-                prompt_rename(
-                    &format!(
-                        "Column '{}' → '{}' on table '{}'",
-                        from.bold(),
-                        to.bold(),
-                        table.bold()
-                    ),
-                    "Column data will be preserved via ALTER TABLE RENAME COLUMN.",
-                )?;
-
-                let mut line = String::new();
-                io::stdin().lock().read_line(&mut line)?;
-                let answer = line.trim().to_lowercase();
-
-                if answer == "n" || answer == "no" {
-                    // User declined, so emit DropColumn + AddColumn instead
-                    final_ops.push(Operation::DropColumn {
-                        table: table.clone(),
-                        column: from.clone(),
-                        risk: Risk::Destructive,
-                    });
-                    final_ops.push(Operation::AddColumn {
-                        table: table.clone(),
-                        column: to.clone(),
-                        field: Box::new(supatype_engine::parser::ast::FieldAst::Text(
-                            supatype_engine::parser::ast::ScalarFieldAst {
-                                required: false,
-                                ..Default::default()
-                            },
-                        )),
-                        risk: Risk::Safe,
-                    });
-                } else {
-                    final_ops.push(op);
-                }
-            }
-            _ => final_ops.push(op),
-        }
-    }
-
-    let safe = final_ops
-        .iter()
-        .filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Safe))
-        .count();
-    let cautious = final_ops
-        .iter()
-        .filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Cautious))
-        .count();
-    let destructive = final_ops
-        .iter()
-        .filter(|o| matches!(supatype_engine::differ::risk_of(o), Risk::Destructive))
-        .count();
-
-    diff.operations = final_ops;
-    diff.summary.safe = safe;
-    diff.summary.cautious = cautious;
-    diff.summary.destructive = destructive;
-    diff.summary.is_destructive = destructive > 0;
-
-    Ok(diff)
-}
-
-/// Prints a styled [INPUT REQUIRED] prompt to stderr and leaves the cursor
-/// on the same line as the `[Y/n]:` tag, ready for the caller to read a line.
-fn prompt_rename(subject: &str, hint: &str) -> Result<()> {
-    use std::io::Write;
-    eprintln!(
-        "\n  {} {}",
-        " INPUT REQUIRED ".on_yellow().black().bold(),
-        subject,
-    );
-    eprintln!("  {}  {}", "↳".yellow(), hint.dimmed(),);
-    eprint!(
-        "  {} Treat as rename? {} ",
-        "›".yellow().bold(),
-        "[Y/n]:".bold(),
-    );
-    let _ = io::stderr().flush();
-    Ok(())
-}
-
 /// Prompt once before applying risky column conversions or destructive operations.
 fn confirm_risky_changes(diff: &supatype_engine::differ::DiffOutput) -> Result<()> {
     use std::io::BufRead;
@@ -983,6 +862,7 @@ mod tests {
             unmanaged_model_tables: vec![],
             field_masking: supatype_engine::differ::FieldMaskingTier::None,
             field_view_plan: Vec::new(),
+            rename_candidates: Vec::new(),
         };
         assert!(has_destructive_ops(&diff));
     }

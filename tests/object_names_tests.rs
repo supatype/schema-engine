@@ -198,12 +198,17 @@ async fn long_storage_policy_names_are_found_after_the_push() {
     .await;
 }
 
+/// `posts` under `table`, declared as renamed from `posts` when it is another name.
 fn posts_in(table: &str) -> SchemaAst {
-    schema(vec![model(
+    let mut post = model(
         "Post",
         table,
         json!({ "id": serial_id(), "slug": text(true) }),
-    )])
+    );
+    if table != "posts" {
+        post["annotations"]["db"]["renamedFrom"] = json!("posts");
+    }
+    schema(vec![post])
 }
 
 /// A rename keeps the rows, the primary key follows the table's new name, and the serial's
@@ -219,9 +224,7 @@ async fn a_renamed_table_takes_its_sequence_and_primary_key_with_it() {
             .unwrap();
         assert_eq!(sequences(&pool).await, ["posts_id_seq"]);
 
-        common::push_with(&pool, &posts_in("posts_archive"), forced())
-            .await
-            .unwrap();
+        push(&pool, &posts_in("posts_archive")).await.unwrap();
         assert_eq!(sequences(&pool).await, ["posts_archive_id_seq"]);
         assert_eq!(
             recorded(&pool, ObjectKind::Sequence).await,
@@ -292,11 +295,16 @@ async fn a_renamed_table_takes_its_sequence_and_primary_key_with_it() {
     .await;
 }
 
+/// `tickets` with a serial `column`, declared as renamed from `ticket_number` when it is another.
 fn tickets(column: &str) -> SchemaAst {
+    let mut serial = json!({ "kind": "serial", "required": true });
+    if column != "ticket_number" {
+        serial["annotations"] = json!({ "db": { "renamedFrom": "ticket_number" } });
+    }
     schema(vec![model(
         "Ticket",
         "tickets",
-        json!({ "id": id(), column: { "kind": "serial", "required": true } }),
+        json!({ "id": id(), column: serial }),
     )])
 }
 

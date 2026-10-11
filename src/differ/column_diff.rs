@@ -1,4 +1,4 @@
-use super::{ColumnDependencySnapshot, Operation, Risk};
+use super::{renames, ColumnDependencySnapshot, Operation, Risk};
 use crate::generator::sql::column_conversion::{
     self, add_column_backfill_default, plan_type_conversion, required_field_existing_table_warning,
     supports_kind_data_migration, ConversionStrategyKind,
@@ -10,9 +10,6 @@ use crate::parser::ast::{FieldAst, IdentityGeneration, ModelAst, RelationCardina
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
 use serde_json::json;
-use strsim::jaro_winkler;
-
-const RENAME_THRESHOLD: f64 = 0.7;
 
 pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
     match field {
@@ -928,51 +925,13 @@ pub fn diff(
         .map(|c| c.name.as_str())
         .collect();
 
-    let mut renamed_dropped = std::collections::HashSet::new();
-    let mut renamed_added = std::collections::HashSet::new();
-
-    // Only a column that is ours is renamed (D4): one the ledger records, or, where it has no row
-    // (an upgraded database), one the last push's schema declared on this table. A rename is a
-    // similarity guess, so a column someone added (`nickname`) would otherwise be renamed into a
-    // declared one (`nick_name`) and taken over with its data. Not one recorded as adopted: that is
-    // someone else's column Supatype was told about (`adopt --key column:...`), never its own.
-    let ours = |column: &str| {
-        !db.column_adopted(&db_table.name, column)
-            && db
-                .column_owned(&db_table.name, column)
-                .unwrap_or_else(|| declared_by(previous_model, column))
-    };
-
-    for &drop in dropped.iter().filter(|c| ours(c)) {
-        if let Some(&add) = added
-            .iter()
-            .filter(|&&a| !renamed_added.contains(a))
-            .max_by(|&&a, &&b| {
-                jaro_winkler(drop, a)
-                    .partial_cmp(&jaro_winkler(drop, b))
-                    .unwrap()
-            })
-        {
-            if jaro_winkler(drop, add) >= RENAME_THRESHOLD {
-                ops.push(Operation::RenameColumn {
-                    table: model.table_name().to_string(),
-                    from: drop.to_string(),
-                    to: add.to_string(),
-                    risk: Risk::Safe,
-                });
-                warnings.push(format!(
-                    "Column '{drop}' removed and '{add}' added on table '{}'. Treating as rename. \
-                     Specify in platform.renames.json to suppress this warning.",
-                    model.table_name()
-                ));
-                renamed_dropped.insert(drop);
-                renamed_added.insert(add);
-            }
-        }
-    }
+    // Renames are declared, never guessed (D1). `renamed` maps each new column to its old one.
+    let renamed = declared_renames(model, db_table, db, previous_model, &schema_col_names, ops)?;
+    let renamed_dropped: std::collections::HashSet<&str> =
+        renamed.values().map(String::as_str).collect();
 
     for col in &added {
-        if !renamed_added.contains(*col) {
+        if !renamed.contains_key(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
                 // A serial or identity column fills existing rows from its own sequence, and a
                 // generated one from its expression, so they need no backfill.
@@ -1052,15 +1011,26 @@ pub fn diff(
         if options_cols.contains(col_name.as_str()) {
             continue;
         }
-        if renamed_added.contains(col_name.as_str()) {
-            continue;
-        }
-        if !db_col_names.contains(col_name) {
-            continue;
-        }
+        // A renamed column is compared as the column it was, under its new name: the rename runs
+        // first, and a widening or a nullability change follows it.
+        let source = renamed
+            .get(col_name)
+            .map_or(col_name.as_str(), String::as_str);
+        let renamed_column;
+        let db_col = match db_col_map.get(source) {
+            None => None,
+            Some(live) if source == col_name => Some(*live),
+            Some(live) => {
+                renamed_column = DbColumn {
+                    name: col_name.clone(),
+                    ..(*live).clone()
+                };
+                Some(&renamed_column)
+            }
+        };
 
-        if let Some(db_col) = db_col_map.get(col_name.as_str()) {
-            let previous_field = previous_model.and_then(|m| field_for_column(m, col_name));
+        if let Some(db_col) = db_col {
+            let previous_field = previous_model.and_then(|m| field_for_column(m, source));
             let mut changes = detect_changes(
                 field,
                 db_col,
@@ -1072,7 +1042,7 @@ pub fn diff(
             let generation = generation_diff(
                 field,
                 db_col,
-                db.recorded_column_sql(model.table_name(), col_name),
+                db.recorded_column_sql(model.table_name(), source),
             );
             if !generation.alter.is_empty() {
                 if changes.is_null() {
@@ -1197,6 +1167,51 @@ pub fn diff(
     }
 
     Ok(())
+}
+
+/// The column renames `model` declares that apply to `db_table`, each pushed as a `RenameColumn`,
+/// as a map from the new column to the old. Refuses one that cannot be a rename, naming both
+/// columns (`renames::check_column_rename`).
+///
+/// Only a column that is ours is a source (D4): one the ledger records, or, where it has no row
+/// (an upgraded database), one the last push's schema declared on this table. Not one recorded as
+/// adopted: that is someone else's column Supatype was told about (`adopt --key column:...`).
+fn declared_renames(
+    model: &ModelAst,
+    db_table: &DbTable,
+    db: &DatabaseState,
+    previous_model: Option<&ModelAst>,
+    schema_columns: &std::collections::HashSet<&str>,
+    ops: &mut Vec<Operation>,
+) -> Result<std::collections::HashMap<String, String>> {
+    let managed = db.owns_table(db_table);
+    let ours = |column: &str| {
+        managed
+            && !db.column_adopted(&db_table.name, column)
+            && db
+                .column_owned(&db_table.name, column)
+                .unwrap_or_else(|| declared_by(previous_model, column))
+    };
+    let mut renamed = std::collections::HashMap::new();
+    for rename in renames::declared_column_renames(model, previous_model) {
+        let site = renames::ColumnRenameSite {
+            table: model.table_name(),
+            source: db_table.columns.iter().find(|c| c.name == rename.from),
+            target_exists: db_table.columns.iter().any(|c| c.name == rename.to),
+            source_declared: schema_columns.contains(rename.from.as_str()),
+            source_ours: ours(&rename.from),
+        };
+        if renames::check_column_rename(&rename, &site)? {
+            ops.push(Operation::RenameColumn {
+                table: model.table_name().to_string(),
+                from: rename.from.clone(),
+                to: rename.to.clone(),
+                risk: Risk::Safe,
+            });
+            renamed.insert(rename.to, rename.from);
+        }
+    }
+    Ok(renamed)
 }
 
 /// Whether a field declares itself the primary key.

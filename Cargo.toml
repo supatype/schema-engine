@@ -39,7 +39,6 @@ sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
 petgraph = "0.7"
-strsim = "0.11"
 similar = "2"
 
 # Terminal styling, zero-dependency and wasm-compatible

@@ -46,6 +46,10 @@ fn schema_with_posts_in(posts_table: &str, slug_unique: bool, with_notes: bool) 
         posts_table,
         json!({ "id": id(), "title": field("TEXT", false), "slug": field("TEXT", slug_unique) }),
     )];
+    // Another table name is a rename of `posts`, declared: renames are never guessed (D1).
+    if posts_table != "posts" {
+        models[0]["annotations"]["db"]["renamedFrom"] = json!("posts");
+    }
     if with_notes {
         models.push(model(
             "Note",
@@ -292,15 +296,14 @@ async fn a_renamed_table_keeps_its_rows_and_its_records_follow_it() {
 async fn a_column_dropped_with_its_tables_rename_is_dropped() {
     common::with_integration_pool(|pool| async move {
         push(&pool, &schema(false, false)).await.unwrap();
-        let without_slug = parser::parse(
-            &json!({ "astVersion": 2, "models": [model(
-                "Post",
-                "posts_archive",
-                json!({ "id": id(), "title": field("TEXT", false) }),
-            )] })
-            .to_string(),
-        )
-        .unwrap();
+        let mut archive = model(
+            "Post",
+            "posts_archive",
+            json!({ "id": id(), "title": field("TEXT", false) }),
+        );
+        archive["annotations"]["db"]["renamedFrom"] = json!("posts");
+        let without_slug =
+            parser::parse(&json!({ "astVersion": 2, "models": [archive] }).to_string()).unwrap();
         let outcome = common::push_with(&pool, &without_slug, forced())
             .await
             .unwrap();

@@ -2268,7 +2268,6 @@ dependencies = [
  "sha2",
  "similar",
  "sqlx",
- "strsim",
  "testcontainers",
  "testcontainers-modules",
  "thiserror",

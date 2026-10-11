@@ -21,6 +21,11 @@ pub struct DbModelAnnotations {
     /// operand set. Beside `indexes` because both are things Postgres holds, unlike `access`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constraints: Vec<AccessRule>,
+    /// The table this model's table was called before, when the schema declares a rename (D1).
+    /// Renames are declared, never guessed: the table differ renames `renamed_from` to this table
+    /// only when it exists, and a declaration whose source is gone is a no-op, so it can stay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -30,8 +35,8 @@ pub struct PlatformModelAnnotations {
     pub access: AccessAst,
     /// Columns Studio's list view searches, in the order the schema asked for.
     ///
-    /// The CLI merges both spellings — `Searchable<T>` on a field and `searchable: [...]` on the
-    /// model — into this one list, so there is nothing per-field to read here. Empty means the
+    /// The CLI merges both spellings (`Searchable<T>` on a field and `searchable: [...]` on the
+    /// model) into this one list, so there is nothing per-field to read here. Empty means the
     /// schema said nothing, not that search is off: see `derive_search_fields`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search_fields: Vec<String>,
@@ -62,6 +67,11 @@ pub struct DbFieldAnnotations {
     /// Array element type (kind `array`).
     #[serde(default)]
     pub element_type: Option<String>,
+    /// The field this one was called before, when the schema declares a rename (D1). The column
+    /// differ renames the old column to this field's only when it exists, is Supatype's and holds
+    /// the declared type (or one that widens to it); a declaration whose source is gone is a no-op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
