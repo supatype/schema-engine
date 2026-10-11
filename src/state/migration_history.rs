@@ -410,14 +410,19 @@ pub async fn assert_project_schema(pool: &PgPool, schema: &str) -> Result<()> {
 /// on demand is a value that can disagree with the push that actually applied the
 /// schema. Writing it makes the tier a recorded fact.
 ///
-/// A database with field rules cannot reach here without the extension (the migration
-/// refuses to apply first), so `unenforced` means only "no field rules in this schema".
-/// That distinction is the point: a deployment that quietly stopped enforcing must be
+/// `unenforced` means only "no field rules in this schema", and `broken` a schema with rules
+/// and neither the extension nor the views to enforce them. That distinction is the point: a deployment that quietly stopped enforcing must be
 /// visible, not inferred.
+///
+/// Beside the tier, `columns` says which predicate decides each masked column
+/// ([`crate::generator::sql::rls::field_predicates`]): what the labels carry under tier 1, and
+/// what nothing else carries under tier 2, where realtime needs it to mask a change.
 pub async fn record_field_enforcement(
     conn: &mut sqlx::PgConnection,
-    labelled_columns: usize,
+    ast: &crate::parser::ast::SchemaAst,
+    schema: &str,
 ) -> Result<()> {
+    let labelled_columns = labelled_column_count(ast);
     let extension: Option<String> =
         sqlx::query_scalar("SELECT extversion FROM pg_extension WHERE extname = $1")
             .bind(crate::generator::sql::rls::MASK_EXTENSION)
@@ -453,6 +458,7 @@ pub async fn record_field_enforcement(
             "extension": crate::generator::sql::rls::MASK_EXTENSION,
             "extensionVersion": extension,
             "labelledColumns": labelled_columns,
+            "columns": crate::generator::sql::rls::field_predicates(ast, schema),
         }
     });
 

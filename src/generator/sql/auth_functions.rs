@@ -57,7 +57,7 @@ pub const CLAIMS_SCHEMA: &str = HELPER_SCHEMA;
 pub const API_ROLES: [&str; 3] = ["anon", "authenticated", "service_role"];
 
 /// The claim readers' signatures, as `GRANT EXECUTE` names them.
-const CLAIM_READERS: [&str; 5] = [
+pub(crate) const CLAIM_READERS: [&str; 5] = [
     "jwt_claims()",
     "jwt_uid()",
     "jwt_role()",

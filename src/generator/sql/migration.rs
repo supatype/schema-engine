@@ -267,6 +267,9 @@ fn render_reasserted_lines(diff: &DiffOutput, ast: &SchemaAst, schema: &str) -> 
         lines.extend(render_mask_probe_lines(ast, schema));
         return lines;
     }
+    // Under tier 2 the API reads the `api` views, so that is where the privileges belong. The views
+    // are made again on every push, which takes their privileges with them, so each view's are
+    // made with it, and recorded on the ledger as it is (F14).
     let views =
         crate::generator::sql::field_views::render_field_views(ast, &diff.field_view_plan, schema);
     if !views.trim().is_empty() {
@@ -277,17 +280,24 @@ fn render_reasserted_lines(diff: &DiffOutput, ast: &SchemaAst, schema: &str) -> 
         lines.push(views.trim_end().into());
         lines.push(String::new());
     }
-    // Under tier 2 the API reads the `api` views, so that is where the privileges belong. The views
-    // are made again on every push, which takes their privileges with them, so these are made
-    // again with them rather than recorded.
-    let grants = crate::generator::sql::grants::generate_view_grants(
-        ast,
-        crate::generator::sql::field_views::VIEW_SCHEMA,
-    );
-    lines.push("-- Field-level access, tier 2: privileges on the api views".into());
-    lines.push(grants.trim().into());
-    lines.push(String::new());
     lines
+}
+
+/// Under tier 2, the functions a policy evaluated as the views' owner may call: after the drafts
+/// layer, which makes some of them. Nothing for the other tiers.
+fn render_owner_reach_lines(diff: &DiffOutput, schema: &str) -> Vec<String> {
+    if diff.field_masking != crate::differ::FieldMaskingTier::Views
+        || diff.field_view_plan.is_empty()
+    {
+        return Vec::new();
+    }
+    vec![
+        "-- Field-level access, tier 2: what the views' owner may call".into(),
+        crate::generator::sql::field_views::owner_reach_sql(schema)
+            .trim_end()
+            .into(),
+        String::new(),
+    ]
 }
 
 fn render_forward_operation_lines(
@@ -359,6 +369,7 @@ fn render_forward_core(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Resu
     // Last, because it reads the snapshot tables the operations above create and the model tables
     // they reference. Errors rather than warns when the push failed to state who may see a draft.
     lines.extend(render_versions_lines(ast, schema)?);
+    lines.extend(render_owner_reach_lines(diff, schema));
     Ok(lines)
 }
 

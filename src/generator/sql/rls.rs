@@ -213,6 +213,22 @@ pub(crate) fn render_delete_policy_sql(
     format!("{head}\nFOR DELETE USING (\n    {expr}\n  );\n\n")
 }
 
+/// The suffix of the policy admitting `service_role` to a tier 2 table.
+pub const SERVICE_ROLE_POLICY: &str = "service_role";
+
+/// Under tier 2, the permissive policy that lets `service_role` reach every row through the `api`
+/// views (F13). The views run as their owner, which does not bypass row-level security, so
+/// `service_role` would otherwise see only the rows its rules happen to allow it, where tier 1 and
+/// every other channel give it all of them. Reachable only through the views: the API roles hold
+/// nothing on the base table.
+pub fn service_role_policy_sql(schema: &str, table: &str) -> String {
+    let admitted = format!("{AUTH_ROLE} = 'service_role'");
+    format!(
+        "{}\nAS PERMISSIVE FOR ALL USING (\n    {admitted}\n  ) WITH CHECK (\n    {admitted}\n  );",
+        policy_head(schema, table, SERVICE_ROLE_POLICY)
+    )
+}
+
 /// The caller's user id, wrapped so Postgres evaluates it once per query, not once per row.
 ///
 /// A bare function call in a policy is re-evaluated for every row the planner
@@ -943,29 +959,56 @@ fn label_target(schema: &str, table: &str, column: &str) -> String {
     format!("{}.{}", quote_qualified(schema, table), quote_ident(column))
 }
 
-/// The statement that takes a column's label off, guarded on the extension: without the provider
-/// registered a `SECURITY LABEL` statement cannot even parse.
+/// The statement that takes a column's label off.
 pub fn drop_field_label_sql(schema: &str, table: &str, column: &str) -> String {
-    guarded_label_drop(&format!(
-        "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN {} IS NULL",
-        label_target(schema, table, column)
-    ))
+    let target = quote_qualified(schema, table);
+    guarded_label_drop(
+        &format!(
+            "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN {} IS NULL",
+            label_target(schema, table, column)
+        ),
+        &format!(
+            "(SELECT attnum FROM pg_catalog.pg_attribute WHERE attrelid = {}::regclass AND attname = {})",
+            quote_literal(&target),
+            quote_literal(column)
+        ),
+        &target,
+    )
 }
 
 /// [`drop_field_label_sql`] for a label on the table itself. The engine writes none, but one found
 /// under its provider is its by location, so the reconcile drops it and needs the statement.
 pub fn drop_table_label_sql(schema: &str, table: &str) -> String {
-    guarded_label_drop(&format!(
-        "SECURITY LABEL FOR {MASK_PROVIDER} ON TABLE {} IS NULL",
-        quote_qualified(schema, table)
-    ))
+    let target = quote_qualified(schema, table);
+    guarded_label_drop(
+        &format!("SECURITY LABEL FOR {MASK_PROVIDER} ON TABLE {target} IS NULL"),
+        "0",
+        &target,
+    )
 }
 
-fn guarded_label_drop(statement: &str) -> String {
+/// Takes a label off whether or not the masking extension is installed (F17, A3-N6).
+///
+/// The provider is registered by the preloaded library, not the extension: `supatype/postgres` with
+/// `supatype_mask` dropped still has it, and still acts on every label left behind, so every UPDATE
+/// of a labelled column fails (T2-N7). A guard on `pg_extension` skipped the drop on exactly that
+/// database while the plan said the label was dropped. So the statement is simply run. Where no
+/// provider is loaded at all (`22023`, a database moved off the image) the label does nothing, a
+/// `SECURITY LABEL` cannot name it, and a superuser removes the catalog row instead; anyone else
+/// leaves it, inert.
+fn guarded_label_drop(statement: &str, subid: &str, target: &str) -> String {
     format!(
-        "DO $mask_label$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = {}) THEN\n    EXECUTE {};\n  END IF;\nEND\n$mask_label$;",
-        quote_literal(MASK_EXTENSION),
-        quote_literal(statement)
+        "DO $mask_label$\nBEGIN\n  EXECUTE {};\n\
+         EXCEPTION WHEN invalid_parameter_value THEN\n\
+         \x20 BEGIN\n\
+         \x20   DELETE FROM pg_catalog.pg_seclabel\n\
+         \x20    WHERE provider = {} AND classoid = 'pg_catalog.pg_class'::regclass\n\
+         \x20      AND objoid = {}::regclass AND objsubid = {subid};\n\
+         \x20 EXCEPTION WHEN insufficient_privilege THEN NULL;\n\
+         \x20 END;\nEND\n$mask_label$;",
+        quote_literal(statement),
+        quote_literal(MASK_PROVIDER),
+        quote_literal(target),
     )
 }
 
@@ -986,35 +1029,64 @@ fn guarded_label_drop(statement: &str) -> String {
 /// Each label is a ledger object (plan section 5): the reconcile sets it, and takes it off when
 /// the rule goes, which the stale-label sweep used to do.
 pub fn field_labels(ast: &SchemaAst, schema: &str) -> Vec<FieldLabel> {
-    let mut out = Vec::new();
+    field_predicates(ast, schema)
+        .into_iter()
+        .map(|p| {
+            let parts: Vec<String> = [("READ", &p.read), ("WRITE", &p.write)]
+                .into_iter()
+                .filter_map(|(word, predicate)| predicate.as_ref().map(|f| format!("{word} {f}")))
+                .collect();
+            FieldLabel {
+                label: format!("MASK {}", parts.join(" ")),
+                table: p.table,
+                column: p.column,
+            }
+        })
+        .collect()
+}
+
+/// Which `can_*` predicate decides each masked column, read and write, named as a label names it
+/// (`schema."can_read_<t>__<col>"`). One entry per column with a field rule.
+///
+/// The names are chosen once for the whole schema, so one cut to the identifier limit, or given a
+/// digit against another, is what the database holds: a reader rebuilding them from the naming rule
+/// alone gets those wrong. Tier 1 carries this in the labels; under tier 2 there are none, so the
+/// push records it beside the tier (`_supatype.schema_state.capabilities.fieldMasking.columns`).
+pub fn field_predicates(ast: &SchemaAst, schema: &str) -> Vec<FieldPredicates> {
     let names = crate::managed::ObjectNames::for_schema(ast);
+    let mut out = Vec::new();
     for model in &ast.models {
         let table = db_table_name(model);
         for (column, rules) in &platform_access(model).fields {
-            let mut parts: Vec<String> = Vec::new();
-            if rules.read.is_some() {
-                parts.push(format!(
-                    "READ {}",
-                    field_predicate_ref(&names, schema, "read", table, column)
-                ));
-            }
-            if rules.write.is_some() {
-                parts.push(format!(
-                    "WRITE {}",
-                    field_predicate_ref(&names, schema, "write", table, column)
-                ));
-            }
-            if parts.is_empty() {
+            let predicate = |op: &str, present: bool| {
+                present.then(|| field_predicate_ref(&names, schema, op, table, column))
+            };
+            let read = predicate("read", rules.read.is_some());
+            let write = predicate("write", rules.write.is_some());
+            if read.is_none() && write.is_none() {
                 continue;
             }
-            out.push(FieldLabel {
+            out.push(FieldPredicates {
                 table: table.to_string(),
                 column: column.clone(),
-                label: format!("MASK {}", parts.join(" ")),
+                read,
+                write,
             });
         }
     }
     out
+}
+
+/// One masked column's predicates: see [`field_predicates`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldPredicates {
+    pub table: String,
+    pub column: String,
+    /// The read predicate, absent when only writes are ruled.
+    pub read: Option<String>,
+    /// The write predicate, absent when only reads are ruled.
+    pub write: Option<String>,
 }
 
 /// The checks a push of field rules runs before any label is set: that the masking extension is

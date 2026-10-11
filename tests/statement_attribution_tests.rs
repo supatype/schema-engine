@@ -18,14 +18,16 @@ use std::collections::BTreeSet;
 
 use supatype_engine::{
     desired::{
-        desired_objects,
+        desired_objects, desired_objects_for,
         statements::{attribute_all, head, split_statements, Attribution, Statement},
-        ObjectKey,
+        DesiredObject, FieldEnforcement, ObjectKey,
     },
+    differ::{self, FieldMaskingTier},
     introspector::fingerprint::ObjectKind,
     parser,
     parser::ast::SchemaAst,
     push,
+    state::database_state::DatabaseState,
 };
 
 /// Every fixture the parser accepts. The ones a database refuses still render, and the split and
@@ -75,6 +77,21 @@ fn push_sql(ast: &SchemaAst) -> String {
     push::fresh_migration(ast, "public", false)
         .unwrap()
         .up_script()
+}
+
+/// The desired set for the masking tier that push chooses: an empty database has no
+/// `supatype_mask`, so a schema with field rules gets tier 2's views and their policies.
+fn desired_for_a_fresh_push(ast: &SchemaAst) -> Vec<DesiredObject> {
+    let diff = differ::diff(ast, &DatabaseState::default()).unwrap();
+    match diff.field_masking {
+        FieldMaskingTier::Views => desired_objects_for(
+            ast,
+            "public",
+            FieldEnforcement::Views(&diff.field_view_plan),
+        ),
+        _ => desired_objects(ast, "public"),
+    }
+    .unwrap()
 }
 
 fn attributed(ast: &SchemaAst) -> Vec<Statement> {
@@ -158,8 +175,7 @@ fn kinds_in_set() -> &'static [ObjectKind] {
 fn the_desired_set_and_the_statements_name_the_same_objects() {
     for name in RENDERABLE {
         let ast = fixture(name);
-        let in_set: BTreeSet<ObjectKey> = desired_objects(&ast, "public")
-            .unwrap()
+        let in_set: BTreeSet<ObjectKey> = desired_for_a_fresh_push(&ast)
             .into_iter()
             .map(|o| o.key)
             .filter(|k| kinds_in_set().contains(&k.kind) && k.schema == "public")

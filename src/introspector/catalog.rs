@@ -180,6 +180,10 @@ pub struct DbFunction {
     /// property above. What a rollback runs to put the function back as it was.
     #[serde(default)]
     pub definition: String,
+    /// Who may call it besides its owner, as sorted `grantee=PRIVILEGE` entries (`PUBLIC` for the
+    /// default grant): which API role can reach an RPC function is part of what it is (F14).
+    #[serde(default)]
+    pub acl: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +194,13 @@ pub struct DbView {
     pub materialized: bool,
     pub definition: String,
     pub comment: Option<String>,
+    /// `reloptions`, sorted: `security_invoker` and `security_barrier` decide whose rights the view
+    /// reads with and whether a caller's filter can run beneath it.
+    #[serde(default)]
+    pub options: Vec<String>,
+    /// The role it runs as when it is not `security_invoker`.
+    #[serde(default)]
+    pub owner: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -499,7 +510,13 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
                 pg_get_function_arguments(p.oid),
                 p.proconfig::text[], p.proisstrict, p.proleakproof, p.proparallel::text,
                 p.procost::text, p.prorows::text,
-                pg_get_functiondef(p.oid)
+                pg_get_functiondef(p.oid),
+                ARRAY(SELECT CASE WHEN g.grantee = 0 THEN 'PUBLIC'
+                                  ELSE pg_get_userbyid(g.grantee)::text END
+                             || '=' || g.privilege_type
+                        FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) g
+                       WHERE g.grantee <> p.proowner
+                       ORDER BY 1)
          FROM pg_proc p
          JOIN pg_namespace n ON n.oid = p.pronamespace
          JOIN pg_language l ON l.oid = p.prolang
@@ -534,15 +551,28 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
                 cost: row.try_get(15)?,
                 rows: row.try_get(16)?,
                 definition: row.try_get(17)?,
+                acl: row.try_get(18)?,
             })
         })
         .collect()
 }
 
+type ViewRow = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Vec<String>,
+    String,
+);
+
 async fn read_views(conn: &mut PgConnection, schemas: &[String]) -> Result<Vec<DbView>> {
-    let rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(
+    let rows: Vec<ViewRow> = sqlx::query_as(
         "SELECT n.nspname::text, c.relname::text, c.relkind::text,
-                pg_get_viewdef(c.oid, true), obj_description(c.oid, 'pg_class')
+                pg_get_viewdef(c.oid, true), obj_description(c.oid, 'pg_class'),
+                COALESCE(ARRAY(SELECT o FROM unnest(c.reloptions) AS o ORDER BY o), '{}'),
+                pg_get_userbyid(c.relowner)::text
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
@@ -555,13 +585,17 @@ async fn read_views(conn: &mut PgConnection, schemas: &[String]) -> Result<Vec<D
 
     Ok(rows
         .into_iter()
-        .map(|(schema, name, relkind, definition, comment)| DbView {
-            schema,
-            name,
-            materialized: relkind == "m",
-            definition,
-            comment,
-        })
+        .map(
+            |(schema, name, relkind, definition, comment, options, owner)| DbView {
+                schema,
+                name,
+                materialized: relkind == "m",
+                definition,
+                comment,
+                options,
+                owner,
+            },
+        )
         .collect())
 }
 
