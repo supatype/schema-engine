@@ -84,3 +84,36 @@ async fn a_database_that_never_had_storage_pushes_cleanly() {
     })
     .await;
 }
+
+/// A steady-state push with buckets re-asserts the storage layer, and used to take ACCESS EXCLUSIVE
+/// on `storage.objects` (and `storage.buckets`) every time, to enable row-level security already on
+/// and add columns already there, behind every upload in progress. With the storage service mid
+/// write (ROW EXCLUSIVE, held), the push now applies without waiting on it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_up_to_date_push_does_not_wait_on_a_write_to_storage_objects() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, MEDIA).await;
+        let side = common::locks::side_pool(&pool, 1).await;
+        let mut writer = side.begin().await.unwrap();
+        sqlx::raw_sql("LOCK TABLE storage.objects, storage.buckets IN ROW EXCLUSIVE MODE")
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let started = std::time::Instant::now();
+        let again = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            common::push(&pool, &parser::parse(MEDIA).unwrap()),
+        )
+        .await
+        .expect("the push waited on the storage service's write");
+        writer.rollback().await.unwrap();
+        let again = again.expect("push applies");
+        assert!(matches!(again, Outcome::UpToDate { .. }), "{again:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "took {:?}",
+            started.elapsed()
+        );
+    })
+    .await;
+}
