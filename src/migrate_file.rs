@@ -1,14 +1,20 @@
-//! The file `supatype migrate` prints: a push, written out so that applying it by hand is the push.
+//! The file `supatype migrate` prints.
 //!
-//! A push writes more than the migration: the engine's own tables, the history row and a ledger row
-//! for every object it made, whose live fingerprint is read from the catalog after the migration
-//! ran. A file that carried only the migration left a database with Supatype's tables and no
-//! record that they were Supatype's, and the next push refused them as unmanaged (E17).
+//! Plain, it is the migration a push would apply, planned from a snapshot of the database without
+//! taking any lock an application waits on (IN-A): nothing stronger than the ACCESS SHARE a read
+//! takes. Applied by hand it changes the schema and records nothing, so its header says the next
+//! push will find the tables unmanaged.
 //!
-//! The live fingerprints cannot be known without running the migration, so the file is made by
-//! running it: the bootstrap, the plan and the push's own writes, in a transaction that is always
-//! rolled back. What the push wrote is read back before the rollback and rendered as statements
-//! that write the same rows, and the file carries them inside its own transaction.
+//! With `--record` it is a push, written out so that applying it by hand is the push. A push writes
+//! more than the migration: the engine's own tables, the history row and a ledger row for every
+//! object it made, whose live fingerprint is read from the catalog after the migration ran. A file
+//! that carried only the migration left a database with Supatype's tables and no record that they
+//! were Supatype's, and the next push refused them as unmanaged (E17). The live fingerprints cannot
+//! be known without running the migration, so the recorded file is made by running it: the
+//! bootstrap, the plan and the push's own writes, in a transaction that is always rolled back, and
+//! which takes the locks a push takes. What the push wrote is read back before the rollback and
+//! rendered as statements that write the same rows, and the file carries them inside its own
+//! transaction.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -22,22 +28,84 @@ use crate::state::migration_history;
 const SCHEMA: &str = "_supatype";
 const LEDGER_KEY: &[&str] = &["kind", "schema_name", "parent", "name"];
 
-/// The migration file for pushing `ast` to the database at `pool`, with the bootstrap and the
-/// push's history and ledger writes in it. A plan with nothing to apply writes nothing, as a push
-/// writes no migration, and its file records nothing.
+/// How `supatype migrate` was asked to write its file.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Options {
+    /// Allow destructive operations, and rewrites of large tables.
+    pub force: bool,
+    /// Rehearse the push, under its locks, so the file also records the history and the ledger.
+    pub record: bool,
+}
+
+/// The header of a file that records nothing.
+pub const UNRECORDED_HEADER: &str = "\
+-- This file does not record what it does. Applied by hand, it changes the schema and writes no
+-- migration history and no record of which objects are Supatype's, so the next `supatype push`
+-- finds the tables it made unmanaged and refuses them until `supatype adopt` takes them over.
+-- To write a file that records it as a push does, run `supatype migrate --record`, which
+-- rehearses the push and takes the same table locks while it does.";
+
+/// The migration file for pushing `ast` to the database at `pool`.
+pub async fn render(
+    pool: &PgPool,
+    ast: &SchemaAst,
+    schema: &str,
+    options: Options,
+) -> Result<String> {
+    if options.record {
+        return render_recorded(pool, ast, schema, options.force).await;
+    }
+    render_unrecorded(pool, ast, schema, options.force).await
+}
+
+/// The migration alone, planned in a transaction that only reads, under one snapshot, and is rolled
+/// back: no bootstrap, no engine lock, nothing stronger than ACCESS SHARE on any table.
+async fn render_unrecorded(
+    pool: &PgPool,
+    ast: &SchemaAst,
+    schema: &str,
+    force: bool,
+) -> Result<String> {
+    use sqlx::Connection;
+    let mut conn = pool.acquire().await?;
+    let mut tx = conn.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *tx)
+        .await
+        .context("read the database under one snapshot")?;
+    let plan = crate::push::plan_on(&mut tx, ast, schema).await;
+    tx.rollback().await?;
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(e) => return Err(crate::push::busy_if_waiting_on_a_writer(pool, e).await),
+    };
+    crate::push::refuse_conflicts(&plan)?;
+    let file = plan.migration(force)?.file();
+    Ok(format!("{UNRECORDED_HEADER}\n{file}"))
+}
+
+/// The migration file, with the bootstrap and the push's history and ledger writes in it. A plan
+/// with nothing to apply writes nothing, as a push writes no migration, and its file records
+/// nothing.
 ///
 /// The rehearsal is a writer, under the engine's lock like a push, and runs the bootstrap whatever
 /// version the database records: the file carries what a push runs on a database with no bootstrap
 /// yet (the bootstrap, its version row, then the claim readers and `auth.*` aliases every push
 /// reinstalls), so applied by hand to any database it leaves the next push nothing to bootstrap.
-pub async fn render(pool: &PgPool, ast: &SchemaAst, schema: &str, force: bool) -> Result<String> {
+/// Every statement is in its transaction, as rehearsed: no index is built concurrently.
+async fn render_recorded(
+    pool: &PgPool,
+    ast: &SchemaAst,
+    schema: &str,
+    force: bool,
+) -> Result<String> {
     let mut tx = crate::push::begin_writer(pool).await?;
     migration_history::run_bootstrap(&mut tx, &migration_history::bootstrap_version())
         .await
         .context("rehearse the bootstrap")?;
     let plan = crate::push::plan_on(&mut tx, ast, schema).await?;
     if !plan.has_changes() {
-        return Ok(plan.migration(force)?.file());
+        return Ok(plan.migration_in_transaction(force)?.file());
     }
 
     let mut bootstrap = migration_history::bootstrap_file_statements();

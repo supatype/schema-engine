@@ -61,16 +61,24 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     Ok(Json(plan.to_json().map_err(engine_error)?))
 }
 
-// ── Migrate (DB: generate SQL only, rehearsed and rolled back) ─────────────
+// ── Migrate (DB: generate SQL only; with `record`, rehearsed and rolled back) ──
 
 pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> {
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
-    // A writer, under the engine's lock, though everything it writes is rolled back.
-    let pool = connect_db(&url).await?;
-    // The push, written out: applying the file by hand records what the push would.
-    let sql = crate::migrate_file::render(&pool, &ast, &req.schema, req.force)
+    // With `record`, a writer under the engine's lock, though everything it writes is rolled back;
+    // without it, a reader that takes no lock an application waits on.
+    let pool = if req.record {
+        connect_db(&url).await?
+    } else {
+        connect_preview_db(&url).await?
+    };
+    let options = crate::migrate_file::Options {
+        force: req.force,
+        record: req.record,
+    };
+    let sql = crate::migrate_file::render(&pool, &ast, &req.schema, options)
         .await
         .map_err(refusal_error)?;
     Ok(Json(SqlResponse { sql }))

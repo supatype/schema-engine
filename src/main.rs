@@ -54,8 +54,9 @@ enum Command {
         #[arg(long, default_value = "public")]
         schema: String,
     },
-    /// Print the migration a push would apply, with the history and ledger writes that make
-    /// applying it by hand a push. Runs it in a transaction that is rolled back; applies nothing.
+    /// Print the migration a push would apply, planned without taking any lock an application
+    /// waits on. Applies nothing, and the file records nothing: with `--record` it also carries the
+    /// history and ledger writes that make applying it by hand a push.
     Migrate {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
@@ -63,6 +64,10 @@ enum Command {
         schema: String,
         #[arg(long, help = "Allow destructive operations without prompting")]
         force: bool,
+        /// Rehearse the push in a transaction that is rolled back, so the file also records the
+        /// migration history and which objects are Supatype's. Takes the table locks a push takes.
+        #[arg(long)]
+        record: bool,
     },
     /// Apply schema to database and record in migration history
     Push {
@@ -339,12 +344,18 @@ async fn run(command: Command, input: String) -> Result<()> {
             database_url,
             schema,
             force,
+            record,
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            // A writer, under the engine's lock, though everything it writes is rolled back.
-            let pool = supatype_engine::db::connect(&database_url).await?;
-            // The push, written out: applying the file by hand records what the push would.
-            let file = supatype_engine::migrate_file::render(&pool, &ast, &schema, force).await?;
+            // With `--record`, a writer under the engine's lock, though everything it writes is
+            // rolled back; without it, a reader that waits on a lock no longer than a preview.
+            let pool = if record {
+                supatype_engine::db::connect(&database_url).await?
+            } else {
+                supatype_engine::db::connect_for_preview(&database_url).await?
+            };
+            let options = supatype_engine::migrate_file::Options { force, record };
+            let file = supatype_engine::migrate_file::render(&pool, &ast, &schema, options).await?;
             println!("{file}");
         }
         Command::Push {

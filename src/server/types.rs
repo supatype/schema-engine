@@ -48,6 +48,10 @@ pub struct DbRequest {
     /// would have to refuses instead. Push only: `doctor` refuses it.
     #[serde(default)]
     pub overwrite_drift: bool,
+    /// For `migrate`: rehearse the push so the file also records the history and the ledger,
+    /// under the table locks a push takes. Without it the file is planned with no such lock.
+    #[serde(default)]
+    pub record: bool,
     /// For `doctor` with `rebaseline`: record drift on access as the baseline too, which is
     /// otherwise refused and listed.
     #[serde(default)]
