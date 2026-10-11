@@ -41,21 +41,15 @@ const SCHEMA: &str = r#"{
     ]
 }"#;
 
-/// Apply the schema, triggers included, exactly as a push would.
+/// Push the schema the way a user does, triggers included.
 macro_rules! with_schema {
     (|$pool:ident| $body:block) => {
         common::with_integration_pool(|$pool| async move {
             let ast = parser::parse(SCHEMA).expect("the schema fixture parses");
-            // The migration a push applies, triggers included (they are the reconcile's since
-            // Phase 4.2). Applying the DDL alone would test a table with no trigger on it and
-            // pass for the wrong reason.
-            let sql = supatype_engine::push::fresh_migration(&ast, "public", false)
-                .expect("renders")
-                .up_script();
-            sqlx::raw_sql(&sql)
-                .execute(&$pool)
-                .await
-                .expect("the schema applies");
+            // A real push, so the triggers land as they do for a user (they are the reconcile's
+            // since Phase 4.2). Applying the DDL alone would test a table with no trigger on it
+            // and pass for the wrong reason.
+            common::push(&$pool, &ast).await.expect("the schema pushes");
             $body
         })
         .await;
@@ -262,12 +256,6 @@ fn the_trigger_is_emitted_only_for_models_that_need_it() {
     );
 }
 
-/// The conversion the parenthesising fix was really about.
-///
-/// `jsonb_to_lexical_migrate_expr` is what the `json -> richText` migration runs, and it
-/// produced `col #>> '{}'::text`, which Postgres reads as `jsonb #>> text` and refuses. The
-/// trigger surfaced it; nothing had tested that migration, so it had been broken since it was
-/// written. Covered here so it stays fixed for both callers.
 /// A localized column holds one value per locale, and each of those is the document.
 ///
 /// `{"en": "...", "fr": "..."}` has no top-level `root`, is not a string and is not an array, so
@@ -337,6 +325,12 @@ async fn a_null_localised_column_stays_null() {
     });
 }
 
+/// The conversion the parenthesising fix was really about.
+///
+/// `jsonb_to_lexical_migrate_expr` is what the `json -> richText` migration runs, and it
+/// produced `col #>> '{}'::text`, which Postgres reads as `jsonb #>> text` and refuses. The
+/// trigger surfaced it; nothing had tested that migration, so it had been broken since it was
+/// written. Covered here so it stays fixed for both callers.
 #[tokio::test]
 async fn a_json_column_holding_a_string_converts_to_a_document() {
     common::with_integration_pool(|pool| async move {

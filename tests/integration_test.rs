@@ -235,26 +235,11 @@ async fn test_up_to_date_push_records_initial_baseline_once() {
         let input = include_str!("fixtures/five_model_blog.json");
         let ast = parser::parse(input).unwrap();
 
-        // What a first push applies, without the history it would record: the case under test is
-        // a database whose schema is current and whose history is empty.
-        let apply_sql = supatype_engine::push::fresh_migration(&ast, "public", false)
-            .unwrap()
-            .up_script();
-        sqlx::raw_sql(&apply_sql).execute(&pool).await.unwrap();
-
-        sqlx::raw_sql(migration_history::create_internal_schema_sql())
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(&migration_history::create_migrations_table_sql())
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(&migration_history::create_schema_state_table_sql())
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::raw_sql(&migration_history::ensure_schema_state_studio_columns_sql())
+        // The case under test is a database whose schema is current and whose history holds no
+        // applied migration: a real first push, with every row it recorded then rolled back. The
+        // `WHERE` is for the image's safe-update guard, which refuses an unqualified UPDATE.
+        common::push(&pool, &ast).await.unwrap();
+        sqlx::raw_sql("UPDATE _supatype.migrations SET rolled_back = true WHERE NOT rolled_back")
             .execute(&pool)
             .await
             .unwrap();
