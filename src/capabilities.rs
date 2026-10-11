@@ -32,9 +32,10 @@ pub const FEATURES: &[&str] = &[
     "identity_columns",
 ];
 
-/// The capabilities document.
+/// The capabilities document. `version` is the build's own (`build.rs`): the crate version for a
+/// release, a `-dev` pre-release with the commit otherwise, so a caller can tell builds apart.
 pub fn capabilities() -> serde_json::Value {
-    serde_json::json!({ "features": FEATURES })
+    serde_json::json!({ "version": env!("ENGINE_VERSION"), "features": FEATURES })
 }
 
 #[cfg(test)]
@@ -43,7 +44,10 @@ mod tests {
     fn the_document_lists_every_feature_this_engine_supports() {
         assert_eq!(
             super::capabilities().to_string(),
-            r#"{"features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns"]}"#
+            format!(
+                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns"]}}"#,
+                env!("ENGINE_VERSION")
+            )
         );
     }
 }
