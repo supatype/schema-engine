@@ -6,7 +6,7 @@
 //! and every SQL construct that touches it is a place the substitution could have been missed.
 //!
 //! The specific worry is oracles. A restriction that returns NULL in the target list but still
-//! evaluates `WHERE salary > 100000` honestly has not hidden the salary — it has made it
+//! evaluates `WHERE salary > 100000` honestly has not hidden the salary: it has made it
 //! searchable one bit at a time. So most of these tests are not "is the value NULL" but "does
 //! this construct discriminate between rows it should not be able to see".
 //!
@@ -135,7 +135,7 @@ async fn a_masked_column_cannot_be_used_as_an_oracle() {
             assert_eq!(
                 n,
                 Some(1),
-                "{predicate} matched more than bob's own row — the qual is evaluating real values"
+                "{predicate} matched more than bob's own row, so the qual is evaluating real values"
             );
         }
 
@@ -221,12 +221,12 @@ async fn aggregates_over_an_unreadable_column_error_rather_than_undercount() {
             .await;
             assert!(
                 result.is_err(),
-                "{agg} returned a value for a caller who cannot read every row — that is a \
+                "{agg} returned a value for a caller who cannot read every row, which is a \
                  partial answer presented as a total"
             );
         }
 
-        // Restricted to rows the caller *can* read, an aggregate is correct and must still work —
+        // Restricted to rows the caller *can* read, an aggregate is correct and must still work;
         // otherwise the rule has broken legitimate use rather than restricted it.
         let rows = attempt(
             &pool,
@@ -253,7 +253,7 @@ async fn a_masked_value_cannot_be_smuggled_out_through_a_projection() {
             .expect("tamper fixture applies");
 
         // Casting, concatenating or arithmetic on the column operates on the substituted NULL,
-        // not the stored value — so each of these must be NULL for a row bob cannot read.
+        // not the stored value, so each of these must be NULL for a row bob cannot read.
         for expr in [
             "salary::text",
             "salary + 0",
@@ -281,26 +281,107 @@ async fn a_masked_value_cannot_be_smuggled_out_through_a_projection() {
                             .map(|n| n.to_string())
                     });
 
-            // `coalesce` and `greatest` legitimately turn NULL into their fallback — the point is
+            // `coalesce` and `greatest` legitimately turn NULL into their fallback. The point is
             // that the fallback is what appears, never 300.
             assert!(
                 v.as_deref() != Some("300") && v.as_deref() != Some("600"),
                 "{expr} produced {v:?}, which is derived from the real value"
             );
         }
+    })
+    .await;
+}
 
-        // A whole-row reference bypasses per-column rewriting by construction, so it is refused
-        // outright rather than masked.
-        let whole_row = attempt(
-            &pool,
-            "bob",
-            "SELECT to_jsonb(t) FROM public.tamper_staff t WHERE id = 3",
-        )
-        .await;
+/// Functions that take the whole row, so a test can hand them `t` and see what arrives. The SQL
+/// one can be inlined by the planner and the PL/pgSQL one cannot, so between them they cover a
+/// row reaching a function body both as an expression and as a real call argument.
+const WHOLE_ROW_FUNCTIONS: &str = r#"
+CREATE FUNCTION public.tamper_salary_sql(r public.tamper_staff)
+  RETURNS int LANGUAGE sql STABLE AS $$ SELECT r.salary $$;
+
+CREATE FUNCTION public.tamper_salary_plpgsql(r public.tamper_staff)
+  RETURNS int LANGUAGE plpgsql STABLE AS $$ BEGIN RETURN r.salary; END $$;
+"#;
+
+/// Every way the test hands the whole row `t` to something that could carry the salary out.
+const WHOLE_ROW_EXPRESSIONS: [&str; 6] = [
+    "to_jsonb(t)",
+    "row_to_json(t)",
+    "t",
+    "public.tamper_salary_sql(t)",
+    "public.tamper_salary_plpgsql(t)",
+    "(SELECT to_jsonb(s) FROM (SELECT * FROM public.tamper_staff) s WHERE s.id = t.id)",
+];
+
+/// Run `expr` over every row as bob and return `(id, expr as text)`, failing the test if the
+/// construct is refused: a whole-row reference must now be answered with the masked row.
+async fn whole_row_as_bob(pool: &sqlx::PgPool, expr: &str) -> Vec<(i32, Option<String>)> {
+    let sql = format!("SELECT t.id, ({expr})::text AS v FROM public.tamper_staff t ORDER BY t.id");
+    let rows = attempt(pool, "bob", &sql).await.unwrap_or_else(|e| {
+        panic!("{expr} was refused; it should return the masked row instead: {e}")
+    });
+    rows.iter()
+        .map(|r| (r.get::<i32, _>("id"), r.get::<Option<String>, _>("v")))
+        .collect()
+}
+
+/// bob's own salary comes through, and neither salary he may not read appears anywhere.
+fn assert_only_bobs_salary(expr: &str, values: &[(i32, Option<String>)]) {
+    assert_eq!(
+        values.len(),
+        3,
+        "{expr} should return every row: {values:?}"
+    );
+    for (id, v) in values {
+        let text = v.as_deref().unwrap_or("");
         assert!(
-            whole_row.is_err(),
-            "a whole-row reference returned a row — every column would be in it, unmasked"
+            !text.contains("100") && !text.contains("300"),
+            "{expr} carried a salary bob may not read out of row {id}: {text}"
         );
+        if *id == 2 {
+            assert!(text.contains("200"), "{expr} lost bob's own salary: {v:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_whole_row_reference_carries_only_the_masked_values() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            eprintln!("SKIP field-access tamper suite: supatype_mask is not installed");
+            return;
+        }
+        sqlx::raw_sql(SETUP)
+            .execute(&pool)
+            .await
+            .expect("tamper fixture applies");
+        sqlx::raw_sql(WHOLE_ROW_FUNCTIONS)
+            .execute(&pool)
+            .await
+            .expect("whole-row functions apply");
+
+        // A whole-row reference does not go through the per-column rewrite, so the extension
+        // substitutes a row built from the masked columns. Whatever consumes it, a JSON builder,
+        // a text cast or a function body, sees that row and never the stored one.
+        for expr in WHOLE_ROW_EXPRESSIONS {
+            let values = whole_row_as_bob(&pool, expr).await;
+            assert_only_bobs_salary(expr, &values);
+        }
+
+        // The same row used as a filter must not discriminate on the real value either.
+        for predicate in [
+            "to_jsonb(t)->>'salary' = '300'",
+            "row_to_json(t)->>'salary' = '300'",
+            "public.tamper_salary_sql(t) = 300",
+            "public.tamper_salary_plpgsql(t) = 300",
+        ] {
+            let sql = format!("SELECT t.id FROM public.tamper_staff t WHERE {predicate}");
+            assert_eq!(
+                count_rows(&pool, "bob", &sql).await,
+                Some(0),
+                "{predicate} matched a row whose salary bob may not read"
+            );
+        }
     })
     .await;
 }
@@ -318,7 +399,7 @@ async fn writes_cannot_destroy_a_value_the_caller_never_saw() {
             .expect("tamper fixture applies");
 
         // The round-trip: bob reads row 3, gets NULL for salary, and writes the whole object back.
-        // The value must survive, and the write must not error — a whole-object client is not
+        // The value must survive, and the write must not error: a whole-object client is not
         // doing anything wrong.
         let mut tx = pool.begin().await.expect("begin");
         sqlx::raw_sql("SET LOCAL tamper.uid = 'bob'; SET LOCAL ROLE tamper_app;")
@@ -357,7 +438,7 @@ async fn writes_cannot_destroy_a_value_the_caller_never_saw() {
             "UPDATE public.tamper_staff SET salary = 1 WHERE id = 3 RETURNING id",
         )
         .await;
-        // Either refused outright, or silently preserved — both are safe. What must not happen is
+        // Either refused outright, or silently preserved: both are safe. What must not happen is
         // the value changing to 1.
         let _ = refused;
         let after: Option<i32> = sqlx::query("SELECT salary FROM public.tamper_staff WHERE id = 3")
