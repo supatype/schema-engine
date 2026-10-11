@@ -429,8 +429,9 @@ async fn an_option_column_the_table_lacks_is_added() {
     .await;
 }
 
-/// A rename is a similarity guess, so only a column that is ours may be its source: one someone
-/// added (`subtitel`) is not renamed into a declared one (`subtitle`), which is added beside it.
+/// Only a column that is ours may be a rename's source: one someone added (`subtitel`) is not
+/// renamed into a declared one (`subtitle`), which is added beside it, and a declaration naming it
+/// is refused. Renames are declared, never guessed from similar names (D1).
 #[tokio::test]
 async fn a_column_someone_added_is_never_renamed_into_a_declared_one() {
     common::with_integration_pool(|pool| async move {
@@ -464,8 +465,22 @@ async fn a_column_someone_added_is_never_renamed_into_a_declared_one() {
         assert!(columns.contains(&"subtitle".to_string()), "{columns:?}");
         assert!(!recorded(&pool).await.contains(&"subtitel".to_string()));
 
-        // One of ours is still renamed.
-        let renamed = posts(json!({ "sub_title": text() }));
+        // Declaring a rename from someone else's column is refused, naming it.
+        let mut from_theirs = text();
+        from_theirs["annotations"]["db"]["renamedFrom"] = json!("subtitel");
+        let refused = push::prepare(&pool, &posts(json!({ "sub_title": from_theirs })), "public")
+            .await
+            .err()
+            .expect("subtitel is not ours to rename");
+        assert!(
+            format!("{refused:#}").contains("\"subtitel\""),
+            "{refused:#}"
+        );
+
+        // One of ours is still renamed, when the rename is declared.
+        let mut declared = text();
+        declared["annotations"]["db"]["renamedFrom"] = json!("subtitle");
+        let renamed = posts(json!({ "sub_title": declared }));
         let plan = push::prepare(&pool, &renamed, "public").await.unwrap();
         assert!(
             plan.diff.operations.iter().any(|op| matches!(

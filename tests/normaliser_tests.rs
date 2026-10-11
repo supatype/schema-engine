@@ -454,7 +454,7 @@ fn test_migration_comments_are_ascii_only() {
 /// Rename-column migration comment must use ASCII arrow `->`, not Unicode `→`.
 #[test]
 fn test_rename_column_comment_uses_ascii_arrow() {
-    // Schema now has "new_name"; DB still has "old_name": the differ should detect a rename.
+    // Schema now has "new_name", declared as renamed from "old_name", which the DB still has.
     let schema = r#"{
   "astVersion": 2,
   "models": [
@@ -467,7 +467,8 @@ fn test_rename_column_comment_uses_ascii_arrow() {
           "annotations": {
             "db": {
               "pgType": "TEXT",
-              "unique": false
+              "unique": false,
+              "renamedFrom": "old_name"
             }
           }
         }
@@ -505,6 +506,10 @@ fn test_rename_column_comment_uses_ascii_arrow() {
 
     let diff = differ::diff(&ast, &db).unwrap();
     let sql = migration::generate(&diff, false, "public", &ast).unwrap();
+    assert!(
+        sql.contains("RENAME COLUMN \"old_name\" TO \"new_name\""),
+        "{sql}"
+    );
 
     for line in sql.lines() {
         let trimmed = line.trim();

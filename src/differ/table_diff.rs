@@ -1,12 +1,10 @@
-use super::column_diff;
+use super::{column_diff, renames};
 use super::{Operation, Risk};
 use crate::introspector::constraints::DbConstraintType;
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
-use strsim::jaro_winkler;
 
-const RENAME_THRESHOLD: f64 = 0.7;
 const EXTENSION_MANAGED_TABLES: &[&str] = &["spatial_ref_sys"];
 
 fn is_extension_managed_table(name: &str) -> bool {
@@ -52,74 +50,33 @@ pub fn diff(
         .chain(versions_tables.iter().map(String::as_str))
         .collect();
 
-    // Detect table renames: new tables (in schema, not in DB) vs removed tables (in DB, not in schema)
-    let new_tables: Vec<&str> = ast
-        .models
-        .iter()
-        .filter(|m| !db_table_names.contains(m.table_name()))
-        .map(|m| m.table_name())
-        .collect();
-
-    // Only tables Supatype owns are rename *candidates*.
-    //
-    // Rename detection is a similarity heuristic (jaro-winkler ≥ 0.7), so an unmanaged table whose
-    // name merely resembles a new model would be renamed into it, quietly taking over someone
-    // else's table, and taking its data with it. That is worse than the drop this gate was written
-    // for, because the result looks like a successful migration.
-    let removed_tables: Vec<&str> = db
-        .tables
-        .iter()
-        .filter(|t| {
-            !schema_table_names.contains(t.name.as_str())
-                && !is_extension_managed_table(t.name.as_str())
-                && db.owns_table(t)
-        })
-        .map(|t| t.name.as_str())
-        .collect();
-
-    // For each removed table, find the best-matching new table by similarity.
-    // If similarity >= threshold, treat as a rename (data preserved via ALTER TABLE RENAME).
+    // Renames are declared, never guessed (D1): a model's `renamedFrom` names its old table, which
+    // is renamed only when it exists, is Supatype's and is not declared again (`renames`).
     let mut renamed_from: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut renamed_to: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for &removed in &removed_tables {
-        let best = new_tables
-            .iter()
-            .filter(|&&t| !renamed_to.contains(t))
-            .map(|&t| (t, jaro_winkler(removed, t)))
-            .filter(|(_, score)| *score >= RENAME_THRESHOLD)
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
-
-        if let Some((matched_new, _)) = best {
+    for model in &ast.models {
+        if let Some(from) = renames::check_table_rename(model, db, &schema_table_names)? {
             ops.push(Operation::RenameTable {
-                from: removed.to_string(),
-                to: matched_new.to_string(),
-                risk: Risk::Cautious,
+                from: from.to_string(),
+                to: model.table_name().to_string(),
+                risk: Risk::Safe,
             });
-            warnings.push(format!(
-                "Table '{removed}' not found in schema but '{matched_new}' is new, so it is \
-                 treating as rename. Run with --force to skip confirmation."
-            ));
-            renamed_from.insert(removed.to_string());
-            renamed_to.insert(matched_new.to_string());
+            renamed_from.insert(from.to_string());
         }
     }
 
     for model in &ast.models {
         if !db_table_names.contains(model.table_name()) {
-            if renamed_to.contains(model.table_name()) {
-                // This table is the target of a rename: diff columns against the source table
-                let from_name = ops
-                    .iter()
-                    .find_map(|op| match op {
-                        Operation::RenameTable { from, to, .. } if to == model.table_name() => {
-                            Some(from.clone())
-                        }
-                        _ => None,
-                    })
-                    .unwrap();
-                let db_table = db.tables.iter().find(|t| t.name == from_name).unwrap();
-                let prev_model = previous_model(previous, model.table_name());
+            let source = model
+                .annotations
+                .db
+                .renamed_from
+                .as_deref()
+                .filter(|from| renamed_from.contains(*from))
+                .and_then(|from| db.tables.iter().find(|t| t.name == from));
+            if let Some(db_table) = source {
+                // The target of a declared rename: its columns are diffed against the old table,
+                // and the last push's model is the one under the old name.
+                let prev_model = previous_model(previous, &db_table.name);
                 column_diff::diff(
                     model,
                     db_table,

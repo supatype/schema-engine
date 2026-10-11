@@ -114,9 +114,10 @@ async fn an_unmanaged_table_is_not_renamed_into_a_model() {
         .await
         .expect("fixture applies");
 
-        // `widgets_old` is similar enough to `widget` to trip the rename heuristic
+        // `widgets_old` is similar enough to `widget` to have tripped the old rename heuristic
         // (jaro-winkler >= 0.7). Renaming would take over their table *and* its data, while looking
-        // like a successful migration.
+        // like a successful migration. Renames are declared now (D1), and a declaration naming
+        // their table is refused.
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
         let db = introspector::introspect(&pool, "public").await.unwrap();
         let diff = differ::diff(&ast, &db).unwrap();
@@ -125,6 +126,14 @@ async fn an_unmanaged_table_is_not_renamed_into_a_model() {
         assert!(
             !ops.iter().any(|o| o.contains("RenameTable")),
             "an unmanaged table was renamed into a model: {ops:?}"
+        );
+        let mut declared: serde_json::Value = serde_json::from_str(ONE_MODEL).unwrap();
+        declared["models"][0]["annotations"]["db"]["renamedFrom"] = "widgets_old".into();
+        let declared = parser::parse(&declared.to_string()).expect("fixture parses");
+        let refused = differ::diff(&declared, &db).expect_err("their table is not ours to rename");
+        assert!(
+            refused.to_string().contains("not managed by Supatype"),
+            "{refused:#}"
         );
 
         let still_there: i64 = sqlx::query_scalar("SELECT count(*) FROM public.widgets_old")
