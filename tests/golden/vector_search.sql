@@ -302,6 +302,7 @@ FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'admin'
   );
 ALTER TABLE "public"."documents" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."documents" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

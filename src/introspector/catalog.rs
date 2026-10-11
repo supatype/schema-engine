@@ -239,6 +239,9 @@ pub struct DbTableGrant {
     pub table: String,
     pub grantee: String,
     pub privileges: Vec<String>,
+    /// How the privileges are held beyond a plain grant from the table's owner (E16).
+    #[serde(default)]
+    pub held_with: HeldWith,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -249,7 +252,31 @@ pub struct DbColumnGrant {
     pub column: String,
     pub grantee: String,
     pub privileges: Vec<String>,
+    #[serde(default)]
+    pub held_with: HeldWith,
 }
+
+/// What a grantee may do with its privileges beyond using them, read from `aclexplode`: those it
+/// may grant on (`WITH GRANT OPTION`), and those it holds from a grantor other than the table's
+/// owner, as `<privilege> GRANTED BY <role>`. Either lets a role hand access on, or keep it after
+/// the owner revokes it, so either is a change to what the role may do. Both are empty for every
+/// grant the engine makes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldWith {
+    #[serde(default)]
+    pub grant_option: Vec<String>,
+    #[serde(default)]
+    pub other_grantors: Vec<String>,
+}
+
+/// The two `SELECT` columns that read a grantee's [`HeldWith`] from the `aclexplode` rows `g` of a
+/// relation `c`, aggregated per grantee, with the grantor's role joined as `gr`.
+const HELD_WITH_COLUMNS: &str = "COALESCE(array_agg(DISTINCT g.privilege_type::text
+                    ORDER BY g.privilege_type::text) FILTER (WHERE g.is_grantable), ARRAY[]::text[]),
+                COALESCE(array_agg(DISTINCT g.privilege_type::text || ' GRANTED BY '
+                    || COALESCE(quote_ident(gr.rolname::text), 'PUBLIC'))
+                    FILTER (WHERE g.grantor <> c.relowner), ARRAY[]::text[])";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -677,31 +704,47 @@ async fn read_table_grants(
     conn: &mut PgConnection,
     schemas: &[String],
 ) -> Result<Vec<DbTableGrant>> {
-    let rows: Vec<(String, String, String, Vec<String>)> = sqlx::query_as(
+    type Row = (
+        String,
+        String,
+        String,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT n.nspname::text, c.relname::text,
                 CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE r.rolname::text END,
-                array_agg(DISTINCT g.privilege_type::text ORDER BY g.privilege_type::text)
+                array_agg(DISTINCT g.privilege_type::text ORDER BY g.privilege_type::text),
+                {HELD_WITH_COLUMNS}
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          CROSS JOIN LATERAL aclexplode(c.relacl) g
          LEFT JOIN pg_roles r ON r.oid = g.grantee
+         LEFT JOIN pg_roles gr ON gr.oid = g.grantor
          LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
          WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'v', 'm', 'p') AND c.relacl IS NOT NULL
            AND d.objid IS NULL
          GROUP BY n.nspname, c.relname, g.grantee, r.rolname
-         ORDER BY n.nspname, c.relname, 3",
-    )
+         ORDER BY n.nspname, c.relname, 3"
+    ))
     .bind(schemas)
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(schema, table, grantee, privileges)| DbTableGrant {
-            schema,
-            table,
-            grantee,
-            privileges,
-        })
+        .map(
+            |(schema, table, grantee, privileges, grant_option, other_grantors)| DbTableGrant {
+                schema,
+                table,
+                grantee,
+                privileges,
+                held_with: HeldWith {
+                    grant_option,
+                    other_grantors,
+                },
+            },
+        )
         .collect())
 }
 
@@ -709,34 +752,51 @@ async fn read_column_grants(
     conn: &mut PgConnection,
     schemas: &[String],
 ) -> Result<Vec<DbColumnGrant>> {
-    let rows: Vec<(String, String, String, String, Vec<String>)> = sqlx::query_as(
+    type Row = (
+        String,
+        String,
+        String,
+        String,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+    );
+    let rows: Vec<Row> = sqlx::query_as(&format!(
         "SELECT n.nspname::text, c.relname::text, a.attname::text,
                 CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE r.rolname::text END,
-                array_agg(DISTINCT g.privilege_type::text ORDER BY g.privilege_type::text)
+                array_agg(DISTINCT g.privilege_type::text ORDER BY g.privilege_type::text),
+                {HELD_WITH_COLUMNS}
          FROM pg_attribute a
          JOIN pg_class c ON c.oid = a.attrelid
          JOIN pg_namespace n ON n.oid = c.relnamespace
          CROSS JOIN LATERAL aclexplode(a.attacl) g
          LEFT JOIN pg_roles r ON r.oid = g.grantee
+         LEFT JOIN pg_roles gr ON gr.oid = g.grantor
          LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
          WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'v', 'm', 'p')
            AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
            AND d.objid IS NULL
          GROUP BY n.nspname, c.relname, a.attname, g.grantee, r.rolname
-         ORDER BY n.nspname, c.relname, a.attname, 4",
-    )
+         ORDER BY n.nspname, c.relname, a.attname, 4"
+    ))
     .bind(schemas)
     .fetch_all(&mut *conn)
     .await?;
     Ok(rows
         .into_iter()
         .map(
-            |(schema, table, column, grantee, privileges)| DbColumnGrant {
-                schema,
-                table,
-                column,
-                grantee,
-                privileges,
+            |(schema, table, column, grantee, privileges, grant_option, other_grantors)| {
+                DbColumnGrant {
+                    schema,
+                    table,
+                    column,
+                    grantee,
+                    privileges,
+                    held_with: HeldWith {
+                        grant_option,
+                        other_grantors,
+                    },
+                }
             },
         )
         .collect())

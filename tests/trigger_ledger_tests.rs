@@ -465,9 +465,11 @@ async fn an_older_engines_slug_trigger_goes_with_its_field_in_the_first_push() {
     .await;
 }
 
-/// The same upgrade with an affordance function whose body an older engine wrote differently: it is
-/// named exactly as the engine names it for the model, so it is brought up to date, not refused.
-/// A user's function that only looks like one (`can_do_things`) is left alone.
+/// The same upgrade with an affordance function whose body is not what the last push's schema
+/// makes: it is named exactly as the engine names it for the model, so it is Supatype's and not a
+/// conflict, but it decides access, so the body that differs is a hand edit the push asks about
+/// before bringing it up to date (F15 (f), A2-N3). A user's function that only looks like one
+/// (`can_do_things`) is left alone.
 #[tokio::test]
 async fn an_older_engines_affordance_function_is_brought_up_to_date_and_a_users_is_left() {
     common::with_integration_pool(|pool| async move {
@@ -501,7 +503,21 @@ async fn an_older_engines_affordance_function_is_brought_up_to_date_and_a_users_
         .await
         .unwrap();
 
-        let outcome = push(&pool, &ast).await.expect("not refused as a conflict");
+        let refused = push(&pool, &ast)
+            .await
+            .expect_err("overwrote a changed affordance function without consent");
+        let drift = refused
+            .downcast_ref::<supatype_engine::ledger::drift::SecurityDrift>()
+            .unwrap_or_else(|| panic!("refused as something else: {refused:#}"));
+        assert_eq!(drift.objects.len(), 1, "{drift}");
+        assert!(drift.objects[0].key.name.starts_with("can_read_posts"));
+        let consented = push::ApplyOptions {
+            overwrite_drift: true,
+            ..Default::default()
+        };
+        let outcome = push_with(&pool, &ast, consented)
+            .await
+            .expect("not refused as a conflict");
         assert!(applied(&outcome), "{outcome:?}");
         assert_eq!(body("can_read_posts").await.unwrap(), ours);
         assert!(body("can_do_things").await.is_some());

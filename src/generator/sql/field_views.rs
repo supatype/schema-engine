@@ -375,6 +375,10 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
         };
         out.push_str(&trigger.render());
     }
+    for grant in crate::generator::sql::grants::api_owner_junction_grants(ast) {
+        out.push_str(&grant.create_sql(schema));
+        out.push_str("\n\n");
+    }
 
     out
 }

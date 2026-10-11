@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use super::catalog::{CatalogState, DbFunction, DbPolicy, DbSecurityLabel};
+use super::catalog::{CatalogState, DbFunction, DbPolicy, DbSecurityLabel, HeldWith};
 use super::constraints::{DbConstraint, DbConstraintType};
 use super::indexes::DbIndex;
 use super::tables::DbTable;
@@ -567,11 +567,42 @@ fn policy_create_sql(p: &DbPolicy) -> String {
     )
 }
 
+/// What one grantee holds on a table or one column: the privileges, and how it holds them beyond a
+/// plain grant from the owner, where the catalog read that.
+#[derive(Default, Clone, Copy)]
+struct Held<'a> {
+    privileges: &'a [String],
+    with: Option<&'a HeldWith>,
+}
+
+impl Held<'_> {
+    /// The privileges as the fingerprint writes them, joined on `sep`: the plain set, then each
+    /// held with the grant option, then each held from another grantor. A grant as the engine
+    /// makes it has neither, so its text, and every fingerprint recorded before these were read,
+    /// is unchanged.
+    fn part(&self, sep: &str) -> String {
+        let mut tokens: Vec<String> = self.privileges.to_vec();
+        if let Some(with) = self.with {
+            tokens.extend(
+                with.grant_option
+                    .iter()
+                    .map(|p| format!("{p} WITH GRANT OPTION")),
+            );
+            tokens.extend(with.other_grantors.iter().cloned());
+        }
+        tokens.join(sep)
+    }
+
+    fn grant_option(&self) -> &[String] {
+        self.with.map(|w| w.grant_option.as_slice()).unwrap_or(&[])
+    }
+}
+
 /// One grantee's privileges on one table: what it holds on the table, and on each column.
 #[derive(Default)]
 struct HeldPrivileges<'a> {
-    table: Vec<&'a str>,
-    columns: BTreeMap<&'a str, Vec<&'a str>>,
+    table: Held<'a>,
+    columns: BTreeMap<&'a str, Held<'a>>,
 }
 
 /// One fingerprint per grantee and table, carrying its table privileges and its column privileges
@@ -583,7 +614,10 @@ fn grant_entries(catalog: &CatalogState, out: &mut Vec<ObjectFingerprint>) {
         let entry = held
             .entry((g.schema.as_str(), g.table.as_str(), g.grantee.as_str()))
             .or_default();
-        entry.table = g.privileges.iter().map(String::as_str).collect();
+        entry.table = Held {
+            privileges: &g.privileges,
+            with: Some(&g.held_with),
+        };
     }
     for g in &catalog.column_grants {
         held.entry((g.schema.as_str(), g.table.as_str(), g.grantee.as_str()))
@@ -591,7 +625,10 @@ fn grant_entries(catalog: &CatalogState, out: &mut Vec<ObjectFingerprint>) {
             .columns
             .insert(
                 g.column.as_str(),
-                g.privileges.iter().map(String::as_str).collect(),
+                Held {
+                    privileges: &g.privileges,
+                    with: Some(&g.held_with),
+                },
             );
     }
     for ((schema, table, grantee), privileges) in held {
@@ -610,7 +647,7 @@ fn grant_entry(
     let columns = privileges
         .columns
         .iter()
-        .map(|(column, privs)| format!("{column}={}", privs.join("|")))
+        .map(|(column, held)| format!("{column}={}", held.part("|")))
         .collect::<Vec<_>>()
         .join(";");
     entry(
@@ -618,30 +655,52 @@ fn grant_entry(
         schema,
         table,
         grantee,
-        &[privileges.table.join(",").as_str(), columns.as_str()],
+        &[privileges.table.part(",").as_str(), columns.as_str()],
     )
+}
+
+/// The fingerprint of `key`'s grantee holding exactly `table` on the table and `columns` on its
+/// columns, each held plainly from the owner: what a grant the engine makes reads as once applied,
+/// for a caller that knows what a grant should hold without the catalog (the comparison of an
+/// object no row records, `ledger::unrecorded`).
+pub fn plain_grant(
+    key: &ObjectKey,
+    table: &[String],
+    columns: &BTreeMap<String, Vec<String>>,
+) -> ObjectFingerprint {
+    let held = HeldPrivileges {
+        table: Held {
+            privileges: table,
+            with: None,
+        },
+        columns: columns
+            .iter()
+            .map(|(column, privileges)| {
+                (
+                    column.as_str(),
+                    Held {
+                        privileges,
+                        with: None,
+                    },
+                )
+            })
+            .collect(),
+    };
+    let mut fingerprint = grant_entry(&key.schema, &key.parent, &key.name, &held);
+    fingerprint.create_sql = Some(grant_create_sql(&key.schema, &key.parent, &key.name, &held));
+    fingerprint
 }
 
 /// A grantee that holds nothing on a table, which the catalog has no row for. The ledger records
 /// it when the rules allow a role nothing, so a push compares "nothing" with "nothing".
 pub fn holding_nothing(key: &ObjectKey) -> ObjectFingerprint {
-    let mut fingerprint = grant_entry(
-        &key.schema,
-        &key.parent,
-        &key.name,
-        &HeldPrivileges::default(),
-    );
-    fingerprint.create_sql = Some(grant_create_sql(
-        &key.schema,
-        &key.parent,
-        &key.name,
-        &HeldPrivileges::default(),
-    ));
-    fingerprint
+    plain_grant(key, &[], &BTreeMap::new())
 }
 
-/// Revoke everything, then grant exactly what the catalog reports: what a rollback runs to
-/// restore a grantee's privileges the push replaced.
+/// Revoke everything, then grant exactly what the catalog reports, with the grant option where it
+/// was held: what a rollback runs to restore a grantee's privileges the push replaced. A privilege
+/// held from another grantor is restored as the owner's, since only that grantor could grant it
+/// again.
 fn grant_create_sql(
     schema: &str,
     table: &str,
@@ -654,18 +713,34 @@ fn grant_create_sql(
     } else {
         quote_ident(grantee)
     };
+    let option = |privilege: &str, held: &Held<'_>| {
+        if held.grant_option().iter().any(|p| p == privilege) {
+            " WITH GRANT OPTION"
+        } else {
+            ""
+        }
+    };
     let mut statements = vec![format!("REVOKE ALL PRIVILEGES ON {target} FROM {role};")];
-    if !privileges.table.is_empty() {
+    let (plain, optioned): (Vec<&String>, Vec<&String>) = privileges
+        .table
+        .privileges
+        .iter()
+        .partition(|p| option(p, &privileges.table).is_empty());
+    if !plain.is_empty() {
+        let plain: Vec<&str> = plain.iter().map(|p| p.as_str()).collect();
+        statements.push(format!("GRANT {} ON {target} TO {role};", plain.join(", ")));
+    }
+    for privilege in optioned {
         statements.push(format!(
-            "GRANT {} ON {target} TO {role};",
-            privileges.table.join(", ")
+            "GRANT {privilege} ON {target} TO {role} WITH GRANT OPTION;"
         ));
     }
-    for (column, privs) in &privileges.columns {
-        for privilege in privs {
+    for (column, held) in &privileges.columns {
+        for privilege in held.privileges {
             statements.push(format!(
-                "GRANT {privilege} ({}) ON {target} TO {role};",
-                quote_ident(column)
+                "GRANT {privilege} ({}) ON {target} TO {role}{};",
+                quote_ident(column),
+                option(privilege, held)
             ));
         }
     }

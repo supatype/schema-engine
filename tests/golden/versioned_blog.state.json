@@ -2216,7 +2216,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "draft",
@@ -2224,7 +2228,11 @@
         "grantee": "authenticated",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "draft",
@@ -2232,7 +2240,11 @@
         "grantee": "service_role",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "draft",
@@ -2247,7 +2259,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2255,7 +2271,11 @@
         "grantee": "authenticated",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2270,7 +2290,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2278,7 +2302,11 @@
         "grantee": "authenticated",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2293,7 +2321,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2308,7 +2340,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2316,7 +2352,11 @@
         "grantee": "anon",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2325,7 +2365,11 @@
         "privileges": [
           "SELECT",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2340,7 +2384,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2350,7 +2398,11 @@
           "INSERT",
           "SELECT",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2365,7 +2417,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2380,7 +2436,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2388,7 +2448,11 @@
         "grantee": "anon",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2396,7 +2460,11 @@
         "grantee": "authenticated",
         "privileges": [
           "SELECT"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       },
       {
         "schema": "public",
@@ -2411,7 +2479,11 @@
           "TRIGGER",
           "TRUNCATE",
           "UPDATE"
-        ]
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
       }
     ],
     "columnGrants": [],

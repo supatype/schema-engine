@@ -67,7 +67,7 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
             DesiredObject {
                 structure: structure(&key, &create_sql),
                 drop_sql: key.drop_sql().unwrap_or_default(),
-                security_relevant: super::security_relevant(key.kind),
+                security_relevant: super::security_relevant(&key),
                 depends_on: Vec::new(),
                 key,
                 create_sql,
@@ -77,8 +77,8 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
 }
 
 /// The roles whose privileges the ledger governs, as on a model table: the API roles a caller can
-/// reach the API as, and the owner of tier 2's views. `service_role` and `PUBLIC` are left alone,
-/// as they are on the model tables.
+/// reach the API as, and the owner of tier 2's views. `service_role` is left alone, as it is on the
+/// model tables; so is `PUBLIC` on these objects, which only a model or junction table records.
 fn governed_role(role: &str) -> bool {
     crate::generator::sql::grants::GRANTED_ROLES.contains(&role)
         || role == crate::generator::sql::field_views::API_OWNER
@@ -99,7 +99,7 @@ fn grant_structure(create_sql: &str) -> BTreeMap<&'static str, String> {
 
 /// The parts of `create_sql` the catalog will report for `key`, labelled as the fingerprint
 /// labels them (`ObjectKind::labels`).
-fn structure(key: &ObjectKey, create_sql: &str) -> BTreeMap<&'static str, String> {
+pub(crate) fn structure(key: &ObjectKey, create_sql: &str) -> BTreeMap<&'static str, String> {
     if key.kind == ObjectKind::TableGrant {
         return grant_structure(create_sql);
     }

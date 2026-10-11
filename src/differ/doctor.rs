@@ -16,7 +16,7 @@ use crate::desired::ObjectKey;
 use crate::introspector::catalog::CatalogState;
 use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKind};
-use crate::ledger::reconcile::{Action, Plan};
+use crate::ledger::reconcile::{Action, HandEdit, Plan};
 use crate::ledger::LedgerRow;
 use crate::parser::ast::SchemaAst;
 use crate::push::{Decision, State};
@@ -251,6 +251,45 @@ fn drifted_item(
     item
 }
 
+/// The item for an object the push overwrites that may have been changed outside Supatype: one
+/// found changed, as [`drifted_item`], or one that could not be compared with what Supatype made
+/// (F16), which says so and why, since it is treated as changed.
+fn hand_edit_item(key: &ObjectKey, edit: &HandEdit) -> DoctorItem {
+    let security_relevant = crate::desired::security_relevant(key);
+    let Some(reason) = &edit.unchecked else {
+        return drifted_item(key, security_relevant, &edit.recorded_def, &edit.live_def);
+    };
+    let mut item = DoctorItem::about(
+        key,
+        &format!(
+            "was not checked for changes made by hand ({reason}): `supatype push` replaces it \
+             only after asking, since it decides who may read or write"
+        ),
+    );
+    item.recorded = Some(edit.recorded_def.clone());
+    item.live = Some(edit.live_def.clone());
+    item
+}
+
+/// The item for an object the push drops, outright or with its table, that was changed outside
+/// Supatype since it was recorded (F15 (c)).
+fn dropped_edit_item(key: &ObjectKey, edit: &HandEdit, with_its_table: bool) -> DoctorItem {
+    let mut item = DoctorItem::about(
+        key,
+        if with_its_table {
+            "goes with its table, which the schema no longer declares, and was changed outside \
+             Supatype: `supatype push` drops it, after asking, since it decides who may read or \
+             write"
+        } else {
+            "is Supatype's and no longer declared, and was changed outside Supatype: `supatype \
+             push` drops it, after asking, since it decides who may read or write"
+        },
+    );
+    item.recorded = Some(edit.recorded_def.clone());
+    item.live = Some(edit.live_def.clone());
+    item
+}
+
 /// One reconcile action as the report's category, or nothing for what needs no attention: a
 /// kept, forgotten or adopted object, or one of Supatype's the schema changed. `recorded` is every
 /// key the ledger has a row for.
@@ -281,12 +320,7 @@ fn classify(action: &Action, recorded: &BTreeSet<&ObjectKey>, out: &mut DoctorRe
             key,
             drifted: Some(edit),
             ..
-        } => out.drifted.push(drifted_item(
-            key,
-            crate::desired::security_relevant(key.kind),
-            &edit.recorded_def,
-            &edit.live_def,
-        )),
+        } => out.drifted.push(hand_edit_item(key, edit)),
         // No row: Supatype's own object from an earlier engine, which its name or location makes
         // ours (a policy or grant named for its table, an object in the engine's own schemas).
         // The push records it with the schema's definition rather than refusing, as it does on
@@ -302,6 +336,19 @@ fn classify(action: &Action, recorded: &BTreeSet<&ObjectKey>, out: &mut DoctorRe
             );
             item.live = Some(previous_sql.clone());
             out.claimed.push(item);
+        }
+        Action::Drop {
+            key,
+            drifted: Some(edit),
+            ..
+        } if crate::desired::security_relevant(key) => {
+            out.stale_managed.push(dropped_edit_item(key, edit, false))
+        }
+        Action::Forget {
+            key,
+            drifted: Some(edit),
+        } if crate::desired::security_relevant(key) => {
+            out.stale_managed.push(dropped_edit_item(key, edit, true))
         }
         Action::Drop { key, .. } => out.stale_managed.push(DoctorItem::about(
             key,

@@ -178,6 +178,31 @@ const AUTH_ALIASES: [(&str, &str, &str, &str); 6] = [
     ),
 ];
 
+/// `sql` as an engine from before the claim readers wrote the same rules, which the upgrade
+/// comparison (`ledger::unrecorded`) also reads an older engine's object as, so the readers
+/// replacing the helpers is not taken for a hand edit. Two forms: every reader call written as the
+/// `auth.*` helper that aliases it (`_supatype.jwt_uid()` was `auth.uid()`), as the model rules
+/// were; and that with a reader called alone in a subquery unwrapped too (`(SELECT
+/// _supatype.jwt_uid())` was a bare `auth.uid()`), as the storage rules were.
+pub fn through_auth_aliases(sql: &str) -> [String; 2] {
+    let mut wrapped = sql.to_string();
+    let mut bare = sql.to_string();
+    for (name, _, _, body) in AUTH_ALIASES {
+        let Some((reader, _)) = body.strip_prefix("{s}.").and_then(|c| c.split_once('(')) else {
+            continue;
+        };
+        let helper = format!("{AUTH_SCHEMA}.{name}(");
+        bare = bare.replace(
+            &format!("(SELECT {CLAIMS_SCHEMA}.{reader}())"),
+            &format!("{helper})"),
+        );
+        for form in [&mut wrapped, &mut bare] {
+            *form = form.replace(&format!("{CLAIMS_SCHEMA}.{reader}("), &helper);
+        }
+    }
+    [wrapped, bare]
+}
+
 /// The `auth.*` aliases, in `config.auth_schema`. They call the readers, so those must exist first.
 pub fn generate_auth_aliases(config: &AuthFunctionConfig) -> String {
     let auth = &config.auth_schema;

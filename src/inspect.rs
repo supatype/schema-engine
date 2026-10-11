@@ -16,11 +16,12 @@
 //! and listed as refused. The push's `--overwrite-drift` puts Supatype's definition back, the
 //! opposite of accepting the hand edit, so doctor refuses it rather than reading it as this.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use sqlx::PgPool;
 
+use crate::adopt::parse_object;
 use crate::desired::{security_relevant, ObjectKey};
 use crate::differ::doctor::{self, DoctorItem, DoctorReport};
 use crate::ledger::{self, reconcile, LedgerRow};
@@ -57,33 +58,36 @@ pub async fn rebaseline(
     schema: &str,
     accept_access_drift: bool,
 ) -> Result<DoctorReport> {
+    rebaseline_previewed(pool, ast, schema, accept_access_drift, None).await
+}
+
+/// [`rebaseline`], of exactly the drift a person was shown (F22). `previewed` names the drifted
+/// objects the preview listed, as doctor and `adopt` name them (`kind:table.name`); if the drift
+/// found now is not that set, an object drifted since or one put back since, nothing is written
+/// and the refusal is a [`DriftChangedSincePreview`] naming the difference. `None` records
+/// whatever drift there is when it runs.
+pub async fn rebaseline_previewed(
+    pool: &PgPool,
+    ast: &SchemaAst,
+    schema: &str,
+    accept_access_drift: bool,
+    previewed: Option<&[String]>,
+) -> Result<DoctorReport> {
     // As a push does: these are ledger writes too.
     let mut tx = push::begin_writer(pool).await?;
     let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
-    let mut report = doctor::report_of(ast, &state, &decision);
     let rows: BTreeMap<&ObjectKey, &LedgerRow> = state.ledger.iter().map(|r| (&r.key, r)).collect();
-    let mut moved = Vec::new();
-    for (key, row, item) in decision
+    let drift: Vec<(&ObjectKey, LedgerRow, DoctorItem)> = decision
         .reconcile
         .actions
         .iter()
         .filter_map(|action| rebaselined(action, &rows))
-    {
-        if security_relevant(key.kind) && !accept_access_drift {
-            let mut refused = DoctorItem::about(
-                key,
-                "decides who may read or write and was changed outside Supatype: not \
-                 rebaselined without --accept-access-drift, so a push still asks before putting \
-                 it back",
-            );
-            refused.recorded = item.recorded;
-            refused.live = item.live;
-            report.rebaseline_refused.push(refused);
-            continue;
-        }
-        moved.push(row);
-        report.rebaselined.push(item);
+        .collect();
+    if let Some(previewed) = previewed {
+        DriftChangedSincePreview::check(previewed, drift.iter().map(|(key, ..)| *key))?;
     }
+    let mut report = doctor::report_of(ast, &state, &decision);
+    let moved = sort_out(drift, accept_access_drift, &mut report);
     ledger::upsert(&mut tx, &moved).await?;
     tx.commit().await?;
     // Drift is a row's live definition moving, so every drifted object had a row; those recorded
@@ -98,6 +102,99 @@ pub async fn rebaseline(
     report.blocking = doctor::has_strict_issues(&report);
     Ok(report)
 }
+
+/// The rows to record, with each listed in `report` as rebaselined, or as refused where it decides
+/// access and `accept_access_drift` was not given.
+fn sort_out(
+    drift: Vec<(&ObjectKey, LedgerRow, DoctorItem)>,
+    accept_access_drift: bool,
+    report: &mut DoctorReport,
+) -> Vec<LedgerRow> {
+    let mut moved = Vec::new();
+    for (key, row, item) in drift {
+        if security_relevant(key) && !accept_access_drift {
+            let mut refused = DoctorItem::about(
+                key,
+                "decides who may read or write and was changed outside Supatype: not \
+                 rebaselined without --accept-access-drift, so a push still asks before putting \
+                 it back",
+            );
+            refused.recorded = item.recorded;
+            refused.live = item.live;
+            report.rebaseline_refused.push(refused);
+            continue;
+        }
+        moved.push(row);
+        report.rebaselined.push(item);
+    }
+    moved
+}
+
+/// The stable name a caller matches a [`DriftChangedSincePreview`] refusal on, in the engine's
+/// JSON output and the server's response.
+pub const DRIFT_CHANGED: &str = "drift_changed";
+
+/// A rebaseline refused because the drift it found is not the drift its preview showed: the
+/// person agreed to record what they saw, and something else has moved since (C04). Nothing was
+/// written. Both lists name objects as the preview does.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DriftChangedSincePreview {
+    /// Drifted now, and not in the preview.
+    pub unseen: Vec<String>,
+    /// In the preview, and not drifted now.
+    pub gone: Vec<String>,
+}
+
+impl DriftChangedSincePreview {
+    /// Refuses unless `found` is exactly the set `previewed` names.
+    fn check<'k>(
+        previewed: &[String],
+        found: impl Iterator<Item = &'k ObjectKey>,
+    ) -> std::result::Result<(), DriftChangedSincePreview> {
+        let found: BTreeSet<String> = found.map(spec).collect();
+        let mut shown = BTreeSet::new();
+        for name in previewed {
+            // A name that is not an object cannot be drifted now, so it is one that has gone.
+            shown.insert(parse_object(name).map(|k| spec(&k)).unwrap_or(name.clone()));
+        }
+        let changed = DriftChangedSincePreview {
+            unseen: found.difference(&shown).cloned().collect(),
+            gone: shown.difference(&found).cloned().collect(),
+        };
+        if changed.unseen.is_empty() && changed.gone.is_empty() {
+            Ok(())
+        } else {
+            Err(changed)
+        }
+    }
+}
+
+/// `kind:table.name`, or `kind:name` for a table-level object: how doctor and `adopt` name one.
+fn spec(key: &ObjectKey) -> String {
+    if key.parent.is_empty() {
+        format!("{}:{}", key.kind.as_str(), key.name)
+    } else {
+        format!("{}:{}.{}", key.kind.as_str(), key.parent, key.name)
+    }
+}
+
+impl std::fmt::Display for DriftChangedSincePreview {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let list = |names: &[String]| match names {
+            [] => "none".to_string(),
+            names => names.join(", "),
+        };
+        write!(
+            f,
+            "The drift changed after the preview, so nothing was rebaselined. Drifted since: {}. \
+             No longer drifted: {}. Run the rebaseline again to review the drift as it is now.",
+            list(&self.unseen),
+            list(&self.gone)
+        )
+    }
+}
+
+impl std::error::Error for DriftChangedSincePreview {}
 
 /// Why a doctor request's consent flags are refused, if they are: `overwrite_drift` is the push's
 /// (put Supatype's definition back), and the consent to take drift on access as the baseline is

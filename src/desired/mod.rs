@@ -285,18 +285,30 @@ pub fn never_removed(kind: ObjectKind) -> bool {
     )
 }
 
-/// The kinds whose drift fails a non-interactive push (plan 3.5): what decides who may read or
-/// write what. A view does: its options and owner decide whose rights it reads with, and the
-/// engine's views are tier 2's whole API and the drafts layer's (E19).
-pub fn security_relevant(kind: ObjectKind) -> bool {
-    matches!(
-        kind,
+/// The objects whose drift fails a non-interactive push (plan 3.5): what decides who may read or
+/// write what. Every policy, grant, security label and RLS attribute; every view, whose options
+/// and owner decide whose rights it reads with, the engine's views being tier 2's whole API and the
+/// drafts layer's (E19); and the functions access is decided by: the `can_*` predicates, which the
+/// field masking labels, the tier 2 views and every caller asking "may I" run, and the claim
+/// readers in the engine's helper schema that every generated rule reads the caller through
+/// (F15 (f)). A hand edit to `can_read_note__secret` is as much a change to who may read a column
+/// as an edit to its label. Any other function's callers are security relevant too when they
+/// change (`ledger::reconcile`, F14), though its body is not. A table's replica identity is not:
+/// it decides what the WAL carries, not who may read it.
+pub fn security_relevant(key: &ObjectKey) -> bool {
+    match key.kind {
         ObjectKind::Policy
-            | ObjectKind::SecurityLabel
-            | ObjectKind::TableGrant
-            | ObjectKind::RlsAttributes
-            | ObjectKind::View
-    )
+        | ObjectKind::SecurityLabel
+        | ObjectKind::TableGrant
+        | ObjectKind::RlsAttributes
+        | ObjectKind::View => true,
+        ObjectKind::Function => {
+            key.name.starts_with("can_")
+                || (key.schema == crate::generator::sql::auth_functions::CLAIMS_SCHEMA
+                    && key.name.starts_with("jwt_"))
+        }
+        _ => false,
+    }
 }
 
 /// How a database enforces the schema's field rules, which is the database's masking tier and not
@@ -404,7 +416,7 @@ impl<'a> Builder<'a> {
         create_sql: String,
         depends_on: Vec<ObjectKey>,
     ) {
-        let security_relevant = security_relevant(key.kind);
+        let security_relevant = security_relevant(&key);
         // Every kind the builder emits has a drop, except what is never removed;
         // `desired_objects_tests` checks it per fixture.
         let drop_sql = key
