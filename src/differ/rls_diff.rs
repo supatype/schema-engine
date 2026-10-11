@@ -25,14 +25,19 @@ pub(crate) fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&Acce
     .collect()
 }
 
-/// The policies a model's table carries that the engine makes: one per declared operation, and
-/// the versions layer's draft select when the model drafts.
+/// The policies a model's table carries that the engine makes: one per declared operation, the
+/// versions layer's draft select when the model drafts, and under tier 2 masking the one admitting
+/// `service_role` through the `api` views.
 fn engine_policy_names(model: &crate::parser::ast::ModelAst) -> HashSet<String> {
     let table = model.table_name();
     let mut names: HashSet<String> = expected_policies(model.access())
         .into_iter()
         .map(|(suffix, _)| crate::managed::policy_name(table, &suffix))
         .collect();
+    names.insert(crate::managed::policy_name(
+        table,
+        crate::generator::sql::rls::SERVICE_ROLE_POLICY,
+    ));
     if crate::parser::accessors::versions_of(model).is_some_and(|v| v.drafts) {
         names.insert(crate::managed::policy_name(table, "draft_select"));
     }

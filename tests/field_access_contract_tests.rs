@@ -11,9 +11,10 @@
 //! aggregate. Nothing here inspects *how* the masking was achieved, which is the only way the
 //! same test can be honest about both.
 //!
-//! Tier 2 does not exist yet. Its cases skip with a message rather than passing vacuously, so
-//! this file is the parity gate the generator will be built against. The day the generator
-//! lands, drift between the tiers becomes a test failure rather than a discovery.
+//! Tier 2 is built by the shipping generator, with the privileges it ships: the views run as their
+//! own owner, and the suite's role holds nothing on the base table while tier 2 is asserted, as
+//! the API roles hold nothing there under tier 2 (F13). A suite that granted its role the base
+//! table would pass against views that cannot serve a real caller, which is how A3-N3 went unseen.
 
 mod common;
 
@@ -106,14 +107,16 @@ async fn install_tier_two(pool: &sqlx::PgPool) {
         .unwrap_or_else(|e| panic!("tier 2 SQL does not apply: {e}\n\n{sql}"));
 
     // The generator grants to the real API roles (anon / authenticated / service_role). This suite
-    // uses a role of its own so that identity is explicit in every assertion, so it grants what that
-    // role needs, exactly as `SETUP` already does for the base table.
-    // `_supatype` too: the generated predicate calls `_supatype.jwt_claim_text`, both when the view
-    // inlines it and when the write trigger calls it. The push grants this to the API roles.
+    // uses a role of its own so that identity is explicit in every assertion, so it grants that role
+    // what the generator grants an API role on the view: usage on `api`, and on `_supatype`, whose
+    // `jwt_claim_text` the view's predicate calls as the caller. And it takes the base table away,
+    // as tier 2 takes it from the API roles: the view reads it as its owner, with the privileges the
+    // generator gave that owner.
     sqlx::raw_sql(
         "GRANT USAGE ON SCHEMA api TO contract_app; \
          GRANT USAGE ON SCHEMA _supatype TO contract_app; \
-         GRANT SELECT, INSERT, UPDATE, DELETE ON api.contract_posts TO contract_app;",
+         GRANT SELECT, INSERT, UPDATE, DELETE ON api.contract_posts TO contract_app; \
+         REVOKE ALL ON public.contract_posts FROM contract_app;",
     )
     .execute(pool)
     .await
@@ -395,33 +398,26 @@ async fn both_tiers_present_the_same_contract() {
 
         install_tier_two(&pool).await;
 
-        if tier_available(&pool, Tier::Views).await {
-            assert_contract(&pool, Tier::Views).await;
-        } else {
-            // Not a pass. Tier 2's generator does not exist yet, and this suite is the gate it
-            // will be built against.
-            eprintln!(
-                "SKIP {}: no `api` view for the fixture table. This is the parity gate for B9; \
-                 when the view generator lands, remove nothing here and it becomes the check that \
-                 the two tiers cannot drift.",
-                Tier::Views.label()
-            );
-        }
+        assert!(
+            tier_available(&pool, Tier::Views).await,
+            "{}: no `api` view for the fixture table",
+            Tier::Views.label()
+        );
+        assert_contract(&pool, Tier::Views).await;
     })
     .await;
 }
 
 /// A masked view must not become a row-level-security bypass.
 ///
-/// Views run as their *owner* unless created `WITH (security_invoker = true)`, and the owner here is
-/// the migrating superuser. Without that option every caller would read every row through the `api`
-/// schema while the base table's policies applied only to callers who went around it, masking a
-/// column while handing over the whole table.
+/// The views run as their owner, `supatype_api_owner`, which holds the base table's rows. Were that
+/// role `BYPASSRLS`, or were the policies not applied to it, every caller would read every row
+/// through the `api` schema, masking a column while handing over the whole table. The policies are
+/// `TO PUBLIC` and read the caller's JWT, so they filter per caller with the owner's rights.
 ///
 /// Its own test because the shared contract fixture deliberately has no policies: several of those
-/// assertions read another caller's row, which a policy would hide. Nothing in that suite noticed
-/// `security_invoker` being removed, which was measured by mutating the generator and watching it
-/// pass.
+/// assertions read another caller's row, which a policy would hide. The suite's role holds nothing
+/// on the base table, as an API role holds nothing there under tier 2.
 #[tokio::test]
 async fn a_masked_view_does_not_bypass_row_level_security() {
     common::with_integration_pool(|pool| async move {
@@ -456,7 +452,6 @@ async fn a_masked_view_does_not_bypass_row_level_security() {
               EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
               END;
             END $$;
-            GRANT SELECT ON public.rls_view_posts TO rls_view_app;
             "#,
         )
         .execute(&pool)
@@ -521,8 +516,8 @@ async fn a_masked_view_does_not_bypass_row_level_security() {
         assert_eq!(
             visible,
             vec!["alice".to_string()],
-            "the view exposed rows the base table's policy hides: it is missing \
-             `security_invoker`, so it ran as its owner"
+            "the view exposed rows the base table's policy hides: its owner bypasses row-level \
+             security, or the policy does not apply to it"
         );
     })
     .await;

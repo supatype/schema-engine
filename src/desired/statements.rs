@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use crate::generator::sql::auth_functions;
+use crate::generator::sql::{auth_functions, field_views};
 use crate::introspector::fingerprint::ObjectKind;
 
 use super::ObjectKey;
@@ -657,7 +657,26 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
             return Attribution::Object(key(ObjectKind::Policy, &s, &t, &name));
         }
     }
-    for p in ["CREATE VIEW ", "DROP VIEW IF EXISTS "] {
+    if starts("ALTER FUNCTION ") {
+        // Tier 2's write triggers: given to the views' owner once made.
+        let (parts, rest) = match qualified_name(after("ALTER FUNCTION ")) {
+            Some(x) => x,
+            None => return Attribution::Unknown,
+        };
+        let (s, f) = split_schema(parts, schema);
+        return Attribution::Object(key(
+            ObjectKind::Function,
+            &s,
+            "",
+            &function_key_name(rest.trim_start(), &f),
+        ));
+    }
+    for p in [
+        "CREATE VIEW ",
+        "DROP VIEW IF EXISTS ",
+        "ALTER VIEW ",
+        "COMMENT ON VIEW ",
+    ] {
         if starts(p) {
             let (parts, _) = match qualified_name(after(p)) {
                 Some(x) => x,
@@ -801,6 +820,26 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
     let tagged = |tag: &str| h.starts_with(&format!("DO ${tag}$"));
     if tagged(auth_functions::AUTH_SCHEMA_USAGE_TAG) {
         return Attribution::Object(key(ObjectKind::Schema, "auth", "", "auth"));
+    }
+    if tagged(field_views::OWNER_TAG) || tagged(field_views::OWNER_REACH_TAG) {
+        // Tier 2's view owner: made, and given the schemas and functions the views use.
+        let api = field_views::VIEW_SCHEMA;
+        return Attribution::Object(key(ObjectKind::Schema, api, "", api));
+    }
+    if tagged(field_views::VIEW_SETUP_TAG) {
+        // A view's defaults, copied from its table: part of the view, named in the block by its
+        // `regclass` literal.
+        let marker = format!("'\"{}\".", field_views::VIEW_SCHEMA);
+        let Some(at) = h.find(&marker) else {
+            return Attribution::Unknown;
+        };
+        return match qualified_name(&h[at + 1..]) {
+            Some((parts, _)) => {
+                let (s, v) = split_schema(parts, schema);
+                Attribution::Object(key(ObjectKind::View, &s, "", &v))
+            }
+            None => Attribution::Unknown,
+        };
     }
     if tagged(auth_functions::CLAIMS_ACCESS_TAG) {
         // The API roles' way in to the claim readers: usage on their schema and execute on each.

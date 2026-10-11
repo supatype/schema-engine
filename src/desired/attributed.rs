@@ -16,8 +16,10 @@ use crate::introspector::fingerprint::{definition_value, normalise_sql, ObjectKi
 use super::statements::{attribute_all, head, split_statements};
 use super::{DesiredObject, ObjectKey};
 
-/// The kinds a blob's statements become desired objects of. Grants, labels and RLS attributes are
-/// left for their own phases: a `REVOKE` leaves nothing live to compare with.
+/// The kinds a blob's statements become desired objects of. Labels and RLS attributes are left for
+/// their own phases. A role's privileges on a table or view are here (F14): what the drafts layer
+/// and tier 2's views grant decides who may read and write through them, so a hand change to it is
+/// drift like any other.
 const KINDS: &[ObjectKind] = &[
     ObjectKind::Table,
     ObjectKind::Index,
@@ -26,6 +28,7 @@ const KINDS: &[ObjectKind] = &[
     ObjectKind::View,
     ObjectKind::Policy,
     ObjectKind::CronJob,
+    ObjectKind::TableGrant,
 ];
 
 /// Every object the statements of `sql` create, in key order.
@@ -35,10 +38,20 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
         let h = head(&statement.sql);
         // The drop before a create and the stamp are the old mechanism's; the reconcile drops and
         // the ledger records.
-        if h.starts_with("DROP ") || h.starts_with("REVOKE ") || h.starts_with("COMMENT ON ") {
+        if h.starts_with("DROP ") || h.starts_with("COMMENT ON ") {
             continue;
         }
+        // A `REVOKE` is part of what a grant intends (a role holding nothing is a grant too), and
+        // of a function, whose callers are part of it (F14): a rollback that put a function back
+        // without its `REVOKE ... FROM PUBLIC` would leave it callable by anyone.
+        let revoke = h.starts_with("REVOKE ");
         for key in statement.attribution.keys() {
+            if revoke && !matches!(key.kind, ObjectKind::TableGrant | ObjectKind::Function) {
+                continue;
+            }
+            if key.kind == ObjectKind::TableGrant && !governed_role(&key.name) {
+                continue;
+            }
             if KINDS.contains(&key.kind) {
                 grouped
                     .entry(key.clone())
@@ -63,9 +76,33 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
         .collect()
 }
 
+/// The roles whose privileges the ledger governs, as on a model table: the API roles a caller can
+/// reach the API as, and the owner of tier 2's views. `service_role` and `PUBLIC` are left alone,
+/// as they are on the model tables.
+fn governed_role(role: &str) -> bool {
+    crate::generator::sql::grants::GRANTED_ROLES.contains(&role)
+        || role == crate::generator::sql::field_views::API_OWNER
+}
+
+/// A grant whose every statement is a `REVOKE` intends the role to hold nothing, which the
+/// catalog reports by having no row for it: said so, as a model table's grant of nothing says so.
+fn grant_structure(create_sql: &str) -> BTreeMap<&'static str, String> {
+    let revokes_only = split_statements(create_sql)
+        .iter()
+        .all(|s| head(s).starts_with("REVOKE "));
+    if revokes_only {
+        BTreeMap::from([("privileges", String::new())])
+    } else {
+        BTreeMap::new()
+    }
+}
+
 /// The parts of `create_sql` the catalog will report for `key`, labelled as the fingerprint
 /// labels them (`ObjectKind::labels`).
 fn structure(key: &ObjectKey, create_sql: &str) -> BTreeMap<&'static str, String> {
+    if key.kind == ObjectKind::TableGrant {
+        return grant_structure(create_sql);
+    }
     // The creating statement, found by a split that knows a `;` inside a dollar-quoted body is
     // not the end of one, and read past its leading comments, which may say anything.
     let statements = split_statements(create_sql);
@@ -654,6 +691,7 @@ mod tests {
                 cost: "100".into(),
                 rows: "0".into(),
                 definition: String::new(),
+                acl: Vec::new(),
             }],
             ..Default::default()
         };
@@ -752,6 +790,7 @@ mod tests {
                     cost: "100".into(),
                     rows: "0".into(),
                     definition: String::new(),
+                    acl: Vec::new(),
                 }],
                 ..Default::default()
             };

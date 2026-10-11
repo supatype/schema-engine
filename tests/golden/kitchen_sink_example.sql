@@ -1506,6 +1506,7 @@ SELECT (jsonb_populate_record(NULL::"public"."page", v."data")).*
       FROM "public"."page_versions" pv
      ORDER BY pv."record_id", pv."version" DESC
   ) v;
+REVOKE ALL ON "draft"."page" FROM anon;
 GRANT SELECT ON "draft"."page" TO authenticated, service_role;
 
 ALTER TABLE "public"."speaker_versions" ENABLE ROW LEVEL SECURITY;
@@ -1601,6 +1602,7 @@ SELECT (jsonb_populate_record(NULL::"public"."speaker", v."data")).*
       FROM "public"."speaker_versions" pv
      ORDER BY pv."record_id", pv."version" DESC
   ) v;
+REVOKE ALL ON "draft"."speaker" FROM anon;
 GRANT SELECT ON "draft"."speaker" TO authenticated, service_role;
 
 ALTER TABLE "public"."talk_versions" ENABLE ROW LEVEL SECURITY;
@@ -1696,6 +1698,7 @@ SELECT (jsonb_populate_record(NULL::"public"."talk", v."data")).*
       FROM "public"."talk_versions" pv
      ORDER BY pv."record_id", pv."version" DESC
   ) v;
+REVOKE ALL ON "draft"."talk" FROM anon;
 GRANT SELECT ON "draft"."talk" TO authenticated, service_role;
 
 -- Scheduled publishing and retention, if this database has a scheduler.

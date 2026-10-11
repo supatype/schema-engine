@@ -303,30 +303,52 @@ pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String>
         .collect()
 }
 
-/// Tier 2's privileges on the `api` views, for each API role: what the rules allow, re-asserted
-/// with the views, which a push makes again every time. The base tables hold nothing for these
+/// Tier 2's privileges on one model's `api` view: for each API role what the rules allow, and for
+/// `service_role` every row verb, as on a model table. Made with the view, which a push makes again
+/// every time, and recorded on the ledger with it (F14). The base tables hold nothing for these
 /// roles then ([`table_grants`]).
-pub fn generate_view_grants(ast: &SchemaAst, view_schema: &str) -> String {
+pub fn view_grants(model: &ModelAst, view_schema: &str) -> String {
+    let target = quote_qualified(view_schema, db_table_name(model));
     let mut blocks = Vec::new();
-    for model in &ast.models {
-        for role in GRANTED_ROLES {
-            let grant = model_grant(model, role);
-            let target = quote_qualified(view_schema, &grant.table);
-            let statements: Vec<String> = RULED
-                .iter()
-                .map(|privilege| {
-                    let narrowed = grant.narrowed.iter().any(|(op, _)| op == privilege);
-                    if grant.privileges.contains(privilege) || narrowed {
-                        format!("GRANT {privilege} ON {target} TO {role}")
-                    } else {
-                        format!("REVOKE {privilege} ON {target} FROM {role}")
-                    }
-                })
-                .collect();
-            blocks.push(guarded_block(role, &statements));
-        }
+    for role in GRANTED_ROLES {
+        let grant = model_grant(model, role);
+        let statements: Vec<String> = RULED
+            .iter()
+            .map(|privilege| {
+                let narrowed = grant.narrowed.iter().any(|(op, _)| op == privilege);
+                if grant.privileges.contains(privilege) || narrowed {
+                    format!("GRANT {privilege} ON {target} TO {role}")
+                } else {
+                    format!("REVOKE {privilege} ON {target} FROM {role}")
+                }
+            })
+            .collect();
+        blocks.push(guarded_block(role, &statements));
     }
+    blocks.push(guarded_block(
+        SERVICE_ROLE,
+        &[format!(
+            "GRANT {} ON {target} TO {SERVICE_ROLE}",
+            RULED.join(", ")
+        )],
+    ));
     blocks.join("\n")
+}
+
+/// The role whose access the rules never narrow: the escape hatch.
+const SERVICE_ROLE: &str = "service_role";
+
+/// What the owner of tier 2's views holds on a model table: every row verb. Nobody connects as it,
+/// and row-level security applies to it with the caller's JWT, so each caller still reaches only
+/// the rows their rules allow.
+pub fn api_owner_grant(model: &ModelAst) -> TableGrant {
+    TableGrant {
+        table: db_table_name(model).to_string(),
+        role: crate::generator::sql::field_views::API_OWNER,
+        privileges: RULED.to_vec(),
+        narrowed: Vec::new(),
+        columns: Vec::new(),
+    }
 }
 
 /// The privileges for one role, applied only if the role exists.

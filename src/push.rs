@@ -869,7 +869,11 @@ fn desired_here(
     let mut desired = desired_objects_for(ast, schema, fields)?;
     desired.retain(|d| match d.key.kind {
         ObjectKind::CronJob => catalog.cron_available,
-        ObjectKind::TableGrant => catalog.granted_roles.contains(&d.key.name),
+        // The views' owner is made by the very push that grants to it, so it is desired wherever
+        // tier 2 asks for it.
+        ObjectKind::TableGrant => {
+            catalog.granted_roles.contains(&d.key.name) || d.key.name == field_views::API_OWNER
+        }
         _ => true,
     });
     sequences_as_created(&mut desired, &catalog.sequences, schema);
@@ -1466,12 +1470,7 @@ async fn within_transaction(
     // Which mechanism is enforcing the field rules, probed rather than assumed. A failure here is
     // a missing diagnostic, not a broken push: the enforcement itself is the labels, which are
     // already applied in this transaction.
-    if let Err(e) = migration_history::record_field_enforcement(
-        tx,
-        migration_history::labelled_column_count(plan.ast),
-    )
-    .await
-    {
+    if let Err(e) = migration_history::record_field_enforcement(tx, plan.ast, &plan.schema).await {
         eprintln!("Warning: failed to record field-enforcement capability: {e}");
     }
 

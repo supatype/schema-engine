@@ -511,6 +511,7 @@ fn draft_view_sql(schema: &str, table: &str, versions_table: &str) -> String {
          FROM {schema_q}.{versions_q} pv\n     \
          ORDER BY pv.\"record_id\", pv.\"version\" DESC\n  \
          ) v;\n\
+         REVOKE ALL ON {draft}.{table_q} FROM anon;\n\
          GRANT SELECT ON {draft}.{table_q} TO authenticated, service_role;\n\n",
         draft = quote_ident(DRAFT_SCHEMA),
         schema_q = quote_ident(schema),

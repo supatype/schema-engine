@@ -883,7 +883,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.\"body\" := CASE WHEN NEW.\"body\" IS NULL THEN NULL WHEN NEW.\"body\" ? 'root' THEN NEW.\"body\" WHEN jsonb_typeof(NEW.\"body\") <> 'object' THEN CASE WHEN NEW.\"body\" IS NULL THEN NULL WHEN NEW.\"body\" ? 'root' THEN NEW.\"body\" WHEN jsonb_typeof(NEW.\"body\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"body\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"body\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"body\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"body\"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW.\"body\") AS locale), NEW.\"body\") END;\n  RETURN NEW;\nEND;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.\"body\" := CASE WHEN NEW.\"body\" IS NULL THEN NULL WHEN NEW.\"body\" ? 'root' THEN NEW.\"body\" WHEN jsonb_typeof(NEW.\"body\") <> 'object' THEN CASE WHEN NEW.\"body\" IS NULL THEN NULL WHEN NEW.\"body\" ? 'root' THEN NEW.\"body\" WHEN jsonb_typeof(NEW.\"body\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"body\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"body\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"body\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"body\"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW.\"body\") AS locale), NEW.\"body\") END;\n  RETURN NEW;\nEND;\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_platform",
@@ -903,7 +906,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_platform",
@@ -923,7 +929,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -945,7 +954,13 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.caller_id()\n RETURNS uuid\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT _supatype.jwt_uid();\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.caller_id()\n RETURNS uuid\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT _supatype.jwt_uid();\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -965,7 +980,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_edit_posts(p_record uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts\"\n       WHERE \"id\" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_edit_posts(p_record uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts\"\n       WHERE \"id\" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')\n    );\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -987,7 +1007,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.default_locales(entry _supatype.versioned_models)\n RETURNS text[]\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n    SELECT CASE\n      WHEN cardinality(entry.\"localized_columns\") = 0 OR cardinality(entry.\"locales\") = 0\n        THEN ARRAY['*'] ELSE entry.\"locales\" END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.default_locales(entry _supatype.versioned_models)\n RETURNS text[]\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n    SELECT CASE\n      WHEN cardinality(entry.\"localized_columns\") = 0 OR cardinality(entry.\"locales\") = 0\n        THEN ARRAY['*'] ELSE entry.\"locales\" END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1009,7 +1032,8 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT COALESCE(s.\"override_visibility\", s.\"configured_visibility\")\n      FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT COALESCE(s.\"override_visibility\", s.\"configured_visibility\")\n      FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n",
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1031,7 +1055,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.ledger_versions_audit()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), _supatype.jwt_uid());\n    RETURN NULL;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.ledger_versions_audit()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), _supatype.jwt_uid());\n    RETURN NULL;\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1051,7 +1078,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1071,7 +1101,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1091,7 +1124,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1111,7 +1147,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1131,7 +1170,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1151,7 +1193,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1171,7 +1216,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1191,7 +1239,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1211,7 +1262,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1231,7 +1285,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1253,7 +1310,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.posts_versions_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"posts_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.posts_versions_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"posts_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1275,7 +1335,13 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_allows(target_model text, target_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT CASE\n      WHEN c.claim IS NULL THEN false\n      -- A bumped epoch withdraws every link minted before it.\n      WHEN (c.claim->>'epoch') IS DISTINCT FROM _supatype.preview_epoch()::text THEN false\n      WHEN c.claim->>'scope' = 'project' THEN true\n      WHEN c.claim->>'scope' = 'record'\n        THEN c.claim->>'model' = target_model AND c.claim->>'record_id' = target_record\n      ELSE false\n    END\n    FROM (\n      SELECT (nullif(current_setting('request.jwt.claims', true), '')::jsonb -> 'preview') AS claim\n    ) c;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_allows(target_model text, target_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT CASE\n      WHEN c.claim IS NULL THEN false\n      -- A bumped epoch withdraws every link minted before it.\n      WHEN (c.claim->>'epoch') IS DISTINCT FROM _supatype.preview_epoch()::text THEN false\n      WHEN c.claim->>'scope' = 'project' THEN true\n      WHEN c.claim->>'scope' = 'record'\n        THEN c.claim->>'model' = target_model AND c.claim->>'record_id' = target_record\n      ELSE false\n    END\n    FROM (\n      SELECT (nullif(current_setting('request.jwt.claims', true), '')::jsonb -> 'preview') AS claim\n    ) c;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1297,7 +1363,13 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_epoch()\n RETURNS integer\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT s.\"preview_epoch\" FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_epoch()\n RETURNS integer\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT s.\"preview_epoch\" FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1319,7 +1391,8 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_preview_links()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    removed integer;\n  BEGIN\n    DELETE FROM _supatype.preview_links\n     WHERE COALESCE(\"revoked_at\", \"expires_at\") < now() - interval '7 days';\n    GET DIAGNOSTICS removed = ROW_COUNT;\n    RETURN removed;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_preview_links()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    removed integer;\n  BEGIN\n    DELETE FROM _supatype.preview_links\n     WHERE COALESCE(\"revoked_at\", \"expires_at\") < now() - interval '7 days';\n    GET DIAGNOSTICS removed = ROW_COUNT;\n    RETURN removed;\n  END;\n  $function$\n",
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1341,7 +1414,8 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_versions()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n    RETURN removed;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_versions()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n    RETURN removed;\n  END;\n  $function$\n",
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1361,7 +1435,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1383,7 +1460,8 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.run_due_publishes(now_at timestamp with time zone DEFAULT now())\n RETURNS integer\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    due record;\n    published integer := 0;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models WHERE \"drafts\" LOOP\n      FOR due IN\n        EXECUTE format(\n          'SELECT v.%I AS record_id, v.%I AS version,\n                  array_agg(e.key) AS locales\n             FROM %I.%I v, jsonb_each_text(v.%I) e\n            WHERE (e.value)::timestamptz <= $1\n            GROUP BY v.%I, v.%I',\n          'record_id', 'version', entry.\"schema_name\", entry.\"versions_table\",\n          'scheduled_locales', 'record_id', 'version')\n          USING now_at\n      LOOP\n        BEGIN\n          PERFORM \"supatype\".publish(\n            entry.\"table_name\", due.record_id::text, due.version, due.locales);\n          published := published + 1;\n        EXCEPTION WHEN OTHERS THEN\n          RAISE WARNING 'scheduled publish failed for % version % in %: %',\n            due.record_id, due.version, entry.\"table_name\", SQLERRM;\n        END;\n\n        EXECUTE format('UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n          entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n          'record_id', entry.\"primary_key_type\", 'version')\n          USING due.record_id::text, due.version, due.locales;\n      END LOOP;\n    END LOOP;\n    RETURN published;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.run_due_publishes(now_at timestamp with time zone DEFAULT now())\n RETURNS integer\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    due record;\n    published integer := 0;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models WHERE \"drafts\" LOOP\n      FOR due IN\n        EXECUTE format(\n          'SELECT v.%I AS record_id, v.%I AS version,\n                  array_agg(e.key) AS locales\n             FROM %I.%I v, jsonb_each_text(v.%I) e\n            WHERE (e.value)::timestamptz <= $1\n            GROUP BY v.%I, v.%I',\n          'record_id', 'version', entry.\"schema_name\", entry.\"versions_table\",\n          'scheduled_locales', 'record_id', 'version')\n          USING now_at\n      LOOP\n        BEGIN\n          PERFORM \"supatype\".publish(\n            entry.\"table_name\", due.record_id::text, due.version, due.locales);\n          published := published + 1;\n        EXCEPTION WHEN OTHERS THEN\n          RAISE WARNING 'scheduled publish failed for % version % in %: %',\n            due.record_id, due.version, entry.\"table_name\", SQLERRM;\n        END;\n\n        EXECUTE format('UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n          entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n          'record_id', entry.\"primary_key_type\", 'version')\n          USING due.record_id::text, due.version, due.locales;\n      END LOOP;\n    END LOOP;\n    RETURN published;\n  END;\n  $function$\n",
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1405,7 +1483,13 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n    caller_role text;\n  BEGIN\n    IF caller IS NULL THEN\n      RETURN false;\n    END IF;\n    SELECT m.role INTO caller_role FROM _supatype.studio_members m WHERE m.user_id = caller;\n    IF caller_role IS NULL THEN\n      RETURN false;\n    END IF;\n    RETURN caller_role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]));\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n    caller_role text;\n  BEGIN\n    IF caller IS NULL THEN\n      RETURN false;\n    END IF;\n    SELECT m.role INTO caller_role FROM _supatype.studio_members m WHERE m.user_id = caller;\n    IF caller_role IS NULL THEN\n      RETURN false;\n    END IF;\n    RETURN caller_role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]));\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1427,7 +1511,13 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_posts(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('posts', v.\"record_id\"::text)\n         )\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_posts(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('posts', v.\"record_id\"::text)\n         )\n    );\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1449,7 +1539,11 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.versioned_model(p_table text)\n RETURNS _supatype.versioned_models\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n  BEGIN\n    SELECT * INTO entry FROM _supatype.versioned_models WHERE \"table_name\" = p_table;\n    IF entry.\"table_name\" IS NULL THEN\n      RAISE EXCEPTION 'no versioned model for table %', p_table\n        USING ERRCODE = '22023',\n              HINT = 'Add `versions` to the model in your schema and push, or check the table name.';\n    END IF;\n    RETURN entry;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.versioned_model(p_table text)\n RETURNS _supatype.versioned_models\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n  BEGIN\n    SELECT * INTO entry FROM _supatype.versioned_models WHERE \"table_name\" = p_table;\n    IF entry.\"table_name\" IS NULL THEN\n      RAISE EXCEPTION 'no versioned model for table %', p_table\n        USING ERRCODE = '22023',\n              HINT = 'Add `versions` to the model in your schema and push, or check the table name.';\n    END IF;\n    RETURN entry;\n  END;\n  $function$\n",
+        "acl": [
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1469,7 +1563,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim(claim_path);\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim(claim_path);\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1489,7 +1586,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim_text(claim_path);\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim_text(claim_path);\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1509,7 +1609,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1529,7 +1632,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claims();\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claims();\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1549,7 +1655,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_role();\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_role();\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1569,7 +1678,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1589,7 +1701,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_uid();\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_uid();\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1609,7 +1724,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1629,7 +1749,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1649,7 +1774,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1669,7 +1799,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1689,7 +1824,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1709,7 +1849,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1729,7 +1874,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1749,7 +1899,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1769,7 +1924,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1789,7 +1949,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1809,7 +1974,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1829,7 +1999,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "supatype",
@@ -1851,7 +2026,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.create_draft(model_table text, record_id text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    base jsonb;\n    saved record;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Write to the table directly; every change is recorded as a version.';\n    END IF;\n\n    EXECUTE format(\n      'SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n      'data', entry.\"schema_name\", entry.\"versions_table\", 'record_id',\n      entry.\"primary_key_type\", 'version')\n      INTO base USING record_id;\n\n    IF base IS NULL THEN\n      EXECUTE format('SELECT to_jsonb(t) FROM %I.%I t WHERE t.%I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"primary_key\", entry.\"primary_key_type\")\n        INTO base USING record_id;\n    END IF;\n\n    IF base IS NULL THEN\n      RAISE EXCEPTION 'no such record % in %', record_id, model_table USING ERRCODE = '02000';\n    END IF;\n\n    -- `version`, `created_by` and `status` are the guard trigger's to assign.\n    EXECUTE format(\n      'INSERT INTO %I.%I (%I, %I) VALUES ($1::%s, $2) RETURNING %I, %I, %I',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', 'data',\n      entry.\"primary_key_type\", 'version', 'status', 'created_at')\n      INTO saved USING record_id, base || COALESCE(data, '{}'::jsonb);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', saved.\"version\",\n      'status', saved.\"status\", 'created_at', saved.\"created_at\");\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION supatype.create_draft(model_table text, record_id text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    base jsonb;\n    saved record;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Write to the table directly; every change is recorded as a version.';\n    END IF;\n\n    EXECUTE format(\n      'SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n      'data', entry.\"schema_name\", entry.\"versions_table\", 'record_id',\n      entry.\"primary_key_type\", 'version')\n      INTO base USING record_id;\n\n    IF base IS NULL THEN\n      EXECUTE format('SELECT to_jsonb(t) FROM %I.%I t WHERE t.%I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"primary_key\", entry.\"primary_key_type\")\n        INTO base USING record_id;\n    END IF;\n\n    IF base IS NULL THEN\n      RAISE EXCEPTION 'no such record % in %', record_id, model_table USING ERRCODE = '02000';\n    END IF;\n\n    -- `version`, `created_by` and `status` are the guard trigger's to assign.\n    EXECUTE format(\n      'INSERT INTO %I.%I (%I, %I) VALUES ($1::%s, $2) RETURNING %I, %I, %I',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', 'data',\n      entry.\"primary_key_type\", 'version', 'status', 'created_at')\n      INTO saved USING record_id, base || COALESCE(data, '{}'::jsonb);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', saved.\"version\",\n      'status', saved.\"status\", 'created_at', saved.\"created_at\");\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "supatype",
@@ -1873,7 +2053,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION supatype.publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "supatype",
@@ -1895,7 +2080,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.restore_version(model_table text, record_id text, version integer)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    snapshot jsonb;\n  BEGIN\n    EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s AND v.%I = $2',\n      'data', entry.\"schema_name\", entry.\"versions_table\",\n      'record_id', entry.\"primary_key_type\", 'version')\n      INTO snapshot USING record_id, version;\n\n    IF snapshot IS NULL THEN\n      RAISE EXCEPTION 'no version % of % in %', version, record_id, model_table\n        USING ERRCODE = '02000';\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, record_id, snapshot);\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION supatype.restore_version(model_table text, record_id text, version integer)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    snapshot jsonb;\n  BEGIN\n    EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s AND v.%I = $2',\n      'data', entry.\"schema_name\", entry.\"versions_table\",\n      'record_id', entry.\"primary_key_type\", 'version')\n      INTO snapshot USING record_id, version;\n\n    IF snapshot IS NULL THEN\n      RAISE EXCEPTION 'no version % of % in %', version, record_id, model_table\n        USING ERRCODE = '02000';\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, record_id, snapshot);\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "supatype",
@@ -1917,7 +2107,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.schedule_publish(model_table text, record_id text, at timestamp with time zone, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target integer;\n    want text[];\n    updated integer;\n  BEGIN\n    IF at IS NULL THEN\n      RAISE EXCEPTION 'schedule_publish needs a time' USING ERRCODE = '22023';\n    END IF;\n\n    target := version;\n    IF target IS NULL THEN\n      EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to schedule for % in %', record_id, model_table\n        USING ERRCODE = '02000', HINT = 'Save a draft first.';\n    END IF;\n\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3 WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target,\n            (SELECT jsonb_object_agg(l, at) FROM unnest(want) AS l);\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to schedule % in %, or no such version', record_id, model_table\n        USING ERRCODE = '42501';\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target, 'at', at, 'locales', to_jsonb(want));\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION supatype.schedule_publish(model_table text, record_id text, at timestamp with time zone, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target integer;\n    want text[];\n    updated integer;\n  BEGIN\n    IF at IS NULL THEN\n      RAISE EXCEPTION 'schedule_publish needs a time' USING ERRCODE = '22023';\n    END IF;\n\n    target := version;\n    IF target IS NULL THEN\n      EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to schedule for % in %', record_id, model_table\n        USING ERRCODE = '02000', HINT = 'Save a draft first.';\n    END IF;\n\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3 WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target,\n            (SELECT jsonb_object_agg(l, at) FROM unnest(want) AS l);\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to schedule % in %, or no such version', record_id, model_table\n        USING ERRCODE = '42501';\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target, 'at', at, 'locales', to_jsonb(want));\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "supatype",
@@ -1939,7 +2134,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.unpublish(model_table text, record_id text, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION supatype.unpublish(model_table text, record_id text, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "supatype",
@@ -1961,7 +2161,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.unschedule_publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[] := COALESCE(locales, _supatype.default_locales(entry));\n  BEGIN\n    IF version IS NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = %I - $2 WHERE %I = $1::%s AND %I ?| $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'scheduled_locales')\n        USING record_id, want;\n    ELSE\n      EXECUTE format(\n        'UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'version')\n        USING record_id, version, want;\n    END IF;\n\n    RETURN jsonb_build_object('record_id', record_id, 'locales', to_jsonb(want));\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION supatype.unschedule_publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[] := COALESCE(locales, _supatype.default_locales(entry));\n  BEGIN\n    IF version IS NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = %I - $2 WHERE %I = $1::%s AND %I ?| $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'scheduled_locales')\n        USING record_id, want;\n    ELSE\n      EXECUTE format(\n        'UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'version')\n        USING record_id, version, want;\n    END IF;\n\n    RETURN jsonb_build_object('record_id', record_id, 'locales', to_jsonb(want));\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       }
     ],
     "views": [
@@ -1970,7 +2175,11 @@
         "name": "posts",
         "materialized": false,
         "definition": " SELECT (jsonb_populate_record(NULL::public.posts, data)).id AS id,\n    (jsonb_populate_record(NULL::public.posts, data)).title AS title,\n    (jsonb_populate_record(NULL::public.posts, data)).body AS body,\n    (jsonb_populate_record(NULL::public.posts, data)).published_at AS published_at,\n    (jsonb_populate_record(NULL::public.posts, data)).created_at AS created_at,\n    (jsonb_populate_record(NULL::public.posts, data)).updated_at AS updated_at\n   FROM ( SELECT DISTINCT ON (pv.record_id) pv.record_id,\n            pv.data\n           FROM public.posts_versions pv\n          ORDER BY pv.record_id, pv.version DESC) v;",
-        "comment": null
+        "comment": null,
+        "options": [
+          "security_invoker=true"
+        ],
+        "owner": "supatype_admin"
       }
     ],
     "schemas": [

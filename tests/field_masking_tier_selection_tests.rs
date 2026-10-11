@@ -5,9 +5,10 @@
 //! silently unmask, and it was the reason field rules could not follow anyone to their own
 //! Postgres. Now the same push generates `api` views.
 //!
-//! These tests run on the ordinary test image, which has no masking extension. That is the point:
-//! they exercise the tier the published image cannot, and they are the ones that would catch tier
-//! selection regressing to a refusal.
+//! These tests never create the masking extension, so they run tier 2 on any image, including
+//! `supatype/postgres`, which only provides it. They used to ask the image whether it could, and
+//! that question created the extension, so on CI's image every one of them skipped and tier 2 went
+//! untested (A3-N3).
 
 mod common;
 
@@ -108,12 +109,6 @@ async fn push(pool: &sqlx::PgPool) -> differ::DiffOutput {
 #[tokio::test]
 async fn a_database_without_the_extension_gets_views_instead_of_a_refusal() {
     common::with_integration_pool(|pool| async move {
-        if common::mask_extension_available(&pool).await {
-            eprintln!(
-                "SKIP: this image has supatype_mask, so tier 1 applies; see the contract suite"
-            );
-            return;
-        }
         prepare(&pool).await;
 
         let diff = push(&pool).await;
@@ -155,11 +150,15 @@ async fn a_database_without_the_extension_gets_views_instead_of_a_refusal() {
 #[tokio::test]
 async fn tier_two_takes_the_api_roles_off_the_base_tables() {
     common::with_integration_pool(|pool| async move {
-        if common::mask_extension_available(&pool).await {
-            eprintln!("SKIP: this image has supatype_mask, so tier 1 applies");
-            return;
-        }
         prepare(&pool).await;
+        // What `supatype/postgres` gives every new table, so the push has something to take away.
+        sqlx::raw_sql(
+            "ALTER DEFAULT PRIVILEGES IN SCHEMA public \
+             GRANT ALL ON TABLES TO anon, authenticated, service_role",
+        )
+        .execute(&pool)
+        .await
+        .expect("the image's default privileges");
         push(&pool).await;
 
         // The whole point. Schema exposure is PostgREST configuration, not a boundary: a client picks
@@ -191,9 +190,9 @@ async fn tier_two_takes_the_api_roles_off_the_base_tables() {
             );
         }
 
-        // `service_role` keeps its base access by standing policy: it is the escape hatch. Asserted
-        // so that the difference from tier 1, where the extension masks it like anyone else, is a
-        // decision on record rather than an accident.
+        // `service_role` keeps its base access by standing policy: it is the escape hatch, and the
+        // engine never touches its privileges. Through the API it reads the views, which exempt it
+        // from every mask, as the extension exempts it in tier 1.
         let escape: bool = sqlx::query_scalar(
             "SELECT has_table_privilege('service_role', 'public.tier_employee', 'SELECT')",
         )
@@ -208,10 +207,6 @@ async fn tier_two_takes_the_api_roles_off_the_base_tables() {
 #[tokio::test]
 async fn the_capability_record_says_views_not_broken() {
     common::with_integration_pool(|pool| async move {
-        if common::mask_extension_available(&pool).await {
-            eprintln!("SKIP: this image has supatype_mask, so tier 1 applies");
-            return;
-        }
         prepare(&pool).await;
         // The engine's own bookkeeping, which a real push creates before it migrates.
         for sql in [
@@ -237,9 +232,8 @@ async fn the_capability_record_says_views_not_broken() {
         let mut conn = pool.acquire().await.expect("connection");
         supatype_engine::state::migration_history::record_field_enforcement(
             &mut conn,
-            supatype_engine::state::migration_history::labelled_column_count(
-                &parser::parse(SCHEMA).expect("schema parses"),
-            ),
+            &parser::parse(SCHEMA).expect("schema parses"),
+            "public",
         )
         .await
         .expect("record the capability");
@@ -252,6 +246,24 @@ async fn the_capability_record_says_views_not_broken() {
         .await
         .expect("read the recorded tier");
         assert_eq!(tier, "views");
+
+        // Which predicate decides each masked column, as a label would say under tier 1: the one
+        // place a tier 2 reader (realtime) can learn it without rebuilding the naming rule.
+        let columns: serde_json::Value = sqlx::query_scalar(
+            "SELECT capabilities #> '{fieldMasking,columns}' FROM _supatype.schema_state WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the recorded predicates");
+        assert_eq!(
+            columns,
+            serde_json::json!([{
+                "table": "tier_employee",
+                "column": "salary",
+                "read": "public.\"can_read_tier_employee__salary\"",
+                "write": null
+            }])
+        );
     })
     .await;
 }

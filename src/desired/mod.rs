@@ -41,8 +41,8 @@ use crate::generator::sql::{
         render_operation_named,
     },
     rls::{
-        drop_field_label_sql, drop_table_label_sql, field_labels, membership_index_create_sql,
-        membership_index_targets, MASK_PROVIDER,
+        self, drop_field_label_sql, drop_table_label_sql, field_labels,
+        membership_index_create_sql, membership_index_targets, MASK_PROVIDER,
     },
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql, versions_record_key_name},
@@ -250,7 +250,8 @@ pub fn never_removed(kind: ObjectKind) -> bool {
 }
 
 /// The kinds whose drift fails a non-interactive push (plan 3.5): what decides who may read or
-/// write what.
+/// write what. A view does: its options and owner decide whose rights it reads with, and the
+/// engine's views are tier 2's whole API and the drafts layer's (E19).
 pub fn security_relevant(kind: ObjectKind) -> bool {
     matches!(
         kind,
@@ -258,6 +259,7 @@ pub fn security_relevant(kind: ObjectKind) -> bool {
             | ObjectKind::SecurityLabel
             | ObjectKind::TableGrant
             | ObjectKind::RlsAttributes
+            | ObjectKind::View
     )
 }
 
@@ -836,10 +838,26 @@ impl<'a> Builder<'a> {
 
     /// The `api` field views and their write triggers (Phase 4.6), for the tables the push's plan
     /// names: the tier a database without the masking extension gets. Owned so the last field
-    /// rule's removal drops them.
+    /// rule's removal drops them. With them, each of their tables gets the policy admitting
+    /// `service_role`, which the views' owner rights would otherwise shut out (F13).
     fn api_views(&mut self) {
         let sql = render_field_views(self.ast, self.field_views, self.schema);
         self.attributed_script(&sql);
+        for entry in self.field_views {
+            let name = policy_name(&entry.table, rls::SERVICE_ROLE_POLICY);
+            let structure = BTreeMap::from([
+                ("command", "*".to_string()),
+                ("permissive", flag(true)),
+                ("roles", "public".to_string()),
+            ]);
+            let create = rls::service_role_policy_sql(self.schema, &entry.table);
+            self.push(
+                self.key(ObjectKind::Policy, &entry.table, &name),
+                structure,
+                create,
+                vec![self.table_key(&entry.table)],
+            );
+        }
     }
 
     /// Row-level security on for a model or junction table (Phase 4.8, D9): enablement only, never

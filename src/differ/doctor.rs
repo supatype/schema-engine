@@ -166,8 +166,68 @@ pub fn report_of(ast: &SchemaAst, state: &State, decision: &Decision) -> DoctorR
         .map(|o| o.key.name.as_str())
         .collect();
     undeclared_tables(&state.db, &declared, &mut out);
+    if decision.diff.field_masking == crate::differ::FieldMaskingTier::Views {
+        tier_two_messages(state, &mut out);
+    }
     out.blocking = has_strict_issues(&out);
     out
+}
+
+/// What tier 2 changes about the report. A mask label is not undeclared there, only unused: the
+/// `api` views enforce the rule instead, so the push takes the label off (F17). And a hand-written
+/// policy restricted to roles applies through the views no more (plan D5, point 4b).
+fn tier_two_messages(state: &State, out: &mut DoctorReport) {
+    for item in out
+        .stale_managed
+        .iter_mut()
+        .filter(|i| i.kind == ObjectKind::SecurityLabel.as_str())
+    {
+        item.message = format!(
+            "Security label {}.{} is not used: this database has no supatype_mask, so the api \
+             views enforce field rules instead, and `supatype push` takes the label off",
+            item.table, item.name
+        );
+    }
+    for item in out.unmanaged_drift.iter_mut() {
+        if let Some(message) = role_restricted_policy(state, item) {
+            item.message = message;
+        }
+    }
+}
+
+/// The warning for a hand-written policy on a model table that names roles. Under tier 2 the API
+/// reads the table through views that run as their owner, and a policy's roles are compared with the
+/// owner, not the caller: a permissive one stops granting (fail closed) and a restrictive one stops
+/// restricting.
+fn role_restricted_policy(state: &State, item: &DoctorItem) -> Option<String> {
+    if item.kind != ObjectKind::Policy.as_str() {
+        return None;
+    }
+    let policy = state
+        .fingerprints
+        .iter()
+        .find(|f| f.kind == ObjectKind::Policy && f.parent == item.table && f.name == item.name)?;
+    let roles = policy
+        .definition
+        .lines()
+        .find_map(|l| l.strip_prefix("roles="))?;
+    if roles.split(',').any(|r| r == "public") {
+        return None;
+    }
+    let consequence = if policy.definition.lines().any(|l| l == "permissive=f") {
+        "as a RESTRICTIVE policy it no longer narrows what callers of the API can reach"
+    } else {
+        "the rows it grants are no longer reachable through the API"
+    };
+    Some(format!(
+        "Policy {}.{} was not created by Supatype and applies only to {roles}. This database masks \
+         fields with api views, which read the table as their owner ({}), so the policy no longer \
+         applies through them: {consequence}. Make it apply to PUBLIC and test the role in its \
+         expression, or declare the rule in the schema.",
+        item.table,
+        item.name,
+        crate::generator::sql::field_views::API_OWNER,
+    ))
 }
 
 /// The item for an object changed outside Supatype: what was recorded beside what is live.

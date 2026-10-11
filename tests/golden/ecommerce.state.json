@@ -993,7 +993,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.normalise_products_rich_text()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.\"description\" := CASE WHEN NEW.\"description\" IS NULL THEN NULL WHEN NEW.\"description\" ? 'root' THEN NEW.\"description\" WHEN jsonb_typeof(NEW.\"description\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"description\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"description\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"description\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"description\"::text::text)))))) END;\n  RETURN NEW;\nEND;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _platform.normalise_products_rich_text()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.\"description\" := CASE WHEN NEW.\"description\" IS NULL THEN NULL WHEN NEW.\"description\" ? 'root' THEN NEW.\"description\" WHEN jsonb_typeof(NEW.\"description\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"description\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"description\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"description\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"description\"::text::text)))))) END;\n  RETURN NEW;\nEND;\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_platform",
@@ -1013,7 +1016,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.set_products_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_products_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_platform",
@@ -1033,7 +1039,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_platform",
@@ -1053,7 +1062,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1073,7 +1085,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1093,7 +1108,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1113,7 +1131,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1133,7 +1154,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1153,7 +1177,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1173,7 +1200,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1193,7 +1223,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1213,7 +1246,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1233,7 +1269,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1253,7 +1292,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1273,7 +1315,10 @@
         "parallel": "s",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1293,7 +1338,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim(claim_path);\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim(claim_path);\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1313,7 +1361,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim_text(claim_path);\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim_text(claim_path);\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1333,7 +1384,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1353,7 +1407,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claims();\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claims();\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1373,7 +1430,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_role();\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_role();\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1393,7 +1453,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "auth",
@@ -1413,7 +1476,10 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_uid();\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_uid();\n$function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1433,7 +1499,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1453,7 +1524,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1473,7 +1549,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1493,7 +1574,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1513,7 +1599,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1533,7 +1624,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1553,7 +1649,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1573,7 +1674,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1593,7 +1699,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1613,7 +1724,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1633,7 +1749,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1653,7 +1774,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1673,7 +1799,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_customers(customers public.customers)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"customers\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1693,7 +1824,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_order_items(order_items public.order_items)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"order_items\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1713,7 +1849,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "public",
@@ -1733,7 +1874,12 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_products(products public.products)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"products\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       }
     ],
     "views": [],

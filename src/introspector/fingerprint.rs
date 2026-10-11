@@ -394,8 +394,9 @@ impl ObjectKind {
                 "parallel",
                 "cost",
                 "rows",
+                "acl",
             ],
-            ObjectKind::View => &["materialized", "definition"],
+            ObjectKind::View => &["materialized", "definition", "options", "owner"],
             ObjectKind::Policy => &["command", "permissive", "roles", "using", "with_check"],
             ObjectKind::RlsAttributes => &["enabled"],
             ObjectKind::EnumType => &["values"],
@@ -953,6 +954,7 @@ fn policy_and_catalog_entries(
         // One `SET` per entry, as `proconfig` holds them; a value may itself hold a comma
         // (`search_path=a, b`), so entries are joined on what no setting contains.
         let config = f.config.join("\u{1f}");
+        let acl = f.acl.join(",");
         let mut fingerprint = entry(
             ObjectKind::Function,
             &f.schema,
@@ -971,6 +973,7 @@ fn policy_and_catalog_entries(
                 f.parallel.as_str(),
                 f.cost.as_str(),
                 f.rows.as_str(),
+                acl.as_str(),
             ],
         )
         .commented(f.comment.as_deref());
@@ -980,12 +983,18 @@ fn policy_and_catalog_entries(
 
     for v in &catalog.views {
         let definition = normalise_sql(&v.definition);
+        let options = v.options.join(",");
         out.push(entry(
             ObjectKind::View,
             &v.schema,
             "",
             &v.name,
-            &[flag(v.materialized), definition.as_str()],
+            &[
+                flag(v.materialized),
+                definition.as_str(),
+                options.as_str(),
+                v.owner.as_str(),
+            ],
         ));
     }
 
@@ -1182,6 +1191,7 @@ mod tests {
                     "CREATE OR REPLACE FUNCTION _supatype.whoami()\n RETURNS text\n LANGUAGE sql\n \
                      STABLE SECURITY DEFINER\n{set}AS $function$ SELECT current_user $function$\n"
                 ),
+                acl: Vec::new(),
             }],
             ..Default::default()
         }

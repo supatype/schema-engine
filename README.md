@@ -202,10 +202,29 @@ introspected extension list rather than from configuration:
 * **Tier 2**, otherwise: the same masking expression goes into `api` schema view definitions, and
   PostgREST is pointed at `api` instead of the managed schema.
 
+Under tier 2 the API roles hold nothing on the base tables, so the views are the only way in. They
+run as `supatype_api_owner`, a `NOLOGIN NOBYPASSRLS` role the push creates, which holds the base
+tables' rows; they have `security_barrier` on, and their write triggers are `SECURITY DEFINER` under
+the same role with a pinned `search_path`. Row-level security still filters per caller, because the
+policies apply to the owner and read the caller's JWT. `service_role` is exempt from the masks and
+the write checks, as in tier 1, and one policy per table (`<table>_service_role`) admits it to every
+row. A write through a view returns the row as the caller may read it, and no row when a policy
+refused the write.
+
+**A hand-written policy restricted to roles (`TO authenticated`) does not apply through the tier 2
+views**, because its roles are compared with the view's owner, not the caller. A permissive one stops
+granting, which fails closed; a restrictive one stops restricting. `supatype doctor` reports either
+on a tier 2 table. Write such a policy `TO PUBLIC` and test the role in its expression, or declare
+the rule in the schema.
+
+The views' options, owner and privileges are on the ledger, so a change made by hand is reported as
+drift and put back only with consent.
+
 Both tiers are held to one behavioural contract, written once in
-`tests/field_access_contract_tests.rs` and run per tier. The one place they diverge is aggregates
-over a masked column, documented in `src/generator/sql/field_views.rs` along with why that
-divergence is unreachable through the API.
+`tests/field_access_contract_tests.rs` and run per tier, and `tests/tier_two_api_tests.rs` runs
+every API caller through what a tier 2 push makes. The one place they diverge is aggregates over a
+masked column, documented in `src/generator/sql/field_views.rs` along with why that divergence is
+unreachable through the API.
 
 Table grants are derived from the same rules (`src/generator/sql/grants.rs`). A privilege is revoked
 only when the rules prove it can never be used, and `service_role` is never touched.
