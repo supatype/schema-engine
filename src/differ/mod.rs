@@ -5,6 +5,7 @@ pub mod field_access_diff;
 pub mod integrity;
 pub mod ordering;
 pub mod renames;
+pub mod rewrites;
 pub mod rls_diff;
 pub mod table_diff;
 
@@ -45,6 +46,11 @@ pub struct DiffOutput {
     /// (it writes the declaration on a yes). Never applied: a rename is declared (D1).
     #[serde(default)]
     pub rename_candidates: Vec<renames::RenameCandidate>,
+    /// The operations that read or rewrite a whole table under a lock that stops its reads and
+    /// writes, each with the table's estimated rows (IN-C 3). Filled where the plan can ask the
+    /// database how large its tables are; a push refuses one that needs consent without `force`.
+    #[serde(default)]
+    pub rewrites: Vec<rewrites::TableRewrite>,
 }
 
 /// How a database enforces per-column rules.
@@ -273,6 +279,7 @@ pub fn diff_with_previous(
         field_masking,
         field_view_plan,
         warnings,
+        rewrites: Vec::new(),
     })
 }
 

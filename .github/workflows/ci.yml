@@ -231,4 +231,6 @@ jobs:
             --test object_names_tests \
             --test name_stability_tests \
             --test sql_quoting_tests \
-            --test concurrency_tests
+            --test concurrency_tests \
+            --test online_ddl_tests \
+            --test push_lock_retry_tests

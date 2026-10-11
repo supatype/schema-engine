@@ -6,6 +6,7 @@ pub mod field_views;
 pub mod grants;
 pub mod migration;
 pub mod migration_errors;
+pub mod online;
 pub mod rls;
 pub mod rollback;
 pub mod sso;

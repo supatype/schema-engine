@@ -308,6 +308,27 @@ const KEY_MATCH: &str = "UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) 
      WHERE m.kind = k.kind AND m.schema_name = k.schema_name \
        AND m.parent = k.parent AND m.name = k.name";
 
+/// [`upsert`] for rows a push writes after its migration committed (an index built concurrently,
+/// a key validated): each is dated when its migration was applied, as the rows written in that
+/// migration's transaction are, so a rollback of it still counts them as the push's own and not as
+/// recorded again since (`undo::rewritten_since`).
+pub async fn upsert_after_commit(conn: &mut PgConnection, rows: &[LedgerRow]) -> Result<()> {
+    upsert(conn, rows).await?;
+    let keys = key_columns(rows.iter().map(|r| &r.key));
+    sqlx::query(&format!(
+        "UPDATE {SCHEMA}.managed_objects m SET updated_at = mig.applied_at
+           FROM {SCHEMA}.migrations mig, {KEY_MATCH} AND mig.id = m.migration_id"
+    ))
+    .bind(&keys.kinds)
+    .bind(&keys.schemas)
+    .bind(&keys.parents)
+    .bind(&keys.names)
+    .execute(&mut *conn)
+    .await
+    .context("date the rows as their migration")?;
+    Ok(())
+}
+
 /// Insert or replace rows by key, in one statement.
 pub async fn upsert(conn: &mut PgConnection, rows: &[LedgerRow]) -> Result<()> {
     if rows.is_empty() {

@@ -27,9 +27,11 @@ use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 use crate::desired::{
     desired_objects_for, security_relevant, statements, FieldEnforcement, ObjectKey,
 };
+use crate::differ::rewrites::{self, TableRewrite};
 use crate::differ::{self, DiffOutput, FieldMaskingTier, Operation};
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
+use crate::generator::sql::online::{AfterCommit, OnlineTables};
 use crate::generator::sql::{constraint_helpers, field_views, grants, rls, storage, versions};
 use crate::generator::typescript::admin;
 use crate::introspector::fingerprint::{
@@ -37,6 +39,7 @@ use crate::introspector::fingerprint::{
 };
 use crate::introspector::{self, catalog, catalog::CatalogState};
 use crate::ledger::{self, drift, probe, reconcile, unrecorded, LedgerRow};
+use crate::online::{online_tables, table_sizes, EngineSession};
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use crate::state::migration_history;
@@ -71,13 +74,13 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
 /// `packages/realtime`, `schema-push-lock`). Realtime skips WAL polls while this is held.
-const PUSH_LOCK_CLASS: i32 = 872014;
+pub(crate) const PUSH_LOCK_CLASS: i32 = 872014;
 const PUSH_LOCK_ID: i32 = 1;
 /// The engine's own mutual exclusion, on the same class and the next id: a push, a writing `adopt`
 /// and `doctor --rebaseline` each take it for their transaction and refuse while another holds it.
 /// Separate from [`PUSH_LOCK_ID`], which the CLI holds from another session around the push it
 /// runs, so refusing on that one would refuse every such push. Only this engine takes this key.
-const ENGINE_LOCK_ID: i32 = 2;
+pub(crate) const ENGINE_LOCK_ID: i32 = 2;
 
 /// Refused because of another push, adopt, rebaseline or rollback. A type, so a caller can tell it
 /// from a failed push and retry: the HTTP server answers it with 409 and [`ENGINE_BUSY`].
@@ -122,6 +125,9 @@ pub struct Plan<'a> {
     pub reconcile: reconcile::Plan,
     /// What `reconcile` was decided from, checked again inside the apply's transaction.
     inputs: ReconcileInputs,
+    /// Which of the tables the push changes hold rows, and what an earlier push left to finish:
+    /// what decides the statements that run online (IN-C 2).
+    pub online: OnlineTables,
 }
 
 /// The ledger and the live objects a reconcile was decided from, each in key order.
@@ -207,8 +213,22 @@ impl Plan<'_> {
     }
 
     /// The one migration this plan is: what `supatype migrate` prints, what `apply` runs and what
-    /// the history records.
+    /// the history records. On a table with rows an index is built, and a key or check validated,
+    /// after the transaction commits.
     pub fn migration(&self, force: bool) -> Result<Migration> {
+        Migration::render_online(
+            &self.diff,
+            &self.reconcile.actions,
+            force,
+            &self.schema,
+            &self.ast,
+            &self.online,
+        )
+    }
+
+    /// [`Plan::migration`] with every statement in the transaction, as `migrate --record`
+    /// rehearses it.
+    pub fn migration_in_transaction(&self, force: bool) -> Result<Migration> {
         Migration::render(
             &self.diff,
             &self.reconcile.actions,
@@ -387,7 +407,9 @@ pub(crate) async fn plan_on<'a>(
     let (
         state,
         Decision {
-            diff, reconcile, ..
+            mut diff,
+            reconcile,
+            ..
         },
     ) = read_and_decide(conn, ast, schema).await?;
 
@@ -396,7 +418,15 @@ pub(crate) async fn plan_on<'a>(
     // applied. Checked here, before the CLI asks anything about a push it is going to refuse.
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
+    let sizes = table_sizes(conn, schema, &diff).await?;
+    let estimates: BTreeMap<String, i64> = sizes.iter().map(|(t, s)| (t.clone(), s.rows)).collect();
+    diff.rewrites = rewrites::rewrites(&diff, &estimates);
+    let flagged: Vec<String> = diff.rewrites.iter().map(TableRewrite::message).collect();
+    diff.warnings.extend(flagged);
+    let online = online_tables(&state, &reconcile, &sizes, schema);
+
     Ok(Plan {
+        online,
         // Rendered with the names the ledger records, as the decision was (F2d).
         ast: with_recorded_names(ast, &state.ledger, schema),
         schema: schema.to_string(),
@@ -1235,7 +1265,7 @@ async fn forget_released_on_missing_tables(
 
 /// Refuses a plan with a conflict: an object under a name the schema needs that Supatype did not
 /// create.
-fn refuse_conflicts(plan: &Plan<'_>) -> Result<()> {
+pub(crate) fn refuse_conflicts(plan: &Plan<'_>) -> Result<()> {
     let conflicts: Vec<String> = plan
         .reconcile
         .conflicts()
@@ -1293,34 +1323,74 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     // tooling see the latest schema without a DDL migration.
     let admin_cfg = admin::generate(&plan.ast)?;
     let schema_snap = serde_json::to_value(&plan.ast)?;
+    let refresh = Refresh {
+        plan: &plan,
+        storage_sql,
+        versions_sql,
+        admin_cfg,
+        schema_snap,
+    };
 
     // These are writes too: under the engine's lock like any other, and only to the database the
-    // plan found up to date.
-    let mut tx = begin_writer(pool).await?;
-    let now = read_state(&mut tx, &plan.schema)
-        .await
-        .context("Failed to re-read the database before applying")?;
-    plan.inputs.assert_current(&now)?;
-    reassert_auth_helpers(&mut tx).await?;
-    restate_rows(&mut tx, &plan.reconcile, &now.fingerprints).await?;
-
-    (&mut *tx)
-        .execute(sqlx::raw_sql(&storage_sql))
-        .await
-        .context("Failed to apply storage schema/policies")?;
-    if !versions_sql.trim().is_empty() {
-        (&mut *tx)
-            .execute(sqlx::raw_sql(&versions_sql))
-            .await
-            .context("Failed to apply drafts and publishing layer")?;
+    // plan found up to date. The keys and checks an earlier push left `NOT VALID` are validated
+    // once they have committed.
+    let mut session = EngineSession::open(pool).await?;
+    let mut after = AfterCommit::default();
+    for key in &plan.online.unvalidated {
+        after.validate(key.clone());
     }
-    migration_history::refresh_metadata_on_up_to_date_push(&mut tx, &admin_cfg, &schema_snap)
-        .await
-        .context("Failed to refresh Studio metadata on up-to-date push")?;
-    tx.commit().await.context("commit up-to-date push")?;
+    let done = match crate::online::with_retries(pool, &mut session, &refresh).await {
+        Ok(()) => crate::online::run_after_commit(&mut session, &after, &plan.schema, None).await,
+        Err(e) => Err(e),
+    };
+    session.close().await;
+    crate::online::finished(done?, None)?;
     Ok(Outcome::UpToDate {
         warnings: plan.diff.warnings,
     })
+}
+
+/// One attempt of an up-to-date push's writes.
+struct Refresh<'p> {
+    plan: &'p Plan<'p>,
+    storage_sql: String,
+    versions_sql: String,
+    admin_cfg: serde_json::Value,
+    schema_snap: serde_json::Value,
+}
+
+impl crate::online::Attempt for Refresh<'_> {
+    type Out = ();
+
+    fn run<'t>(&'t self, tx: &'t mut PgConnection) -> crate::online::Running<'t, ()> {
+        Box::pin(async move {
+            let plan = self.plan;
+            let now = read_state(tx, &plan.schema)
+                .await
+                .context("Failed to re-read the database before applying")?;
+            plan.inputs.assert_current(&now)?;
+            reassert_auth_helpers(tx).await?;
+            restate_rows(tx, &plan.reconcile, &now.fingerprints).await?;
+            (&mut *tx)
+                .execute(sqlx::raw_sql(&self.storage_sql))
+                .await
+                .context("Failed to apply storage schema/policies")?;
+            if !self.versions_sql.trim().is_empty() {
+                (&mut *tx)
+                    .execute(sqlx::raw_sql(&self.versions_sql))
+                    .await
+                    .context("Failed to apply drafts and publishing layer")?;
+            }
+            migration_history::refresh_metadata_on_up_to_date_push(
+                tx,
+                &self.admin_cfg,
+                &self.schema_snap,
+            )
+            .await
+            .context("Failed to refresh Studio metadata on up-to-date push")?;
+            Ok(())
+        })
+    }
 }
 
 /// F2(c) on a push with nothing to apply: each restated row rewritten to this push's statement,
@@ -1368,8 +1438,14 @@ struct Rendered {
     sources: migration_history::AppliedMigrationSources,
 }
 
-fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
-    let migration = plan.migration(opts.force)?;
+/// The push's migration, with what runs online after commit (`online`) or all of it in the
+/// transaction (a rehearsal, which cannot build an index concurrently).
+fn render(plan: &Plan<'_>, opts: ApplyOptions, online: bool) -> Result<Rendered> {
+    let migration = if online {
+        plan.migration(opts.force)?
+    } else {
+        plan.migration_in_transaction(opts.force)?
+    };
     // Millisecond precision so rapid retries do not collide on the name.
     let name = opts
         .name
@@ -1389,38 +1465,29 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
 
 async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<Outcome> {
     let strict = opts.strict;
-    let rendered = render(&plan, opts)?;
+    let rendered = render(&plan, opts, true)?;
     // Locked before anything is written, so a refusal records no failed migration.
-    let mut tx = begin_writer(pool).await?;
-    migration_history::assert_name_unused(&mut *tx, &rendered.name).await?;
-    let applied = match within_transaction(&mut tx, &plan, strict, &rendered).await {
-        Ok(applied) => applied,
-        Err(e) => {
-            migration_history::rollback_push_tx(
-                tx,
-                pool,
-                &rendered.name,
-                &rendered.migration.hash,
-                &rendered.apply_body,
-                &e.to_string(),
+    let mut session = EngineSession::open(pool).await?;
+    let committed = commit_migration(pool, &mut session, &plan, strict, &rendered).await;
+    let unfinished = match &committed {
+        Ok(applied) => Some(
+            crate::online::run_after_commit(
+                &mut session,
+                &rendered.migration.after_commit,
+                &plan.schema,
+                Some(applied.migration_id),
             )
-            .await;
-            return Err(e);
-        }
+            .await,
+        ),
+        Err(_) => None,
     };
-    tx.commit().await.context("commit migration transaction")?;
-
-    // Studio reads its schema from `_supatype.schema_state`, which was once written only on the
-    // up-to-date path, so any project whose last push applied a migration had none. A failure here
-    // must not undo an applied migration, so it only warns.
-    if let Some((admin_cfg, schema_snap)) = applied.studio_metadata.as_ref() {
-        if let Err(e) =
-            migration_history::save_studio_metadata_if_present(pool, admin_cfg, schema_snap).await
-        {
-            eprintln!("Warning: failed to refresh Studio metadata: {e}");
-        }
+    session.close().await;
+    let applied = committed?;
+    save_studio_metadata(pool, &applied).await;
+    // The migration is applied whatever ran after it; what did not is said, and the push fails.
+    if let Some(unfinished) = unfinished {
+        crate::online::finished(unfinished?, Some(&rendered.name))?;
     }
-
     let operations = plan.diff.operations.len() + rendered.migration.reconciled;
     let mut warnings = plan.diff.warnings;
     warnings.extend(applied.drift_warnings);
@@ -1431,9 +1498,86 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
     })
 }
 
+/// The migration's transaction, tried again while it gives up on a lock, under the engine's lock
+/// `session` holds. A failure is recorded as a failed migration, unless the push was refused before
+/// it began: another writer, or a name already used.
+async fn commit_migration(
+    pool: &PgPool,
+    session: &mut EngineSession,
+    plan: &Plan<'_>,
+    strict: bool,
+    rendered: &Rendered,
+) -> Result<Applied> {
+    // Asked again under the engine's lock, which no other writer can take now.
+    migration_history::assert_name_unused(session.conn(), &rendered.name).await?;
+    let attempt = Migrate {
+        plan,
+        strict,
+        rendered,
+    };
+    let committed = crate::online::with_retries(pool, session, &attempt).await;
+    if let Err(e) = &committed {
+        if e.downcast_ref::<EngineBusy>().is_none() {
+            record_failure(pool, rendered, e).await;
+        }
+    }
+    committed
+}
+
+/// Studio reads its schema from `_supatype.schema_state`, which was once written only on the
+/// up-to-date path, so any project whose last push applied a migration had none. A failure here
+/// must not undo an applied migration, so it only warns.
+async fn save_studio_metadata(pool: &PgPool, applied: &Applied) {
+    if let Some((admin_cfg, schema_snap)) = applied.studio_metadata.as_ref() {
+        if let Err(e) =
+            migration_history::save_studio_metadata_if_present(pool, admin_cfg, schema_snap).await
+        {
+            eprintln!("Warning: failed to refresh Studio metadata: {e}");
+        }
+    }
+}
+
+/// Records a push that applied nothing as a failed migration, with the statements it would have
+/// run and why it did not.
+async fn record_failure(pool: &PgPool, rendered: &Rendered, e: &anyhow::Error) {
+    if let Err(record_err) = migration_history::record_failed_migration(
+        pool,
+        &rendered.name,
+        &rendered.migration.hash,
+        &rendered.migration.recorded_up(),
+        &e.to_string(),
+    )
+    .await
+    {
+        eprintln!("Warning: could not record failed migration: {record_err}");
+    }
+}
+
+/// One attempt of a push's migration transaction.
+struct Migrate<'p> {
+    plan: &'p Plan<'p>,
+    strict: bool,
+    rendered: &'p Rendered,
+}
+
+impl crate::online::Attempt for Migrate<'_> {
+    type Out = Applied;
+
+    fn run<'t>(&'t self, tx: &'t mut PgConnection) -> crate::online::Running<'t, Applied> {
+        Box::pin(within_transaction(
+            tx,
+            self.plan,
+            self.strict,
+            self.rendered,
+        ))
+    }
+}
+
 /// The migration a push would apply, applied in `tx` exactly as [`apply_migration`] applies it,
 /// history, ledger and Studio metadata included, for a caller that then rolls `tx` back and keeps
-/// what was written (`migrate_file`). Returns the migration and the id its history row took.
+/// what was written (`migrate_file`). Every statement runs in `tx`: an index is not built
+/// concurrently, nor a key added `NOT VALID`. Returns the migration and the id its history row
+/// took.
 pub(crate) async fn rehearse(
     tx: &mut Transaction<'_, Postgres>,
     plan: &Plan<'_>,
@@ -1448,6 +1592,7 @@ pub(crate) async fn rehearse(
             name: Some(name),
             ..Default::default()
         },
+        false,
     )?;
     let applied = within_transaction(tx, plan, false, &rendered).await?;
     if let Some((admin_cfg, schema_snap)) = applied.studio_metadata.as_ref() {
@@ -1467,72 +1612,24 @@ struct Applied {
 /// The writes, in order. Any error here rolls the whole transaction back and records a failed
 /// migration with the same name, hash and batch.
 async fn within_transaction(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut PgConnection,
     plan: &Plan<'_>,
     strict: bool,
     rendered: &Rendered,
 ) -> Result<Applied> {
-    // The reconcile's inputs, read again inside this transaction: what it decided is applied only
-    // to the database it decided it against.
-    let now = read_state(tx, &plan.schema)
-        .await
-        .context("Failed to re-read the database before applying")?;
-    plan.inputs.assert_current(&now)?;
-    reassert_auth_helpers(tx).await?;
-
-    if let Err(e) = (&mut **tx)
-        .execute(sqlx::raw_sql(&rendered.apply_body))
-        .await
-    {
-        let msg = migration_errors::enrich_migration_error(
-            &e.to_string(),
-            Some(&plan.diff),
-            &check_sites(&plan.reconcile),
-        );
-        return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
-    }
-
+    apply_statements(tx, plan, rendered).await?;
     let after = live(tx, &plan.schema)
         .await
         .context("Failed to introspect after migration")?;
-
     let schema_snap = serde_json::to_value(&plan.ast).ok();
     let admin_cfg = admin::generate(&plan.ast).ok();
-    let migration_id = migration_history::insert_applied_migration(
-        &mut **tx,
-        &rendered.name,
-        &rendered.migration.hash,
-        schema_snap.clone(),
-        admin_cfg.clone(),
-        &rendered.apply_body,
-        &rendered.sources,
-    )
-    .await
-    .context("Failed to record migration in history")?;
-
-    record_ledger(
-        tx,
-        &plan.reconcile,
-        &after.fingerprints,
-        &after.catalog.sequences,
-        &plan.schema,
-        migration_id,
-    )
-    .await?;
-
-    migration_history::save_schema_state(&mut **tx, &after.db)
-        .await
-        .context("Failed to save schema state cache")?;
-
-    // Which mechanism is enforcing the field rules, probed rather than assumed. A failure here is
-    // a missing diagnostic, not a broken push: the enforcement itself is the labels, which are
-    // already applied in this transaction.
-    if let Err(e) = migration_history::record_field_enforcement(tx, &plan.ast, &plan.schema).await {
-        eprintln!("Warning: failed to record field-enforcement capability: {e}");
-    }
+    let metadata = (admin_cfg.clone(), schema_snap.clone());
+    let migration_id = record_push(tx, plan, rendered, &after, metadata).await?;
 
     // Checked last, with the rows just written, so it reads the database as the next push will.
-    let check = differ::integrity::post_push(&plan.ast, &after_push(after, tx).await?);
+    let deferred = rendered.migration.after_commit.deferred_keys();
+    let state = after_push(after, tx).await?;
+    let check = differ::integrity::post_push(&plan.ast, &state, &deferred);
     if strict && !check.settled {
         bail!(
             "Push rolled back: post-apply schema drift in strict mode ({})",
@@ -1547,8 +1644,102 @@ async fn within_transaction(
     })
 }
 
+/// What a push records once its statements ran: the history row, the ledger, the schema state
+/// cache and the field enforcement in use. Returns the history row's id.
+async fn record_push(
+    tx: &mut PgConnection,
+    plan: &Plan<'_>,
+    rendered: &Rendered,
+    after: &Live,
+    (admin_cfg, schema_snap): (Option<serde_json::Value>, Option<serde_json::Value>),
+) -> Result<i32> {
+    let migration_id = migration_history::insert_applied_migration(
+        &mut *tx,
+        &rendered.name,
+        &rendered.migration.hash,
+        schema_snap,
+        admin_cfg,
+        &rendered.migration.recorded_up(),
+        &rendered.sources,
+    )
+    .await
+    .context("Failed to record migration in history")?;
+    let recording = Recording {
+        plan: &plan.reconcile,
+        after: &after.fingerprints,
+        sequences: &after.catalog.sequences,
+        schema: &plan.schema,
+        migration_id,
+        deferred: &rendered.migration.after_commit.deferred_keys(),
+    };
+    record_ledger(tx, recording).await?;
+    migration_history::save_schema_state(&mut *tx, &after.db)
+        .await
+        .context("Failed to save schema state cache")?;
+    // Which mechanism is enforcing the field rules, probed rather than assumed. A failure here is
+    // a missing diagnostic, not a broken push: the enforcement itself is the labels, which are
+    // already applied in this transaction.
+    if let Err(e) = migration_history::record_field_enforcement(tx, &plan.ast, &plan.schema).await {
+        eprintln!("Warning: failed to record field-enforcement capability: {e}");
+    }
+    Ok(migration_id)
+}
+
+/// Re-reads what the reconcile was decided from, refuses if it moved, and runs the migration's
+/// statements: first making sure no row already breaks a key or check it adds `NOT VALID`, which
+/// is then validated after commit.
+async fn apply_statements(
+    tx: &mut PgConnection,
+    plan: &Plan<'_>,
+    rendered: &Rendered,
+) -> Result<()> {
+    // The reconcile's inputs, read again inside this transaction: what it decided is applied only
+    // to the database it decided it against.
+    let now = read_state(tx, &plan.schema)
+        .await
+        .context("Failed to re-read the database before applying")?;
+    plan.inputs.assert_current(&now)?;
+    reassert_auth_helpers(tx).await?;
+    crate::online::refuse_broken_rows(
+        tx,
+        &plan.reconcile.actions,
+        &rendered.migration.after_commit.validations,
+    )
+    .await
+    .context("Failed to apply migration")?;
+
+    if let Err(e) = (&mut *tx)
+        .execute(sqlx::raw_sql(&rendered.apply_body))
+        .await
+    {
+        let msg = migration_errors::enrich_migration_error(
+            &e.to_string(),
+            Some(&plan.diff),
+            &check_sites(&plan.reconcile),
+        );
+        // A lock not taken is retried: its cause stays a database error the retry can tell.
+        if crate::online::lock_timed_out(&anyhow::Error::from(e)) {
+            return Err(LockTimeout(msg).into());
+        }
+        return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
+    }
+    Ok(())
+}
+
+/// An attempt that gave up waiting for a lock, said as the migration error it was.
+#[derive(Debug)]
+pub(crate) struct LockTimeout(pub String);
+
+impl std::fmt::Display for LockTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to apply migration: {}", self.0)
+    }
+}
+
+impl std::error::Error for LockTimeout {}
+
 /// The state after apply, with the ledger as this push has just recorded it.
-async fn after_push(after: Live, tx: &mut Transaction<'_, Postgres>) -> Result<State> {
+async fn after_push(after: Live, tx: &mut PgConnection) -> Result<State> {
     let ledger = ledger::load(tx).await?;
     let Live {
         mut db,
@@ -1584,14 +1775,26 @@ fn check_sites(plan: &reconcile::Plan) -> Vec<CheckSite<'_>> {
 /// Plan section 4, steps 6 and 7: after apply, every object of a moved kind the reconcile named is
 /// re-read from the catalog and its row written with the `CREATE` intended, the fingerprint found
 /// and the migration that changed it; rows for objects dropped or already gone are removed.
-async fn record_ledger(
-    tx: &mut Transaction<'_, Postgres>,
-    plan: &reconcile::Plan,
-    after: &[ObjectFingerprint],
-    sequences: &[catalog::DbSequence],
-    schema: &str,
+/// What [`record_ledger`] records from: the reconcile, the catalog once applied, and the objects
+/// this push puts in place only after it commits, whose rows are written then.
+struct Recording<'r> {
+    plan: &'r reconcile::Plan,
+    after: &'r [ObjectFingerprint],
+    sequences: &'r [catalog::DbSequence],
+    schema: &'r str,
     migration_id: i32,
-) -> Result<()> {
+    deferred: &'r BTreeSet<ObjectKey>,
+}
+
+async fn record_ledger(tx: &mut PgConnection, recording: Recording<'_>) -> Result<()> {
+    let Recording {
+        plan,
+        after,
+        sequences,
+        schema,
+        migration_id,
+        deferred,
+    } = recording;
     if plan.actions.is_empty() {
         return Ok(());
     }
@@ -1603,6 +1806,11 @@ async fn record_ledger(
     let mut removed = Vec::new();
     for action in &plan.actions {
         let key = action.key();
+        // Built after commit and recorded once it is valid; remembered below all the same, so a
+        // rollback takes its row with it.
+        if deferred.contains(key) {
+            continue;
+        }
         match action.row_after() {
             reconcile::RowAfter::Write { create_sql, status } => {
                 // A sequence this push made is recorded under the name Postgres gave it, found by
@@ -1637,6 +1845,7 @@ async fn record_ledger(
         .iter()
         .map(|r| r.key.clone())
         .chain(removed.iter().cloned())
+        .chain(deferred.iter().cloned())
         .collect();
     ledger::undo::remember(tx, migration_id, &touched).await?;
     ledger::upsert(tx, &rows).await?;
@@ -1677,7 +1886,8 @@ fn created_sequence(
 const WRITER_IDLE_TIMEOUT: &str = "60s";
 /// How long one of a writer's statements may wait for a lock. A backend waiting on a lock does not
 /// read its socket, so it cannot see that its client was killed; this bounds that wait, and the
-/// queue of app queries a waiting `ALTER` holds up behind it.
+/// queue of app queries a waiting `ALTER` holds up behind it. A push waits far less on each of its
+/// attempts and tries again instead (`online::PUSH_LOCK_TIMEOUT`).
 const WRITER_LOCK_TIMEOUT: &str = "30s";
 /// How often a writer's backend checks, while a statement runs, that its client is still there
 /// (Postgres 14 and later, on platforms that support it).
@@ -1691,14 +1901,16 @@ pub(crate) async fn begin_writer(pool: &PgPool) -> Result<Transaction<'_, Postgr
         .begin()
         .await
         .context("begin the writer's transaction")?;
-    bound_writer(&mut tx).await?;
+    bound_writer(&mut tx, WRITER_LOCK_TIMEOUT).await?;
     take_engine_lock(&mut tx).await?;
     take_push_lock(&mut tx).await?;
     Ok(tx)
 }
 
-/// `SET LOCAL` for the writer's timeouts, so they end with its transaction.
-async fn bound_writer(tx: &mut PgConnection) -> Result<()> {
+/// `SET LOCAL` for the writer's timeouts, so they end with its transaction. A push's attempts
+/// wait `lock_timeout` for a lock, shorter than the other writers' [`WRITER_LOCK_TIMEOUT`]
+/// (`online::PUSH_LOCK_TIMEOUT`).
+pub(crate) async fn bound_writer(tx: &mut PgConnection, lock_timeout: &str) -> Result<()> {
     sqlx::query(
         "SELECT set_config('idle_in_transaction_session_timeout', $1, true),
                 set_config('lock_timeout', $2, true),
@@ -1706,7 +1918,7 @@ async fn bound_writer(tx: &mut PgConnection) -> Result<()> {
                      THEN set_config('client_connection_check_interval', $3, true) END",
     )
     .bind(WRITER_IDLE_TIMEOUT)
-    .bind(WRITER_LOCK_TIMEOUT)
+    .bind(lock_timeout)
     .bind(WRITER_CLIENT_CHECK)
     .execute(&mut *tx)
     .await
@@ -1732,10 +1944,7 @@ pub(crate) async fn engine_lock_held(pool: &PgPool) -> Result<bool> {
 /// while another writer holds the engine's lock was waiting on that writer: said as
 /// [`EngineBusy::Running`], as the writer would have been told. Any other error is `e` unchanged.
 pub(crate) async fn busy_if_waiting_on_a_writer(pool: &PgPool, e: anyhow::Error) -> anyhow::Error {
-    let waited = e
-        .chain()
-        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
-        .any(|cause| migration_history::sql_state(cause).as_deref() == Some("55P03"));
+    let waited = crate::online::lock_timed_out(&e);
     if waited && engine_lock_held(pool).await.unwrap_or(false) {
         return EngineBusy::Running.into();
     }

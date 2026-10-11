@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
+use sqlx::{Executor, PgConnection, PgPool, Postgres};
 
 // Internal bookkeeping lives in a dedicated schema so it never appears in the
 // user's `public` schema and is never touched by introspection or diffs.
@@ -914,22 +914,6 @@ where
              applied. Give this push a name of its own, or leave the name out for a generated one."
         ),
         None => Ok(()),
-    }
-}
-
-/// Roll back an in-flight push transaction and best-effort record a failed migration row.
-pub async fn rollback_push_tx(
-    tx: Transaction<'_, Postgres>,
-    pool: &PgPool,
-    migration_name: &str,
-    hash: &str,
-    sql_up: &str,
-    err: &str,
-) {
-    let _ = tx.rollback().await;
-    if let Err(record_err) = record_failed_migration(pool, migration_name, hash, sql_up, err).await
-    {
-        eprintln!("Warning: could not record failed migration: {record_err}");
     }
 }
 

@@ -112,7 +112,7 @@ pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes
          JOIN pg_class i ON i.oid = ix.indexrelid
          JOIN pg_am am ON am.oid = i.relam
          JOIN pg_namespace n ON n.oid = t.relnamespace
-         WHERE n.nspname = $1
+         WHERE n.nspname = $1 AND ix.indisvalid
          ORDER BY t.relname, i.relname",
     )
     .bind(schema)

@@ -229,6 +229,7 @@ mod tests {
             field_masking: crate::differ::FieldMaskingTier::None,
             field_view_plan: Vec::new(),
             rename_candidates: Vec::new(),
+            rewrites: Vec::new(),
         };
 
         let msg = enrich_migration_error("cannot cast type integer to uuid", Some(&diff), &[]);

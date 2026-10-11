@@ -4,6 +4,8 @@ use crate::generator::sql::column_conversion::{
     add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
 };
+use crate::generator::sql::online::{self, AfterCommit, Online, OnlineTables};
+use crate::introspector::fingerprint::ObjectKind;
 use crate::ledger::reconcile;
 use crate::managed::ObjectNames;
 use crate::parser::ast::{
@@ -71,6 +73,10 @@ fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
             "{} destructive operation(s) detected. Use --force to proceed.",
             diff.summary.destructive
         );
+    }
+    // IN-C 3: a rewrite that stops a large table's reads and writes needs the same consent.
+    if let Some(refusal) = crate::differ::rewrites::refusal(&diff.rewrites).filter(|_| !force) {
+        bail!(refusal);
     }
     Ok(())
 }
@@ -405,6 +411,9 @@ pub struct Migration {
     /// How many of the forward statements the reconcile contributed.
     pub reconciled: usize,
     risk: &'static str,
+    /// What runs once the transaction has committed: the concurrent index builds and the
+    /// validations (IN-C 2). Empty when every table the push changes is new or has no rows.
+    pub after_commit: AfterCommit,
 }
 
 /// What a migration file writes beside the migration, so that applying it by hand is a push: the
@@ -439,13 +448,35 @@ fn push_section(lines: &mut Vec<String>, header: &str, statements: &[String]) {
 
 impl Migration {
     /// Renders the diff's operations and then the reconcile's actions, refusing a destructive diff
-    /// without `force` and a schema that declares an unmanaged table.
+    /// without `force` and a schema that declares an unmanaged table. Every statement runs in the
+    /// transaction: [`Migration::render_online`] is the form for a database whose tables hold rows.
     pub fn render(
         diff: &DiffOutput,
         reconcile: &[reconcile::Action],
         force: bool,
         schema: &str,
         ast: &SchemaAst,
+    ) -> Result<Migration> {
+        Migration::render_online(
+            diff,
+            reconcile,
+            force,
+            schema,
+            ast,
+            &OnlineTables::default(),
+        )
+    }
+
+    /// [`Migration::render`], with each new index on a table in `tables.with_rows` built
+    /// concurrently after commit, and each key or check added to one `NOT VALID` and validated
+    /// after commit (IN-C 2).
+    pub fn render_online(
+        diff: &DiffOutput,
+        reconcile: &[reconcile::Action],
+        force: bool,
+        schema: &str,
+        ast: &SchemaAst,
+        tables: &OnlineTables,
     ) -> Result<Migration> {
         assert_forward_allowed(diff, force)?;
         // The reconcile's removals first, so a drop the operations depend on has happened (a
@@ -474,10 +505,7 @@ impl Migration {
         early.sort_by_key(|a| std::cmp::Reverse(reconcile::creation_rank(a.key().kind)));
         let removals: Vec<String> = early.iter().filter_map(|a| a.removal_sql()).collect();
         let late_removals: Vec<String> = late.iter().filter_map(|a| a.removal_sql()).collect();
-        let additions: Vec<String> = reconcile
-            .iter()
-            .flat_map(reconcile::Action::addition_sql)
-            .collect();
+        let (additions, after_commit) = split_online(reconcile, schema, tables);
         let mut body = reconciled_section(removals.clone());
         body.extend(render_forward_core(diff, schema, ast)?);
         body.extend(reconciled_section(late_removals.clone()));
@@ -513,8 +541,12 @@ impl Migration {
             preamble: render_forward_preamble(diff),
             body,
             down,
+            after_commit: AfterCommit::default(),
             hash: String::new(),
-            reconciled: removals.len() + late_removals.len() + additions.len(),
+            reconciled: removals.len()
+                + late_removals.len()
+                + additions.len()
+                + after_commit.indexes.len(),
             risk: if diff.summary.is_destructive {
                 "destructive"
             } else if diff.summary.cautious > 0 {
@@ -523,8 +555,28 @@ impl Migration {
                 "safe"
             },
         };
-        migration.hash = migration_hash(&migration.up());
+        migration.after_commit = after_commit;
+        migration.hash = migration_hash(&migration.hashed());
         Ok(migration)
+    }
+
+    /// What [`Migration::hash`] is taken over: [`Migration::up`], then what runs after commit.
+    fn hashed(&self) -> String {
+        let after = self.after_commit.statements();
+        if after.is_empty() {
+            return self.up();
+        }
+        format!("{}\n{}", self.up(), after.join("\n"))
+    }
+
+    /// [`Migration::apply_body`] and then what runs after commit: what the history records as the
+    /// migration's `sql_up`.
+    pub fn recorded_up(&self) -> String {
+        let section = online::file_section(&self.after_commit);
+        if section.is_empty() {
+            return self.apply_body();
+        }
+        format!("{}\n{section}", self.apply_body())
     }
 
     /// The forward statements, preamble included, for running inside a transaction the caller
@@ -590,6 +642,11 @@ impl Migration {
         lines.extend(self.body.iter().cloned());
         push_section(&mut lines, LEDGER_HEADER, &recording.ledger);
         lines.push("COMMIT;".into());
+        let after = online::file_section(&self.after_commit);
+        if !after.is_empty() {
+            lines.push(String::new());
+            lines.push(after);
+        }
         lines.join("\n")
     }
 
@@ -602,6 +659,50 @@ impl Migration {
         }
         format!("{}\n{}", self.storage.trim(), self.up().trim_end())
     }
+}
+
+/// The reconcile's additions that run in the transaction, and what runs after it commits: a new
+/// index on a table with rows is built concurrently, and a key or check on one is added `NOT VALID`
+/// and validated (IN-C 2). An index made again where an INVALID one of its name was left is
+/// preceded by the drop of that one, which introspection does not see.
+fn split_online(
+    reconcile: &[reconcile::Action],
+    schema: &str,
+    tables: &OnlineTables,
+) -> (Vec<String>, AfterCommit) {
+    let mut additions = Vec::new();
+    let mut after = AfterCommit::default();
+    for action in reconcile {
+        let key = action.key();
+        let placed = action.addition_sql();
+        match online::online(action, schema, tables) {
+            Online::Concurrent(index) => after.indexes.push(index),
+            Online::NotValid { create_sql } => {
+                let original = action.create_sql().unwrap_or_default();
+                additions.extend(placed.into_iter().map(|sql| {
+                    if sql == original {
+                        create_sql.clone()
+                    } else {
+                        sql
+                    }
+                }));
+                after.validate(key.clone());
+            }
+            Online::No => {
+                let left_invalid = key.kind == ObjectKind::Index
+                    && key.schema == schema
+                    && tables.invalid_indexes.contains(&key.name);
+                if left_invalid && !placed.is_empty() {
+                    additions.push(online::drop_invalid_sql(key));
+                }
+                additions.extend(placed);
+            }
+        }
+    }
+    for key in &tables.unvalidated {
+        after.validate(key.clone());
+    }
+    (additions, after)
 }
 
 /// The drafts and publishing layer, when this schema has a versioned model.
@@ -2236,6 +2337,7 @@ mod tests {
             field_masking: Default::default(),
             field_view_plan: Vec::new(),
             rename_candidates: Vec::new(),
+            rewrites: Vec::new(),
         };
         let function = crate::desired::ObjectKey {
             kind: crate::introspector::fingerprint::ObjectKind::Function,

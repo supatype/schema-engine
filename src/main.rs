@@ -883,6 +883,7 @@ mod tests {
             field_masking: supatype_engine::differ::FieldMaskingTier::None,
             field_view_plan: Vec::new(),
             rename_candidates: Vec::new(),
+            rewrites: Vec::new(),
         };
         assert!(has_destructive_ops(&diff));
     }

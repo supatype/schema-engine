@@ -47,6 +47,10 @@ pub struct DoctorReport {
     /// records it, with the schema's definition. Reported, not a failure (`--strict` passes).
     #[serde(default)]
     pub claimed: Vec<DoctorItem>,
+    /// A key or check of ours added `NOT VALID` and not validated yet, or an index of ours a
+    /// concurrent build left INVALID: the next push finishes it (IN-C 2).
+    #[serde(default)]
+    pub pending: Vec<DoctorItem>,
     /// Drifted objects whose live definition `doctor --rebaseline` just recorded as the baseline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rebaselined: Vec<DoctorItem>,
@@ -169,6 +173,7 @@ pub fn report_of(ast: &SchemaAst, state: &State, decision: &Decision) -> DoctorR
     if decision.diff.field_masking == crate::differ::FieldMaskingTier::Views {
         tier_two_messages(state, &mut out);
     }
+    out.pending = pending_items(state, decision);
     out.blocking = has_strict_issues(&out);
     out
 }
@@ -511,4 +516,40 @@ pub fn has_strict_issues(report: &DoctorReport) -> bool {
         || !report.stale_managed.is_empty()
         || !report.drifted.is_empty()
         || !report.conflicting.is_empty()
+        || !report.pending.is_empty()
+}
+
+/// The keys and checks of ours a push added `NOT VALID` and has not validated, and the INVALID
+/// indexes a concurrent build of ours left (IN-C 2): the next push finishes each.
+fn pending_items(state: &State, decision: &Decision) -> Vec<DoctorItem> {
+    let schema = state.db.schema.as_str();
+    let ours = |key: &ObjectKey| {
+        state
+            .ledger
+            .iter()
+            .any(|r| r.key == *key && r.status != crate::ledger::Status::Released)
+            || decision.desired.iter().any(|d| d.key == *key)
+    };
+    state
+        .catalog
+        .pending
+        .iter()
+        .map(|p| ObjectKey {
+            kind: p.kind,
+            schema: schema.to_string(),
+            parent: p.table.clone(),
+            name: p.name.clone(),
+        })
+        .filter(ours)
+        .map(|key| {
+            let rest = if key.kind == ObjectKind::Index {
+                "is INVALID: a concurrent build did not finish. `supatype push` drops it and builds \
+                 it again"
+            } else {
+                "was added NOT VALID and has not been validated against the rows already there: \
+                 `supatype push` validates it"
+            };
+            DoctorItem::about(&key, rest)
+        })
+        .collect()
 }
