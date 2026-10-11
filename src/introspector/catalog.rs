@@ -754,18 +754,21 @@ async fn cron_available(conn: &mut PgConnection) -> Result<bool> {
     )
 }
 
+/// This database's jobs, as `cron.schedule` records them
+/// ([`crate::generator::sql::versions::cron_job_database`]).
 async fn read_cron_jobs(conn: &mut PgConnection) -> Result<Vec<DbCronJob>> {
     if !cron_available(conn).await? {
         return Ok(Vec::new());
     }
-    let rows: Vec<(Option<String>, String, String, bool)> = sqlx::query_as(
+    let sql = format!(
         "SELECT jobname::text, schedule::text, command::text, active
          FROM cron.job
-         WHERE database = current_database()
+         WHERE database = {}
          ORDER BY jobname, jobid",
-    )
-    .fetch_all(&mut *conn)
-    .await?;
+        crate::generator::sql::versions::cron_job_database()
+    );
+    let rows: Vec<(Option<String>, String, String, bool)> =
+        sqlx::query_as(&sql).fetch_all(&mut *conn).await?;
     Ok(rows
         .into_iter()
         .map(|(name, schedule, command, active)| DbCronJob {

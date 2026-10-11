@@ -52,7 +52,7 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
-    let pool = connect_db(&url).await?;
+    let pool = connect_preview_db(&url).await?;
     // The plan a push would apply: the differ's operations and, under `reconcile`, what the
     // ledger would do about the kinds it owns.
     let plan = crate::push::plan(&pool, &ast, &req.schema)
@@ -67,7 +67,7 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
-    let pool = connect_db(&url).await?;
+    let pool = connect_preview_db(&url).await?;
     // The same plan a push would apply, returned as a file instead.
     let plan = crate::push::plan(&pool, &ast, &req.schema)
         .await
@@ -90,6 +90,12 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         tracing::warn!("{}", crate::state::migration_history::NO_CACHE_NOTICE);
     }
 
+    // A reused name is refused before anything is planned (E10).
+    if let Some(name) = &req.name {
+        crate::state::migration_history::assert_name_unused(&pool, name)
+            .await
+            .map_err(engine_error)?;
+    }
     // A refusal the caller can act on is a 409 naming the tables, not a 500.
     let plan = push::prepare(&pool, &ast, &req.schema)
         .await
@@ -223,12 +229,9 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
 
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    for col_sql in crate::state::migration_history::ensure_all_migration_columns_sql() {
-        sqlx::raw_sql(&col_sql)
-            .execute(&pool)
-            .await
-            .map_err(engine_error)?;
-    }
+    crate::state::migration_history::bootstrap_internal_state(&pool)
+        .await
+        .map_err(refusal_error)?;
     if let Some(name) = req.name.filter(|n| !n.trim().is_empty()) {
         let sources = crate::state::migration_history::load_migration_sources(&pool, &name)
             .await
@@ -258,13 +261,8 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
 pub async fn rollback(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    for col_sql in crate::state::migration_history::ensure_all_migration_columns_sql() {
-        sqlx::raw_sql(&col_sql)
-            .execute(&pool)
-            .await
-            .map_err(engine_error)?;
-    }
-    // Refused with `engine_busy` while another writer holds the engine's lock.
+    // Bootstraps first, and is refused with `engine_busy` while another writer holds the engine's
+    // lock.
     let result = crate::state::migration_history::apply_rollback(&pool, &req.schema)
         .await
         .map_err(refusal_error)?;
@@ -332,7 +330,7 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
-    let pool = connect_db(&url).await?;
+    let pool = connect_preview_db(&url).await?;
     let report = if req.rebaseline {
         crate::inspect::rebaseline(&pool, &ast, &req.schema, req.accept_access_drift).await
     } else {
@@ -448,9 +446,17 @@ fn parse_ast(
 }
 
 async fn connect_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse>)> {
-    PgPool::connect(url)
+    crate::db::connect(url)
         .await
-        .map_err(|e| engine_error(anyhow::anyhow!("Failed to connect to database: {e}")))
+        .map_err(|e| engine_error(format!("{e:#}")))
+}
+
+/// [`connect_db`] for a preview (`diff`, `migrate`, `doctor`), whose reads give up on a lock
+/// within seconds (`crate::db::connect_for_preview`).
+async fn connect_preview_db(url: &str) -> Result<PgPool, (StatusCode, Json<ErrorResponse>)> {
+    crate::db::connect_for_preview(url)
+        .await
+        .map_err(|e| engine_error(format!("{e:#}")))
 }
 
 fn resolve_db_request_url(req: &DbRequest) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
@@ -590,7 +596,7 @@ mod tests {
     #[test]
     fn an_engine_busy_refusal_is_a_409_with_its_reason() {
         use anyhow::Context;
-        let refused: anyhow::Result<()> = Err(crate::push::EngineBusy.into());
+        let refused: anyhow::Result<()> = Err(crate::push::EngineBusy::Running.into());
         let (status, Json(body)) = super::refusal_error(refused.context("push").unwrap_err());
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(body.reason, Some("engine_busy"));

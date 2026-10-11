@@ -349,3 +349,52 @@ async fn a_layer_index_changed_by_hand_is_put_back() {
     })
     .await;
 }
+
+/// A2-N1: in a database that has `pg_cron` but is not `cron.database_name` (a branch, a template
+/// copy, a restore under a new name), `cron.schedule` records `cron.database_name` as the job's
+/// database. The engine looked its jobs up by `current_database()`, so every push of a versioned
+/// schema failed after applying: `cron_job .supatype-prune-versions was not found in the catalog`.
+///
+/// pg_cron refuses `CREATE EXTENSION` outside `cron.database_name`, except in a database named
+/// `contrib_regression` (its own test database), which is exactly that case.
+#[tokio::test]
+async fn a_versioned_push_applies_where_pg_cron_runs_for_another_database() {
+    let Ok(admin_url) = std::env::var("DATABASE_URL") else {
+        assert!(!common::force_integration_tests(), "needs DATABASE_URL");
+        return;
+    };
+    let admin = PgPool::connect(&admin_url).await.unwrap();
+    for make in [
+        "DROP DATABASE IF EXISTS contrib_regression WITH (FORCE)",
+        "CREATE DATABASE contrib_regression",
+    ] {
+        sqlx::raw_sql(make).execute(&admin).await.unwrap();
+    }
+    let url = common::database_url_with_name(&admin_url, "contrib_regression");
+    let pool = PgPool::connect(&url).await.unwrap();
+    let ran = async {
+        sqlx::raw_sql("CREATE EXTENSION pg_cron")
+            .execute(&pool)
+            .await?;
+        let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
+        let outcome = common::push(&pool, &ast).await;
+        let jobs: Vec<String> = sqlx::query_scalar("SELECT jobname FROM cron.job ORDER BY 1")
+            .fetch_all(&pool)
+            .await?;
+        anyhow::Ok((outcome, jobs))
+    }
+    .await;
+    pool.close().await;
+    let _ = sqlx::raw_sql("DROP DATABASE IF EXISTS contrib_regression WITH (FORCE)")
+        .execute(&admin)
+        .await;
+    let (outcome, jobs) = ran.expect("pg_cron in contrib_regression");
+    assert!(
+        matches!(outcome, Ok(push::Outcome::Applied { .. })),
+        "{outcome:?}"
+    );
+    assert_eq!(
+        jobs,
+        ["supatype-prune-versions", "supatype-scheduled-publish"]
+    );
+}

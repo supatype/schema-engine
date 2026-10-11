@@ -202,7 +202,9 @@ async fn dashboard_views_are_for_service_role_and_members_only() {
 }
 
 /// A database bootstrapped by an earlier engine has the old grants on objects `CREATE OR REPLACE`
-/// and `CREATE TABLE IF NOT EXISTS` leave alone. The next push has to take them away.
+/// and `CREATE TABLE IF NOT EXISTS` leave alone. The next push has to take them away. That engine
+/// recorded no bootstrap version (`_supatype.engine_bootstrap` came later), which is what makes
+/// this engine run its bootstrap, Studio's objects included, on the first push after the upgrade.
 #[tokio::test]
 async fn a_push_takes_back_the_grants_an_earlier_engine_made() {
     common::with_integration_pool(|pool| async move {
@@ -210,7 +212,8 @@ async fn a_push_takes_back_the_grants_an_earlier_engine_made() {
         sqlx::raw_sql(
             "GRANT EXECUTE ON FUNCTION supatype.daily_content_creates(text, integer) TO PUBLIC, anon;
              GRANT SELECT, INSERT, UPDATE, DELETE ON supatype.dashboard_views TO anon;
-             ALTER TABLE supatype.dashboard_views DISABLE ROW LEVEL SECURITY;",
+             ALTER TABLE supatype.dashboard_views DISABLE ROW LEVEL SECURITY;
+             DROP TABLE _supatype.engine_bootstrap;",
         )
         .execute(&pool)
         .await
