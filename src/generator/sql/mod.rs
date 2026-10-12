@@ -9,6 +9,7 @@ pub mod migration_errors;
 pub mod online;
 pub mod rls;
 pub mod rollback;
+pub mod settled;
 pub mod sso;
 pub mod storage;
 pub mod triggers;

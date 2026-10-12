@@ -29,7 +29,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbRlsPoli
         Option<String>,
         Option<String>,
         Option<String>,
-    )> = sqlx::query_as(
+    )> = sqlx::query_as(&format!(
         "SELECT c.relname, p.polname, p.polcmd::text,
                     p.polpermissive,
                     pg_get_expr(p.polqual, p.polrelid),
@@ -38,9 +38,10 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbRlsPoli
              FROM pg_policy p
              JOIN pg_class c ON c.oid = p.polrelid
              JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname = $1
+             WHERE n.nspname = $1 AND {}
              ORDER BY c.relname, p.polname",
-    )
+        super::readable("p.polrelid"),
+    ))
     .bind(schema)
     .fetch_all(&mut *conn)
     .await?;

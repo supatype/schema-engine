@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use crate::generator::sql::{auth_functions, field_views};
+use crate::generator::sql::{auth_functions, field_views, versions};
 use crate::introspector::fingerprint::{ObjectKind, REPLICA_IDENTITY};
 
 use super::ObjectKey;
@@ -821,6 +821,13 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
         return attribute(schema, &executed, &mut Context::default());
     }
     let tagged = |tag: &str| h.starts_with(&format!("DO ${tag}$"));
+    if tagged(versions::RLS_ON_TAG) {
+        // Row-level security turned on where it is off: the statement it executes names the table.
+        let Some(at) = h.find("ALTER TABLE ") else {
+            return Attribution::Unknown;
+        };
+        return attribute(schema, &h[at..], &mut Context::default());
+    }
     if tagged(auth_functions::AUTH_SCHEMA_USAGE_TAG) {
         return Attribution::Object(key(ObjectKind::Schema, "auth", "", "auth"));
     }

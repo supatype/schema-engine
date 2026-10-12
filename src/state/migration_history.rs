@@ -1060,40 +1060,89 @@ fn without_transaction_control(sql: &str) -> String {
 /// and committed even when the rollback was then refused (E36).
 pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResult> {
     bootstrap_internal_state(pool).await?;
-    let mut tx = crate::push::begin_writer(pool).await?;
-    // The history is one project's; rolling it back from another would undo that project's
-    // migration and record this schema as the database's.
-    assert_project_schema_on(&mut tx, schema).await?;
-    let latest = load_latest_applied_migration(&mut tx)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!("no_applied_migration: No applied migration to roll back")
-        })?;
-    let sql_down = latest
-        .sql_down
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!("no_rollback_sql: Migration has no rollback SQL (metadata-only push?)")
-        })?;
-    let prior = load_prior_applied_migration(&mut tx, latest.id).await?;
-    let left = undo_migration(&mut tx, &latest, &sql_down, schema).await?;
-    restore_studio_metadata(&mut tx, prior.as_ref()).await?;
-    let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
-    save_schema_state(&mut *tx, &new_state).await?;
-    tx.commit().await?;
-    Ok(rolled_back(&latest.name, prior, &left))
+    // A person is waiting: a lock it cannot take at once is named, not retried (LK1).
+    let (mut tx, pid) = crate::push::begin_watched_writer(pool).await?;
+    let work = async move {
+        // The history is one project's; rolling it back from another would undo that project's
+        // migration and record this schema as the database's.
+        assert_project_schema_on(&mut tx, schema).await?;
+        let latest = load_latest_applied_migration(&mut tx)
+            .await?
+            .ok_or(RollbackRefused::NoAppliedMigration)?;
+        let sql_down = latest
+            .sql_down
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .ok_or(RollbackRefused::NoRollbackSql)?;
+        let prior = load_prior_applied_migration(&mut tx, latest.id).await?;
+        let (left, index_drops) = undo_migration(&mut tx, &latest, &sql_down, schema).await?;
+        restore_studio_metadata(&mut tx, prior.as_ref()).await?;
+        let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
+        save_schema_state(&mut *tx, &new_state).await?;
+        tx.commit().await?;
+        Ok((rolled_back(&latest.name, prior, &left), index_drops))
+    };
+    let (result, index_drops) = crate::online::fail_fast(pool, pid, "rollback", work).await?;
+    crate::online::drop_concurrently(pool, &index_drops).await?;
+    Ok(result)
 }
 
+/// A rollback with nothing to undo (CL3): told apart by its reason, not its wording. The message
+/// keeps the reason as its first word, as it always has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollbackRefused {
+    NoAppliedMigration,
+    NoRollbackSql,
+}
+
+impl RollbackRefused {
+    pub fn reason(self) -> &'static str {
+        match self {
+            RollbackRefused::NoAppliedMigration => "no_applied_migration",
+            RollbackRefused::NoRollbackSql => "no_rollback_sql",
+        }
+    }
+}
+
+impl std::fmt::Display for RollbackRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let said = match self {
+            RollbackRefused::NoAppliedMigration => "No applied migration to roll back",
+            RollbackRefused::NoRollbackSql => "Migration has no rollback SQL (metadata-only push?)",
+        };
+        write!(f, "{}: {said}", self.reason())
+    }
+}
+
+impl std::error::Error for RollbackRefused {}
+
+/// The stable name a caller matches a [`NoSchemaSnapshot`] refusal on (CL3).
+pub const NO_SCHEMA_SNAPSHOT: &str = "no_schema_snapshot";
+
+/// A migration whose schema sources were asked for and that recorded none. The message keeps the
+/// wording callers matched on before the reason existed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoSchemaSnapshot {
+    pub name: String,
+}
+
+impl std::fmt::Display for NoSchemaSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Migration {} has no schema snapshot", self.name)
+    }
+}
+
+impl std::error::Error for NoSchemaSnapshot {}
+
 /// Run `sql_down` for `migration`, put the ledger back as it was before it and mark it rolled
-/// back. Returns the objects left as they are: released or recorded again since the push, so no
-/// longer the push's to undo.
+/// back. Returns the objects left as they are (released or recorded again since the push, so no
+/// longer the push's to undo), and the indexes to drop concurrently once `tx` has committed (LK7).
 async fn undo_migration(
     tx: &mut PgConnection,
     migration: &LatestMigrationRow,
     sql_down: &str,
     schema: &str,
-) -> Result<Vec<crate::desired::ObjectKey>> {
+) -> Result<(Vec<crate::desired::ObjectKey>, Vec<String>)> {
     let id = migration.id;
     // Both tables exist on any database a push bootstrapped since; asserted here for one
     // bootstrapped before the undo table was.
@@ -1110,17 +1159,30 @@ async fn undo_migration(
     let leave = crate::ledger::undo::rewritten_since(tx, id).await?;
     let sparing = crate::ledger::undo::sparing(&migration.name, sql_down, schema, &leave)?;
     let (sql_down, left) = crate::ledger::undo::leaving_alone(sql_down, schema, &sparing.leave);
+    let (sql_down, index_drops) = crate::online::concurrent_drops(&sql_down);
     (&mut *tx)
         .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
+        .map_err(|e| {
+            // The database error stays the cause, so a lock not taken is told apart (LK1).
+            let said = format!("Failed to apply rollback SQL: {e}");
+            anyhow::Error::from(e).context(said)
+        })?;
     crate::ledger::undo::restore(tx, id).await?;
     crate::ledger::delete(tx, &sparing.with_their_table).await?;
-    let mark_sql = format!(
-        "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = $1"
-    );
-    sqlx::query(&mark_sql).bind(id).execute(&mut *tx).await?;
-    Ok(left)
+    sqlx::query(&mark_rolled_back_sql("$1"))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    Ok((left, index_drops))
+}
+
+/// Marks the migration whose id `id` gives rolled back: a parameter, or for a `migrate --record`
+/// file's rollback section, a subquery naming it (HI2).
+pub fn mark_rolled_back_sql(id: &str) -> String {
+    format!(
+        "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = {id}"
+    )
 }
 
 /// Studio reads the schema of the migration now in force: the one before the rolled-back push.
@@ -1349,13 +1411,21 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     if recorded.as_deref() == Some(version.as_str()) {
         return Ok(());
     }
-    let mut tx = crate::push::begin_writer(pool).await?;
-    // Another writer may have run it between the read and the lock.
-    if recorded_bootstrap(&mut tx).await?.as_deref() != Some(version.as_str()) {
-        run_bootstrap(&mut tx, &version).await?;
-    }
-    tx.commit().await.context("commit the bootstrap")?;
-    Ok(())
+    // A push or `dev` runs it, and nobody is at a prompt: a lock it cannot take is tried again,
+    // as a push's is (LK1).
+    let version = version.as_str();
+    crate::online::retrying("bootstrap", || async {
+        let (mut tx, pid) = crate::push::begin_watched_writer(pool).await?;
+        let work = async move {
+            // Another writer may have run it between the read and the lock.
+            if recorded_bootstrap(&mut tx).await?.as_deref() != Some(version) {
+                run_bootstrap(&mut tx, version).await?;
+            }
+            tx.commit().await.context("commit the bootstrap")
+        };
+        crate::online::fail_fast(pool, pid, "bootstrap", work).await
+    })
+    .await
 }
 
 /// The bootstrap, run in `tx`, recorded as `version`. `migrate_file` runs it too, in the

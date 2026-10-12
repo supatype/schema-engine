@@ -59,10 +59,34 @@ use crate::state::database_state::DatabaseState;
 /// Schema the views live in. PostgREST is pointed here instead of the managed schema.
 pub const VIEW_SCHEMA: &str = "api";
 
-/// The role that owns the views and their write triggers, and the only one holding rows of the
-/// base tables under tier 2. `NOLOGIN NOBYPASSRLS`: nobody connects as it, and every policy
-/// applies to it.
+/// The name every database's view owner shares the start of. Until TI2 it was the whole name: one
+/// role for the server, so on a shared server every project granted its base tables to the same
+/// role, and every project's pushing role was a member of it.
 pub const API_OWNER: &str = "supatype_api_owner";
+
+/// The role that owns the views and their write triggers in the database named `database`, and the
+/// only one holding rows of the base tables under tier 2: [`API_OWNER`] and the start of a hash of
+/// the name, one role per database (TI2). `NOLOGIN NOBYPASSRLS`: nobody connects as it, and every
+/// policy applies to it.
+pub fn api_owner_for(database: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let hash = hex::encode(Sha256::digest(database.as_bytes()));
+    format!("{API_OWNER}_{}", &hash[..10])
+}
+
+/// Whether `role` is a view owner: a database's own, or the shared one an older engine made.
+pub fn is_api_owner(role: &str) -> bool {
+    role == API_OWNER
+        || role
+            .strip_prefix(API_OWNER)
+            .and_then(|rest| rest.strip_prefix('_'))
+            .is_some_and(|hash| hash.len() == 10 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// The owner a plan's views are made for: every entry carries it.
+pub fn plan_owner(plan: &[FieldViewTable]) -> &str {
+    plan.first().map_or(API_OWNER, |entry| entry.owner.as_str())
+}
 
 /// The dollar tag of the block that makes [`API_OWNER`] and gives it what the views need.
 /// Statement attribution recognises the block by it.
@@ -88,23 +112,24 @@ fn service_role_exempt() -> String {
 }
 
 /// `CREATE SCHEMA`, the API roles' usage, and the owner role with what it needs.
-fn preamble(schema: &str) -> String {
+fn preamble(schema: &str, owner: &str) -> String {
     let api = quote_ident(VIEW_SCHEMA);
     format!(
         "CREATE SCHEMA IF NOT EXISTS {api};\n\
          GRANT USAGE ON SCHEMA {api} TO anon, authenticated, service_role;\n\n\
          {}\n\n",
-        owner_block(schema)
+        owner_block(schema, owner)
     )
 }
 
-/// Makes [`API_OWNER`] where it does not exist, refuses one that could log in or bypass row-level
-/// security, lets the pushing role own objects as it, and grants it the schemas the views read and
-/// the claim readers the write triggers call as it. Idempotent, and safe against another database
-/// of the same cluster making the role at the same moment.
-fn owner_block(schema: &str) -> String {
-    let owner = quote_ident(API_OWNER);
-    let owner_lit = quote_literal(API_OWNER);
+/// Makes `owner`, this database's view owner, where it does not exist, refuses one that could log
+/// in or bypass row-level security, lets the pushing role own objects as it, and grants it the
+/// schemas the views read and the claim readers the write triggers call as it. Idempotent, and
+/// safe against another database of the same cluster making a role at the same moment. A
+/// database the shared [`API_OWNER`] served is moved to its own ([`from_shared_owner`]).
+fn owner_block(schema: &str, owner_name: &str) -> String {
+    let owner = quote_ident(owner_name);
+    let owner_lit = quote_literal(owner_name);
     let claims = quote_ident(CLAIMS_SCHEMA);
     let readers = crate::generator::sql::auth_functions::CLAIM_READERS
         .iter()
@@ -112,11 +137,11 @@ fn owner_block(schema: &str) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let refused = raise_message(&format!(
-        "role {API_OWNER} can log in or bypass row-level security"
+        "role {owner_name} can log in or bypass row-level security"
     ));
     let hint = quote_literal(&format!(
         "The api views and their write triggers run as this role. As a superuser: ALTER ROLE \
-         {API_OWNER} NOLOGIN NOBYPASSRLS NOSUPERUSER;"
+         {owner_name} NOLOGIN NOBYPASSRLS NOSUPERUSER;"
     ));
     format!(
         "DO ${OWNER_TAG}$\nBEGIN\n\
@@ -141,9 +166,29 @@ fn owner_block(schema: &str) -> String {
          \x20 IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN\n\
          \x20   GRANT USAGE ON SCHEMA \"auth\" TO {owner};\n\
          \x20 END IF;\n\
+         {shared}\
          END\n${OWNER_TAG}$;",
         api = quote_ident(VIEW_SCHEMA),
         project = quote_ident(schema),
+        shared = from_shared_owner(owner_name),
+    )
+}
+
+/// The upgrade from the shared [`API_OWNER`] (TI2), inside [`owner_block`]: what it owns in this
+/// database goes to `owner`, and what it holds here is taken back, so it reaches nothing of this
+/// database. The role itself is the server's and a push never drops it: another database may still
+/// use it until its own next push, and Postgres refuses the rest of a transaction that dropped a
+/// role its own session was a member of ("could not find tuple for role"). Once every database has
+/// moved, an operator drops it. Only where the pushing role may act as it; otherwise it is left.
+fn from_shared_owner(owner: &str) -> String {
+    let shared = quote_literal(API_OWNER);
+    format!(
+        "\x20 IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {shared})\n\
+         \x20    AND pg_has_role(current_user, {shared}, 'USAGE') THEN\n\
+         \x20   EXECUTE format('REASSIGN OWNED BY %I TO %I', {shared}, {owner});\n\
+         \x20   EXECUTE format('DROP OWNED BY %I', {shared});\n\
+         \x20 END IF;\n",
+        owner = quote_literal(owner),
     )
 }
 
@@ -156,8 +201,8 @@ fn owner_block(schema: &str) -> String {
 /// granted by name (an affordance function since H2, the drafts layer's visibility check) would
 /// fail every write. Run after the drafts layer, which makes some of them. The owner gains nothing a
 /// caller could use: nobody connects as it, and it only runs the triggers' own statements.
-pub fn owner_reach_sql(schema: &str) -> String {
-    let owner_lit = quote_literal(API_OWNER);
+pub fn owner_reach_sql(schema: &str, owner: &str) -> String {
+    let owner_lit = quote_literal(owner);
     format!(
         "DO ${OWNER_REACH_TAG}$\nDECLARE\n  f regprocedure;\nBEGIN\n\
          \x20 FOR f IN\n\
@@ -290,6 +335,9 @@ fn ast_columns(model: &ModelAst) -> Vec<String> {
 #[serde(rename_all = "camelCase")]
 pub struct FieldViewTable {
     pub table: String,
+    /// The role its view is owned by: this database's ([`api_owner_for`]).
+    #[serde(default)]
+    pub owner: String,
     pub columns: Vec<String>,
     /// Primary key, for the write trigger's row identity. Empty means the view is read-only.
     pub key: Vec<String>,
@@ -298,6 +346,7 @@ pub struct FieldViewTable {
 /// What the `api` layer needs to cover, read from the database (and from the schema for tables this
 /// migration is about to create).
 pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTable> {
+    let owner = api_owner_for(&db.database);
     let mut plan = Vec::new();
     for model in &ast.models {
         let table = db_table_name(model);
@@ -322,6 +371,7 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
 
         plan.push(FieldViewTable {
             table: table.to_string(),
+            owner: owner.clone(),
             columns,
             key,
         });
@@ -329,7 +379,7 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
     plan.extend(
         ast.junction_tables
             .iter()
-            .map(|j| junction_view_plan(j, db)),
+            .map(|j| junction_view_plan(j, db, &owner)),
     );
     plan
 }
@@ -337,7 +387,11 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
 /// A many-to-many junction's view: its two key columns, which are also its primary key. Without
 /// one, tier 2 would serve no many-to-many relation at all, over REST or GraphQL, where tier 1
 /// serves the junction table.
-fn junction_view_plan(junction: &JunctionTableAst, db: &DatabaseState) -> FieldViewTable {
+fn junction_view_plan(
+    junction: &JunctionTableAst,
+    db: &DatabaseState,
+    owner: &str,
+) -> FieldViewTable {
     let declared = vec![junction.fk_a.clone(), junction.fk_b.clone()];
     let columns = match db.tables.iter().find(|t| t.name == junction.name) {
         Some(t) => t.columns.iter().map(|c| c.name.clone()).collect(),
@@ -349,6 +403,7 @@ fn junction_view_plan(junction: &JunctionTableAst, db: &DatabaseState) -> FieldV
     };
     FieldViewTable {
         table: junction.name.clone(),
+        owner: owner.to_string(),
         columns,
         key,
     }
@@ -370,7 +425,7 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
     if plan.is_empty() {
         return String::new();
     }
-    let mut out = preamble(schema);
+    let mut out = preamble(schema, plan_owner(plan));
     let names = crate::managed::ObjectNames::for_schema(ast);
 
     for entry in plan {
@@ -483,9 +538,9 @@ fn view_head(entry: &FieldViewTable, projections: &[String], schema: &str) -> St
          ALTER VIEW {view} OWNER TO {};\n",
         projections.join(",\n"),
         quote_qualified(schema, &entry.table),
-        quote_ident(API_OWNER),
+        quote_ident(&entry.owner),
     );
-    out.push_str(&view_setup(schema, &entry.table));
+    out.push_str(&view_setup(schema, &entry.table, &entry.owner));
     out
 }
 
@@ -493,7 +548,8 @@ fn view_head(entry: &FieldViewTable, projections: &[String], schema: &str) -> St
 fn view_tail(entry: &FieldViewTable, schema: &str) -> String {
     format!(
         "{}\n\n",
-        crate::generator::sql::grants::api_owner_grant(&entry.table).create_sql(schema)
+        crate::generator::sql::grants::api_owner_grant(&entry.table, &entry.owner)
+            .create_sql(schema)
     )
 }
 
@@ -527,7 +583,7 @@ fn projection(
 /// table is created a few statements earlier, and a column the schema does not declare keeps its
 /// default too. A sequence default (`nextval`) is left to the trigger, which draws it as the owner:
 /// a caller holds no privilege on the table's sequences.
-fn view_setup(schema: &str, table: &str) -> String {
+fn view_setup(schema: &str, table: &str, owner: &str) -> String {
     let base = quote_literal(&quote_qualified(schema, table));
     let view = quote_literal(&quote_qualified(VIEW_SCHEMA, table));
     format!(
@@ -552,7 +608,7 @@ fn view_setup(schema: &str, table: &str) -> String {
          \x20   EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO %I', d.seq, {owner});\n\
          \x20 END LOOP;\n\
          END\n${VIEW_SETUP_TAG}$;\n",
-        owner = quote_literal(API_OWNER),
+        owner = quote_literal(owner),
     )
 }
 
@@ -769,7 +825,7 @@ impl WriteTrigger<'_> {
 
     fn render(&self) -> String {
         let function = quote_qualified(VIEW_SCHEMA, &self.names.write_function(&self.entry.table));
-        let owner = quote_ident(API_OWNER);
+        let owner = quote_ident(&self.entry.owner);
         format!(
             "CREATE OR REPLACE FUNCTION {function}() RETURNS trigger\n\
              LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $trg$\n\

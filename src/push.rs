@@ -104,8 +104,9 @@ impl std::fmt::Display for EngineBusy {
                  again. Nothing was applied."
             }
             EngineBusy::LandedSincePlan => {
-                "another push, adopt, rebaseline or rollback was applied to this database while \
-                 this one was being planned; try again. Nothing was applied."
+                "another change landed on this database (a push, adopt, rebaseline or rollback) \
+                 after this one was planned, so nothing was applied. Run it again to plan it \
+                 against the database as it is now."
             }
         })
     }
@@ -418,7 +419,7 @@ pub(crate) async fn plan_on<'a>(
     // applied. Checked here, before the CLI asks anything about a push it is going to refuse.
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
-    let sizes = table_sizes(conn, schema, &diff).await?;
+    let sizes = table_sizes(conn, schema, &diff, &reconcile).await?;
     let estimates: BTreeMap<String, i64> = sizes.iter().map(|(t, s)| (t.clone(), s.rows)).collect();
     diff.rewrites = rewrites::rewrites(&diff, &estimates);
     let flagged: Vec<String> = diff.rewrites.iter().map(TableRewrite::message).collect();
@@ -794,7 +795,7 @@ fn desired_here(
         ObjectKind::TableGrant => {
             d.key.name == grants::PUBLIC
                 || catalog.granted_roles.contains(&d.key.name)
-                || d.key.name == field_views::API_OWNER
+                || field_views::is_api_owner(&d.key.name)
         }
         _ => true,
     });
@@ -822,6 +823,7 @@ fn sequences_as_created(
             .map(|s| s.name.clone())
     };
     let owner = |d: &crate::desired::DesiredObject| d.structure.get("owned_by").cloned();
+    let before: Vec<String> = desired.iter().map(|d| d.key.name.clone()).collect();
     let mut unresolved = Vec::new();
     for (i, d) in desired.iter_mut().enumerate() {
         if d.key.kind != ObjectKind::Sequence || d.key.schema != schema {
@@ -858,6 +860,35 @@ fn sequences_as_created(
         }
         let name = taken.choose(table, Some(column), "seq");
         rename_sequence(d, schema, &owner, &name);
+    }
+    sequence_grants_follow(desired, &before, schema);
+}
+
+/// Each sequence's grants under the name its sequence was given above (`before` holds every
+/// object's name before that).
+fn sequence_grants_follow(
+    desired: &mut [crate::desired::DesiredObject],
+    before: &[String],
+    schema: &str,
+) {
+    let renamed: BTreeMap<String, String> = desired
+        .iter()
+        .zip(before)
+        .filter(|(d, was)| d.key.kind == ObjectKind::Sequence && d.key.name != **was)
+        .map(|(d, was)| (was.clone(), d.key.name.clone()))
+        .collect();
+    for d in desired.iter_mut() {
+        if d.key.kind != ObjectKind::TableGrant || d.key.schema != schema {
+            continue;
+        }
+        let Some(name) = renamed.get(&d.key.parent) else {
+            continue;
+        };
+        let was = crate::sql_quote::quote_qualified(schema, &d.key.parent);
+        d.create_sql = d
+            .create_sql
+            .replace(&was, &crate::sql_quote::quote_qualified(schema, name));
+        d.key.parent = name.clone();
     }
 }
 
@@ -896,7 +927,7 @@ pub struct NarrowedColumns {
     /// `(table, column)` adopted while undeclared, in the table's column order.
     adopted: Vec<(String, String)>,
     /// `(table, column, roles)` with no row, and the narrowed roles it gets no write grant for.
-    pub ungranted: Vec<(String, String, Vec<&'static str>)>,
+    pub ungranted: Vec<(String, String, Vec<String>)>,
 }
 
 impl NarrowedColumns {
@@ -914,7 +945,7 @@ impl NarrowedColumns {
                 .map(|r| r.status)
         };
         let mut adopted = Vec::new();
-        let mut ungranted: Vec<(String, String, Vec<&'static str>)> = Vec::new();
+        let mut ungranted: Vec<(String, String, Vec<String>)> = Vec::new();
         for grant in grants::table_grants(ast, views(diff)) {
             if grant.narrowed.is_empty() {
                 continue;
@@ -933,8 +964,8 @@ impl NarrowedColumns {
                         .iter_mut()
                         .find(|(t, c, _)| (t, c) == (&at.0, &at.1))
                     {
-                        Some((_, _, roles)) => roles.push(grant.role),
-                        None => ungranted.push((at.0, at.1, vec![grant.role])),
+                        Some((_, _, roles)) => roles.push(grant.role.to_string()),
+                        None => ungranted.push((at.0, at.1, vec![grant.role.to_string()])),
                     },
                     _ => {}
                 }
@@ -987,7 +1018,7 @@ impl NarrowedColumns {
 
 /// What push and doctor say of a column added outside Supatype on a table whose write grant a
 /// field rule narrows.
-pub fn ungranted_message(table: &str, column: &str, roles: &[&str]) -> String {
+pub fn ungranted_message(table: &str, column: &str, roles: &[String]) -> String {
     format!(
         "column {table}.{column} was added outside Supatype and has no write grant for {}; run \
          `supatype adopt --key column:{table}.{column}` to include it",
@@ -1130,7 +1161,12 @@ fn with_grants_of_nothing<'k>(
     let present: BTreeSet<ObjectKey> = live.iter().map(ObjectFingerprint::key).collect();
     let relations: BTreeSet<(&str, &str)> = live
         .iter()
-        .filter(|f| matches!(f.kind, ObjectKind::Table | ObjectKind::View))
+        .filter(|f| {
+            matches!(
+                f.kind,
+                ObjectKind::Table | ObjectKind::View | ObjectKind::Sequence
+            )
+        })
         .map(|f| (f.schema.as_str(), f.name.as_str()))
         .collect();
     let gone = |k: &ObjectKey| {
@@ -1255,12 +1291,19 @@ async fn forget_released_on_missing_tables(
         .map(|m| m.table_name())
         .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
         .collect();
-    let mut tx = begin_writer(pool).await?;
-    migration_history::assert_project_schema_on(&mut tx, schema).await?;
-    ledger::forget_released_on_missing_tables(&mut tx, schema, &declared).await?;
-    tx.commit()
-        .await
-        .context("commit the removal of released ledger rows")
+    let declared = &declared;
+    crate::online::retrying("push", || async {
+        let (mut tx, pid) = begin_watched_writer(pool).await?;
+        let work = async move {
+            migration_history::assert_project_schema_on(&mut tx, schema).await?;
+            ledger::forget_released_on_missing_tables(&mut tx, schema, declared).await?;
+            tx.commit()
+                .await
+                .context("commit the removal of released ledger rows")
+        };
+        crate::online::fail_fast(pool, pid, "push", work).await
+    })
+    .await
 }
 
 /// Refuses a plan with a conflict: an object under a name the schema needs that Supatype did not
@@ -1317,7 +1360,13 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
 async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     // Rendered before anything is applied, so a schema whose versioned models have no stated
     // visibility fails the push rather than half-applying it.
-    let versions_sql = versions::render_versions_layer(&plan.ast, &plan.schema)?;
+    // Without what is in place as this push wants it: dropping and making again a policy or a
+    // trigger locks its table against every read and write (LK7).
+    let versions_sql = crate::generator::sql::settled::Settled::of(&plan.reconcile.actions, &[])
+        .leave_out(
+            &versions::render_versions_layer(&plan.ast, &plan.schema)?,
+            &plan.schema,
+        );
     let storage_sql = storage::generate(&plan.ast)?;
     // AST-only changes (widgets, labels) still need admin_config and the snapshot so Studio and
     // tooling see the latest schema without a DDL migration.
@@ -1627,7 +1676,7 @@ async fn within_transaction(
     let migration_id = record_push(tx, plan, rendered, &after, metadata).await?;
 
     // Checked last, with the rows just written, so it reads the database as the next push will.
-    let deferred = rendered.migration.after_commit.deferred_keys();
+    let deferred = rendered.migration.after_commit.unfinished_keys();
     let state = after_push(after, tx).await?;
     let check = differ::integrity::post_push(&plan.ast, &state, &deferred);
     if strict && !check.settled {
@@ -1884,32 +1933,39 @@ fn created_sequence(
 /// answering (frozen, or cut off with no reset) leaves it idle, holding the lock keys and every
 /// table lock it took (E33: 15 minutes to over 2 hours).
 const WRITER_IDLE_TIMEOUT: &str = "60s";
-/// How long one of a writer's statements may wait for a lock. A backend waiting on a lock does not
-/// read its socket, so it cannot see that its client was killed; this bounds that wait, and the
-/// queue of app queries a waiting `ALTER` holds up behind it. A push waits far less on each of its
-/// attempts and tries again instead (`online::PUSH_LOCK_TIMEOUT`).
-const WRITER_LOCK_TIMEOUT: &str = "30s";
+
 /// How often a writer's backend checks, while a statement runs, that its client is still there
 /// (Postgres 14 and later, on platforms that support it).
 const WRITER_CLIENT_CHECK: &str = "5s";
 
 /// A writer's transaction: bounded by the timeouts above, holding [`ENGINE_LOCK_ID`] (or refused
 /// with [`EngineBusy`]) and then [`PUSH_LOCK_ID`]. Push, adopt, rebaseline, rollback and the
-/// bootstrap all begin here, so none of them can outlive a lost client.
+/// bootstrap all begin here, so none of them can outlive a lost client. Each waits for a lock as
+/// briefly as a push's attempt does (`online::PUSH_LOCK_TIMEOUT`, LK1): a backend waiting on a
+/// lock cannot see that its client was killed, and every application query on that table queues
+/// behind it while it waits.
 pub(crate) async fn begin_writer(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
     let mut tx = pool
         .begin()
         .await
         .context("begin the writer's transaction")?;
-    bound_writer(&mut tx, WRITER_LOCK_TIMEOUT).await?;
+    bound_writer(&mut tx, crate::online::PUSH_LOCK_TIMEOUT).await?;
     take_engine_lock(&mut tx).await?;
     take_push_lock(&mut tx).await?;
     Ok(tx)
 }
 
-/// `SET LOCAL` for the writer's timeouts, so they end with its transaction. A push's attempts
-/// wait `lock_timeout` for a lock, shorter than the other writers' [`WRITER_LOCK_TIMEOUT`]
-/// (`online::PUSH_LOCK_TIMEOUT`).
+/// [`begin_writer`] and its backend's pid, for `online::fail_fast` to name what it waits on.
+pub(crate) async fn begin_watched_writer(
+    pool: &PgPool,
+) -> Result<(Transaction<'_, Postgres>, i32)> {
+    let mut tx = begin_writer(pool).await?;
+    let pid = crate::online::backend_pid(&mut tx).await?;
+    Ok((tx, pid))
+}
+
+/// `SET LOCAL` for the writer's timeouts, so they end with its transaction: `lock_timeout` is how
+/// long each statement waits for a lock.
 pub(crate) async fn bound_writer(tx: &mut PgConnection, lock_timeout: &str) -> Result<()> {
     sqlx::query(
         "SELECT set_config('idle_in_transaction_session_timeout', $1, true),
@@ -2000,6 +2056,17 @@ pub(crate) async fn take_engine_lock(tx: &mut PgConnection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CC2: a push overtaken by another change says that change landed and to run it again,
+    /// rather than reading as a busy engine to wait for.
+    #[test]
+    fn an_overtaken_push_says_another_change_landed_and_to_run_it_again() {
+        let said = EngineBusy::LandedSincePlan.to_string();
+        assert!(said.contains("another change landed"), "{said}");
+        assert!(said.contains("Run it again"), "{said}");
+        assert!(said.contains("nothing was applied"), "{said}");
+        assert!(!said.contains("running"), "{said}");
+    }
 
     fn sequence(name: &str, owned_by: Option<&str>) -> catalog::DbSequence {
         catalog::DbSequence {

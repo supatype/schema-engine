@@ -973,13 +973,25 @@ impl<'a> Builder<'a> {
                 let structure = BTreeMap::from([("owned_by", format!("{table}.{column}"))]);
                 let create = sequence_owned_by_sql(self.schema, &name, table, &column);
                 let column_key = self.key(ObjectKind::Column, table, &column);
-                self.push(
-                    self.key(ObjectKind::Sequence, "", &name),
-                    structure,
-                    create,
-                    vec![column_key],
-                );
+                let sequence_key = self.key(ObjectKind::Sequence, "", &name);
+                self.push(sequence_key.clone(), structure, create, vec![column_key]);
+                if matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_)) {
+                    self.sequence_grants(model, &name, sequence_key);
+                }
             }
+        }
+    }
+
+    /// What each API role may do with a serial column's sequence: `USAGE` where the model's create
+    /// rule admits it (`grants::sequence_grant`), a ledger object like a table's grants, so a
+    /// change by hand is drift that decides access.
+    fn sequence_grants(&mut self, model: &ModelAst, sequence: &str, sequence_key: ObjectKey) {
+        for role in crate::generator::sql::grants::GRANTED_ROLES {
+            let grant = crate::generator::sql::grants::sequence_grant(model, sequence, role);
+            let key = self.key(ObjectKind::TableGrant, sequence, role);
+            let structure = BTreeMap::from([("privileges", grant.privilege_set())]);
+            let create = grant.create_sql(self.schema);
+            self.push(key, structure, create, vec![sequence_key.clone()]);
         }
     }
 
@@ -988,7 +1000,7 @@ impl<'a> Builder<'a> {
     /// nothing for these roles; the `api` views' privileges are re-asserted with the views.
     fn table_grants(&mut self, views: bool) {
         for grant in table_grants(self.ast, views) {
-            let key = self.key(ObjectKind::TableGrant, &grant.table, grant.role);
+            let key = self.key(ObjectKind::TableGrant, &grant.table, &grant.role);
             let structure = BTreeMap::from([("privileges", grant.privilege_set())]);
             let table = self.table_key(&grant.table);
             self.push(key, structure, grant.create_sql(self.schema), vec![table]);

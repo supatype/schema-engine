@@ -5,9 +5,10 @@
 //! (Postgres 11 and later), a dropped column, a rename. Some read or rewrite the whole table under
 //! a lock that stops every read and write until the push commits: a type change that is not
 //! binary-compatible, a column added with a volatile default or a generated value, `SET NOT NULL`
-//! with no validated check to prove it. On a large table that is an outage, so the plan says so
-//! with the table's estimated size, and a push of one on a table above [`CONSENT_ROWS`] needs the
-//! same consent a destructive change does.
+//! with no validated check to prove it (a push proves it with one on a table with rows, LK7, except
+//! where an identity change in the same operation needs the column `NOT NULL` first). On a large
+//! table that is an outage, so the plan says so with the table's estimated size, and a push of one
+//! on a table above [`CONSENT_ROWS`] needs the same consent a destructive change does.
 
 use std::collections::BTreeMap;
 
@@ -196,12 +197,7 @@ fn altered(changes: &serde_json::Value) -> Vec<(Work, String)> {
             ));
         }
     }
-    let not_null = changes
-        .get("nullability")
-        .and_then(|c| c.get("to"))
-        .and_then(|v| v.as_str())
-        == Some("not_null");
-    if not_null {
+    if becomes_not_null(changes) && !not_null_online(changes) {
         out.push((Work::Checks, "becomes NOT NULL".to_string()));
     }
     let generated = changes
@@ -212,6 +208,21 @@ fn altered(changes: &serde_json::Value) -> Vec<(Work, String)> {
         out.push((Work::Rewrites, "changes how it is generated".to_string()));
     }
     out
+}
+
+fn becomes_not_null(changes: &serde_json::Value) -> bool {
+    changes
+        .get("nullability")
+        .and_then(|c| c.get("to"))
+        .and_then(|v| v.as_str())
+        == Some("not_null")
+}
+
+/// Whether an `ALTER COLUMN` making the column `NOT NULL` proves it with a check validated after
+/// commit on a table with rows, so the lock it takes is momentary (LK7): every one, except where
+/// an identity change in the same operation needs the column `NOT NULL` before it.
+pub fn not_null_online(changes: &serde_json::Value) -> bool {
+    becomes_not_null(changes) && changes.get("identity").is_none()
 }
 
 /// Whether Postgres changes a column from `from` (its `udt_name`) to `to` (the type the schema
@@ -232,7 +243,8 @@ mod tests {
         assert!(binary_compatible("varchar", "text"));
         assert!(!binary_compatible("int4", "BIGINT"));
         let changes = serde_json::json!({ "type": { "from_udt": "int4", "to_pg": "BIGINT" },
-                                          "nullability": { "to": "not_null" } });
+                                          "nullability": { "to": "not_null" },
+                                          "identity": { "action": "add" } });
         assert_eq!(
             altered(&changes),
             vec![
@@ -243,6 +255,10 @@ mod tests {
                 (Work::Checks, "becomes NOT NULL".to_string()),
             ]
         );
+        // Without the identity change, NOT NULL is proved after commit and scans nothing under
+        // the lock.
+        let online = serde_json::json!({ "nullability": { "to": "not_null" } });
+        assert!(altered(&online).is_empty());
     }
 
     #[test]

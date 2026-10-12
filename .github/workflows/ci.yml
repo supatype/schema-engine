@@ -233,4 +233,11 @@ jobs:
             --test sql_quoting_tests \
             --test concurrency_tests \
             --test online_ddl_tests \
-            --test push_lock_retry_tests
+            --test push_lock_retry_tests \
+            --test needless_lock_tests \
+            --test writer_lock_wait_tests \
+            --test unanalysed_table_tests \
+            --test graphql_affordance_tests \
+            --test api_owner_role_tests \
+            --test doctor_notes_tests \
+            --test sequence_grant_tests

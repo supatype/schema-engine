@@ -1,6 +1,7 @@
 //! What runs once a push's transaction has committed: the keys and checks it added `NOT VALID`
-//! are validated, and the indexes it left are built with `CREATE INDEX CONCURRENTLY`, each
-//! recorded in the ledger once it is in place (IN-C 2).
+//! are validated, the columns it makes `NOT NULL` are proved and set, and the indexes it left are
+//! built with `CREATE INDEX CONCURRENTLY`, each recorded in the ledger once it is in place (IN-C 2,
+//! LK7).
 
 use std::collections::BTreeMap;
 
@@ -9,14 +10,16 @@ use sqlx::{Connection, Executor, PgConnection};
 
 use super::EngineSession;
 use crate::desired::ObjectKey;
+use crate::generator::sql::online::drop_concurrently_sql;
 use crate::generator::sql::online::{validate_sql, AfterCommit, ConcurrentIndex};
 use crate::introspector::fingerprint::ObjectFingerprint;
+use crate::introspector::fingerprint::ObjectKind;
 use crate::ledger::{self, LedgerRow};
-use crate::sql_quote::quote_qualified;
+use crate::sql_quote::{quote_literal, quote_qualified};
 
 /// How long a statement that runs after commit waits for a lock. Validation and a concurrent build
 /// take SHARE UPDATE EXCLUSIVE, which no read or write waits on, so a longer wait holds nobody up.
-const AFTER_COMMIT_LOCK_TIMEOUT: &str = "30s";
+pub(super) const AFTER_COMMIT_LOCK_TIMEOUT: &str = "30s";
 
 /// What the steps after commit could not do. The migration itself is applied.
 #[derive(Debug, Default)]
@@ -36,6 +39,9 @@ pub async fn run_after_commit(
     let mut unfinished = Unfinished::default();
     if !after.validations.is_empty() {
         validate(session, &after.validations, schema, &mut unfinished).await?;
+    }
+    if !after.not_null.is_empty() {
+        super::not_null::make_not_null(session, &after.not_null, schema, &mut unfinished).await?;
     }
     if !after.indexes.is_empty() {
         let built = build_indexes(session, &after.indexes, &mut unfinished).await?;
@@ -77,7 +83,11 @@ async fn validate(
 }
 
 /// Rewrites the live fingerprint and definition of the rows for `keys` from the catalog.
-async fn refresh_rows(conn: &mut PgConnection, keys: &[ObjectKey], schema: &str) -> Result<()> {
+pub(super) async fn refresh_rows(
+    conn: &mut PgConnection,
+    keys: &[ObjectKey],
+    schema: &str,
+) -> Result<()> {
     if keys.is_empty() {
         return Ok(());
     }
@@ -105,9 +115,9 @@ async fn live_fingerprints(
         .collect())
 }
 
-/// Builds each index concurrently, outside any transaction. An INVALID index left under its name
-/// (by an earlier build) is dropped first, and one this build leaves is dropped after it, so the
-/// next push starts clean. Returns the indexes built.
+/// Builds each index concurrently, outside any transaction, then runs what puts it in place. An
+/// INVALID index left under its name (by an earlier build) is dropped first, and one this build
+/// leaves is dropped after it, so the next push starts clean. Returns the indexes put in place.
 async fn build_indexes<'a>(
     session: &mut EngineSession,
     indexes: &'a [ConcurrentIndex],
@@ -117,22 +127,60 @@ async fn build_indexes<'a>(
     let was = set_lock_timeout(conn, AFTER_COMMIT_LOCK_TIMEOUT).await?;
     let mut built = Vec::new();
     for index in indexes {
-        drop_if_invalid(conn, &index.key).await?;
-        let ran = (&mut *conn).execute(sqlx::raw_sql(&index.build_sql)).await;
-        match ran {
-            Ok(_) => built.push(index),
+        let relation = quote_qualified(&index.key.schema, &index.built);
+        drop_if_invalid(conn, &relation).await?;
+        let ran = match (&mut *conn).execute(sqlx::raw_sql(&index.build_sql)).await {
+            Ok(_) => put_in_place(conn, index).await,
             Err(e) => {
-                drop_if_invalid(conn, &index.key).await?;
-                unfinished.failures.push(format!(
-                    "index {} could not be built: {e}. Nothing of it was left behind; the next \
-                     push builds it again",
-                    index.key.name
-                ));
+                drop_if_invalid(conn, &relation).await?;
+                Err(e.into())
             }
+        };
+        match ran {
+            Ok(()) => built.push(index),
+            Err(e) => unfinished.failures.push(format!(
+                "{} {} could not be built: {e:#}. Nothing of it was left behind; the next push \
+                 builds it again",
+                if index.key.kind == ObjectKind::Unique {
+                    "unique constraint"
+                } else {
+                    "index"
+                },
+                index.key.name
+            )),
         }
     }
     set_lock_timeout(conn, &was).await?;
     Ok(built)
+}
+
+/// Once `index` is built: its `then_sql` in one transaction that waits for its momentary lock no
+/// longer than a push does, then the index it replaced dropped concurrently. When the first fails
+/// the index just built is dropped, so the object stays as it was before the push.
+async fn put_in_place(conn: &mut PgConnection, index: &ConcurrentIndex) -> Result<()> {
+    if !index.then_sql.is_empty() {
+        let swap = format!(
+            "BEGIN;\nSET LOCAL lock_timeout = {};\n{}\nCOMMIT;",
+            quote_literal(super::PUSH_LOCK_TIMEOUT),
+            index.then_sql.join("\n")
+        );
+        if let Err(e) = (&mut *conn).execute(sqlx::raw_sql(&swap)).await {
+            let _ = (&mut *conn).execute(sqlx::raw_sql("ROLLBACK;")).await;
+            let built = quote_qualified(&index.key.schema, &index.built);
+            (&mut *conn)
+                .execute(sqlx::raw_sql(&drop_concurrently_sql(&built)))
+                .await
+                .with_context(|| format!("drop {built}, built but not put in place"))?;
+            return Err(e.into());
+        }
+    }
+    if let Some(old) = &index.drop_after {
+        (&mut *conn)
+            .execute(sqlx::raw_sql(&drop_concurrently_sql(old)))
+            .await
+            .with_context(|| format!("drop {old}, the index it replaced"))?;
+    }
+    Ok(())
 }
 
 /// Sets the session's lock timeout to `timeout`, returning what it was.
@@ -149,20 +197,19 @@ async fn set_lock_timeout(conn: &mut PgConnection, timeout: &str) -> Result<Stri
     Ok(was)
 }
 
-/// Drops the index `key` names when it is INVALID, without blocking writes to its table.
-async fn drop_if_invalid(conn: &mut PgConnection, key: &ObjectKey) -> Result<()> {
-    let relation = quote_qualified(&key.schema, &key.name);
+/// Drops the index `relation` (quoted and qualified) when it is INVALID, without blocking writes
+/// to its table.
+async fn drop_if_invalid(conn: &mut PgConnection, relation: &str) -> Result<()> {
     let invalid: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM pg_index WHERE indexrelid = to_regclass($1)
                          AND NOT indisvalid)",
     )
-    .bind(&relation)
+    .bind(relation)
     .fetch_one(&mut *conn)
     .await?;
     if invalid {
-        let drop = format!("DROP INDEX CONCURRENTLY IF EXISTS {relation}");
         (&mut *conn)
-            .execute(sqlx::raw_sql(&drop))
+            .execute(sqlx::raw_sql(&drop_concurrently_sql(relation)))
             .await
             .with_context(|| format!("drop the INVALID index {relation}"))?;
     }

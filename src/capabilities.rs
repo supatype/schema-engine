@@ -30,6 +30,15 @@ pub const FEATURES: &[&str] = &[
     // columns, created, changed and introspected (`isIdentity`, `generationExpression`, ...). An
     // engine without it parses neither key and makes a plain column.
     "identity_columns",
+    // `migrate` with `record` / `--record`: the file records the history and the ledger, as a push
+    // does, by rehearsing the push under its locks; plain `migrate` takes none (IN-A).
+    "migrate_record",
+    // A push on tables with rows takes no lock that stops reads or writes for longer than a moment:
+    // short lock waits with retries, indexes built and rebuilt concurrently, keys, checks and
+    // `NOT NULL` validated after commit, and unchanged policies, triggers and views left alone
+    // (IN-C, LK7). Its lock and after-commit failures are HTTP 409 `lock_unavailable` and
+    // `validation_failed` (LK6).
+    "online_ddl",
 ];
 
 /// The capabilities document. `version` is the build's own (`build.rs`): the crate version for a
@@ -45,7 +54,7 @@ mod tests {
         assert_eq!(
             super::capabilities().to_string(),
             format!(
-                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns"]}}"#,
+                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns","migrate_record","online_ddl"]}}"#,
                 env!("ENGINE_VERSION")
             )
         );

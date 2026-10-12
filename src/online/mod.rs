@@ -14,13 +14,15 @@
 
 mod after_commit;
 mod broken_rows;
+mod index_drops;
+mod not_null;
 mod sizes;
 
 pub use after_commit::{finished, run_after_commit, AfterCommitFailed, Unfinished};
 pub use broken_rows::refuse_broken_rows;
+pub use index_drops::{concurrent_drops, drop_concurrently};
 pub use sizes::{online_tables, table_sizes, TableSize};
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -149,12 +151,37 @@ pub struct LockWait {
     pub holders: Vec<Holder>,
 }
 
-/// A push that could not take a lock in [`PUSH_ATTEMPTS`] attempts. Nothing was applied.
+/// A writer that could not take a lock: a push or the bootstrap in [`PUSH_ATTEMPTS`] attempts, or
+/// adopt, a rebaseline or a rollback in one, since a person is waiting on it (LK1). Nothing was
+/// applied.
 #[derive(Debug)]
 pub struct LockNotAvailable {
+    /// What gave up: `push`, `bootstrap`, `adopt`, `rebaseline`, `rollback`, `migrate --record`.
+    pub what: &'static str,
     pub attempts: u32,
-    /// What the last attempt waited on, when the push saw it.
+    /// What the last attempt waited on, when the writer saw it.
     pub wait: Option<LockWait>,
+}
+
+/// The stable name a caller matches a [`LockNotAvailable`] refusal on (LK6).
+pub const LOCK_UNAVAILABLE: &str = "lock_unavailable";
+
+impl LockNotAvailable {
+    /// How long it waited: "in 4 attempts, each waiting 3s", or "waiting 3s" for one.
+    fn waited(&self) -> String {
+        match self.attempts {
+            1 => format!("waiting {PUSH_LOCK_TIMEOUT}"),
+            n => format!("in {n} attempts, each waiting {PUSH_LOCK_TIMEOUT}"),
+        }
+    }
+
+    /// What to do once the lock is free.
+    fn again(&self) -> String {
+        match self.what {
+            "push" => "push again".to_string(),
+            what => format!("run the {what} again"),
+        }
+    }
 }
 
 impl std::fmt::Display for LockNotAvailable {
@@ -162,10 +189,11 @@ impl std::fmt::Display for LockNotAvailable {
         let Some(wait) = &self.wait else {
             return write!(
                 f,
-                "The push could not take a table lock in {} attempts, each waiting {}, and \
-                 nothing was applied. Another session is using a table it changes; push again \
-                 once it is done.",
-                self.attempts, PUSH_LOCK_TIMEOUT
+                "The {} could not take a table lock {}, and nothing was applied. Another session \
+                 is using a table it changes; {} once it is done.",
+                self.what,
+                self.waited(),
+                self.again()
             );
         };
         let holders: Vec<String> = wait
@@ -182,24 +210,95 @@ impl std::fmt::Display for LockNotAvailable {
             .collect();
         write!(
             f,
-            "The push could not take {} on {} in {} attempts, each waiting {}, and nothing was \
-             applied. It is held by {}. End that session, or wait for it to finish, then push \
-             again.",
+            "The {} could not take {} on {} {}, and nothing was applied. It is held by {}. End \
+             that session, or wait for it to finish, then {}.",
+            self.what,
             wait.mode,
             wait.table,
-            self.attempts,
-            PUSH_LOCK_TIMEOUT,
-            holders.join(", ")
+            self.waited(),
+            holders.join(", "),
+            self.again()
         )
     }
 }
 
 impl std::error::Error for LockNotAvailable {}
 
+/// The backend `conn` runs on, for [`fail_fast`] to watch.
+pub async fn backend_pid(conn: &mut PgConnection) -> Result<i32> {
+    sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(conn)
+        .await
+        .context("read the writer's backend")
+}
+
+/// Runs `work`, a writer's transaction on backend `pid`, watching what it waits for. One that gives
+/// up on a lock is said as [`LockNotAvailable`] naming the table and the session holding it,
+/// without trying again: the writers a person runs at a prompt (adopt, a rebaseline, a rollback)
+/// tell them at once (LK1).
+pub async fn fail_fast<T>(
+    pool: &PgPool,
+    pid: i32,
+    what: &'static str,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    let watch = WaitWatch::start(pool, pid);
+    let result = work.await;
+    let wait = watch.finish().await;
+    result.map_err(|e| {
+        if retryable(&e) {
+            LockNotAvailable {
+                what,
+                attempts: 1,
+                wait,
+            }
+            .into()
+        } else {
+            e
+        }
+    })
+}
+
+/// Runs `once` until it does not give up on a lock, [`PUSH_ATTEMPTS`] times at most with a
+/// [`pause`] between, as a push's attempts run: for a writer no person waits on (the bootstrap a
+/// push or `dev` runs). The last failure names what it waited for when `once` said so
+/// ([`fail_fast`]).
+pub async fn retrying<T, F, Fut>(what: &'static str, mut once: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    for tried in 1..=PUSH_ATTEMPTS {
+        let e = match once().await {
+            Ok(out) => return Ok(out),
+            Err(e) => e,
+        };
+        let gave_up = e.downcast_ref::<LockNotAvailable>().is_some() || retryable(&e);
+        if !gave_up {
+            return Err(e);
+        }
+        if tried == PUSH_ATTEMPTS {
+            let wait = e
+                .downcast::<LockNotAvailable>()
+                .ok()
+                .and_then(|failed| failed.wait);
+            return Err(LockNotAvailable {
+                what,
+                attempts: tried,
+                wait,
+            }
+            .into());
+        }
+        tracing::warn!("{what} attempt {tried} gave up on a lock; trying again");
+        tokio::time::sleep(pause(tried)).await;
+    }
+    unreachable!("the last attempt returns")
+}
+
 /// Watches one backend while it runs a statement, keeping the last relation lock it was seen
 /// waiting for and the sessions it waited behind.
 pub struct WaitWatch {
-    stop: Arc<AtomicBool>,
+    stop: Arc<tokio::sync::Notify>,
     task: tokio::task::JoinHandle<Option<LockWait>>,
 }
 
@@ -207,24 +306,29 @@ type WaitRow = (String, String, i32, String, f64);
 
 impl WaitWatch {
     pub fn start(pool: &PgPool, pid: i32) -> WaitWatch {
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let stopped = stop.clone();
         let pool = pool.clone();
         let task = tokio::spawn(async move {
             let mut seen = None;
-            while !flag.load(Ordering::SeqCst) {
-                tokio::time::sleep(Duration::from_millis(250)).await;
+            loop {
+                // Woken at once when told to stop, so a writer that took every lock it needed is
+                // not held up by the watch's own pause.
+                tokio::select! {
+                    _ = stopped.notified() => return seen,
+                    _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                }
                 if let Ok(Some(wait)) = waiting(&pool, pid).await {
                     seen = Some(wait);
                 }
             }
-            seen
         });
         WaitWatch { stop, task }
     }
 
     pub async fn finish(self) -> Option<LockWait> {
-        self.stop.store(true, Ordering::SeqCst);
+        // `notify_one` keeps the wake-up for a watch between two of its polls.
+        self.stop.notify_one();
         self.task.await.ok().flatten()
     }
 }
@@ -295,6 +399,7 @@ pub async fn with_retries<A: Attempt + Sync>(
         }
         if tried == PUSH_ATTEMPTS {
             return Err(LockNotAvailable {
+                what: "push",
                 attempts: tried,
                 wait,
             }

@@ -5,6 +5,7 @@ use crate::generator::sql::column_conversion::{
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
 };
 use crate::generator::sql::online::{self, AfterCommit, Online, OnlineTables};
+use crate::generator::sql::settled::Settled;
 use crate::introspector::fingerprint::ObjectKind;
 use crate::ledger::reconcile;
 use crate::managed::ObjectNames;
@@ -262,7 +263,12 @@ fn render_mask_probe_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
 /// derived privileges and the outer-body path did not, and the outer body is what every real push
 /// actually runs, so the privileges were generated and never applied. Anything in this list
 /// belongs on every path that applies a migration.
-fn render_reasserted_lines(diff: &DiffOutput, ast: &SchemaAst, schema: &str) -> Vec<String> {
+fn render_reasserted_lines(
+    diff: &DiffOutput,
+    ast: &SchemaAst,
+    schema: &str,
+    settled: &Settled,
+) -> Vec<String> {
     // `can_*` functions live in the managed schema and read the table, they do not change it.
     let mut lines = render_can_function_lines(ast, schema);
 
@@ -273,11 +279,14 @@ fn render_reasserted_lines(diff: &DiffOutput, ast: &SchemaAst, schema: &str) -> 
         lines.extend(render_mask_probe_lines(ast, schema));
         return lines;
     }
-    // Under tier 2 the API reads the `api` views, so that is where the privileges belong. The views
-    // are made again on every push, which takes their privileges with them, so each view's are
-    // made with it, and recorded on the ledger as it is (F14).
-    let views =
-        crate::generator::sql::field_views::render_field_views(ast, &diff.field_view_plan, schema);
+    // Under tier 2 the API reads the `api` views, so that is where the privileges belong. A view is
+    // made again when it changed, which takes its privileges with it, so each view's are made with
+    // it, and recorded on the ledger as it is (F14). One in place as this push wants it is left
+    // alone: making it again locks it against every API read (LK7).
+    let views = settled.leave_out(
+        &crate::generator::sql::field_views::render_field_views(ast, &diff.field_view_plan, schema),
+        schema,
+    );
     if !views.trim().is_empty() {
         lines.push(
             "-- Field-level access, tier 2: api views (this database cannot load supatype_mask)"
@@ -299,18 +308,63 @@ fn render_owner_reach_lines(diff: &DiffOutput, schema: &str) -> Vec<String> {
     }
     vec![
         "-- Field-level access, tier 2: what the views' owner may call".into(),
-        crate::generator::sql::field_views::owner_reach_sql(schema)
-            .trim_end()
-            .into(),
+        crate::generator::sql::field_views::owner_reach_sql(
+            schema,
+            crate::generator::sql::field_views::plan_owner(&diff.field_view_plan),
+        )
+        .trim_end()
+        .into(),
         String::new(),
     ]
 }
 
-fn render_forward_operation_lines(
-    diff: &DiffOutput,
-    schema: &str,
-    ast: &SchemaAst,
-) -> Result<Vec<String>> {
+/// What a migration's forward body is rendered from.
+struct Forward<'a> {
+    diff: &'a DiffOutput,
+    schema: &'a str,
+    ast: &'a SchemaAst,
+    /// What is in place as the push wants it, left out of the re-asserted scripts (LK7).
+    settled: Settled,
+    /// The tables with rows, on which `SET NOT NULL` is proved after commit (LK7).
+    tables: &'a OnlineTables,
+}
+
+/// `sql` rendered for `op`, with a `SET NOT NULL` on a table with rows replaced by its helper
+/// check, which `after` validates once the transaction has committed (LK7). Not with an identity
+/// change in the same operation, which needs the column `NOT NULL` before it.
+fn online_not_null(
+    op: &Operation,
+    sql: String,
+    f: &Forward<'_>,
+    after: &mut AfterCommit,
+) -> String {
+    let Operation::AlterColumn {
+        table,
+        column,
+        changes,
+        ..
+    } = op
+    else {
+        return sql;
+    };
+    if !f.tables.with_rows.contains(table) || !crate::differ::rewrites::not_null_online(changes) {
+        return sql;
+    }
+    let set = format!(
+        "{} SET NOT NULL;",
+        alter_column_prefix(f.schema, table, column)
+    );
+    if !sql.contains(&set) {
+        return sql;
+    }
+    let not_null = online::NotNull::new(f.schema, table, column);
+    let sql = sql.replacen(&set, &not_null.add_sql(), 1);
+    after.not_null.push(not_null);
+    sql
+}
+
+fn render_forward_operation_lines(f: &Forward<'_>, after: &mut AfterCommit) -> Result<Vec<String>> {
+    let (diff, schema, ast) = (f.diff, f.schema, f.ast);
     let mut lines = Vec::new();
     let names = ObjectNames::for_schema(ast);
 
@@ -337,7 +391,12 @@ fn render_forward_operation_lines(
             },
         };
 
-        let sql = render_operation_named(op, schema, ast, &names)?;
+        let sql = online_not_null(
+            op,
+            render_operation_named(op, schema, ast, &names)?,
+            f,
+            after,
+        );
         lines.push(format!(
             "-- [{risk_label}] {desc}",
             desc = op_description(op)
@@ -357,7 +416,8 @@ fn render_forward_operation_lines(
 /// second, so a push created the snapshot tables and none of the views, functions or policies that
 /// make them mean anything. The push reported success. Only running it against a real database
 /// showed it, because every test rendered the file.
-fn render_forward_core(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<Vec<String>> {
+fn render_forward_core(f: &Forward<'_>, after: &mut AfterCommit) -> Result<Vec<String>> {
+    let (diff, schema, ast, settled) = (f.diff, f.schema, f.ast, &f.settled);
     let mut lines = Vec::new();
     // A CHECK that calls a function is validated when the table is created, so the helper
     // functions have to exist before any operation line runs, not alongside the triggers.
@@ -365,16 +425,19 @@ fn render_forward_core(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Resu
     // Before the operations, because a draft view depends on every column it selects and would
     // otherwise refuse a column drop. Recreated by the versions layer at the end of this same
     // migration, so the window where they are missing is inside one transaction.
-    let drop_drafts = crate::generator::sql::versions::drop_draft_views_sql(ast);
+    let drop_drafts = crate::generator::sql::versions::drop_draft_views_sql(
+        ast,
+        &super::settled::changed_tables(&diff.operations),
+    );
     if !drop_drafts.trim().is_empty() {
         lines.push(drop_drafts.trim_end().to_string());
         lines.push(String::new());
     }
-    lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(diff, ast, schema));
+    lines.extend(render_forward_operation_lines(f, after)?);
+    lines.extend(render_reasserted_lines(diff, ast, schema, settled));
     // Last, because it reads the snapshot tables the operations above create and the model tables
     // they reference. Errors rather than warns when the push failed to state who may see a draft.
-    lines.extend(render_versions_lines(ast, schema)?);
+    lines.extend(render_versions_lines(ast, schema, settled)?);
     lines.extend(render_owner_reach_lines(diff, schema));
     Ok(lines)
 }
@@ -425,12 +488,18 @@ pub struct Recording {
     pub bootstrap: Vec<String>,
     /// Statements, closed with a `;` or not.
     pub ledger: Vec<String>,
+    /// What the rollback section runs after undoing the migration: the ledger put back and the
+    /// migration marked rolled back, as `supatype rollback` does (HI2). Statements, closed with a
+    /// `;` or not.
+    pub restore: Vec<String>,
 }
 
 const BOOTSTRAP_HEADER: &str =
     "-- Supatype's own tables and claim readers, created or repaired as a push does";
 const LEDGER_HEADER: &str =
     "-- What a push records: the history row, and which objects are Supatype's";
+const RESTORE_HEADER: &str =
+    "-- What a rollback records: the ledger as it was before the push, and the migration rolled back";
 
 /// `statements` under `header`, each closed with one `;`, or nothing when there are none.
 fn push_section(lines: &mut Vec<String>, header: &str, statements: &[String]) {
@@ -503,11 +572,25 @@ impl Migration {
         // Dependents first across every removal, not only among the drops: a foreign key a push
         // replaces or rebuilds goes before the key it references, which may itself be replaced.
         early.sort_by_key(|a| std::cmp::Reverse(reconcile::creation_rank(a.key().kind)));
-        let removals: Vec<String> = early.iter().filter_map(|a| a.removal_sql()).collect();
-        let late_removals: Vec<String> = late.iter().filter_map(|a| a.removal_sql()).collect();
-        let (additions, after_commit) = split_online(reconcile, schema, tables);
+        let (additions, mut after_commit) = split_online(reconcile, schema, tables);
+        // An index rebuilt after commit keeps its old one until the new one is swapped in.
+        let rebuilt = after_commit.rebuilt_keys();
+        let removal = |a: &&reconcile::Action| {
+            (!rebuilt.contains(a.key()))
+                .then(|| a.removal_sql())
+                .flatten()
+        };
+        let removals: Vec<String> = early.iter().filter_map(removal).collect();
+        let late_removals: Vec<String> = late.iter().filter_map(removal).collect();
         let mut body = reconciled_section(removals.clone());
-        body.extend(render_forward_core(diff, schema, ast)?);
+        let forward = Forward {
+            diff,
+            schema,
+            ast,
+            settled: Settled::of(reconcile, &diff.operations),
+            tables,
+        };
+        body.extend(render_forward_core(&forward, &mut after_commit)?);
         body.extend(reconciled_section(late_removals.clone()));
         body.extend(reconciled_section(additions.clone()));
 
@@ -625,8 +708,15 @@ impl Migration {
             hash = self.hash,
             risk = self.risk,
             forward = self.applied_script(recording),
-            rollback = super::rollback::script(&self.down),
+            rollback = super::rollback::script(&self.down_recording(recording)),
         )
+    }
+
+    /// [`Migration::down`]'s statements, then what the rollback records.
+    fn down_recording(&self, recording: &Recording) -> Vec<String> {
+        let mut lines = self.down.clone();
+        push_section(&mut lines, RESTORE_HEADER, &recording.restore);
+        lines
     }
 
     /// [`Migration::up_script`] with the storage layer at the start of the transaction.
@@ -706,8 +796,11 @@ fn split_online(
 }
 
 /// The drafts and publishing layer, when this schema has a versioned model.
-fn render_versions_lines(ast: &SchemaAst, schema: &str) -> Result<Vec<String>> {
-    let sql = crate::generator::sql::versions::render_versions_layer(ast, schema)?;
+fn render_versions_lines(ast: &SchemaAst, schema: &str, settled: &Settled) -> Result<Vec<String>> {
+    let sql = settled.leave_out(
+        &crate::generator::sql::versions::render_versions_layer(ast, schema)?,
+        schema,
+    );
     if sql.trim().is_empty() {
         return Ok(Vec::new());
     }

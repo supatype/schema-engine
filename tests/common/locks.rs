@@ -26,9 +26,40 @@ pub struct LockSampler {
     task: JoinHandle<BTreeSet<(String, String)>>,
 }
 
+/// Matches a relation by its bare name, whatever its schema.
+const BY_NAME: &str = "SELECT c.relname::text, l.mode FROM pg_locks l
+       JOIN pg_class c ON c.oid = l.relation
+      WHERE l.granted AND c.relname = ANY($1)
+        AND l.pid <> pg_backend_pid() AND l.pid <> ALL($2)";
+
+/// Matches a relation by `schema.name`, so a view named after its table is told apart from it.
+const BY_QUALIFIED_NAME: &str = "SELECT n.nspname || '.' || c.relname, l.mode FROM pg_locks l
+       JOIN pg_class c ON c.oid = l.relation
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE l.granted AND n.nspname || '.' || c.relname = ANY($1)
+        AND l.pid <> pg_backend_pid() AND l.pid <> ALL($2)";
+
 impl LockSampler {
     /// Samples every 5 ms, leaving out the sessions in `ignored` and its own.
     pub async fn start(pool: &PgPool, tables: &[&str], ignored: Vec<i32>) -> LockSampler {
+        LockSampler::sample(pool, BY_NAME, tables, ignored).await
+    }
+
+    /// [`LockSampler::start`] for relations named `schema.name`; the locks seen are named so too.
+    pub async fn start_qualified(
+        pool: &PgPool,
+        relations: &[&str],
+        ignored: Vec<i32>,
+    ) -> LockSampler {
+        LockSampler::sample(pool, BY_QUALIFIED_NAME, relations, ignored).await
+    }
+
+    async fn sample(
+        pool: &PgPool,
+        query: &'static str,
+        tables: &[&str],
+        ignored: Vec<i32>,
+    ) -> LockSampler {
         let side = side_pool(pool, 1).await;
         let stop = Arc::new(AtomicBool::new(false));
         let tables: Vec<String> = tables.iter().map(|t| t.to_string()).collect();
@@ -36,17 +67,12 @@ impl LockSampler {
         let task = tokio::spawn(async move {
             let mut seen = BTreeSet::new();
             while !flag.load(Ordering::SeqCst) {
-                let rows: Vec<(String, String)> = sqlx::query_as(
-                    "SELECT c.relname::text, l.mode FROM pg_locks l
-                       JOIN pg_class c ON c.oid = l.relation
-                      WHERE l.granted AND c.relname = ANY($1)
-                        AND l.pid <> pg_backend_pid() AND l.pid <> ALL($2)",
-                )
-                .bind(&tables)
-                .bind(&ignored)
-                .fetch_all(&side)
-                .await
-                .unwrap_or_default();
+                let rows: Vec<(String, String)> = sqlx::query_as(query)
+                    .bind(&tables)
+                    .bind(&ignored)
+                    .fetch_all(&side)
+                    .await
+                    .unwrap_or_default();
                 seen.extend(rows);
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }

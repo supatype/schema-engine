@@ -494,7 +494,7 @@ async fn an_older_engines_affordance_function_is_brought_up_to_date_and_a_users_
         common::as_an_older_engine_left_it(&pool).await.unwrap();
         exec(
             &pool,
-            "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts) RETURNS boolean
+            "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts, not_in_graphql boolean DEFAULT NULL) RETURNS boolean
                LANGUAGE sql STABLE AS $can$ SELECT TRUE OR FALSE $can$;
              CREATE FUNCTION public.can_do_things(posts public.posts) RETURNS boolean
                LANGUAGE sql STABLE AS $can$ SELECT TRUE $can$;

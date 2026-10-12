@@ -136,6 +136,15 @@ async fn prepare(pool: &sqlx::PgPool) {
         .expect("auth helpers");
 }
 
+/// This database's view owner (TI2).
+async fn this_owner(pool: &sqlx::PgPool) -> String {
+    let database: String = sqlx::query_scalar("SELECT current_database()::text")
+        .fetch_one(pool)
+        .await
+        .expect("read the database's name");
+    supatype_engine::generator::sql::field_views::api_owner_for(&database)
+}
+
 async fn push_fixture(pool: &sqlx::PgPool, ast: &SchemaAst) -> push::Outcome {
     let plan = push::prepare(pool, ast, "public")
         .await
@@ -401,6 +410,7 @@ type TriggerFunctionRow = (String, bool, String, Option<Vec<String>>, bool);
 async fn the_views_and_their_triggers_run_as_a_dedicated_owner() {
     common::with_integration_pool(|pool| async move {
         pushed(&pool).await;
+        let expected = this_owner(&pool).await;
         let views: Vec<(String, String, String)> = sqlx::query_as(
             "SELECT c.relname::text, coalesce(array_to_string(c.reloptions, ','), ''),
                     pg_get_userbyid(c.relowner)::text
@@ -413,12 +423,13 @@ async fn the_views_and_their_triggers_run_as_a_dedicated_owner() {
         assert_eq!(views.len(), 2, "{views:?}");
         for (name, options, owner) in &views {
             assert_eq!(options, "security_barrier=true", "{name}");
-            assert_eq!(owner, "supatype_api_owner", "{name}");
+            assert_eq!(owner, &expected, "{name}");
         }
         let owner: (bool, bool, bool, bool) = sqlx::query_as(
             "SELECT rolcanlogin, rolbypassrls, rolsuper, rolinherit FROM pg_roles
-              WHERE rolname = 'supatype_api_owner'",
+              WHERE rolname = $1",
         )
+        .bind(&expected)
         .fetch_one(&pool)
         .await
         .expect("the owner role exists");
@@ -436,7 +447,7 @@ async fn the_views_and_their_triggers_run_as_a_dedicated_owner() {
         assert_eq!(functions.len(), 2, "{functions:?}");
         for (name, definer, owner, config, anon_executes) in &functions {
             assert!(definer, "{name} is not SECURITY DEFINER");
-            assert_eq!(owner, "supatype_api_owner", "{name}");
+            assert_eq!(owner, &expected, "{name}");
             assert!(
                 config
                     .as_ref()
@@ -666,7 +677,7 @@ async fn a_second_push_plans_nothing_and_keeps_the_owner_rights_design() {
         .fetch_one(&pool)
         .await
         .expect("read the view");
-        assert_eq!(options, "security_barrier=true supatype_api_owner");
+        assert_eq!(options, format!("security_barrier=true {}", this_owner(&pool).await));
     })
     .await;
 }
@@ -770,7 +781,7 @@ async fn hand_changes_to_the_views_access_are_reported_and_need_consent() {
         .fetch_one(&pool)
         .await
         .expect("read the view");
-        assert_eq!(options, "security_barrier=true supatype_api_owner");
+        assert_eq!(options, format!("security_barrier=true {}", this_owner(&pool).await));
     })
     .await;
 }
@@ -868,7 +879,7 @@ async fn hand_changes_to_draft_and_versions_privileges_are_reported() {
         assert_access_drift(
             &pool,
             &ast,
-            "REVOKE EXECUTE ON FUNCTION public.can_read_t2_article(public.t2_article) \
+            "REVOKE EXECUTE ON FUNCTION public.can_read_t2_article(public.t2_article, boolean) \
              FROM PUBLIC, anon, authenticated",
             "function public.can_read_t2_article",
         )

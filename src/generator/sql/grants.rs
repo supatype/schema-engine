@@ -16,6 +16,7 @@
 //! merely leaves today's behaviour in place. `service_role` is never touched: it is
 //! the escape hatch that has to keep working when everything else is locked down.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::differ::rls_diff::intersect_access;
@@ -104,7 +105,7 @@ pub const RULED: [&str; 4] = ["DELETE", "INSERT", "SELECT", "UPDATE"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableGrant {
     pub table: String,
-    pub role: &'static str,
+    pub role: Cow<'static, str>,
     /// Table-level privileges, sorted as the catalog sorts them.
     pub privileges: Vec<&'static str>,
     /// Write privileges narrowed to columns: the operation, and the columns it may not touch. The
@@ -131,7 +132,7 @@ impl TableGrant {
     /// never granted anything, so its object is the one statement that takes everything away.
     pub fn create_sql(&self, schema: &str) -> String {
         let target = quote_qualified(schema, &self.table);
-        let role = self.role;
+        let role = &*self.role;
         if role == PUBLIC {
             return format!("REVOKE ALL PRIVILEGES ON {target} FROM PUBLIC;");
         }
@@ -189,10 +190,10 @@ impl TableGrant {
     }
 
     /// A grant of nothing: what `role` holds on `table` where nothing is granted at all.
-    fn nothing(table: &str, role: &'static str) -> TableGrant {
+    fn nothing(table: &str, role: impl Into<Cow<'static, str>>) -> TableGrant {
         TableGrant {
             table: table.to_string(),
-            role,
+            role: role.into(),
             privileges: Vec::new(),
             narrowed: Vec::new(),
             columns: Vec::new(),
@@ -245,6 +246,24 @@ pub const PUBLIC: &str = "PUBLIC";
 /// `service_role` keeps its base-table access: tier 1 masks a `service_role` caller like any other
 /// (the read predicate simply fails for it), while under tier 2 that caller reads the table
 /// directly and sees everything. Deliberate, and recorded rather than quietly true.
+/// What `role` may do with `sequence`, the sequence a serial column of `model` owns: `USAGE`, which
+/// `nextval` needs, where the model's create rule admits the role, and nothing otherwise. Not
+/// `SELECT` or `UPDATE`: an insert only draws the next value. The same in both tiers: under tier 2
+/// a view with no write trigger inserts through the table's own default, which draws the value as
+/// the caller. An identity column needs none of this, since Postgres draws its value without
+/// checking the caller's privileges on its sequence. A many-to-many junction has no serial key.
+pub fn sequence_grant(model: &ModelAst, sequence: &str, role: &'static str) -> TableGrant {
+    let create = platform_access(model).create.as_ref();
+    TableGrant {
+        privileges: if allowed(role, create) {
+            vec!["USAGE"]
+        } else {
+            Vec::new()
+        },
+        ..TableGrant::nothing(sequence, role)
+    }
+}
+
 pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
     let mut out = Vec::new();
     for model in &ast.models {
@@ -378,7 +397,7 @@ fn model_grant(model: &ModelAst, role: &'static str) -> TableGrant {
     }
     TableGrant {
         table: db_table_name(model).to_string(),
-        role,
+        role: role.into(),
         privileges,
         narrowed,
         columns: declared_columns(model),
@@ -509,10 +528,10 @@ const SERVICE_ROLE: &str = "service_role";
 /// each caller still reaches only the rows their rules allow. A junction's view needs it as a
 /// model's does, and a view whose rule reads a junction as a membership source reads it with the
 /// owner's rights, as an API role does under tier 1.
-pub fn api_owner_grant(table: &str) -> TableGrant {
+pub fn api_owner_grant(table: &str, owner: &str) -> TableGrant {
     TableGrant {
         privileges: RULED.to_vec(),
-        ..TableGrant::nothing(table, crate::generator::sql::field_views::API_OWNER)
+        ..TableGrant::nothing(table, owner.to_string())
     }
 }
 

@@ -276,101 +276,101 @@ CREATE TABLE IF NOT EXISTS "public"."ledger_versions" (
 CREATE INDEX IF NOT EXISTS "ledger_versions_record_idx" ON "public"."ledger_versions" ("record_id", "version" DESC);
 
 -- Row-level affordance functions (PostgREST computed columns)
-CREATE OR REPLACE FUNCTION "public"."can_read_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_read_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_create_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_update_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_delete_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_ledger"("ledger" "public"."ledger")
+CREATE OR REPLACE FUNCTION "public"."can_read_ledger"("ledger" "public"."ledger", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "ledger";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_ledger"("public"."ledger") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_ledger"("public"."ledger") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_ledger"("public"."ledger", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_ledger"("public"."ledger", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_ledger"("ledger" "public"."ledger")
+CREATE OR REPLACE FUNCTION "public"."can_create_ledger"("ledger" "public"."ledger", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "ledger";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_ledger"("public"."ledger") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_ledger"("public"."ledger") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_ledger"("public"."ledger", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_ledger"("public"."ledger", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_ledger"("ledger" "public"."ledger")
+CREATE OR REPLACE FUNCTION "public"."can_update_ledger"("ledger" "public"."ledger", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "ledger";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_ledger"("public"."ledger") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_ledger"("public"."ledger") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_ledger"("public"."ledger", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_ledger"("public"."ledger", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_ledger"("ledger" "public"."ledger")
+CREATE OR REPLACE FUNCTION "public"."can_delete_ledger"("ledger" "public"."ledger", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "ledger";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_ledger"("public"."ledger") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_ledger"("public"."ledger") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_ledger"("public"."ledger", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_ledger"("public"."ledger", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_tags"("tags" "public"."tags")
+CREATE OR REPLACE FUNCTION "public"."can_read_tags"("tags" "public"."tags", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_tags"("public"."tags") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_tags"("public"."tags") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_tags"("public"."tags", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_tags"("public"."tags", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_tags"("tags" "public"."tags")
+CREATE OR REPLACE FUNCTION "public"."can_create_tags"("tags" "public"."tags", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_tags"("public"."tags") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_tags"("public"."tags") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_tags"("public"."tags", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_tags"("public"."tags", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_tags"("tags" "public"."tags")
+CREATE OR REPLACE FUNCTION "public"."can_update_tags"("tags" "public"."tags", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_tags"("public"."tags") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_tags"("public"."tags") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_tags"("public"."tags", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_tags"("public"."tags", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
+CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_tags"("public"."tags") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_tags"("public"."tags") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_tags"("public"."tags", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_tags"("public"."tags", boolean) TO anon, authenticated, service_role;
 
 -- Drafts, version history and publishing
 CREATE SCHEMA IF NOT EXISTS "draft";
@@ -1080,7 +1080,13 @@ GRANT EXECUTE ON FUNCTION "supatype".restore_version(text, text, integer) TO aut
 REVOKE ALL ON SCHEMA "draft" FROM anon;
 GRANT USAGE ON SCHEMA "draft" TO authenticated, service_role;
 
-ALTER TABLE "public"."posts_versions" ENABLE ROW LEVEL SECURITY;
+DO $versions_rls$
+BEGIN
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = '"public"."posts_versions"'::regclass) THEN
+    ALTER TABLE "public"."posts_versions" ENABLE ROW LEVEL SECURITY;
+  END IF;
+END
+$versions_rls$;
 
 DROP POLICY IF EXISTS "posts_versions_select" ON "public"."posts_versions";
 CREATE POLICY "posts_versions_select" ON "public"."posts_versions"
@@ -1176,7 +1182,13 @@ SELECT (jsonb_populate_record(NULL::"public"."posts", v."data")).*
 REVOKE ALL ON "draft"."posts" FROM anon;
 GRANT SELECT ON "draft"."posts" TO authenticated, service_role;
 
-ALTER TABLE "public"."ledger_versions" ENABLE ROW LEVEL SECURITY;
+DO $versions_rls$
+BEGIN
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = '"public"."ledger_versions"'::regclass) THEN
+    ALTER TABLE "public"."ledger_versions" ENABLE ROW LEVEL SECURITY;
+  END IF;
+END
+$versions_rls$;
 
 DROP POLICY IF EXISTS "ledger_versions_select" ON "public"."ledger_versions";
 CREATE POLICY "ledger_versions_select" ON "public"."ledger_versions"
