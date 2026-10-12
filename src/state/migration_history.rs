@@ -115,6 +115,18 @@ pub fn create_studio_members_table_sql() -> String {
     )
 }
 
+/// SQL that is true when the `studio_members` row aliased `member` is held by `subject` (a uuid
+/// expression), under either identity the row can carry.
+///
+/// Every check the engine generates goes through this, so a member admitted in one place is
+/// admitted in all of them. Matching `user_id` alone shut every Cloud account out of the Studio
+/// statistics, the saved dashboards and the drafts its role may see, although the Cloud control
+/// plane admits that account to Studio. A NULL subject matches nothing, and neither does a row's
+/// NULL column, so a caller with no `sub` is never a member.
+pub fn studio_member_held_by_sql(member: &str, subject: &str) -> String {
+    format!("{subject} IN ({member}.user_id, {member}.platform_user_id)")
+}
+
 /// Audit trail for Studio membership changes and elevated data access.
 ///
 /// Access-control changes need a durable record, not a log line that rotates

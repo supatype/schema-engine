@@ -789,22 +789,21 @@ CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles() RETURNS text[]
 -- membership table is not something an API caller may read. This returns one boolean about the
 -- caller themselves, so it discloses nothing they could not already infer.
 --
+-- A member is matched under either identity a membership row can hold, a project user or a Cloud
+-- account, as every other Studio check is. A subject-less caller matches no row.
+--
 -- An absent membership table means no elevated readers rather than an error, so a deployment that
 -- has never bootstrapped Studio still has working drafts, visible to their creators.
 CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts() RETURNS boolean
   LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
   DECLARE
     caller uuid := _supatype.caller_id();
-    caller_role text;
   BEGIN
-    IF caller IS NULL THEN
-      RETURN false;
-    END IF;
-    SELECT m.role INTO caller_role FROM _supatype.studio_members m WHERE m.user_id = caller;
-    IF caller_role IS NULL THEN
-      RETURN false;
-    END IF;
-    RETURN caller_role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]));
+    RETURN EXISTS (
+      SELECT 1 FROM _supatype.studio_members m
+       WHERE caller IN (m.user_id, m.platform_user_id)
+         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))
+    );
   EXCEPTION WHEN undefined_table THEN
     RETURN false;
   END;

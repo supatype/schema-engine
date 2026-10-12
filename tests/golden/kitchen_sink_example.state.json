@@ -3892,7 +3892,7 @@
         "language": "plpgsql",
         "volatility": "s",
         "securityDefiner": true,
-        "body": "\n  DECLARE\n    caller uuid := _supatype.caller_id();\n    caller_role text;\n  BEGIN\n    IF caller IS NULL THEN\n      RETURN false;\n    END IF;\n    SELECT m.role INTO caller_role FROM _supatype.studio_members m WHERE m.user_id = caller;\n    IF caller_role IS NULL THEN\n      RETURN false;\n    END IF;\n    RETURN caller_role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]));\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  ",
+        "body": "\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  ",
         "comment": null,
         "arguments": "",
         "config": [
@@ -3903,7 +3903,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n    caller_role text;\n  BEGIN\n    IF caller IS NULL THEN\n      RETURN false;\n    END IF;\n    SELECT m.role INTO caller_role FROM _supatype.studio_members m WHERE m.user_id = caller;\n    IF caller_role IS NULL THEN\n      RETURN false;\n    END IF;\n    RETURN caller_role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]));\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "anon=EXECUTE",
