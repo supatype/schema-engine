@@ -8,11 +8,20 @@
 //! Every place a rule can stand is checked: the row clauses, the update check, the per-field rules
 //! and the filter of a membership source. A filter reads another table, so its `Owner` is checked
 //! against the model behind that table rather than the one the policy is attached to.
+//!
+//! A relation owner is also checked for what it reaches (D11). The model at the other end must be
+//! a user's own, keyed by a `SupatypeAuthUserId`, or owned by an `Owner` rule of its own (O1); and
+//! that owner must not be a relation to yet another model that is not a user's, since ownership is
+//! followed through one relation only (O4). An owner that is a plain UUID, not marked as an auth
+//! user id, is accepted with a warning: nothing says it holds one (O2).
 
-use super::accessors::{db_table_name, resolve_owner_column};
+use super::accessors::{
+    db_table_name, field_annotations, is_user_identity_model, owner_field_on_model,
+    resolve_owner_column,
+};
 use super::ast::{AccessRule, FieldAst, MembershipSource, ModelAst, SchemaAst};
 use anyhow::{anyhow, Result};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const ALLOWED: &str =
     "An owner must be \"id\", a relation field, or a field of type UUID or SupatypeAuthUserId";
@@ -30,6 +39,15 @@ struct Scope {
     /// A relation's key column, and `<relation>_id`, each mapped to the relation, so
     /// `Owner<"author_id">` means the relation `author`.
     relation_keys: HashMap<String, String>,
+    /// Each owning relation's target model.
+    relation_targets: HashMap<String, String>,
+    /// Keyed by a `SupatypeAuthUserId`: a user's own model.
+    user_model: bool,
+    /// The field this model is owned through, resolved as [`Scope::check`] resolves one.
+    owner: Option<String>,
+    /// The UUID fields, `id` included, not marked as an auth user id: an owner that is one of them
+    /// is warned about (O2).
+    plain_uuids: HashSet<String>,
 }
 
 impl Scope {
@@ -39,11 +57,36 @@ impl Scope {
             .iter()
             .map(|(name, field)| (name.clone(), field_eligibility(name, field)))
             .collect();
-        Self {
+        let relation_targets = model
+            .fields
+            .iter()
+            .filter_map(|(name, field)| match field {
+                FieldAst::Relation(rel) if rel.is_owning() => {
+                    Some((name.clone(), rel.target.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let plain_uuids = model
+            .fields
+            .iter()
+            .filter(|(_, f)| {
+                matches!(f, FieldAst::Uuid(_)) && !field_annotations(f).db.auth_user_id
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        let mut scope = Self {
             model: model.name.clone(),
             fields,
             relation_keys: relation_keys(model).collect(),
-        }
+            relation_targets,
+            user_model: is_user_identity_model(model),
+            owner: None,
+            plain_uuids,
+        };
+        scope.owner = owner_field_on_model(model)
+            .map(|owner| scope.resolve(owner).unwrap_or_else(|| owner.to_string()));
+        scope
     }
 
     /// `id` first, then every field that may own a row, in name order.
@@ -63,6 +106,14 @@ impl Scope {
              Eligible on this model: [{}]",
             self.model,
             self.eligible()
+        )
+    }
+
+    /// A refusal of `Owner<"{field}">` for what it reaches rather than what it is.
+    fn refuse_reach(&self, field: &str, reason: &str) -> anyhow::Error {
+        anyhow!(
+            "Model '{}': Owner<\"{field}\"> is invalid: {reason}",
+            self.model
         )
     }
 
@@ -153,11 +204,62 @@ impl Scopes {
     fn for_table(&self, table: &str) -> Option<&Scope> {
         self.by_model.get(self.model_by_table.get(table)?)
     }
+
+    /// Refuse `Owner<"{written}">` on `scope`, resolved to `field`, when it is a relation that reaches
+    /// a model no caller's id can match through (O1), or one owned through a second relation (O4).
+    fn check_reach(&self, scope: &Scope, field: &str, written: &str) -> Result<()> {
+        let Some(target) = self.target_of(scope, field) else {
+            return Ok(());
+        };
+        if target.user_model {
+            return Ok(());
+        }
+        let Some(owner) = target.owner.as_deref() else {
+            return Err(scope.refuse_reach(written, &unowned(target, scope)));
+        };
+        match self.target_of(target, owner) {
+            Some(next) if !next.user_model => {
+                Err(scope.refuse_reach(written, &chained(target, owner, next, scope)))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The model `field` of `scope` reaches, when it is an owning relation to a model declared here.
+    fn target_of(&self, scope: &Scope, field: &str) -> Option<&Scope> {
+        self.by_model.get(scope.relation_targets.get(field)?)
+    }
+}
+
+/// Why an owner relation to `target` is refused when nothing owns it (O1).
+fn unowned(target: &Scope, scope: &Scope) -> String {
+    format!(
+        "it reaches model '{target}', which is neither a user model (keyed by a \
+         SupatypeAuthUserId) nor owned by an Owner rule of its own, so no caller's id could ever \
+         match it. Key '{target}' by SupatypeAuthUserId, give it an Owner rule, or own '{model}' \
+         through a field that holds the user's id",
+        target = target.model,
+        model = scope.model
+    )
+}
+
+/// Why an owner relation to `target` is refused when `target` is owned through a second relation,
+/// `owner`, to `next` (O4).
+fn chained(target: &Scope, owner: &str, next: &Scope, scope: &Scope) -> String {
+    format!(
+        "it reaches model '{target}', which is owned through its relation '{owner}' to model \
+         '{next}': a chain of more than one relation, and ownership is followed through one. Own \
+         '{model}' through a field that holds the user's id, or own '{target}' through one",
+        target = target.model,
+        next = next.model,
+        model = scope.model
+    )
 }
 
 /// Check every `Owner` in the schema, normalising relation key columns to their relation.
 pub fn validate(ast: &mut SchemaAst) -> Result<()> {
     let scopes = Scopes::read(ast);
+    let mut warnings = BTreeSet::new();
     for model in &mut ast.models {
         let scope = &scopes.by_model[&model.name];
         let access = &mut model.annotations.platform.access;
@@ -173,27 +275,55 @@ pub fn validate(ast: &mut SchemaAst) -> Result<()> {
             .values_mut()
             .flat_map(|rules| [&mut rules.read, &mut rules.write]);
         for rule in clauses.into_iter().chain(field_rules).flatten() {
-            check_rule(rule, scope, &scopes)?;
+            check_rule(rule, scope, &scopes, &mut warnings)?;
         }
     }
+    ast.warnings.extend(warnings);
     Ok(())
 }
 
-fn check_rule(rule: &mut AccessRule, scope: &Scope, scopes: &Scopes) -> Result<()> {
+fn check_rule(
+    rule: &mut AccessRule,
+    scope: &Scope,
+    scopes: &Scopes,
+    warnings: &mut BTreeSet<String>,
+) -> Result<()> {
     match rule {
-        AccessRule::Owner { field } => scope.check(field),
+        AccessRule::Owner { field } => {
+            let written = field.clone();
+            scope.check(field)?;
+            scopes.check_reach(scope, field, &written)?;
+            if scope.plain_uuids.contains(field.as_str()) {
+                warnings.insert(plain_uuid_owner(scope, field));
+            }
+            Ok(())
+        }
         AccessRule::Any { rules } | AccessRule::All { rules } => rules
             .iter_mut()
-            .try_for_each(|inner| check_rule(inner, scope, scopes)),
-        AccessRule::Not { rule } => check_rule(rule, scope, scopes),
+            .try_for_each(|inner| check_rule(inner, scope, scopes, warnings)),
+        AccessRule::Not { rule } => check_rule(rule, scope, scopes, warnings),
         AccessRule::In { source, .. } | AccessRule::Exists { source } => {
-            check_filter(source, scopes)
+            check_filter(source, scopes, warnings)
         }
         _ => Ok(()),
     }
 }
 
-fn check_filter(source: &mut MembershipSource, scopes: &Scopes) -> Result<()> {
+/// The warning for an owner that is a plain UUID, not marked as an auth user id (O2): the policy
+/// compares the caller's id with it, and nothing says it holds one.
+fn plain_uuid_owner(scope: &Scope, field: &str) -> String {
+    format!(
+        "Model '{}': Owner<\"{field}\"> compares the caller's id with a plain UUID. Declare \
+         '{field}' as SupatypeAuthUserId if it holds an auth user's id: nothing checks that it does.",
+        scope.model
+    )
+}
+
+fn check_filter(
+    source: &mut MembershipSource,
+    scopes: &Scopes,
+    warnings: &mut BTreeSet<String>,
+) -> Result<()> {
     let MembershipSource::Rows {
         table,
         filter: Some(filter),
@@ -203,7 +333,7 @@ fn check_filter(source: &mut MembershipSource, scopes: &Scopes) -> Result<()> {
         return Ok(());
     };
     match scopes.for_table(table) {
-        Some(scope) => check_rule(filter, scope, scopes),
+        Some(scope) => check_rule(filter, scope, scopes, warnings),
         None => Ok(()),
     }
 }

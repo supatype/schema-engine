@@ -30,6 +30,10 @@ pub const FEATURES: &[&str] = &[
     // columns, created, changed and introspected (`isIdentity`, `generationExpression`, ...). An
     // engine without it parses neither key and makes a plain column.
     "identity_columns",
+    // `push` with the audit trail: `pushed_by`, `pushed_via`, `pushed_from` and
+    // `pushed_by_verified` (`--pushed-by`, ...), recorded on the migration row with the renames
+    // the push applied from the schema's rename journal (`renameJournal`).
+    "push_audit",
 ];
 
 /// The capabilities document. `version` is the build's own (`build.rs`): the crate version for a
@@ -45,7 +49,7 @@ mod tests {
         assert_eq!(
             super::capabilities().to_string(),
             format!(
-                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns"]}}"#,
+                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns","push_audit"]}}"#,
                 env!("ENGINE_VERSION")
             )
         );

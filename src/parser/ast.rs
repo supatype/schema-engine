@@ -26,6 +26,9 @@ pub struct SchemaAst {
     pub publishing: Option<PublishingAst>,
     /// Warnings from parse/validation.
     pub warnings: Vec<String>,
+    /// The project's rename journal (`supatype/renames.json`): each entry a declared rename, read
+    /// beside every `renamedFrom`, and recorded with who declared it when a push applies it.
+    pub rename_journal: Vec<super::annotations::DeclaredRename>,
     /// The names the target database's ledger already records for this schema's keys, checks and
     /// indexes, which keep them (F2d). Filled by a push from the database, never parsed or
     /// serialized; empty everywhere else, where names are chosen from the schema alone.

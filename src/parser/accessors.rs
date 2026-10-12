@@ -191,6 +191,41 @@ pub fn resolve_owner_column(model: &ModelAst, kernel_field: &str) -> String {
     to_snake_case(kernel_field)
 }
 
+/// Whether `model` is a user's own: keyed by an `id` the CLI marked as an `auth.users` id
+/// (`SupatypeAuthUserId`). An owner relation to it compares the caller's id with the key directly.
+///
+/// The marker is the only evidence. A UUID key the database does not generate was once taken for
+/// one, but nothing in a schema said so, and the CLI generates every UUID key anyway (O1).
+pub fn is_user_identity_model(model: &ModelAst) -> bool {
+    matches!(
+        model.fields.get("id"),
+        Some(field @ FieldAst::Uuid(_)) if field_annotations(field).db.auth_user_id
+    )
+}
+
+/// The field a model is owned through: the first `Owner` among its read, update, delete and create
+/// rules, looking inside `any` and `all`. A rule that names no owner (`Public`, a role) is passed
+/// over rather than ending the search, so `read: Public` beside `update: Owner<"user_id">` is owned
+/// through `user_id` (O3).
+pub fn owner_field_on_model(model: &ModelAst) -> Option<&str> {
+    let access = platform_access(model);
+    [&access.read, &access.update, &access.delete, &access.create]
+        .into_iter()
+        .flatten()
+        .find_map(owner_in_rule)
+}
+
+fn owner_in_rule(rule: &super::ast::AccessRule) -> Option<&str> {
+    use super::ast::AccessRule;
+    match rule {
+        AccessRule::Owner { field } => Some(field.as_str()),
+        AccessRule::Any { rules } | AccessRule::All { rules } => {
+            rules.iter().find_map(owner_in_rule)
+        }
+        _ => None,
+    }
+}
+
 pub fn default_foreign_key_column(field_name: &str) -> String {
     let snake = field_name
         .replace(' ', "_")

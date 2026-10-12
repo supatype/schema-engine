@@ -8,7 +8,7 @@ pub struct AstRequest {
     pub ast: serde_json::Value,
     /// Schema Supatype manages. Defaults to `public`, so an older client keeps working; the DB
     /// endpoints have always carried this, and the previews rendered `public` regardless.
-    #[serde(default = "default_schema")]
+    #[serde(default = "default_schema", deserialize_with = "plain_schema")]
     pub schema: String,
 }
 
@@ -32,7 +32,7 @@ pub struct DbRequest {
     /// Ignored when `DATABASE_URL` is set on the engine process (trusted-proxy mode).
     #[serde(default)]
     pub database_url: Option<String>,
-    #[serde(default = "default_schema")]
+    #[serde(default = "default_schema", deserialize_with = "plain_schema")]
     pub schema: String,
     #[serde(default)]
     pub force: bool,
@@ -78,10 +78,27 @@ pub struct DbRequest {
     pub schema_sources_base64: Option<String>,
     #[serde(default)]
     pub schema_sources_manifest: Option<serde_json::Value>,
+    /// For `push`, the audit trail: who pushed (`pushed_by`), through what (`pushed_via`: `cli`,
+    /// `studio`, `cloud` or `self-host`, anything else refused), from where (`pushed_from`, a host
+    /// or CI run), and whether a control plane authenticated the author (`pushed_by_verified`).
+    /// Recorded on the migration row. A control plane sets the author from its own authentication.
+    #[serde(flatten)]
+    pub audit: crate::state::audit::PushAudit,
 }
 
 fn default_schema() -> String {
     "public".to_string()
+}
+
+/// A `schema` or `auth_schema` that is a plain identifier, refused otherwise before anything runs
+/// (Q1, Q3): see [`crate::sql_quote::plain_schema_name`].
+fn plain_schema<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    crate::sql_quote::plain_schema_name(&name).map_err(serde::de::Error::custom)?;
+    Ok(name)
 }
 
 /// Request body for /auth-functions endpoint.
@@ -89,7 +106,7 @@ fn default_schema() -> String {
 pub struct AuthFunctionsRequest {
     #[serde(default)]
     pub project_ref: String,
-    #[serde(default = "default_auth_schema")]
+    #[serde(default = "default_auth_schema", deserialize_with = "plain_schema")]
     pub auth_schema: String,
 }
 
@@ -102,7 +119,7 @@ fn default_auth_schema() -> String {
 pub struct StudioConfigRequest {
     #[serde(default)]
     pub database_url: Option<String>,
-    #[serde(default = "default_schema")]
+    #[serde(default = "default_schema", deserialize_with = "plain_schema")]
     pub schema: String,
 }
 

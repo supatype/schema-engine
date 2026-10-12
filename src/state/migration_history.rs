@@ -2,11 +2,13 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{Executor, PgConnection, PgPool, Postgres};
 
+use super::audit::{PushAudit, PushChannel};
+
 // Internal bookkeeping lives in a dedicated schema so it never appears in the
 // user's `public` schema and is never touched by introspection or diffs.
 const SCHEMA: &str = "_supatype";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MigrationListItem {
     pub id: i32,
@@ -17,6 +19,13 @@ pub struct MigrationListItem {
     pub engine_version: String,
     pub status: String,
     pub schema_sources_manifest: Option<serde_json::Value>,
+    /// Who pushed it: verified when a control plane authenticated them, else their own claim.
+    pub pushed_by: Option<String>,
+    pub pushed_via: Option<String>,
+    pub pushed_from: Option<String>,
+    pub pushed_by_verified: Option<bool>,
+    /// Each rename it applied, with who declared it and when.
+    pub renames: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +75,12 @@ pub fn create_migrations_table_sql() -> String {
     schema_sources          BYTEA,
     schema_sources_manifest JSONB,
     status                  TEXT NOT NULL DEFAULT 'applied',
-    error_message           TEXT
+    error_message           TEXT,
+    pushed_by               TEXT,
+    pushed_via              TEXT,
+    pushed_from             TEXT,
+    pushed_by_verified      BOOLEAN,
+    renames                 JSONB
 )"#
     )
 }
@@ -342,7 +356,22 @@ pub fn ensure_all_migration_columns_sql() -> Vec<String> {
         ensure_migrations_status_columns_sql(),
         ensure_migrations_sql_down_column_sql(),
         ensure_migrations_schema_sources_column_sql(),
+        ensure_migrations_audit_columns_sql(),
     ]
+}
+
+/// The audit trail's columns (`crate::state::audit`): who pushed, through what, from where,
+/// whether a control plane authenticated the author, and the renames the push applied. Nullable:
+/// a row from before them, or written by a caller that sent none, says nothing rather than
+/// something untrue.
+pub fn ensure_migrations_audit_columns_sql() -> String {
+    format!(
+        "ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS pushed_by TEXT;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS pushed_via TEXT;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS pushed_from TEXT;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS pushed_by_verified BOOLEAN;\
+         ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS renames JSONB"
+    )
 }
 
 pub fn ensure_migrations_status_columns_sql() -> String {
@@ -732,8 +761,9 @@ where
 pub fn insert_migration_sql() -> String {
     format!(
         "INSERT INTO {SCHEMA}.migrations \
-         (name, hash, engine_version, schema_snapshot, admin_config, sql_up, sql_down, schema_sources, schema_sources_manifest) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id"
+         (name, hash, engine_version, schema_snapshot, admin_config, sql_up, sql_down, schema_sources, schema_sources_manifest, \
+          pushed_by, pushed_via, pushed_from, pushed_by_verified, renames) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id"
     )
 }
 
@@ -745,6 +775,16 @@ pub struct AppliedMigrationSources {
     pub sql_down: Option<String>,
     pub schema_sources: Option<Vec<u8>>,
     pub schema_sources_manifest: Option<serde_json::Value>,
+    /// Who pushed, through what and from where.
+    pub audit: PushAudit,
+    /// The renames the push applied, with who declared each ([`PushAudit::applied_renames`]).
+    pub renames: Option<serde_json::Value>,
+}
+
+/// `pushed_by_verified` as recorded: true or false when the push said who it was from, and
+/// nothing when it did not, so an absent author is not recorded as an unverified one.
+fn verified_column(audit: &PushAudit) -> Option<bool> {
+    audit.pushed_by.as_ref().map(|_| audit.pushed_by_verified)
 }
 
 /// Record a successful migration row (same shape as [`insert_migration_sql`]). Returns the row's
@@ -772,6 +812,11 @@ where
         .bind(sources.sql_down.as_deref())
         .bind(sources.schema_sources.as_deref())
         .bind(sources.schema_sources_manifest.as_ref())
+        .bind(sources.audit.pushed_by.as_deref())
+        .bind(sources.audit.pushed_via.map(PushChannel::as_str))
+        .bind(sources.audit.pushed_from.as_deref())
+        .bind(verified_column(&sources.audit))
+        .bind(sources.renames.as_ref())
         .fetch_one(executor)
         .await?;
     Ok(id)
@@ -797,11 +842,12 @@ pub async fn update_latest_migration_admin(
 }
 
 /// When push finds no DDL diff: refresh Studio metadata on the latest migration row, or
-/// record a one-time `initial_*` baseline when no active migration exists yet.
+/// record a one-time `initial_*` baseline when no active migration exists yet, by `audit`'s author.
 pub async fn refresh_metadata_on_up_to_date_push(
     conn: &mut sqlx::PgConnection,
     admin_config: &serde_json::Value,
     schema_snapshot: &serde_json::Value,
+    audit: &PushAudit,
 ) -> Result<()> {
     save_studio_metadata_if_present(&mut *conn, admin_config, schema_snapshot).await?;
 
@@ -821,6 +867,11 @@ pub async fn refresh_metadata_on_up_to_date_push(
         .bind(None::<String>)
         .bind(None::<String>)
         .bind(None::<Vec<u8>>)
+        .bind(None::<serde_json::Value>)
+        .bind(audit.pushed_by.as_deref())
+        .bind(audit.pushed_via.map(PushChannel::as_str))
+        .bind(audit.pushed_from.as_deref())
+        .bind(verified_column(audit))
         .bind(None::<serde_json::Value>)
         .execute(&mut *conn)
         .await?;
@@ -851,22 +902,33 @@ pub async fn save_studio_metadata_if_present(
 pub fn insert_failed_migration_sql() -> String {
     format!(
         "INSERT INTO {SCHEMA}.migrations \
-         (name, hash, engine_version, sql_up, status, error_message) \
-         VALUES ($1, $2, $3, $4, 'failed', $5) \
+         (name, hash, engine_version, sql_up, status, error_message, \
+          pushed_by, pushed_via, pushed_from, pushed_by_verified) \
+         VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7, $8, $9) \
          ON CONFLICT (name) DO NOTHING"
     )
 }
 
-/// Record a failed push under `name`, or, when a migration already has that name, under
+/// What a failed push records: its name, hash and statements, why it failed, and who tried it.
+pub struct FailedMigration<'a> {
+    pub name: &'a str,
+    pub hash: &'a str,
+    pub sql_up: &'a str,
+    pub error: &'a str,
+    pub audit: &'a PushAudit,
+}
+
+/// Record a failed push under its name, or, when a migration already has that name, under
 /// `<name>.failed.<time>`: a name of its own, so the failure is kept and the earlier row is not
 /// changed.
-pub async fn record_failed_migration(
-    pool: &PgPool,
-    name: &str,
-    hash: &str,
-    sql_up: &str,
-    error: &str,
-) -> Result<()> {
+pub async fn record_failed_migration(pool: &PgPool, failed: FailedMigration<'_>) -> Result<()> {
+    let FailedMigration {
+        name,
+        hash,
+        sql_up,
+        error,
+        audit,
+    } = failed;
     let unique = format!(
         "{name}.failed.{}",
         chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")
@@ -878,6 +940,10 @@ pub async fn record_failed_migration(
             .bind(env!("ENGINE_VERSION"))
             .bind(sql_up)
             .bind(error)
+            .bind(audit.pushed_by.as_deref())
+            .bind(audit.pushed_via.map(PushChannel::as_str))
+            .bind(audit.pushed_from.as_deref())
+            .bind(verified_column(audit))
             .execute(pool)
             .await?;
         if recorded.rows_affected() == 1 {
@@ -918,41 +984,13 @@ where
 }
 
 pub async fn list_migrations_summary(pool: &PgPool) -> Result<Vec<MigrationListItem>> {
-    type MigrationSummaryRow = (
-        i32,
-        String,
-        String,
-        String,
-        bool,
-        String,
-        String,
-        Option<serde_json::Value>,
-    );
-
     let sql = format!(
-        "SELECT id, name, hash, applied_at::TEXT, rolled_back, engine_version, \
-         COALESCE(status, 'applied'), schema_sources_manifest \
-         FROM {SCHEMA}.migrations ORDER BY applied_at DESC"
+        "SELECT id, name, hash, applied_at::TEXT AS applied_at, rolled_back, engine_version, \
+         COALESCE(status, 'applied') AS status, schema_sources_manifest, \
+         pushed_by, pushed_via, pushed_from, pushed_by_verified, renames \
+         FROM {SCHEMA}.migrations m ORDER BY m.applied_at DESC"
     );
-    let rows: Vec<MigrationSummaryRow> = sqlx::query_as(&sql).fetch_all(pool).await?;
-
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, name, hash, applied_at, rolled_back, engine_version, status, manifest)| {
-                MigrationListItem {
-                    id,
-                    name,
-                    hash,
-                    applied_at,
-                    rolled_back,
-                    engine_version,
-                    status,
-                    schema_sources_manifest: manifest,
-                }
-            },
-        )
-        .collect())
+    Ok(sqlx::query_as(&sql).fetch_all(pool).await?)
 }
 
 struct LatestMigrationRow {

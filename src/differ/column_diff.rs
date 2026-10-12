@@ -6,7 +6,7 @@ use crate::generator::sql::column_conversion::{
 use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::tables::{DbColumn, DbTable};
 use crate::parser::accessors::{column_names_for, is_localized};
-use crate::parser::ast::{FieldAst, IdentityGeneration, ModelAst, RelationCardinality};
+use crate::parser::ast::{FieldAst, IdentityGeneration, ModelAst, RelationCardinality, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
 use serde_json::json;
@@ -887,9 +887,10 @@ pub fn diff(
     db: &DatabaseState,
     ops: &mut Vec<Operation>,
     warnings: &mut Vec<String>,
-    default_locale: &str,
+    ast: &SchemaAst,
     previous_model: Option<&ModelAst>,
 ) -> Result<()> {
+    let default_locale = ast.effective_default_locale();
     let db_col_names: std::collections::HashSet<String> =
         db_table.columns.iter().map(|c| c.name.clone()).collect();
 
@@ -926,7 +927,15 @@ pub fn diff(
         .collect();
 
     // Renames are declared, never guessed (D1). `renamed` maps each new column to its old one.
-    let renamed = declared_renames(model, db_table, db, previous_model, &schema_col_names, ops)?;
+    let renamed = declared_renames(
+        model,
+        db_table,
+        db,
+        previous_model,
+        &schema_col_names,
+        ops,
+        ast,
+    )?;
     let renamed_dropped: std::collections::HashSet<&str> =
         renamed.values().map(String::as_str).collect();
 
@@ -1169,9 +1178,10 @@ pub fn diff(
     Ok(())
 }
 
-/// The column renames `model` declares that apply to `db_table`, each pushed as a `RenameColumn`,
-/// as a map from the new column to the old. Refuses one that cannot be a rename, naming both
-/// columns (`renames::check_column_rename`).
+/// The column renames `model` and the rename journal declare that apply to `db_table`, each pushed
+/// as a `RenameColumn` from the first declared source `db_table` still has, as a map from the new
+/// column to the old. Refuses one that cannot be a rename, naming both columns
+/// (`renames::check_column_rename`). A journal entry counts on any name the table has had.
 ///
 /// Only a column that is ours is a source (D4): one the ledger records, or, where it has no row
 /// (an upgraded database), one the last push's schema declared on this table. Not one recorded as
@@ -1183,6 +1193,7 @@ fn declared_renames(
     previous_model: Option<&ModelAst>,
     schema_columns: &std::collections::HashSet<&str>,
     ops: &mut Vec<Operation>,
+    ast: &SchemaAst,
 ) -> Result<std::collections::HashMap<String, String>> {
     let managed = db.owns_table(db_table);
     let ours = |column: &str| {
@@ -1192,24 +1203,36 @@ fn declared_renames(
                 .column_owned(&db_table.name, column)
                 .unwrap_or_else(|| declared_by(previous_model, column))
     };
+    let journal = &ast.rename_journal;
+    let table_names = renames::declared_table_sources(model, journal);
+    let tables: Vec<&str> = [model.table_name(), db_table.name.as_str()]
+        .into_iter()
+        .chain(table_names.iter().map(String::as_str))
+        .collect();
+    let column = |name: &str| db_table.columns.iter().find(|c| c.name == name);
     let mut renamed = std::collections::HashMap::new();
-    for rename in renames::declared_column_renames(model, previous_model) {
+    for rename in renames::declared_column_renames(model, previous_model, journal, &tables) {
+        let Some(source) = rename
+            .present_source(|name| column(name).is_some())
+            .and_then(column)
+        else {
+            continue;
+        };
         let site = renames::ColumnRenameSite {
             table: model.table_name(),
-            source: db_table.columns.iter().find(|c| c.name == rename.from),
-            target_exists: db_table.columns.iter().any(|c| c.name == rename.to),
-            source_declared: schema_columns.contains(rename.from.as_str()),
-            source_ours: ours(&rename.from),
+            source,
+            target_exists: column(&rename.to).is_some(),
+            source_declared: schema_columns.contains(source.name.as_str()),
+            source_ours: ours(&source.name),
         };
-        if renames::check_column_rename(&rename, &site)? {
-            ops.push(Operation::RenameColumn {
-                table: model.table_name().to_string(),
-                from: rename.from.clone(),
-                to: rename.to.clone(),
-                risk: Risk::Safe,
-            });
-            renamed.insert(rename.to, rename.from);
-        }
+        renames::check_column_rename(&rename, &site)?;
+        ops.push(Operation::RenameColumn {
+            table: model.table_name().to_string(),
+            from: source.name.clone(),
+            to: rename.to.clone(),
+            risk: Risk::Safe,
+        });
+        renamed.insert(rename.to, source.name.clone());
     }
     Ok(renamed)
 }

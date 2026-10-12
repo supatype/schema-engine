@@ -6,6 +6,12 @@ use owo_colors::OwoColorize;
 use std::io::{self, Read};
 use tracing::info;
 
+/// `--schema` and `--auth-schema`: a plain identifier, refused before anything is read or
+/// connected to (Q1, Q3).
+fn schema_name(name: &str) -> Result<String, String> {
+    supatype_engine::sql_quote::plain_schema_name(name).map(|()| name.to_string())
+}
+
 #[derive(Parser)]
 #[command(
     name = "supatype-engine",
@@ -34,6 +40,35 @@ struct Cli {
     command: Command,
 }
 
+/// `push`'s audit trail: who pushed, through what and from where, recorded on the migration row
+/// (`state::audit`). The renames it applied are recorded from the schema's rename journal.
+#[derive(clap::Args)]
+struct AuditArgs {
+    /// Who is pushing: a control plane passes the identity it authenticated
+    #[arg(long)]
+    pushed_by: Option<String>,
+    /// The channel: cli, studio, cloud or self-host
+    #[arg(long)]
+    pushed_via: Option<supatype_engine::state::audit::PushChannel>,
+    /// Where the push comes from: a host name or a CI run
+    #[arg(long)]
+    pushed_from: Option<String>,
+    /// The author was authenticated by the caller, not merely claimed
+    #[arg(long)]
+    pushed_by_verified: bool,
+}
+
+impl From<AuditArgs> for supatype_engine::state::audit::PushAudit {
+    fn from(args: AuditArgs) -> Self {
+        Self {
+            pushed_by: args.pushed_by,
+            pushed_via: args.pushed_via,
+            pushed_from: args.pushed_from,
+            pushed_by_verified: args.pushed_by_verified,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Print what this engine supports of the ownership contract, as JSON
@@ -44,14 +79,14 @@ enum Command {
     Introspect {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
     },
     /// Compute diff between target schema and current database state
     Diff {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
     },
     /// Print the migration a push would apply, planned without taking any lock an application
@@ -60,7 +95,7 @@ enum Command {
     Migrate {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
         #[arg(long, help = "Allow destructive operations without prompting")]
         force: bool,
@@ -73,7 +108,7 @@ enum Command {
     Push {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
         #[arg(long, help = "Allow destructive operations without prompting")]
         force: bool,
@@ -99,6 +134,8 @@ enum Command {
             help = "Put back policies, grants, labels and RLS changed outside Supatype without asking"
         )]
         overwrite_drift: bool,
+        #[command(flatten)]
+        audit: AuditArgs,
     },
     /// Generate typed client code (TypeScript by default; use --lang for other languages)
     Generate {
@@ -111,19 +148,19 @@ enum Command {
     },
     /// Generate trigger SQL (updated_at + slug)
     Triggers {
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
     },
     /// Generate RLS policy SQL
     Rls {
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
     },
     /// Generate storage schema SQL (bucket DDL + storage RLS)
     Storage,
     /// Generate PostgREST configuration
     Postgrest {
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
     },
     /// Generate admin panel configuration JSON
@@ -139,6 +176,7 @@ enum Command {
         #[arg(
             long,
             default_value = "auth",
+            value_parser = schema_name,
             help = "Schema where auth functions are created"
         )]
         auth_schema: String,
@@ -161,14 +199,14 @@ enum Command {
     Rollback {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
     },
     /// Report schema drift between AST and live database (read-only)
     Doctor {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
         #[arg(
             long,
@@ -198,7 +236,7 @@ enum Command {
     Seed {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
         #[arg(
             long,
@@ -225,7 +263,7 @@ enum Command {
     Adopt {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
-        #[arg(long, default_value = "public")]
+        #[arg(long, default_value = "public", value_parser = schema_name)]
         schema: String,
         #[arg(long, help = "Write the ledger rows instead of previewing them")]
         yes: bool,
@@ -369,6 +407,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             schema_sources_gz,
             schema_sources_manifest,
             overwrite_drift,
+            audit,
         } => {
             use supatype_engine::generator::sql::migration::{
                 UnmanagedModelTables, UNMANAGED_MODEL_TABLES,
@@ -438,6 +477,7 @@ async fn run(command: Command, input: String) -> Result<()> {
                 schema_sources,
                 schema_sources_manifest,
                 overwrite_drift,
+                audit: audit.into(),
             };
             // A refusal goes on stdout too, so the CLI can show the objects and ask (plan 3.5).
             let outcome = match push::apply(&pool, plan, options).await {

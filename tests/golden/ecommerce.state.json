@@ -771,7 +771,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = customer_id)",
         "managed": false
       },
       {
@@ -779,7 +779,7 @@
         "name": "orders_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = customer_id)",
         "checkExpr": null,
         "managed": false
       },
@@ -1540,7 +1540,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"customer_id\"\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
         "comment": null,
         "arguments": "orders public.orders",
         "config": [],
@@ -1549,7 +1549,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"customer_id\"\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
@@ -1740,7 +1740,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"customer_id\"\n      FROM (SELECT ($1).*) AS \"orders\";\n  ",
         "comment": null,
         "arguments": "orders public.orders",
         "config": [],
@@ -1749,7 +1749,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (SELECT 1 FROM \"customers\" WHERE \"customers\".\"id\" = \"customer_id\" AND (SELECT _supatype.jwt_uid()) = \"customers\".\"id\")\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_orders(orders public.orders)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"customer_id\"\n      FROM (SELECT ($1).*) AS \"orders\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
@@ -2162,7 +2162,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(EXISTS ( SELECT 1\n   FROM public.customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
+        "checkExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = customer_id)",
         "comment": null
       },
       {
@@ -2174,7 +2174,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(EXISTS ( SELECT 1\n   FROM public.customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT _supatype.jwt_uid() AS jwt_uid) = customers.id))))",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = customer_id)",
         "checkExpr": null,
         "comment": null
       },
