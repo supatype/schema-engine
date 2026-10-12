@@ -9,6 +9,12 @@ fn owner_rule_accepts_kernel_relation_field_name() {
             {
                 "name": "User",
                 "fields": {
+                    "id": {
+                        "kind": "uuid",
+                        "primaryKey": true,
+                        "required": true,
+                        "annotations": { "db": { "pgType": "UUID", "authUserId": true } }
+                    },
                     "email": {
                         "kind": "text",
                         "required": true,
@@ -170,7 +176,7 @@ fn owner_from_nested_relation_generates_exists_subquery() {
                         "kind": "uuid",
                         "primaryKey": true,
                         "required": true,
-                        "annotations": { "db": { "pgType": "UUID" } }
+                        "annotations": { "db": { "pgType": "UUID", "authUserId": true } }
                     }
                 },
                 "options": {},
@@ -260,7 +266,14 @@ fn owner_rule_accepts_fk_column_name_and_normalizes_to_field_name() {
         "models": [
             {
                 "name": "Profile",
-                "fields": {},
+                "fields": {
+                    "id": {
+                        "kind": "uuid",
+                        "primaryKey": true,
+                        "required": true,
+                        "annotations": { "db": { "pgType": "UUID", "authUserId": true } }
+                    }
+                },
                 "options": {},
                 "annotations": {
                     "db": { "tableName": "profile", "indexes": [] },
@@ -316,7 +329,14 @@ fn owner_rule_fk_column_name_generates_correct_rls() {
         "models": [
             {
                 "name": "Profile",
-                "fields": {},
+                "fields": {
+                    "id": {
+                        "kind": "uuid",
+                        "primaryKey": true,
+                        "required": true,
+                        "annotations": { "db": { "pgType": "UUID", "authUserId": true } }
+                    }
+                },
                 "options": {},
                 "annotations": {
                     "db": { "tableName": "profile", "indexes": [] },

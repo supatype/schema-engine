@@ -229,7 +229,9 @@ pub fn diff_with_previous(
     previous: Option<&SchemaAst>,
 ) -> Result<DiffOutput> {
     let mut ops: Vec<Operation> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
+    // What the parser found worth saying about the schema itself (an owner that is a plain UUID, a
+    // plugin built for another API) first: it was dropped here, so nothing ever showed it.
+    let mut warnings: Vec<String> = ast.warnings.clone();
 
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
     rls_diff::diff(ast, db, &mut warnings)?;

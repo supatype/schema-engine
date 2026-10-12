@@ -389,6 +389,6 @@ fn capabilities_prints_the_features_this_engine_supports() {
         body,
         serde_json::json!({ "version": env!("ENGINE_VERSION"), "features": ["adopt_keys", "adopt_none", "release", "reclaim",
             "rebaseline", "accept_access_drift", "rebaseline_keys", "overwrite_drift", "engine_busy", "identity_columns",
-            "migrate_record", "online_ddl"] })
+            "migrate_record", "online_ddl", "push_audit"] })
     );
 }

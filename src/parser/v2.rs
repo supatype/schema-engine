@@ -54,6 +54,7 @@ pub fn deserialize_schema(value: &Value) -> Result<SchemaAst> {
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?,
         warnings: deserialize_optional_string_vec(value, "warnings"),
+        rename_journal: deserialize_optional_vec(value, "renameJournal")?,
         recorded_names: Default::default(),
     })
 }
@@ -881,6 +882,9 @@ pub fn serialize_schema(ast: &SchemaAst) -> Value {
     }
     if !ast.warnings.is_empty() {
         root["warnings"] = serde_json::to_value(&ast.warnings).unwrap_or(Value::Null);
+    }
+    if !ast.rename_journal.is_empty() {
+        root["renameJournal"] = serde_json::to_value(&ast.rename_journal).unwrap_or(Value::Null);
     }
     root
 }

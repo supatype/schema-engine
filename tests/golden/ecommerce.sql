@@ -326,7 +326,7 @@ GRANT EXECUTE ON FUNCTION "public"."can_delete_products"("public"."products", bo
 
 CREATE OR REPLACE FUNCTION "public"."can_read_orders"("orders" "public"."orders", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT _supatype.jwt_uid()) = "customers"."id")
+    SELECT (SELECT _supatype.jwt_uid()) = "customer_id"
       FROM (SELECT ($1).*) AS "orders";
   $can$;
 REVOKE ALL ON FUNCTION "public"."can_read_orders"("public"."orders", boolean) FROM PUBLIC;
@@ -334,7 +334,7 @@ GRANT EXECUTE ON FUNCTION "public"."can_read_orders"("public"."orders", boolean)
 
 CREATE OR REPLACE FUNCTION "public"."can_create_orders"("orders" "public"."orders", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
-    SELECT EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT _supatype.jwt_uid()) = "customers"."id")
+    SELECT (SELECT _supatype.jwt_uid()) = "customer_id"
       FROM (SELECT ($1).*) AS "orders";
   $can$;
 REVOKE ALL ON FUNCTION "public"."can_create_orders"("public"."orders", boolean) FROM PUBLIC;
@@ -487,11 +487,11 @@ FOR DELETE USING (
   );
 CREATE POLICY "orders_insert" ON "public"."orders"
 FOR INSERT WITH CHECK (
-    EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT _supatype.jwt_uid()) = "customers"."id")
+    (SELECT _supatype.jwt_uid()) = "customer_id"
   );
 CREATE POLICY "orders_select" ON "public"."orders"
 FOR SELECT USING (
-    EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT _supatype.jwt_uid()) = "customers"."id")
+    (SELECT _supatype.jwt_uid()) = "customer_id"
   );
 CREATE POLICY "orders_update" ON "public"."orders"
 FOR UPDATE USING (

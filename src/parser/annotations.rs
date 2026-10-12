@@ -21,11 +21,12 @@ pub struct DbModelAnnotations {
     /// operand set. Beside `indexes` because both are things Postgres holds, unlike `access`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constraints: Vec<AccessRule>,
-    /// The table this model's table was called before, when the schema declares a rename (D1).
-    /// Renames are declared, never guessed: the table differ renames `renamed_from` to this table
-    /// only when it exists, and a declaration whose source is gone is a no-op, so it can stay.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub renamed_from: Option<String>,
+    /// The names this model's table was called before, newest first, when the schema declares a
+    /// rename (D1). Renames are declared, never guessed: the table differ renames the first of them
+    /// the database still has to this table, and a declaration whose sources are all gone is a
+    /// no-op, so it can stay. `renamedFrom` is one name or a list ([`RenamedFrom`]).
+    #[serde(default, skip_serializing_if = "RenamedFrom::is_empty")]
+    pub renamed_from: RenamedFrom,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,11 +68,17 @@ pub struct DbFieldAnnotations {
     /// Array element type (kind `array`).
     #[serde(default)]
     pub element_type: Option<String>,
-    /// The field this one was called before, when the schema declares a rename (D1). The column
-    /// differ renames the old column to this field's only when it exists, is Supatype's and holds
-    /// the declared type (or one that widens to it); a declaration whose source is gone is a no-op.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub renamed_from: Option<String>,
+    /// The names this field was called before, newest first, when the schema declares a rename
+    /// (D1). The column differ renames the first old column the database still has to this
+    /// field's, only when it is Supatype's and holds the declared type (or one that widens to it);
+    /// a declaration whose sources are all gone is a no-op.
+    #[serde(default, skip_serializing_if = "RenamedFrom::is_empty")]
+    pub renamed_from: RenamedFrom,
+    /// The field holds an `auth.users` id: the CLI marks a `SupatypeAuthUserId` field, since a UUID
+    /// alone says nothing about what it identifies. A model keyed by one is a user's own, which an
+    /// owner relation may point at (O1); an owner field without the mark is warned about (O2).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auth_user_id: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -81,4 +88,61 @@ pub struct PlatformFieldAnnotations {
     pub editor: Option<String>,
     #[serde(default)]
     pub read_only: bool,
+}
+
+/// The old names a rename declares, newest first: `renamedFrom` as one name or a list. A list is
+/// what lets a database two renames behind follow the chain back to the name it still has.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct RenamedFrom(pub Vec<String>);
+
+impl RenamedFrom {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.0.iter().map(String::as_str)
+    }
+}
+
+impl<'de> Deserialize<'de> for RenamedFrom {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum OneOrMany {
+            One(String),
+            Many(Vec<String>),
+        }
+        Ok(RenamedFrom(match OneOrMany::deserialize(deserializer)? {
+            OneOrMany::One(name) => vec![name],
+            OneOrMany::Many(names) => names,
+        }))
+    }
+}
+
+/// A dropped table or column and an added one, as a rename: `from` became `to`. What the engine
+/// offers (`renameCandidates`) and what the project's rename journal records.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameCandidate {
+    /// `table` or `column`.
+    pub kind: String,
+    /// The table, for a column; the old table's name, for a table.
+    pub table: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// One entry of the project's rename journal (`supatype/renames.json`, sent as the schema's
+/// `renameJournal`): a rename and who declared it, when. The journal's own fields (`id`) are
+/// ignored. Each entry is a declared rename, as `renamedFrom` is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclaredRename {
+    #[serde(flatten)]
+    pub rename: RenameCandidate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_at: Option<String>,
 }

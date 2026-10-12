@@ -281,11 +281,12 @@ fn owner_through_a_has_many_relation_is_refused() {
 
 #[test]
 fn owner_through_a_relation_to_a_user_model_is_accepted() {
+    // A user model is keyed by a `SupatypeAuthUserId`, which the CLI marks (O1).
     let profile = model(
         "Author",
         "author",
         json!({ "id": { "kind": "uuid", "primaryKey": true, "required": true,
-                        "annotations": { "db": { "pgType": "UUID" } } } }),
+                        "annotations": { "db": { "pgType": "UUID", "authUserId": true } } } }),
         json!({}),
     );
     let ast = parser::parse(&post_by(profile)).expect("parses");

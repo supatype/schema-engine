@@ -1276,11 +1276,15 @@ fn relations_fixture() -> SchemaAst {
         json!({ "kind": "relation", "cardinality": "belongsTo", "target": target,
                 "uniqueFk": unique, "required": false })
     };
+    // A staff member is keyed by their auth user id, which the CLI marks (O1): a payslip's owner
+    // relation reaches them.
+    let mut staff_id = uuid_key(false);
+    staff_id["annotations"]["db"]["authUserId"] = json!(true);
     let staff = model(
         "Staff",
         "staff",
         json!({
-            "id": uuid_key(false),
+            "id": staff_id,
             "name": column("text", "TEXT", true),
             "salary": column("integer", "INTEGER", false),
             "manager": belongs_to("Staff", false),

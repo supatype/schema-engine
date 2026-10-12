@@ -1,8 +1,11 @@
 use crate::generator::sql::auth_functions::{API_ROLES, AUTH_SCHEMA, CLAIMS_SCHEMA};
-use crate::parser::accessors::{db_table_name, platform_access, resolve_owner_column};
+use crate::parser::accessors::{
+    db_table_name, is_user_identity_model, owner_field_on_model, platform_access,
+    resolve_owner_column,
+};
 use crate::parser::ast::{
-    AccessRule, DefaultValueAst, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst,
-    Operand, SchemaAst,
+    AccessRule, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst, Operand,
+    SchemaAst,
 };
 use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified};
 use anyhow::Result;
@@ -714,10 +717,12 @@ fn interval(text: &str) -> String {
 /// `Owner<"f">`: compare the caller's user id ([`AUTH_UID`]) with a column of the row, or look
 /// ownership up through a related model.
 ///
-/// `id` and a UUID field are compared directly, as is a relation's key when the related model is
-/// keyed by the auth user id or declares no owner of its own. A related model with an `Owner`
-/// rule is joined, and its owner column compared. The validator (`parser::owner_rules`) has
-/// already refused every other kind of field.
+/// `id` and a UUID field are compared directly, as is a relation's key when the related model is a
+/// user's own (keyed by a `SupatypeAuthUserId`) or is owned through its own `id`: the key is then
+/// the owner's id, and a subquery would say the same thing at more cost and with a policy rewrite
+/// on every change of wording. A related model owned through another column is joined, and that
+/// column compared. The validator (`parser::owner_rules`) has already refused every other kind of
+/// field, a relation to a model that is neither, and a chain of more than one relation (O1, O4).
 ///
 /// Columns are always quoted, which is also what lets `qualify_bare_columns` find these references
 /// when the same expression is reused inside a `can_*` function, where a bare column has no `FROM`
@@ -725,16 +730,18 @@ fn interval(text: &str) -> String {
 /// so no policy is recreated for it.
 fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
     let column = resolve_owner_column(model, kernel_field);
+    let direct = format!("{AUTH_UID} = {}", quote_ident(&column));
     let Some(FieldAst::Relation(rel)) = model.fields.get(kernel_field) else {
-        return format!("{AUTH_UID} = {}", quote_ident(&column));
+        return direct;
     };
-    let owned_target = ast
+    let joined = ast
         .models
         .iter()
         .find(|m| m.name == rel.target)
         .filter(|target| !is_user_identity_model(target))
-        .and_then(|target| Some((target, owner_column_on_model(target)?)));
-    match owned_target {
+        .and_then(|target| Some((target, owner_column_on_model(target)?)))
+        .filter(|(_, owner_col)| owner_col != "id");
+    match joined {
         Some((target, owner_col)) => {
             let table = quote_ident(db_table_name(target));
             format!(
@@ -743,29 +750,13 @@ fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> S
                 owner_q = quote_ident(&owner_col)
             )
         }
-        None => format!("{AUTH_UID} = {}", quote_ident(&column)),
+        None => direct,
     }
 }
 
-/// Models whose primary key is the auth user id (e.g. Profile), not a generated UUID.
-fn is_user_identity_model(model: &ModelAst) -> bool {
-    let Some(FieldAst::Uuid(id)) = model.fields.get("id") else {
-        return false;
-    };
-    if !id.primary_key {
-        return false;
-    }
-    !matches!(id.default, Some(DefaultValueAst::GenRandomUuid))
-}
-
-/// Owner column on a related model (from its read/update Owner rule).
+/// The column a related model is owned through, from the first `Owner` among its rules (O3).
 fn owner_column_on_model(model: &ModelAst) -> Option<String> {
-    let access = platform_access(model);
-    let rule = access.read.as_ref().or(access.update.as_ref())?;
-    let AccessRule::Owner { field } = rule else {
-        return None;
-    };
-    Some(resolve_owner_column(model, field))
+    owner_field_on_model(model).map(|field| resolve_owner_column(model, field))
 }
 
 // ─── Row-level affordances ───────────────────────────────────────────────────

@@ -2066,6 +2066,7 @@ fn test_rls_any_rule_generates_or_expression() {
         sso: None,
         publishing: None,
         warnings: vec![],
+        rename_journal: Vec::new(),
         recorded_names: Default::default(),
     };
     let expr = access_rule_to_expr(&ast, &model, &rule, "public");
@@ -2163,6 +2164,8 @@ fn test_rls_removed_access_rules_warns() {
 fn test_rls_generator_output_force_rls_and_policy_naming() {
     use supatype_engine::generator::sql::rls;
 
+    // `User` is keyed by a `SupatypeAuthUserId`, which the CLI marks: a post's owner relation has to
+    // reach a user model or an owned one (O1).
     let ast_json = r#"{
   "astVersion": 2,
   "models": [
@@ -2179,7 +2182,8 @@ fn test_rls_generator_output_force_rls_and_policy_naming() {
           "annotations": {
             "db": {
               "pgType": "UUID",
-              "unique": false
+              "unique": false,
+              "authUserId": true
             }
           }
         }

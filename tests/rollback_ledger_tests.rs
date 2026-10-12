@@ -407,7 +407,14 @@ async fn a_failure_never_overwrites_a_recorded_migration() {
         )
         .await
         .unwrap();
-        migration_history::record_failed_migration(&pool, "mig_a", "sha256:x", "SELECT 1;", "boom")
+        let failed = migration_history::FailedMigration {
+            name: "mig_a",
+            hash: "sha256:x",
+            sql_up: "SELECT 1;",
+            error: "boom",
+            audit: &Default::default(),
+        };
+        migration_history::record_failed_migration(&pool, failed)
             .await
             .unwrap();
         let names = history(&pool).await;

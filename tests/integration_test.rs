@@ -248,12 +248,22 @@ async fn test_up_to_date_push_records_initial_baseline_once() {
         let schema_snap = serde_json::to_value(&ast).unwrap();
 
         let mut conn = pool.acquire().await.unwrap();
-        migration_history::refresh_metadata_on_up_to_date_push(&mut conn, &admin_cfg, &schema_snap)
-            .await
-            .unwrap();
-        migration_history::refresh_metadata_on_up_to_date_push(&mut conn, &admin_cfg, &schema_snap)
-            .await
-            .unwrap();
+        migration_history::refresh_metadata_on_up_to_date_push(
+            &mut conn,
+            &admin_cfg,
+            &schema_snap,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
+        migration_history::refresh_metadata_on_up_to_date_push(
+            &mut conn,
+            &admin_cfg,
+            &schema_snap,
+            &Default::default(),
+        )
+        .await
+        .unwrap();
         drop(conn);
 
         let count: (i64,) = sqlx::query_as(
