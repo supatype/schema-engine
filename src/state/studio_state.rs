@@ -2,6 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 
+use super::migration_history::studio_member_held_by_sql;
+
 // Studio state lives in the `supatype` schema, apart from the internal `_supatype` bookkeeping
 // schema, so that PostgREST can serve it when the schema is listed in `db-schemas`. Being
 // reachable is why every object here decides for itself who may use it: anon may use none of
@@ -65,7 +67,7 @@ fn studio_function_grants(signature: &str) -> String {
 }
 
 /// Whether the caller may use Studio's state: `service_role`, or a signed-in user with a row in
-/// `_supatype.studio_members`.
+/// `_supatype.studio_members` under either identity (see [`studio_member_held_by_sql`]).
 ///
 /// The claims are the ones PostgREST verified and set for the request. SECURITY DEFINER because
 /// the membership table is deliberately out of the data plane's reach; the answer is one boolean
@@ -87,15 +89,16 @@ BEGIN
     END IF;
     RETURN EXISTS (
         SELECT 1 FROM _supatype.studio_members m
-         WHERE m.user_id = (claims->>'sub')::uuid
+         WHERE {held_by_caller}
     );
 EXCEPTION
     WHEN undefined_table OR invalid_text_representation THEN
         RETURN false;
 END
 $fn$;
-{}"#,
-        studio_function_grants("studio_caller_allowed()")
+{grants}"#,
+        held_by_caller = studio_member_held_by_sql("m", "(claims->>'sub')::uuid"),
+        grants = studio_function_grants("studio_caller_allowed()")
     )
 }
 
