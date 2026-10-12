@@ -13,14 +13,20 @@ the conventional commits since the last release, works out the next version, and
 `Cargo.toml` and `Cargo.lock` along with a `CHANGELOG.md` entry. Merging it commits that and creates
 the tag.
 
+The same workflow then writes the licence's two release parameters onto the PR, with
+`scripts/licence-parameters.sh set`: the version in `LICENSE`'s "Licensed Work" line, and a "Change
+Date" four years after the day the PR was last updated. The Business Source License gives each
+version its own Change Date and requires it to be stated (covenant 3). The PR merges a few days later
+at most, and an earlier Change Date only frees the code sooner.
+
 The tag push then runs `release.yml` exactly as a hand-made tag did.
 
 ### Why it is not a checklist any more
 
 It used to be four steps: bump `Cargo.toml`, commit, tag, push. The version lived in two places, a
 file and a tag someone typed, and only one of them was automated. The bump was forgotten often
-enough that the gate below exists to catch it, which it does -- after the tag is public and the
-release has gone red.
+enough that the gate below exists to catch it, which it does, but only after the tag is public and
+the release has gone red.
 
 Merging one PR makes the bump and the tag the same action, so they cannot disagree.
 
@@ -56,6 +62,10 @@ bump is now a red release rather than a quiet mislabel.
 Kept under release-please, where it should never fire again. If it ever does, the two halves that
 are supposed to move together have come apart, which is worth stopping for rather than tolerating.
 
+The same job also runs `scripts/licence-parameters.sh check`: `LICENSE` must name the tag's version
+and a concrete Change Date after the date of the tagged commit and no more than four years after it.
+A tag whose licence still carries the unreleased placeholder does not ship.
+
 ### 2. Test
 
 One `ubuntu-latest` job running `cargo test --workspace` against a `supatype/postgres:17-latest`
@@ -83,15 +93,18 @@ Unix binaries are stripped after the build (`aarch64-linux-gnu-strip` for the cr
 
 ### 4. Sign, upload and release
 
-1. `sha256sum supatype-engine-* > checksums.sha256`.
+1. `sha256sum supatype-engine-* LICENSE THIRD-PARTY-NOTICES > checksums.sha256`, so the signature
+   covers the licence and the dependencies' notices as well as the binaries.
 2. Sign it with minisign, trusted comment `supatype engine releases v<version>`, producing
    `checksums.sha256.minisig`.
-3. Upload the binaries, `checksums.sha256` and `checksums.sha256.minisig` to
-   `s3://<CDN_BUCKET>/engine/v<version>/`, each `immutable` with a one-year max-age.
-4. Overwrite `s3://<CDN_BUCKET>/engine/latest.json` with `{version, date, checksums_url}`, cached
-   `no-cache, no-store, must-revalidate`. Public URL base: `https://releases.supatype.com/engine/`.
-5. Create the GitHub Release on this repo with generated notes, attaching the binaries, checksums
-   and signature. A tag containing `-` is marked a prerelease.
+3. Upload the binaries, `LICENSE`, `THIRD-PARTY-NOTICES`, `checksums.sha256` and
+   `checksums.sha256.minisig` to `s3://<CDN_BUCKET>/engine/v<version>/`, each `immutable` with a
+   one-year max-age.
+4. Overwrite `s3://<CDN_BUCKET>/engine/latest.json` with `{version, date, license, checksums_url}`,
+   cached `no-cache, no-store, must-revalidate`. Public URL base:
+   `https://releases.supatype.com/engine/`.
+5. Create the GitHub Release on this repo with generated notes, attaching the binaries, `LICENSE`,
+   `THIRD-PARTY-NOTICES`, checksums and signature. A tag containing `-` is marked a prerelease.
 
 Storage is Hetzner Object Storage, addressed with the plain `aws` CLI and an `--endpoint-url`. Do
 not switch to `configure-aws-credentials`: it calls AWS STS, which Hetzner does not serve.
@@ -102,12 +115,16 @@ not switch to `configure-aws-credentials`: it calls AWS STS, which Hetzner does 
 `ubuntu-latest` and `linux/arm64` on `ubuntu-24.04-arm`, pushes each by digest, then joins them into
 one multi-platform manifest tagged `v<version>` and `latest` on `supatype/schema-engine`.
 
+The image carries `/LICENSE` and `/THIRD-PARTY-NOTICES`. The Dockerfile labels it
+`org.opencontainers.image.licenses="BUSL-1.1"` with its title and vendor, and the workflow adds
+`version`, `revision` (the tag's commit) and `source`.
+
 ## What the workflow does not do
 
 Worth stating, because earlier versions of this document claimed otherwise:
 
-* No `CHANGELOG.md`. The GitHub Release notes are generated from commits
-  (`generate_release_notes: true`), and no changelog file exists in this repo.
+* No changelog of its own. release-please writes `CHANGELOG.md` in the release PR; the GitHub
+  Release notes are generated separately from commits (`generate_release_notes: true`).
 * No `versions.json`. Only `latest.json` is rewritten.
 * No mirror to a public fallback repo.
 * No automatic PR against the CLI repo to bump the engine version. The CLI's engine floor lives in

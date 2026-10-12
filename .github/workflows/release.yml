@@ -49,6 +49,16 @@ jobs:
             echo "::error::Tag v${TAG} does not match Cargo.toml ${CRATE}. Bump the crate version, or tag v${CRATE}."
             exit 1
           fi
+      # The licence ships in every binary, the image and the release assets, and it has to name this
+      # version and a concrete Change Date no more than four years after the release (the date of
+      # the tagged commit). release-please.yml writes both onto the release PR.
+      - name: LICENSE names this version and its Change Date
+        run: |
+          RELEASED="$(date -u -d "@$(git log -1 --format=%ct)" +%F)"
+          if ! bash scripts/licence-parameters.sh check "${RELEASE_TAG#v}" "${RELEASED}" LICENSE; then
+            echo "::error::LICENSE does not carry ${RELEASE_TAG}'s parameters. Run scripts/licence-parameters.sh set ${RELEASE_TAG#v} ${RELEASED} and release again."
+            exit 1
+          fi
 
   # ─── Run tests before building release artefacts ────────────────────────────
   test:
@@ -237,9 +247,11 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
+      # The licence and the dependencies' notices travel with the binaries, and the signed checksums
+      # cover them, so a download can be checked against the terms it was published under.
       - name: Generate checksums.sha256
         run: |
-          sha256sum supatype-engine-* > checksums.sha256
+          sha256sum supatype-engine-* LICENSE THIRD-PARTY-NOTICES > checksums.sha256
           echo "=== checksums.sha256 ==="
           cat checksums.sha256
 
@@ -258,12 +270,12 @@ jobs:
             -t "supatype engine releases v${VERSION}"
           rm -f /tmp/minisign.key
 
-      - name: Upload binaries + checksums to CDN
+      - name: Upload binaries, licence, notices and checksums to CDN
         run: |
           BASE="s3://${{ secrets.CDN_BUCKET }}/engine/v${VERSION}"
           EP="${{ secrets.CDN_ENDPOINT }}"
 
-          for f in supatype-engine-*; do
+          for f in supatype-engine-* LICENSE THIRD-PARTY-NOTICES; do
             aws s3 cp "$f" "${BASE}/${f}" \
               --endpoint-url "${EP}" \
               --cache-control "public, max-age=31536000, immutable"
@@ -280,7 +292,7 @@ jobs:
       - name: Update engine/latest.json
         run: |
           EP="${{ secrets.CDN_ENDPOINT }}"
-          printf '{"version":"%s","date":"%s","checksums_url":"https://releases.supatype.com/engine/v%s/checksums.sha256"}\n' \
+          printf '{"version":"%s","date":"%s","license":"BUSL-1.1","checksums_url":"https://releases.supatype.com/engine/v%s/checksums.sha256"}\n' \
             "${VERSION}" "$(date -u +%Y-%m-%d)" "${VERSION}" > latest.json
           aws s3 cp latest.json \
             "s3://${{ secrets.CDN_BUCKET }}/engine/latest.json" \
@@ -295,6 +307,8 @@ jobs:
           prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           files: |
             supatype-engine-*
+            LICENSE
+            THIRD-PARTY-NOTICES
             checksums.sha256
             checksums.sha256.minisig
 

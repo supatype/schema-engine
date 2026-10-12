@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
@@ -52,3 +53,33 @@ jobs:
           # There is no loop to start. `release.yml` builds and publishes; it does not push to
           # main, so nothing brings this action back round.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      # The licence names the version it covers and that version's Change Date, four years after
+      # its release (Business Source License, covenant 3), so both change with every release. They
+      # are written onto the release PR here, dated the day the PR was last updated: the PR merges a
+      # few days later at most, and an earlier Change Date only frees the code sooner. release.yml
+      # refuses a tag whose LICENSE names another version or no date.
+      #
+      # release-please rewrites the PR branch whenever main moves, dropping this commit, and this
+      # step writes it again on the same run.
+      - name: Check out the release PR
+        if: steps.release.outputs.pr
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - name: Set the licence's version and Change Date
+        if: steps.release.outputs.pr
+        run: |
+          VERSION="$(jq -r '."."' .release-please-manifest.json)"
+          bash scripts/licence-parameters.sh set "${VERSION}" "$(date -u +%F)"
+          if git diff --quiet -- LICENSE; then
+            echo "LICENSE already names ${VERSION} and today's Change Date."
+            exit 0
+          fi
+          git add LICENSE
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "chore: set the licence parameters for ${VERSION}"
+          git push origin "HEAD:${{ fromJSON(steps.release.outputs.pr).headBranchName }}"
