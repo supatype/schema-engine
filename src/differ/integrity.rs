@@ -18,8 +18,8 @@ pub struct PostPush {
     pub settled: bool,
 }
 
-/// The check, with `after_commit` (the objects this push builds once it commits) left out of what
-/// is missing.
+/// The check, with `after_commit` (the objects this push puts in place once it commits) left out
+/// of every finding.
 pub fn post_push(ast: &SchemaAst, state: &State, after_commit: &BTreeSet<ObjectKey>) -> PostPush {
     let mut report = match decide(ast, state, None) {
         Ok(decision) => report_of(ast, state, &decision),
@@ -30,11 +30,18 @@ pub fn post_push(ast: &SchemaAst, state: &State, after_commit: &BTreeSet<ObjectK
             }
         }
     };
-    report.missing.retain(|item| {
-        !after_commit
+    let finished_later = |item: &DoctorItem| {
+        after_commit
             .iter()
             .any(|k| k.kind.as_str() == item.kind && k.parent == item.table && k.name == item.name)
-    });
+    };
+    for items in [
+        &mut report.missing,
+        &mut report.stale_managed,
+        &mut report.drifted,
+    ] {
+        items.retain(|item| !finished_later(item));
+    }
     let sections: [(&str, &[DoctorItem]); 4] = [
         ("missing", &report.missing),
         ("stale managed", &report.stale_managed),

@@ -398,23 +398,23 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
             assert!(exists, "{name} was not generated");
         }
 
-        // Takes exactly one argument of the table's composite type and returns
-        // boolean -- the shape PostgREST requires to expose it as
-        // `?select=*,can_delete_posts`. The parameter is *named* after the table
-        // (so the policy expression can be reused verbatim in the body), which is
-        // why the signature reads "posts posts".
-        let (args, returns, nargs): (String, String, i16) = sqlx::query_as(
+        // Called with the table's row alone, and returns boolean: the shape PostgREST requires
+        // to expose it as `?select=*,can_delete_posts`. Its second parameter has a default, which
+        // PostgREST fills and pg_graphql takes as a reason to leave it out of GraphQL (CT3). The
+        // row's parameter is *named* after the table (so the policy expression can be reused
+        // verbatim in the body), which is why the signature starts "posts posts".
+        let (args, returns, required): (String, String, i16) = sqlx::query_as(
             "SELECT pg_get_function_identity_arguments(p.oid),
                     pg_catalog.format_type(p.prorettype, NULL),
-                    p.pronargs
+                    p.pronargs - p.pronargdefaults
                FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname = 'can_delete_posts'",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(nargs, 1, "a computed column takes exactly the row: {args}");
-        assert!(args.ends_with("posts"), "argument is not the row type: {args}");
+        assert_eq!(required, 1, "a computed column is called with the row alone: {args}");
+        assert!(args.starts_with("posts posts"), "argument is not the row type: {args}");
         assert_eq!(returns, "boolean", "computed column must be boolean: {returns}");
 
         // And it answers. `posts.delete` is Role<"admin">, so with no JWT claims set

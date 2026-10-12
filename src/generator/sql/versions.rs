@@ -28,6 +28,7 @@ use crate::parser::accessors::{db_table_name, versions_of, versions_table_name};
 use crate::parser::ast::{ModelAst, PublishingAst, SchemaAst};
 use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 use anyhow::{bail, Result};
+use std::collections::BTreeSet;
 
 /// Schema holding one draft view per versioned model, selected with `Accept-Profile: draft`.
 ///
@@ -41,6 +42,10 @@ pub const RPC_SCHEMA: &str = "supatype";
 
 /// Schema holding the helpers the policies call. Never exposed to the API.
 pub const HELPER_SCHEMA: &str = "_supatype";
+
+/// The dollar tag of the block that turns on row-level security on a snapshot table where it is
+/// off. Statement attribution recognises the block by it.
+pub const RLS_ON_TAG: &str = "versions_rls";
 
 /// Every model that declares `versions`, in declaration order.
 pub fn versioned_models(ast: &SchemaAst) -> Vec<&ModelAst> {
@@ -396,7 +401,7 @@ CREATE OR REPLACE FUNCTION {helper}.preview_allows(target_model text, target_rec
 fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &str) -> String {
     let policy = crate::managed::policy_name(versions_table, "select");
     format!(
-        "ALTER TABLE {schema_q}.{versions_q} ENABLE ROW LEVEL SECURITY;\n\n\
+        "{rls_on}\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{versions_q};\n\
          CREATE POLICY {policy_q} ON {schema_q}.{versions_q}\n  \
          FOR SELECT USING (\n    \
@@ -414,6 +419,20 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
         policy_q = quote_ident(&policy),
         model_lit = quote_literal(model_table),
         helper = HELPER_SCHEMA,
+        rls_on = rls_on_sql(schema, versions_table),
+    )
+}
+
+/// `ENABLE ROW LEVEL SECURITY` on `schema.table` only where it is off (LK7): the statement takes
+/// the table's ACCESS EXCLUSIVE lock before it looks, and the layer runs on every push.
+fn rls_on_sql(schema: &str, table: &str) -> String {
+    let target = quote_qualified(schema, table);
+    format!(
+        "DO ${RLS_ON_TAG}$\nBEGIN\n  \
+         IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = {}::regclass) THEN\n    \
+         ALTER TABLE {target} ENABLE ROW LEVEL SECURITY;\n  \
+         END IF;\nEND\n${RLS_ON_TAG}$;\n",
+        quote_literal(&target),
     )
 }
 
@@ -443,15 +462,21 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
 ///
 /// `IF EXISTS` on both the schema check and the view: this runs on the first push for a model that
 /// has just become versioned, where neither exists yet.
-pub fn drop_draft_views_sql(ast: &SchemaAst) -> String {
-    // Every model, not only the ones with drafts now: a model that had drafts and stopped, or
-    // stopped keeping versions at all, still has the view, and its history table cannot be dropped
-    // while the view reads it (nothing cascades, plan 3.3). The drop is `IF EXISTS`, so a model
-    // that never had one costs a no-op.
-    if ast.models.is_empty() {
+pub fn drop_draft_views_sql(ast: &SchemaAst, changed: &BTreeSet<String>) -> String {
+    // Every model the operations change, not only the ones with drafts now: a model that had
+    // drafts and stopped, or stopped keeping versions at all, still has the view, and its history
+    // table cannot be dropped while the view reads it (nothing cascades, plan 3.3). The drop is
+    // `IF EXISTS`, so a model that never had one costs a no-op. A model they leave alone keeps its
+    // view: dropping it takes ACCESS EXCLUSIVE on a view the API reads (LK7).
+    let tables: Vec<&str> = ast
+        .models
+        .iter()
+        .map(|m| m.table_name())
+        .filter(|t| changed.contains(*t) || changed.contains(&versions_table_name(t)))
+        .collect();
+    if tables.is_empty() {
         return String::new();
     }
-    let tables: Vec<&str> = ast.models.iter().map(|m| m.table_name()).collect();
     format!(
         "-- Drop draft views before column changes; recreated at the end of this migration.\n{}",
         drop_views_in_schema_sql(DRAFT_SCHEMA, &tables)

@@ -1,10 +1,10 @@
 //! How large each table a push changes is, read from the catalog without a lock: what decides
 //! whether a statement runs online (IN-C 2) and whether a rewrite needs consent (IN-C 3).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use sqlx::PgConnection;
+use sqlx::{Executor, PgConnection};
 
 use crate::desired::ObjectKey;
 use crate::differ::{DiffOutput, Operation};
@@ -12,6 +12,8 @@ use crate::generator::sql::online::OnlineTables;
 use crate::introspector::fingerprint::ObjectKind;
 use crate::ledger::reconcile::{self, Action};
 use crate::push::State;
+use crate::sql_quote::quote_qualified;
+use sqlx::Connection;
 
 /// What the catalog says of one table's size, read without taking a lock on it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -42,24 +44,24 @@ impl TableSize {
 
 /// The size of each table of `schema`, by the name `diff` knows it by: a table it renames is read
 /// under its old name. From `pg_class` and the statistics views, which take no lock, so planning a
-/// push never waits on an application.
+/// push never waits on an application. A table the push changes (`diff` or `plan`) that has never
+/// been analysed has no statistics to read, and would read as empty: it is analysed first (LK3).
 pub async fn table_sizes(
     conn: &mut PgConnection,
     schema: &str,
     diff: &DiffOutput,
+    plan: &reconcile::Plan,
 ) -> Result<BTreeMap<String, TableSize>> {
-    let rows: Vec<SizeRow> = sqlx::query_as(
-        "SELECT c.relname::text, c.reltuples::float8, c.relpages::int8,
-                COALESCE(s.n_live_tup, 0)::int8, COALESCE(s.n_tup_ins, 0)::int8
-           FROM pg_class c
-           JOIN pg_namespace n ON n.oid = c.relnamespace
-           LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-          WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')",
-    )
-    .bind(schema)
-    .fetch_all(&mut *conn)
-    .await
-    .context("read the size of each table")?;
+    let mut rows = read_sizes(conn, schema).await?;
+    let changed = changed_tables(diff, plan, schema);
+    let unanalysed: Vec<String> = rows
+        .iter()
+        .filter(|(table, reltuples, ..)| *reltuples < 0.0 && changed.contains(table))
+        .map(|(table, ..)| table.clone())
+        .collect();
+    if analyse(conn, schema, &unanalysed).await {
+        rows = read_sizes(conn, schema).await?;
+    }
     let mut sizes: BTreeMap<String, TableSize> = rows
         .iter()
         .map(|row| (row.0.clone(), TableSize::of(row)))
@@ -72,6 +74,56 @@ pub async fn table_sizes(
         }
     }
     Ok(sizes)
+}
+
+async fn read_sizes(conn: &mut PgConnection, schema: &str) -> Result<Vec<SizeRow>> {
+    sqlx::query_as(
+        "SELECT c.relname::text, c.reltuples::float8, c.relpages::int8,
+                COALESCE(s.n_live_tup, 0)::int8, COALESCE(s.n_tup_ins, 0)::int8
+           FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+          WHERE n.nspname = $1 AND c.relkind IN ('r', 'p')",
+    )
+    .bind(schema)
+    .fetch_all(&mut *conn)
+    .await
+    .context("read the size of each table")
+}
+
+/// The tables of `schema` the push changes: those the operations name, and the parents of the
+/// reconcile's objects there that it does not keep as they are.
+fn changed_tables(diff: &DiffOutput, plan: &reconcile::Plan, schema: &str) -> BTreeSet<String> {
+    let mut tables = crate::generator::sql::settled::changed_tables(&diff.operations);
+    tables.extend(
+        plan.actions
+            .iter()
+            .filter(|a| !matches!(a, Action::Keep { .. } | Action::Restate { .. }))
+            .map(Action::key)
+            .filter(|k| k.schema == schema && !k.parent.is_empty())
+            .map(|k| k.parent.clone()),
+    );
+    tables
+}
+
+/// `ANALYZE` on each of `tables`, under SHARE UPDATE EXCLUSIVE, which no read or write waits on.
+/// Not inside a transaction: a snapshot taken before it would not see the statistics it writes,
+/// and a refusal would abort the caller's work. One that cannot be analysed (a table owned by
+/// another role, a lock another maintenance task holds) keeps the estimate it has. Whether any
+/// was analysed.
+async fn analyse(conn: &mut PgConnection, schema: &str, tables: &[String]) -> bool {
+    if conn.is_in_transaction() {
+        return false;
+    }
+    let mut any = false;
+    for table in tables {
+        let sql = format!("ANALYZE {}", quote_qualified(schema, table));
+        match conn.execute(sqlx::raw_sql(&sql)).await {
+            Ok(_) => any = true,
+            Err(e) => tracing::warn!("{table} has no statistics and could not be analysed: {e}"),
+        }
+    }
+    any
 }
 
 /// What decides the statements that run online: the tables with rows, the INVALID indexes an

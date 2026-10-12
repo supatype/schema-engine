@@ -66,7 +66,7 @@ type IndexRow = (
 );
 
 pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes> {
-    let rows: Vec<IndexRow> = sqlx::query_as(
+    let rows: Vec<IndexRow> = sqlx::query_as(&format!(
         "SELECT t.relname::text, i.relname::text,
                 (SELECT array_agg(a.attname::text ORDER BY k.ord)
                    FROM unnest(ix.indkey) WITH ORDINALITY AS k(attnum, ord)
@@ -112,9 +112,10 @@ pub async fn read_all(conn: &mut PgConnection, schema: &str) -> Result<DbIndexes
          JOIN pg_class i ON i.oid = ix.indexrelid
          JOIN pg_am am ON am.oid = i.relam
          JOIN pg_namespace n ON n.oid = t.relnamespace
-         WHERE n.nspname = $1 AND ix.indisvalid
+         WHERE n.nspname = $1 AND ix.indisvalid AND {}
          ORDER BY t.relname, i.relname",
-    )
+        super::readable("t.oid"),
+    ))
     .bind(schema)
     .fetch_all(&mut *conn)
     .await?;

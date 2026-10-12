@@ -86,11 +86,24 @@ pub async fn remember(
 /// its transaction's `NOW()`, as does its migration's `applied_at`, so a row written since is one
 /// updated after it.
 pub async fn restore(conn: &mut PgConnection, migration_id: i32) -> Result<()> {
-    let untouched_since = format!("(SELECT applied_at FROM {SCHEMA}.migrations WHERE id = $1)");
-    let statements = [
+    for sql in &restore_statements("$1") {
+        sqlx::query(sql)
+            .bind(migration_id)
+            .execute(&mut *conn)
+            .await
+            .context("put the ledger back as it was before the push")?;
+    }
+    Ok(())
+}
+
+/// The statements [`restore`] runs, for the migration whose id `id` gives: a parameter, or for a
+/// `migrate --record` file's rollback section, a subquery naming it (HI2).
+pub fn restore_statements(id: &str) -> [String; 3] {
+    let untouched_since = format!("(SELECT applied_at FROM {SCHEMA}.migrations WHERE id = {id})");
+    [
         format!(
             "DELETE FROM {SCHEMA}.managed_objects m USING {SCHEMA}.managed_objects_undo u
-              WHERE u.migration_id = $1 AND NOT u.existed
+              WHERE u.migration_id = {id} AND NOT u.existed
                 AND m.kind = u.kind AND m.schema_name = u.schema_name
                 AND m.parent = u.parent AND m.name = u.name
                 AND m.updated_at <= {untouched_since}"
@@ -102,7 +115,7 @@ pub async fn restore(conn: &mut PgConnection, migration_id: i32) -> Result<()> {
              SELECT kind, schema_name, parent, name, desired_fp, desired_sql, live_fp, live_def,
                     status, prior_migration_id, created_at, updated_at
                FROM {SCHEMA}.managed_objects_undo
-              WHERE migration_id = $1 AND existed
+              WHERE migration_id = {id} AND existed
              ON CONFLICT (kind, schema_name, parent, name) DO UPDATE SET
                 desired_fp = EXCLUDED.desired_fp,
                 desired_sql = EXCLUDED.desired_sql,
@@ -114,16 +127,8 @@ pub async fn restore(conn: &mut PgConnection, migration_id: i32) -> Result<()> {
                 updated_at = EXCLUDED.updated_at
               WHERE {SCHEMA}.managed_objects.updated_at <= {untouched_since}"
         ),
-        format!("DELETE FROM {SCHEMA}.managed_objects_undo WHERE migration_id = $1"),
-    ];
-    for sql in &statements {
-        sqlx::query(sql)
-            .bind(migration_id)
-            .execute(&mut *conn)
-            .await
-            .context("put the ledger back as it was before the push")?;
-    }
-    Ok(())
+        format!("DELETE FROM {SCHEMA}.managed_objects_undo WHERE migration_id = {id}"),
+    ]
 }
 
 /// An object a rollback must leave as it is, and why.

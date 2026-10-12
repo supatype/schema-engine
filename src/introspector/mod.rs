@@ -13,6 +13,20 @@ use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 use sqlx::{PgConnection, PgPool};
 
+/// The session setting naming, by oid, the relations another session holds exclusively, whose
+/// deparsed parts a read leaves out rather than wait on (IN-B): `pg_get_expr`, the deparsers of
+/// keys, indexes and views, and a column's default all take a lock on the relation. Unset for
+/// every read but doctor's, so every other reader waits as it always has.
+pub const UNREADABLE: &str = "supatype.unreadable";
+
+/// SQL that is true when the relation `relid` (an oid expression) is not one of [`UNREADABLE`].
+pub fn readable(relid: &str) -> String {
+    format!(
+        "NOT ({relid}::text = ANY (string_to_array(COALESCE(current_setting({}, true), ''), ',')))",
+        crate::sql_quote::quote_literal(UNREADABLE)
+    )
+}
+
 /// The differ's view of `schema`, read under the session's own `search_path`.
 ///
 /// Deliberately not pinned ([`pin_search_path`]): nothing read here is fingerprinted, and it is

@@ -251,10 +251,10 @@ async fn a_renamed_table_takes_its_sequence_and_primary_key_with_it() {
         assert_eq!(
             functions,
             [
-                "can_create_posts_archive(posts_archive)",
-                "can_delete_posts_archive(posts_archive)",
-                "can_read_posts_archive(posts_archive)",
-                "can_update_posts_archive(posts_archive)",
+                "can_create_posts_archive(posts_archive,boolean)",
+                "can_delete_posts_archive(posts_archive,boolean)",
+                "can_read_posts_archive(posts_archive,boolean)",
+                "can_update_posts_archive(posts_archive,boolean)",
             ],
             "the old table's functions were left behind"
         );
@@ -284,10 +284,10 @@ async fn a_renamed_table_takes_its_sequence_and_primary_key_with_it() {
         assert_eq!(
             functions,
             [
-                "can_create_posts(posts)",
-                "can_delete_posts(posts)",
-                "can_read_posts(posts)",
-                "can_update_posts(posts)",
+                "can_create_posts(posts,boolean)",
+                "can_delete_posts(posts,boolean)",
+                "can_read_posts(posts,boolean)",
+                "can_update_posts(posts,boolean)",
             ]
         );
         assert!(up_to_date(&push(&pool, &posts_in("posts")).await.unwrap()));

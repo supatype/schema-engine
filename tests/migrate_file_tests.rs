@@ -163,6 +163,46 @@ async fn a_migrate_file_on_a_pushed_database_records_the_same_ledger_as_the_push
     .await;
 }
 
+/// HI2: the file's rollback section, applied by hand after its forward section, puts the ledger
+/// back as `supatype rollback` does, and marks the migration rolled back, so the next push of the
+/// earlier schema finds nothing to do.
+#[tokio::test]
+async fn a_migrate_files_rollback_section_puts_the_ledger_back() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &widgets(false)).await.unwrap();
+        let before = ledger_rows(&pool).await;
+        let file = migrate_file::render(&pool, &widgets(true), "public", RECORD)
+            .await
+            .expect("the file renders");
+        exec(&pool, forward(&file)).await.expect("applies");
+        assert_ne!(
+            ledger_rows(&pool).await,
+            before,
+            "the file recorded the push"
+        );
+
+        let (_, rollback) = file
+            .split_once("ROLLBACK MIGRATION")
+            .expect("the file has a rollback section");
+        let rollback = rollback.split_once("BEGIN;").map(|(_, r)| r).unwrap();
+        exec(&pool, &format!("BEGIN;{rollback}"))
+            .await
+            .expect("the rollback section applies");
+        assert!(!column_exists(&pool).await);
+        assert_eq!(ledger_rows(&pool).await, before, "the ledger is put back");
+        let rolled_back: bool = sqlx::query_scalar(
+            "SELECT rolled_back FROM _supatype.migrations ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(rolled_back, "the migration is marked rolled back");
+        let outcome = push(&pool, &widgets(false)).await.unwrap();
+        assert!(up_to_date(&outcome), "{outcome:?}");
+    })
+    .await;
+}
+
 async fn column_exists(pool: &PgPool) -> bool {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM information_schema.columns

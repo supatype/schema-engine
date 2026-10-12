@@ -410,10 +410,11 @@ async fn both_tiers_present_the_same_contract() {
 
 /// A masked view must not become a row-level-security bypass.
 ///
-/// The views run as their owner, `supatype_api_owner`, which holds the base table's rows. Were that
-/// role `BYPASSRLS`, or were the policies not applied to it, every caller would read every row
-/// through the `api` schema, masking a column while handing over the whole table. The policies are
-/// `TO PUBLIC` and read the caller's JWT, so they filter per caller with the owner's rights.
+/// The views run as their owner, this database's `supatype_api_owner_<hash>`, which holds the base
+/// table's rows. Were that role `BYPASSRLS`, or were the policies not applied to it, every caller
+/// would read every row through the `api` schema, masking a column while handing over the whole
+/// table. The policies are `TO PUBLIC` and read the caller's JWT, so they filter per caller with the
+/// owner's rights.
 ///
 /// Its own test because the shared contract fixture deliberately has no policies: several of those
 /// assertions read another caller's row, which a policy would hide. The suite's role holds nothing

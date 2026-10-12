@@ -221,37 +221,37 @@ CREATE TABLE IF NOT EXISTS "public"."documents" (
 CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding");
 
 -- Row-level affordance functions (PostgREST computed columns)
-CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."documents")
+CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."documents", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "documents";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_documents"("public"."documents") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_documents"("public"."documents") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_documents"("public"."documents", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_documents"("public"."documents", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_documents"("documents" "public"."documents")
+CREATE OR REPLACE FUNCTION "public"."can_create_documents"("documents" "public"."documents", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = ANY(ARRAY['admin', 'ingest'])
       FROM (SELECT ($1).*) AS "documents";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_documents"("public"."documents") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_documents"("public"."documents") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_documents"("public"."documents", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_documents"("public"."documents", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_documents"("documents" "public"."documents")
+CREATE OR REPLACE FUNCTION "public"."can_update_documents"("documents" "public"."documents", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'admin'
       FROM (SELECT ($1).*) AS "documents";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_documents"("public"."documents") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_documents"("public"."documents") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_documents"("public"."documents", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_documents"("public"."documents", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_documents"("documents" "public"."documents")
+CREATE OR REPLACE FUNCTION "public"."can_delete_documents"("documents" "public"."documents", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'admin'
       FROM (SELECT ($1).*) AS "documents";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_documents"("public"."documents") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_documents"("public"."documents") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_documents"("public"."documents", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_documents"("public"."documents", boolean) TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";

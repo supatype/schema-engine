@@ -414,293 +414,293 @@ CREATE TABLE IF NOT EXISTS "public"."talk_versions" (
 CREATE INDEX IF NOT EXISTS "talk_versions_record_idx" ON "public"."talk_versions" ("record_id", "version" DESC);
 
 -- Row-level affordance functions (PostgREST computed columns)
-CREATE OR REPLACE FUNCTION "public"."can_read_page"("page" "public"."page")
+CREATE OR REPLACE FUNCTION "public"."can_read_page"("page" "public"."page", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT "published_at" <= (SELECT now())
       FROM (SELECT ($1).*) AS "page";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_page"("public"."page") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_page"("public"."page") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_page"("public"."page", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_page"("public"."page", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_page"("page" "public"."page")
+CREATE OR REPLACE FUNCTION "public"."can_create_page"("page" "public"."page", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "page";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_page"("public"."page") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_page"("public"."page") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_page"("public"."page", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_page"("public"."page", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_page"("page" "public"."page")
+CREATE OR REPLACE FUNCTION "public"."can_update_page"("page" "public"."page", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "page";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_page"("public"."page") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_page"("public"."page") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_page"("public"."page", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_page"("public"."page", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_page"("page" "public"."page")
+CREATE OR REPLACE FUNCTION "public"."can_delete_page"("page" "public"."page", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "page";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_page"("public"."page") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_page"("public"."page") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_page"("public"."page", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_page"("public"."page", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_speaker"("speaker" "public"."speaker")
+CREATE OR REPLACE FUNCTION "public"."can_read_speaker"("speaker" "public"."speaker", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT "published_at" <= (SELECT now())
       FROM (SELECT ($1).*) AS "speaker";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_speaker"("public"."speaker") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_speaker"("public"."speaker") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_speaker"("public"."speaker", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_speaker"("public"."speaker", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_speaker"("speaker" "public"."speaker")
+CREATE OR REPLACE FUNCTION "public"."can_create_speaker"("speaker" "public"."speaker", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "speaker";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_speaker"("public"."speaker") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_speaker"("public"."speaker") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_speaker"("public"."speaker", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_speaker"("public"."speaker", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_speaker"("speaker" "public"."speaker")
+CREATE OR REPLACE FUNCTION "public"."can_update_speaker"("speaker" "public"."speaker", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "speaker";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_speaker"("public"."speaker") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_speaker"("public"."speaker") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_speaker"("public"."speaker", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_speaker"("public"."speaker", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_speaker"("speaker" "public"."speaker")
+CREATE OR REPLACE FUNCTION "public"."can_delete_speaker"("speaker" "public"."speaker", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "speaker";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_speaker"("public"."speaker") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_speaker"("public"."speaker") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_speaker"("public"."speaker", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_speaker"("public"."speaker", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_room"("room" "public"."room")
+CREATE OR REPLACE FUNCTION "public"."can_read_room"("room" "public"."room", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "room";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_room"("public"."room") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_room"("public"."room") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_room"("public"."room", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_room"("public"."room", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_room"("room" "public"."room")
+CREATE OR REPLACE FUNCTION "public"."can_create_room"("room" "public"."room", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "room";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_room"("public"."room") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_room"("public"."room") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_room"("public"."room", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_room"("public"."room", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_room"("room" "public"."room")
+CREATE OR REPLACE FUNCTION "public"."can_update_room"("room" "public"."room", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "room";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_room"("public"."room") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_room"("public"."room") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_room"("public"."room", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_room"("public"."room", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_room"("room" "public"."room")
+CREATE OR REPLACE FUNCTION "public"."can_delete_room"("room" "public"."room", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "room";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_room"("public"."room") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_room"("public"."room") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_room"("public"."room", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_room"("public"."room", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_talk"("talk" "public"."talk")
+CREATE OR REPLACE FUNCTION "public"."can_read_talk"("talk" "public"."talk", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT "published_at" <= (SELECT now())
       FROM (SELECT ($1).*) AS "talk";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_talk"("public"."talk") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_talk"("public"."talk") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_talk"("public"."talk", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_talk"("public"."talk", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_talk"("talk" "public"."talk")
+CREATE OR REPLACE FUNCTION "public"."can_create_talk"("talk" "public"."talk", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "talk";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_talk"("public"."talk") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_talk"("public"."talk") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_talk"("public"."talk", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_talk"("public"."talk", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_talk"("talk" "public"."talk")
+CREATE OR REPLACE FUNCTION "public"."can_update_talk"("talk" "public"."talk", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "talk";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_talk"("public"."talk") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_talk"("public"."talk") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_talk"("public"."talk", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_talk"("public"."talk", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_talk"("talk" "public"."talk")
+CREATE OR REPLACE FUNCTION "public"."can_delete_talk"("talk" "public"."talk", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "talk";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_talk"("public"."talk") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_talk"("public"."talk") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_talk"("public"."talk", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_talk"("public"."talk", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_sponsor"("sponsor" "public"."sponsor")
+CREATE OR REPLACE FUNCTION "public"."can_read_sponsor"("sponsor" "public"."sponsor", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT "published_at" <= (SELECT now())
       FROM (SELECT ($1).*) AS "sponsor";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_sponsor"("public"."sponsor") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_sponsor"("public"."sponsor") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_sponsor"("public"."sponsor", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_sponsor"("public"."sponsor", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_sponsor"("sponsor" "public"."sponsor")
+CREATE OR REPLACE FUNCTION "public"."can_create_sponsor"("sponsor" "public"."sponsor", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "sponsor";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_sponsor"("public"."sponsor") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_sponsor"("public"."sponsor") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_sponsor"("public"."sponsor", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_sponsor"("public"."sponsor", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_sponsor"("sponsor" "public"."sponsor")
+CREATE OR REPLACE FUNCTION "public"."can_update_sponsor"("sponsor" "public"."sponsor", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "sponsor";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_sponsor"("public"."sponsor") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_sponsor"("public"."sponsor") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_sponsor"("public"."sponsor", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_sponsor"("public"."sponsor", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_sponsor"("sponsor" "public"."sponsor")
+CREATE OR REPLACE FUNCTION "public"."can_delete_sponsor"("sponsor" "public"."sponsor", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "sponsor";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_sponsor"("public"."sponsor") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_sponsor"("public"."sponsor") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_sponsor"("public"."sponsor", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_sponsor"("public"."sponsor", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_attendee"("attendee" "public"."attendee")
+CREATE OR REPLACE FUNCTION "public"."can_read_attendee"("attendee" "public"."attendee", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_attendee"("public"."attendee") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_attendee"("public"."attendee") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_attendee"("public"."attendee", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_attendee"("public"."attendee", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_attendee"("attendee" "public"."attendee")
+CREATE OR REPLACE FUNCTION "public"."can_create_attendee"("attendee" "public"."attendee", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_attendee"("public"."attendee") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_attendee"("public"."attendee") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_attendee"("public"."attendee", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_attendee"("public"."attendee", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_attendee"("attendee" "public"."attendee")
+CREATE OR REPLACE FUNCTION "public"."can_update_attendee"("attendee" "public"."attendee", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "id"
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_attendee"("public"."attendee") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_attendee"("public"."attendee") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_attendee"("public"."attendee", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_attendee"("public"."attendee", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_attendee"("attendee" "public"."attendee")
+CREATE OR REPLACE FUNCTION "public"."can_delete_attendee"("attendee" "public"."attendee", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "id"
       FROM (SELECT ($1).*) AS "attendee";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_attendee"("public"."attendee") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_attendee"("public"."attendee") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_attendee"("public"."attendee", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_attendee"("public"."attendee", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_ticket"("ticket" "public"."ticket")
+CREATE OR REPLACE FUNCTION "public"."can_read_ticket"("ticket" "public"."ticket", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_ticket"("public"."ticket") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_ticket"("public"."ticket") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_ticket"("public"."ticket", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_ticket"("public"."ticket", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_ticket"("ticket" "public"."ticket")
+CREATE OR REPLACE FUNCTION "public"."can_create_ticket"("ticket" "public"."ticket", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_ticket"("public"."ticket") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_ticket"("public"."ticket") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_ticket"("public"."ticket", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_ticket"("public"."ticket", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_ticket"("ticket" "public"."ticket")
+CREATE OR REPLACE FUNCTION "public"."can_update_ticket"("ticket" "public"."ticket", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_ticket"("public"."ticket") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_ticket"("public"."ticket") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_ticket"("public"."ticket", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_ticket"("public"."ticket", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_ticket"("ticket" "public"."ticket")
+CREATE OR REPLACE FUNCTION "public"."can_delete_ticket"("ticket" "public"."ticket", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "ticket";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_ticket"("public"."ticket") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_ticket"("public"."ticket") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_ticket"("public"."ticket", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_ticket"("public"."ticket", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_chat_message"("chat_message" "public"."chat_message")
+CREATE OR REPLACE FUNCTION "public"."can_read_chat_message"("chat_message" "public"."chat_message", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_chat_message"("public"."chat_message") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_chat_message"("public"."chat_message") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_chat_message"("public"."chat_message", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_chat_message"("public"."chat_message", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_chat_message"("chat_message" "public"."chat_message")
+CREATE OR REPLACE FUNCTION "public"."can_create_chat_message"("chat_message" "public"."chat_message", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_chat_message"("public"."chat_message") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_chat_message"("public"."chat_message") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_chat_message"("public"."chat_message", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_chat_message"("public"."chat_message", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_chat_message"("chat_message" "public"."chat_message")
+CREATE OR REPLACE FUNCTION "public"."can_update_chat_message"("chat_message" "public"."chat_message", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_chat_message"("public"."chat_message") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_chat_message"("public"."chat_message") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_chat_message"("public"."chat_message", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_chat_message"("public"."chat_message", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_chat_message"("chat_message" "public"."chat_message")
+CREATE OR REPLACE FUNCTION "public"."can_delete_chat_message"("chat_message" "public"."chat_message", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "auth_user_id"
       FROM (SELECT ($1).*) AS "chat_message";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_chat_message"("public"."chat_message") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_chat_message"("public"."chat_message") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_chat_message"("public"."chat_message", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_chat_message"("public"."chat_message", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read__global_site_settings"("_global_site_settings" "public"."_global_site_settings")
+CREATE OR REPLACE FUNCTION "public"."can_read__global_site_settings"("_global_site_settings" "public"."_global_site_settings", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "_global_site_settings";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read__global_site_settings"("public"."_global_site_settings") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read__global_site_settings"("public"."_global_site_settings") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read__global_site_settings"("public"."_global_site_settings", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read__global_site_settings"("public"."_global_site_settings", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create__global_site_settings"("_global_site_settings" "public"."_global_site_settings")
+CREATE OR REPLACE FUNCTION "public"."can_create__global_site_settings"("_global_site_settings" "public"."_global_site_settings", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "_global_site_settings";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create__global_site_settings"("public"."_global_site_settings") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create__global_site_settings"("public"."_global_site_settings") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create__global_site_settings"("public"."_global_site_settings", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create__global_site_settings"("public"."_global_site_settings", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update__global_site_settings"("_global_site_settings" "public"."_global_site_settings")
+CREATE OR REPLACE FUNCTION "public"."can_update__global_site_settings"("_global_site_settings" "public"."_global_site_settings", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "_global_site_settings";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update__global_site_settings"("public"."_global_site_settings") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update__global_site_settings"("public"."_global_site_settings") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update__global_site_settings"("public"."_global_site_settings", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update__global_site_settings"("public"."_global_site_settings", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete__global_site_settings"("_global_site_settings" "public"."_global_site_settings")
+CREATE OR REPLACE FUNCTION "public"."can_delete__global_site_settings"("_global_site_settings" "public"."_global_site_settings", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'editor'
       FROM (SELECT ($1).*) AS "_global_site_settings";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete__global_site_settings"("public"."_global_site_settings") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete__global_site_settings"("public"."_global_site_settings") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete__global_site_settings"("public"."_global_site_settings", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete__global_site_settings"("public"."_global_site_settings", boolean) TO anon, authenticated, service_role;
 
 -- Drafts, version history and publishing
 CREATE SCHEMA IF NOT EXISTS "draft";
@@ -1413,7 +1413,13 @@ GRANT EXECUTE ON FUNCTION "supatype".restore_version(text, text, integer) TO aut
 REVOKE ALL ON SCHEMA "draft" FROM anon;
 GRANT USAGE ON SCHEMA "draft" TO authenticated, service_role;
 
-ALTER TABLE "public"."page_versions" ENABLE ROW LEVEL SECURITY;
+DO $versions_rls$
+BEGIN
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = '"public"."page_versions"'::regclass) THEN
+    ALTER TABLE "public"."page_versions" ENABLE ROW LEVEL SECURITY;
+  END IF;
+END
+$versions_rls$;
 
 DROP POLICY IF EXISTS "page_versions_select" ON "public"."page_versions";
 CREATE POLICY "page_versions_select" ON "public"."page_versions"
@@ -1509,7 +1515,13 @@ SELECT (jsonb_populate_record(NULL::"public"."page", v."data")).*
 REVOKE ALL ON "draft"."page" FROM anon;
 GRANT SELECT ON "draft"."page" TO authenticated, service_role;
 
-ALTER TABLE "public"."speaker_versions" ENABLE ROW LEVEL SECURITY;
+DO $versions_rls$
+BEGIN
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = '"public"."speaker_versions"'::regclass) THEN
+    ALTER TABLE "public"."speaker_versions" ENABLE ROW LEVEL SECURITY;
+  END IF;
+END
+$versions_rls$;
 
 DROP POLICY IF EXISTS "speaker_versions_select" ON "public"."speaker_versions";
 CREATE POLICY "speaker_versions_select" ON "public"."speaker_versions"
@@ -1605,7 +1617,13 @@ SELECT (jsonb_populate_record(NULL::"public"."speaker", v."data")).*
 REVOKE ALL ON "draft"."speaker" FROM anon;
 GRANT SELECT ON "draft"."speaker" TO authenticated, service_role;
 
-ALTER TABLE "public"."talk_versions" ENABLE ROW LEVEL SECURITY;
+DO $versions_rls$
+BEGIN
+  IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = '"public"."talk_versions"'::regclass) THEN
+    ALTER TABLE "public"."talk_versions" ENABLE ROW LEVEL SECURITY;
+  END IF;
+END
+$versions_rls$;
 
 DROP POLICY IF EXISTS "talk_versions_select" ON "public"."talk_versions";
 CREATE POLICY "talk_versions_select" ON "public"."talk_versions"

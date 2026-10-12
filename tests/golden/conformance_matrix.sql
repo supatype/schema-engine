@@ -454,229 +454,229 @@ CREATE TABLE IF NOT EXISTS "public"."relations_every" (
 );
 
 -- Row-level affordance functions (PostgREST computed columns)
-CREATE OR REPLACE FUNCTION "public"."can_read_every"("every" "public"."every")
+CREATE OR REPLACE FUNCTION "public"."can_read_every"("every" "public"."every", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_every"("public"."every") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_every"("public"."every") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_every"("public"."every", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_every"("public"."every", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_every"("every" "public"."every")
+CREATE OR REPLACE FUNCTION "public"."can_create_every"("every" "public"."every", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_every"("public"."every") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_every"("public"."every") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_every"("public"."every", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_every"("public"."every", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_every"("every" "public"."every")
+CREATE OR REPLACE FUNCTION "public"."can_update_every"("every" "public"."every", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_every"("public"."every") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_every"("public"."every") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_every"("public"."every", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_every"("public"."every", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_every"("every" "public"."every")
+CREATE OR REPLACE FUNCTION "public"."can_delete_every"("every" "public"."every", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_every"("public"."every") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_every"("public"."every") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_every"("public"."every", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_every"("public"."every", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_every_localised"("every_localised" "public"."every_localised")
+CREATE OR REPLACE FUNCTION "public"."can_read_every_localised"("every_localised" "public"."every_localised", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_localised";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_every_localised"("public"."every_localised") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_every_localised"("public"."every_localised") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_every_localised"("public"."every_localised", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_every_localised"("public"."every_localised", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_every_localised"("every_localised" "public"."every_localised")
+CREATE OR REPLACE FUNCTION "public"."can_create_every_localised"("every_localised" "public"."every_localised", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_localised";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_every_localised"("public"."every_localised") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_every_localised"("public"."every_localised") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_every_localised"("public"."every_localised", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_every_localised"("public"."every_localised", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_every_localised"("every_localised" "public"."every_localised")
+CREATE OR REPLACE FUNCTION "public"."can_update_every_localised"("every_localised" "public"."every_localised", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_localised";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_every_localised"("public"."every_localised") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_every_localised"("public"."every_localised") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_every_localised"("public"."every_localised", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_every_localised"("public"."every_localised", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_every_localised"("every_localised" "public"."every_localised")
+CREATE OR REPLACE FUNCTION "public"."can_delete_every_localised"("every_localised" "public"."every_localised", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_localised";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_every_localised"("public"."every_localised") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_every_localised"("public"."every_localised") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_every_localised"("public"."every_localised", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_every_localised"("public"."every_localised", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_every_required"("every_required" "public"."every_required")
+CREATE OR REPLACE FUNCTION "public"."can_read_every_required"("every_required" "public"."every_required", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_required";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_every_required"("public"."every_required") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_every_required"("public"."every_required") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_every_required"("public"."every_required", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_every_required"("public"."every_required", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_every_required"("every_required" "public"."every_required")
+CREATE OR REPLACE FUNCTION "public"."can_create_every_required"("every_required" "public"."every_required", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_required";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_every_required"("public"."every_required") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_every_required"("public"."every_required") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_every_required"("public"."every_required", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_every_required"("public"."every_required", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_every_required"("every_required" "public"."every_required")
+CREATE OR REPLACE FUNCTION "public"."can_update_every_required"("every_required" "public"."every_required", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_required";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_every_required"("public"."every_required") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_every_required"("public"."every_required") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_every_required"("public"."every_required", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_every_required"("public"."every_required", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_every_required"("every_required" "public"."every_required")
+CREATE OR REPLACE FUNCTION "public"."can_delete_every_required"("every_required" "public"."every_required", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_required";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_every_required"("public"."every_required") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_every_required"("public"."every_required") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_every_required"("public"."every_required", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_every_required"("public"."every_required", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_every_defaulted"("every_defaulted" "public"."every_defaulted")
+CREATE OR REPLACE FUNCTION "public"."can_read_every_defaulted"("every_defaulted" "public"."every_defaulted", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_defaulted";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_every_defaulted"("public"."every_defaulted") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_every_defaulted"("public"."every_defaulted") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_every_defaulted"("public"."every_defaulted", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_every_defaulted"("public"."every_defaulted", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_every_defaulted"("every_defaulted" "public"."every_defaulted")
+CREATE OR REPLACE FUNCTION "public"."can_create_every_defaulted"("every_defaulted" "public"."every_defaulted", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_defaulted";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_every_defaulted"("public"."every_defaulted") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_every_defaulted"("public"."every_defaulted") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_every_defaulted"("public"."every_defaulted", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_every_defaulted"("public"."every_defaulted", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_every_defaulted"("every_defaulted" "public"."every_defaulted")
+CREATE OR REPLACE FUNCTION "public"."can_update_every_defaulted"("every_defaulted" "public"."every_defaulted", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_defaulted";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_every_defaulted"("public"."every_defaulted") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_every_defaulted"("public"."every_defaulted") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_every_defaulted"("public"."every_defaulted", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_every_defaulted"("public"."every_defaulted", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_every_defaulted"("every_defaulted" "public"."every_defaulted")
+CREATE OR REPLACE FUNCTION "public"."can_delete_every_defaulted"("every_defaulted" "public"."every_defaulted", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_defaulted";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_every_defaulted"("public"."every_defaulted") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_every_defaulted"("public"."every_defaulted") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_every_defaulted"("public"."every_defaulted", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_every_defaulted"("public"."every_defaulted", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_every_read_only"("every_read_only" "public"."every_read_only")
+CREATE OR REPLACE FUNCTION "public"."can_read_every_read_only"("every_read_only" "public"."every_read_only", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_read_only";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_every_read_only"("public"."every_read_only") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_every_read_only"("public"."every_read_only") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_every_read_only"("public"."every_read_only", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_every_read_only"("public"."every_read_only", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_every_read_only"("every_read_only" "public"."every_read_only")
+CREATE OR REPLACE FUNCTION "public"."can_create_every_read_only"("every_read_only" "public"."every_read_only", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_read_only";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_every_read_only"("public"."every_read_only") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_every_read_only"("public"."every_read_only") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_every_read_only"("public"."every_read_only", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_every_read_only"("public"."every_read_only", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_every_read_only"("every_read_only" "public"."every_read_only")
+CREATE OR REPLACE FUNCTION "public"."can_update_every_read_only"("every_read_only" "public"."every_read_only", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_read_only";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_every_read_only"("public"."every_read_only") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_every_read_only"("public"."every_read_only") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_every_read_only"("public"."every_read_only", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_every_read_only"("public"."every_read_only", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_every_read_only"("every_read_only" "public"."every_read_only")
+CREATE OR REPLACE FUNCTION "public"."can_delete_every_read_only"("every_read_only" "public"."every_read_only", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "every_read_only";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_every_read_only"("public"."every_read_only") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_every_read_only"("public"."every_read_only") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_every_read_only"("public"."every_read_only", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_every_read_only"("public"."every_read_only", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_relations"("relations" "public"."relations")
+CREATE OR REPLACE FUNCTION "public"."can_read_relations"("relations" "public"."relations", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "relations";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_relations"("public"."relations") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_relations"("public"."relations") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_relations"("public"."relations", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_relations"("public"."relations", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_relations"("relations" "public"."relations")
+CREATE OR REPLACE FUNCTION "public"."can_create_relations"("relations" "public"."relations", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "relations";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_relations"("public"."relations") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_relations"("public"."relations") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_relations"("public"."relations", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_relations"("public"."relations", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_relations"("relations" "public"."relations")
+CREATE OR REPLACE FUNCTION "public"."can_update_relations"("relations" "public"."relations", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "relations";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_relations"("public"."relations") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_relations"("public"."relations") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_relations"("public"."relations", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_relations"("public"."relations", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_relations"("relations" "public"."relations")
+CREATE OR REPLACE FUNCTION "public"."can_delete_relations"("relations" "public"."relations", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "relations";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_relations"("public"."relations") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_relations"("public"."relations") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_relations"("public"."relations", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_relations"("public"."relations", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_composites"("composites" "public"."composites")
+CREATE OR REPLACE FUNCTION "public"."can_read_composites"("composites" "public"."composites", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "composites";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_composites"("public"."composites") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_composites"("public"."composites") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_composites"("public"."composites", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_composites"("public"."composites", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_composites"("composites" "public"."composites")
+CREATE OR REPLACE FUNCTION "public"."can_create_composites"("composites" "public"."composites", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "composites";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_composites"("public"."composites") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_composites"("public"."composites") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_composites"("public"."composites", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_composites"("public"."composites", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_composites"("composites" "public"."composites")
+CREATE OR REPLACE FUNCTION "public"."can_update_composites"("composites" "public"."composites", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "composites";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_composites"("public"."composites") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_composites"("public"."composites") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_composites"("public"."composites", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_composites"("public"."composites", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_composites"("composites" "public"."composites")
+CREATE OR REPLACE FUNCTION "public"."can_delete_composites"("composites" "public"."composites", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "composites";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_composites"("public"."composites") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_composites"("public"."composites") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_composites"("public"."composites", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_composites"("public"."composites", boolean) TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";
@@ -913,6 +913,20 @@ BEGIN
   END IF;
 END
 $grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_bigSerial_plain_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_bigSerial_plain_seq" FROM authenticated';
+  END IF;
+END
+$grants$;
 REVOKE ALL PRIVILEGES ON "public"."every_defaulted" FROM PUBLIC;
 DO $grants$
 BEGIN
@@ -925,6 +939,34 @@ DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_defaulted" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_defaulted_bigSerial_def_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_defaulted_bigSerial_def_seq" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_defaulted_serial_def_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_defaulted_serial_def_seq" FROM authenticated';
   END IF;
 END
 $grants$;
@@ -958,6 +1000,34 @@ BEGIN
   END IF;
 END
 $grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_read_only_bigSerial_ro_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_read_only_bigSerial_ro_seq" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_read_only_serial_ro_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_read_only_serial_ro_seq" FROM authenticated';
+  END IF;
+END
+$grants$;
 REVOKE ALL PRIVILEGES ON "public"."every_required" FROM PUBLIC;
 DO $grants$
 BEGIN
@@ -970,6 +1040,48 @@ DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_required" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_required_bigSerial_req_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_required_bigSerial_req_seq" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_required_serial_req_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_required_serial_req_seq" FROM authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_serial_plain_seq" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."every_serial_plain_seq" FROM authenticated';
   END IF;
 END
 $grants$;

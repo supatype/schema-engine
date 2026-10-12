@@ -99,24 +99,45 @@ async fn render_recorded(
     schema: &str,
     force: bool,
 ) -> Result<String> {
-    let mut tx = crate::push::begin_writer(pool).await?;
-    migration_history::run_bootstrap(&mut tx, &migration_history::bootstrap_version())
-        .await
-        .context("rehearse the bootstrap")?;
-    let plan = crate::push::plan_on(&mut tx, ast, schema).await?;
-    if !plan.has_changes() {
-        return Ok(plan.migration_in_transaction(force)?.file());
-    }
+    // A person is waiting: a lock it cannot take at once is named, not retried (LK1).
+    let (mut tx, pid) = crate::push::begin_watched_writer(pool).await?;
+    let work = async move {
+        migration_history::run_bootstrap(&mut tx, &migration_history::bootstrap_version())
+            .await
+            .context("rehearse the bootstrap")?;
+        let plan = crate::push::plan_on(&mut tx, ast, schema).await?;
+        if !plan.has_changes() {
+            return Ok(plan.migration_in_transaction(force)?.file());
+        }
 
-    let mut bootstrap = migration_history::bootstrap_file_statements();
-    bootstrap.extend(migration_history::auth_helper_statements(&mut tx, "auth").await?);
-    let name = format!("migrate_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f"));
-    let (migration, migration_id) = crate::push::rehearse(&mut tx, &plan, force, name.clone())
-        .await
-        .context("rehearse the migration, to record what a push would")?;
-    let ledger = recorded(&mut tx, &name, migration_id).await?;
-    tx.rollback().await?;
-    Ok(migration.file_recording(&Recording { bootstrap, ledger }))
+        let mut bootstrap = migration_history::bootstrap_file_statements();
+        bootstrap.extend(migration_history::auth_helper_statements(&mut tx, "auth").await?);
+        let name = format!("migrate_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f"));
+        let (migration, migration_id) = crate::push::rehearse(&mut tx, &plan, force, name.clone())
+            .await
+            .context("rehearse the migration, to record what a push would")?;
+        let ledger = recorded(&mut tx, &name, migration_id).await?;
+        tx.rollback().await?;
+        let recording = Recording {
+            bootstrap,
+            ledger,
+            restore: restored(&name),
+        };
+        Ok(migration.file_recording(&recording))
+    };
+    crate::online::fail_fast(pool, pid, "migrate --record", work).await
+}
+
+/// What the file's rollback section runs after undoing the migration, as `supatype rollback` does
+/// (HI2): the ledger put back as it was before the push, and the migration marked rolled back.
+fn restored(name: &str) -> Vec<String> {
+    let this_migration = format!(
+        "(SELECT id FROM {SCHEMA}.migrations WHERE name = {})",
+        quote_literal(name)
+    );
+    let mut statements = crate::ledger::undo::restore_statements(&this_migration).to_vec();
+    statements.push(migration_history::mark_rolled_back_sql(&this_migration));
+    statements
 }
 
 /// What the rehearsed push wrote, read back as JSON.

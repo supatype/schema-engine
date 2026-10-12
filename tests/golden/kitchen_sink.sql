@@ -240,37 +240,37 @@ CREATE INDEX IF NOT EXISTS "kitchen_sink_vector_field_idx" ON "public"."kitchen_
 CREATE INDEX IF NOT EXISTS "kitchen_sink_deleted_at_idx" ON "public"."kitchen_sink" USING btree ("deleted_at");
 
 -- Row-level affordance functions (PostgREST computed columns)
-CREATE OR REPLACE FUNCTION "public"."can_read_kitchen_sink"("kitchen_sink" "public"."kitchen_sink")
+CREATE OR REPLACE FUNCTION "public"."can_read_kitchen_sink"("kitchen_sink" "public"."kitchen_sink", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "kitchen_sink";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_kitchen_sink"("public"."kitchen_sink") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_kitchen_sink"("public"."kitchen_sink") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_kitchen_sink"("public"."kitchen_sink", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_kitchen_sink"("public"."kitchen_sink", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_kitchen_sink"("kitchen_sink" "public"."kitchen_sink")
+CREATE OR REPLACE FUNCTION "public"."can_create_kitchen_sink"("kitchen_sink" "public"."kitchen_sink", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "kitchen_sink";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_kitchen_sink"("public"."kitchen_sink") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_kitchen_sink"("public"."kitchen_sink") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_kitchen_sink"("public"."kitchen_sink", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_kitchen_sink"("public"."kitchen_sink", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_kitchen_sink"("kitchen_sink" "public"."kitchen_sink")
+CREATE OR REPLACE FUNCTION "public"."can_update_kitchen_sink"("kitchen_sink" "public"."kitchen_sink", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "kitchen_sink";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_kitchen_sink"("public"."kitchen_sink") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_kitchen_sink"("public"."kitchen_sink") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_kitchen_sink"("public"."kitchen_sink", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_kitchen_sink"("public"."kitchen_sink", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_kitchen_sink"("kitchen_sink" "public"."kitchen_sink")
+CREATE OR REPLACE FUNCTION "public"."can_delete_kitchen_sink"("kitchen_sink" "public"."kitchen_sink", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "kitchen_sink";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_kitchen_sink"("public"."kitchen_sink") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_kitchen_sink"("public"."kitchen_sink") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_kitchen_sink"("public"."kitchen_sink", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_kitchen_sink"("public"."kitchen_sink", boolean) TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";
