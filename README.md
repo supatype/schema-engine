@@ -91,6 +91,7 @@ These read the AST and need no database connection.
 | Command | Description |
 |---|---|
 | `capabilities` | What this engine supports of the ownership contract, as JSON (also `GET /capabilities`) |
+| `licence` | The licence this binary is distributed under, word for word (also `license`) |
 | `parse` | Parse and validate an AST, printing the resolved form |
 | `generate` | Typed client code. `--lang typescript` (default), `python`, `go`, `php`, `swift`, `kotlin`, `dart` |
 | `rls` | RLS policy SQL plus auth helpers |
@@ -149,7 +150,6 @@ supatype-engine generate -i schema.json --lang swift
 | `-i, --input <path>` | Input file path, or `-` for stdin (default) |
 | `-o, --output <path>` | Output file path, or `-` for stdout (default) |
 | `--log <level>` | Log level filter, written to stderr (default `warn`) |
-| `--license <key>` | License key for gated features |
 
 Database commands take `--database-url`, which also reads `DATABASE_URL`. All of them except
 `migrations` also take `--schema` (default `public`).
@@ -392,12 +392,8 @@ src/
 │   ├── studio/            Studio metadata JSON
 │   └── config/            PostgREST, Kong
 ├── state/                 DatabaseState, target state, migration history, Studio state
-├── server/                Axum route handlers and request / response types
-└── licensing/             Tier definitions (Community / Pro / Enterprise)
+└── server/                Axum route handlers and request / response types
 ```
-
-Licensing currently resolves every key to `Community`; key validation is not implemented, so no
-feature is gated in practice. `src/licensing/features.rs` holds the intended tier per feature.
 
 ## Building
 
@@ -455,6 +451,7 @@ its base branch:
 | Unit & Evolution Tests | `cargo test --lib` plus every non-database suite |
 | SDK Exec Tests | Generated SDKs compiled and executed on Linux and macOS against real Python, Go, PHP, Swift, Kotlin and Dart toolchains |
 | Integration Tests | Every database suite against `supatype/postgres:17-latest` |
+| Licences | `cargo deny check licenses` (no copyleft dependency), `THIRD-PARTY-NOTICES` regenerated and compared, and the release licence check proven both ways |
 
 **Release** (`.github/workflows/release.yml`), triggered by `v*` tags:
 
@@ -462,16 +459,38 @@ its base branch:
    `SUPATYPE_ENGINE_RELEASE`, and `build.rs` bakes `CARGO_PKG_VERSION` into `ENGINE_VERSION`, which
    both binaries report, so a drift between tag and manifest is a lie the CLI would believe. Any
    other build reports `<major>.<minor + 1>.0-dev+<commit>` (see `docs/release-process.md`).
+   It also refuses a tag whose `LICENSE` does not name that version and a concrete Change Date
+   (`scripts/licence-parameters.sh`, which `release-please.yml` runs on the release PR).
 2. Run the test suite.
 3. Build all five targets (Linux arm64 via `cross`) and strip them.
-4. Generate `checksums.sha256` and sign it with minisign.
-5. Upload binaries, checksums and signature to the CDN under `engine/v<version>/`, then rewrite
-   `engine/latest.json`.
-6. Create the GitHub Release, marking any tag containing `-` as a prerelease.
-7. Publish the multi-platform Docker image.
+4. Generate `checksums.sha256` over the binaries, `LICENSE` and `THIRD-PARTY-NOTICES`, and sign it
+   with minisign.
+5. Upload those files, the checksums and the signature to the CDN under `engine/v<version>/`, then
+   rewrite `engine/latest.json`.
+6. Create the GitHub Release with the same files, marking any tag containing `-` as a prerelease.
+7. Publish the multi-platform Docker image, with `/LICENSE` and `/THIRD-PARTY-NOTICES`.
 
 See `docs/release-process.md` for the checklist and minisign key handling.
 
-## License
+## Licence
 
-Proprietary. All rights reserved.
+The engine is source-available under the [Business Source License 1.1](LICENSE) (SPDX
+`BUSL-1.1`). `supatype-engine licence` prints the exact terms for the version you have.
+
+- **You can always** read, change and redistribute the engine, and run it in production: build and
+  run your own applications on it, commercial ones included, self-host Supatype, and build and host
+  applications for your clients.
+- **You cannot** use it to offer Supatype or the engine as a hosted or managed service, or sell a
+  product whose primary value is the engine. The Additional Use Grant in [LICENSE](LICENSE) defines
+  both.
+- **Each version becomes Apache 2.0** on its Change Date, four years after that version's release.
+
+Versions 0.1.5 to 0.6.0 are made available under the same terms, with the same Additional Use Grant
+and the same Change Date as 0.7.0.
+
+For a commercial licence or anything the grant does not cover, contact
+[licensing@supatype.com](mailto:licensing@supatype.com).
+
+The dependencies' licences and notices are in `THIRD-PARTY-NOTICES`, which ships beside the binary
+in every release and in the image. Contributions need a signed CLA: see
+[CONTRIBUTING.md](CONTRIBUTING.md).

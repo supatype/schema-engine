@@ -12,11 +12,17 @@ fn schema_name(name: &str) -> Result<String, String> {
     supatype_engine::sql_quote::plain_schema_name(name).map(|()| name.to_string())
 }
 
+/// The licence this binary is distributed under, embedded so every copy carries the exact text
+/// for its version, as the Business Source License requires.
+const LICENSE: &str = include_str!("../LICENSE");
+
 #[derive(Parser)]
 #[command(
     name = "supatype-engine",
     version = env!("ENGINE_VERSION"),
-    about = "Supatype schema engine"
+    about = "Supatype schema engine",
+    after_help = "Licensed under the Business Source License 1.1. \
+                  Run `supatype-engine licence` for the terms."
 )]
 struct Cli {
     #[arg(long, short, global = true, help = "Input file path, or '-' for stdin")]
@@ -32,9 +38,6 @@ struct Cli {
 
     #[arg(long, global = true, default_value = "warn")]
     log: String,
-
-    #[arg(long, global = true, help = "License key for gated features")]
-    license: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -73,6 +76,9 @@ impl From<AuditArgs> for supatype_engine::state::audit::PushAudit {
 enum Command {
     /// Print what this engine supports of the ownership contract, as JSON
     Capabilities,
+    /// Print the licence this engine is distributed under (Business Source License 1.1)
+    #[command(alias = "license")]
+    Licence,
     /// Parse and validate a schema AST
     Parse,
     /// Introspect current database state
@@ -307,12 +313,11 @@ async fn main() -> Result<()> {
         "supatype-engine starting"
     );
 
-    let _license = supatype_engine::licensing::License::new(cli.license.as_deref());
-
     let input = match &cli.command {
-        Command::Migrations { .. } | Command::Rollback { .. } | Command::Capabilities => {
-            String::new()
-        }
+        Command::Migrations { .. }
+        | Command::Rollback { .. }
+        | Command::Capabilities
+        | Command::Licence => String::new(),
         Command::Seed { status: true, .. } => String::new(),
         _ => read_input(cli.input.as_deref())?,
     };
@@ -333,6 +338,7 @@ async fn run(command: Command, input: String) -> Result<()> {
         Command::Capabilities => {
             println!("{}", supatype_engine::capabilities::capabilities());
         }
+        Command::Licence => print!("{LICENSE}"),
         Command::Parse => {
             let ast = supatype_engine::parser::parse(&input)?;
             println!("{}", serde_json::to_string_pretty(&ast)?);
