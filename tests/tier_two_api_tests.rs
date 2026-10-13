@@ -25,12 +25,19 @@ const ADMIN: &str = "ae2c4442-fa2b-430b-8609-c4530b7eed80";
 
 // ---------------------------------------------------------------------------------------------
 // The T2 fixture: `Employee` (salary admin-only, ssn owner-only, name any signed-in user) and
-// `Payslip` (primary key not named `id`, with a default; amount readable by its owner only).
+// `Payslip` (primary key not named `id`, with a default; amount, and a note with a default,
+// readable by its owner only).
 // ---------------------------------------------------------------------------------------------
 
 fn column(kind: &str, pg_type: &str, required: bool) -> Value {
     json!({ "kind": kind, "required": required,
             "annotations": { "db": { "pgType": pg_type, "unique": false } } })
+}
+
+/// `field` with a literal default.
+fn with_default(mut field: Value, value: &str) -> Value {
+    field["default"] = json!({ "kind": "value", "value": value });
+    field
 }
 
 fn uuid_key(default: bool) -> Value {
@@ -96,13 +103,17 @@ fn fixture() -> SchemaAst {
             "owner_id": column("uuid", "UUID", true),
             "month": column("text", "TEXT", true),
             "amount": column("integer", "INTEGER", false),
+            "note": with_default(column("text", "TEXT", false), "none"),
         }),
         json!({
             "read": logged_in(),
             "create": admin(),
             "update": admin(),
             "delete": admin(),
-            "fields": { "amount": { "read": owner("owner_id") } }
+            "fields": {
+                "amount": { "read": owner("owner_id") },
+                "note": { "read": owner("owner_id") }
+            }
         }),
     );
     let doc = json!({ "astVersion": 2, "models": [employee, payslip] }).to_string();
@@ -543,14 +554,14 @@ async fn an_insert_checks_the_field_write_rules() {
     common::with_integration_pool(|pool| async move {
         pushed(&pool).await;
 
-        // T2-N3: salary's write rule is admin-only. Tier 1 replaces a value the caller may not write
-        // with the column's default on INSERT, silently, so a whole-object POST still works. It
-        // tests the rule against a row of NULLs, there being no stored row, so `ssn` (Owner<"id">,
-        // which reads the row) falls back too: the same answer tier 1 gives.
-        let insert = |id: &str, name: &str| {
+        // MASK-N1 (was T2-N3): each field write rule judges the row being inserted, as an RLS
+        // `WITH CHECK` does, as tier 1 does. A value it allows is stored; one it refuses is an
+        // error, never quietly dropped. Judged against a row of NULLs instead, `ssn`
+        // (Owner<"id">) was stored as NULL for everyone but service_role.
+        let insert = |id: &str, name: &str, salary: &str| {
             format!(
                 "INSERT INTO api.t2_employee (id, name, salary, ssn)
-                 VALUES ('{id}', '{name}', 999999, 'SSN') RETURNING name, salary, ssn"
+                 VALUES ('{id}', '{name}', {salary}, '{name}-SSN') RETURNING name, salary, ssn"
             )
         };
         sqlx::raw_sql(&format!(
@@ -559,28 +570,36 @@ async fn an_insert_checks_the_field_write_rules() {
         .execute(&pool)
         .await
         .expect("make room");
-        let out = as_caller(&pool, Caller::A, &insert(A, "Alice")).await;
-        assert_eq!(
-            out.rows.as_deref().map(employees),
-            Ok(vec![(json!("Alice"), Value::Null, Value::Null)])
-        );
-        assert_eq!(
-            out.stored,
-            ["Alice|-|-", "Bob|90000|B-SSN-222"],
-            "a non-admin wrote salary on INSERT"
-        );
 
-        // The admin may write salary, on their own row (create is Owner<"id">).
-        let out = as_caller(&pool, Caller::Admin, &insert(ADMIN, "Ada")).await;
+        // A user creating their own row sets their own owner-only `ssn`, and reads it back.
+        // `salary` is NULL, which is not a write, so a whole-object POST still works.
+        let out = as_caller(&pool, Caller::A, &insert(A, "Alice", "NULL")).await;
         assert_eq!(
             out.rows.as_deref().map(employees),
-            Ok(vec![(json!("Ada"), json!(999999), Value::Null)])
+            Ok(vec![(json!("Alice"), Value::Null, json!("Alice-SSN"))])
         );
-        assert_eq!(out.stored[0], "Ada|999999|-");
+        assert_eq!(out.stored, ["Alice|-|Alice-SSN", "Bob|90000|B-SSN-222"]);
+
+        // `salary` is admin-only: a value from anyone else is refused and nothing is stored.
+        let out = as_caller(&pool, Caller::A, &insert(A, "Alice", "999999")).await;
+        let refusal = out.rows.expect_err("a non-admin wrote salary on INSERT");
+        assert!(
+            refusal.contains("permission denied for column salary of relation t2_employee"),
+            "{refusal}"
+        );
+        assert_eq!(out.stored, ["Bob|90000|B-SSN-222"]);
+
+        // The admin may write salary, on their own row (create is Owner<"id">), and their ssn.
+        let out = as_caller(&pool, Caller::Admin, &insert(ADMIN, "Ada", "999999")).await;
+        assert_eq!(
+            out.rows.as_deref().map(employees),
+            Ok(vec![(json!("Ada"), json!(999999), json!("Ada-SSN"))])
+        );
+        assert_eq!(out.stored[0], "Ada|999999|Ada-SSN");
 
         // service_role is exempt, as in tier 1: everything it sends is written.
-        let out = as_caller(&pool, Caller::Service, &insert(A, "Alice")).await;
-        assert_eq!(out.stored[0], "Alice|999999|SSN");
+        let out = as_caller(&pool, Caller::Service, &insert(A, "Alice", "999999")).await;
+        assert_eq!(out.stored[0], "Alice|999999|Alice-SSN");
     })
     .await;
 }
@@ -589,21 +608,31 @@ async fn an_insert_checks_the_field_write_rules() {
 async fn an_insert_through_a_view_gets_the_base_tables_defaults() {
     common::with_integration_pool(|pool| async move {
         pushed(&pool).await;
-        // T2-N4: `ref` has a default; PostgREST sends only the columns the client gave.
-        let out = as_caller(
-            &pool,
-            Caller::Admin,
-            &format!(
-                "INSERT INTO api.t2_payslip (owner_id, month, amount) VALUES ('{B}', '2026-10', 7600)
-                 RETURNING ref IS NOT NULL AS has_ref, amount"
-            ),
-        )
-        .await;
+        // T2-N4: `ref` has a default; PostgREST sends only the columns the client gave. `note`
+        // has one too, and it is masked: left out, it is no write by the admin, who does not own
+        // B's payslip, so it takes its default rather than being refused.
+        let payslip = |columns: &str, values: &str| {
+            format!(
+                "INSERT INTO api.t2_payslip (owner_id, month{columns}) VALUES ('{B}', '2026-10'{values})
+                 RETURNING ref IS NOT NULL AS has_ref, amount, note"
+            )
+        };
+        let out = as_caller(&pool, Caller::Admin, &payslip("", "")).await;
         assert_eq!(
             out.rows,
-            Ok(vec![json!({ "has_ref": true, "amount": null })]),
-            "the admin does not own B's payslip, so its amount comes back masked"
+            Ok(vec![json!({ "has_ref": true, "amount": null, "note": null })]),
+            "the admin does not own B's payslip, so its masked columns come back masked"
         );
+
+        // An amount on B's payslip is B's to write (MASK-N1): refused, not stored as NULL.
+        let out = as_caller(&pool, Caller::Admin, &payslip(", amount", ", 7600")).await;
+        let refusal = out.rows.expect_err("the admin wrote an amount on B's payslip");
+        assert!(
+            refusal.contains("permission denied for column amount of relation t2_payslip"),
+            "{refusal}"
+        );
+
+        // A masked column's default stays the base table's, so leaving it out is no write.
         let defaults: Vec<String> = sqlx::query_scalar(
             "SELECT a.attname::text FROM pg_attribute a JOIN pg_attrdef d
                  ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -667,7 +696,7 @@ async fn a_second_push_plans_nothing_and_keeps_the_owner_rights_design() {
         .fetch_one(&pool)
         .await
         .expect("count the recorded predicates");
-        assert_eq!(recorded, 4, "name, salary, ssn and amount");
+        assert_eq!(recorded, 5, "name, salary, ssn, amount and note");
         // And an applied third push leaves the design in place.
         push_fixture(&pool, &ast).await;
         let options: String = sqlx::query_scalar(
@@ -914,7 +943,7 @@ async fn moving_to_tier_two_takes_the_mask_labels_off() {
             .await
             .expect("count labels")
         };
-        assert_eq!(labels().await, 4, "tier 1 labels each field rule");
+        assert_eq!(labels().await, 5, "tier 1 labels each field rule");
 
         // T2-N7: the library is still preloaded, so the labels keep acting until they are gone.
         sqlx::raw_sql("DROP EXTENSION supatype_mask CASCADE")
@@ -925,7 +954,7 @@ async fn moving_to_tier_two_takes_the_mask_labels_off() {
         let before = supatype_engine::inspect::doctor(&pool, &ast, "public", false)
             .await
             .expect("doctor");
-        assert_eq!(before.stale_managed.len(), 4, "{:?}", before.stale_managed);
+        assert_eq!(before.stale_managed.len(), 5, "{:?}", before.stale_managed);
         assert!(
             before
                 .stale_managed

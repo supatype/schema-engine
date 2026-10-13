@@ -479,7 +479,7 @@ fn render_view(
         .iter()
         .map(|column| projection(ast, model, schema, &entry.table, column))
         .collect();
-    let mut out = view_head(entry, &projections, schema);
+    let mut out = view_head(entry, &projections, schema, &masked_columns(model, entry));
     out.push_str(&graphql_comment_sql(
         entry,
         &model_foreign_keys(ast, model),
@@ -508,7 +508,7 @@ fn render_junction_view(
         .iter()
         .map(|column| format!("    {}.{}", quote_ident(&entry.table), quote_ident(column)))
         .collect();
-    let mut out = view_head(entry, &projections, schema);
+    let mut out = view_head(entry, &projections, schema, &[]);
     out.push_str(&graphql_comment_sql(
         entry,
         &junction_foreign_keys(ast, junction),
@@ -523,13 +523,19 @@ fn render_junction_view(
     out
 }
 
-/// The view itself over `projections`, owned by [`API_OWNER`], with the base table's defaults.
+/// The view itself over `projections`, owned by [`API_OWNER`], with the base table's defaults but
+/// those of the `masked` columns ([`view_setup`]).
 ///
 /// Dropped and recreated, not `CREATE OR REPLACE`: replace refuses anything but appending columns
 /// at the end, so a renamed or removed column would break every later push. The `api` schema is
 /// generated in full by Supatype, so there is nothing of the operator's to lose, and the trigger,
 /// which belongs to the view, is recreated with it.
-fn view_head(entry: &FieldViewTable, projections: &[String], schema: &str) -> String {
+fn view_head(
+    entry: &FieldViewTable,
+    projections: &[String],
+    schema: &str,
+    masked: &[&String],
+) -> String {
     let view = quote_qualified(VIEW_SCHEMA, &entry.table);
     let mut out = format!(
         "DROP VIEW IF EXISTS {view};\n\
@@ -540,8 +546,17 @@ fn view_head(entry: &FieldViewTable, projections: &[String], schema: &str) -> St
         quote_qualified(schema, &entry.table),
         quote_ident(&entry.owner),
     );
-    out.push_str(&view_setup(schema, &entry.table, &entry.owner));
+    out.push_str(&view_setup(schema, entry, masked));
     out
+}
+
+/// The columns of `entry` that `model` gives a field rule, in the rules' order.
+fn masked_columns<'a>(model: &'a ModelAst, entry: &FieldViewTable) -> Vec<&'a String> {
+    platform_access(model)
+        .fields
+        .keys()
+        .filter(|c| entry.columns.contains(c))
+        .collect()
 }
 
 /// What the owner holds on the table behind a view, which closes the view's block.
@@ -583,9 +598,14 @@ fn projection(
 /// table is created a few statements earlier, and a column the schema does not declare keeps its
 /// default too. A sequence default (`nextval`) is left to the trigger, which draws it as the owner:
 /// a caller holds no privilege on the table's sequences.
-fn view_setup(schema: &str, table: &str, owner: &str) -> String {
-    let base = quote_literal(&quote_qualified(schema, table));
-    let view = quote_literal(&quote_qualified(VIEW_SCHEMA, table));
+///
+/// Nor is a `masked` column's default copied, so a masked column the caller leaves out reaches the
+/// write trigger as NULL, which it takes as no write and fills from the base table's default
+/// (MASK-N1). It is also why PostgREST's `Prefer: missing=default` sends nothing for such a
+/// column under tier 2: PostgREST reads the view's defaults.
+fn view_setup(schema: &str, entry: &FieldViewTable, masked: &[&String]) -> String {
+    let base = quote_literal(&quote_qualified(schema, &entry.table));
+    let view = quote_literal(&quote_qualified(VIEW_SCHEMA, &entry.table));
     format!(
         "DO ${VIEW_SETUP_TAG}$\nDECLARE\n  d record;\nBEGIN\n\
          \x20 FOR d IN\n\
@@ -594,6 +614,7 @@ fn view_setup(schema: &str, table: &str, owner: &str) -> String {
          \x20     JOIN pg_attribute a ON a.attrelid = ad.adrelid AND a.attnum = ad.adnum\n\
          \x20    WHERE ad.adrelid = {base}::regclass AND a.attgenerated = ''\n\
          \x20      AND pg_get_expr(ad.adbin, ad.adrelid) NOT LIKE 'nextval(%'\n\
+         {unmasked}\
          \x20      AND EXISTS (SELECT 1 FROM pg_attribute v\n\
          \x20                   WHERE v.attrelid = {view}::regclass AND v.attname = a.attname)\n\
          \x20 LOOP\n\
@@ -608,8 +629,22 @@ fn view_setup(schema: &str, table: &str, owner: &str) -> String {
          \x20   EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO %I', d.seq, {owner});\n\
          \x20 END LOOP;\n\
          END\n${VIEW_SETUP_TAG}$;\n",
-        owner = quote_literal(owner),
+        owner = quote_literal(&entry.owner),
+        unmasked = unmasked_clause(masked),
     )
+}
+
+/// The condition in [`view_setup`] that passes over the masked columns' defaults.
+fn unmasked_clause(masked: &[&String]) -> String {
+    if masked.is_empty() {
+        return String::new();
+    }
+    let names = masked
+        .iter()
+        .map(|c| quote_literal(c))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("\x20      AND a.attname::text NOT IN ({names})\n")
 }
 
 /// The comment pg_graphql reads a view's primary key and foreign keys from: a view has neither of
@@ -761,13 +796,12 @@ impl WriteTrigger<'_> {
             .join(" AND ")
     }
 
-    /// The masked columns this table has, in the rules' order.
-    fn masked_columns(&self) -> Vec<&String> {
-        platform_access(self.model)
-            .fields
-            .keys()
-            .filter(|c| self.entry.columns.contains(c))
-            .collect()
+    /// The refusal of a write to `column`, as Postgres words a refused column privilege.
+    fn denied(&self, column: &str) -> String {
+        raise_message(&format!(
+            "permission denied for column {column} of relation {}",
+            self.entry.table
+        ))
     }
 
     /// Columns no write may name: a generated one, which Postgres refuses to write.
@@ -834,6 +868,9 @@ impl WriteTrigger<'_> {
              \x20 touched bigint;\n\
              \x20 written text[];\n\
              \x20 filled record;\n\
+             \x20 wrote text[] := '{{}}';\n\
+             \x20 sent jsonb;\n\
+             \x20 dflt jsonb;\n\
              \x20 exempt boolean := {exempt};\n\
              BEGIN\n\
              {delete}{insert}{update}END $trg$;\n\
@@ -890,12 +927,11 @@ impl WriteTrigger<'_> {
         )
     }
 
-    /// An insert, as tier 1 makes one (T2-N3): a value the caller may not write is not written, and
-    /// the column gets its default instead, silently, so a client POSTing a whole object still
-    /// works. The rule is evaluated against a row of NULLs, as the extension does, since there is
-    /// no stored row: a rule that reads the row then answers NULL and the column falls back. The
-    /// statement names only the columns that remain, which is what makes the table's own default
-    /// apply. A key left empty is drawn from its sequence first, as the owner, so the row can be
+    /// An insert, as tier 1 makes one (MASK-N1, MK3): each masked column's write rule judges the
+    /// row stored, as an RLS `WITH CHECK` judges a new row. So `NEW` is completed first: each
+    /// masked column the caller did not write gets the base table's default, evaluated once and
+    /// written explicitly, and each key left empty is drawn from its sequence, as the owner. A
+    /// value the caller wrote that its rule refuses is an error, never quietly dropped. The row is
     /// read back without `RETURNING`, which would refuse a row the caller may write but not read.
     fn insert_branch(&self) -> String {
         let columns = self
@@ -904,13 +940,12 @@ impl WriteTrigger<'_> {
             .map(|c| quote_literal(c))
             .collect::<Vec<_>>()
             .join(", ");
+        let masked = self.masked_inserted();
         format!(
             "\x20 IF TG_OP = 'INSERT' THEN\n\
-             {refused}{fill}\
+             {refused}{defaults}{fill}\
              \x20   written := ARRAY[{columns}]::text[];\n\
-             \x20   IF NOT exempt THEN\n\
-             {coerced}\
-             \x20   END IF;\n\
+             {checked}\
              \x20   EXECUTE {insert_into}\n\
              \x20     || coalesce('(' || (SELECT string_agg(quote_ident(c), ', ') FROM unnest(written) AS c)\n\
              \x20       || ') OVERRIDING SYSTEM VALUE SELECT '\n\
@@ -920,8 +955,9 @@ impl WriteTrigger<'_> {
              {reread}\
              \x20 END IF;\n\n",
             refused = self.always_identity_refusal(),
+            defaults = self.fill_masked_defaults(&masked),
             fill = self.fill_from_sequences(),
-            coerced = self.insert_coercions(),
+            checked = self.insert_checks(&masked),
             insert_into = quote_literal(&format!("INSERT INTO {} ", self.base())),
             reread = self.reread("    "),
         )
@@ -964,20 +1000,73 @@ impl WriteTrigger<'_> {
         )
     }
 
-    /// Takes each masked column the caller may not write out of the insert.
-    fn insert_coercions(&self) -> String {
-        let null_row = format!("(NULL::{})", self.base());
-        self.masked_columns()
+    /// The masked columns an insert writes.
+    fn masked_inserted(&self) -> Vec<&String> {
+        let inserted = self.inserted();
+        masked_columns(self.model, self.entry)
             .into_iter()
+            .filter(|column| inserted.contains(column))
+            .collect()
+    }
+
+    /// Decides, per masked column, whether the caller wrote it (MK1, MK6), and gives each one it
+    /// did not write the base table's default. Not written: NULL (left out, since the view has no
+    /// default for a masked column ([`view_setup`]), named DEFAULT, or sent as NULL), or the
+    /// default's own value. The default is read from the catalog and evaluated once per row, cast
+    /// to the column's type, and only where needed: for a NULL, and for a value `service_role`
+    /// did not send. A sequence default is left to [`Self::fill_from_sequences`], and never equals
+    /// a value sent, so it is not drawn to be compared.
+    fn fill_masked_defaults(&self, masked: &[&String]) -> String {
+        if masked.is_empty() {
+            return String::new();
+        }
+        let base = quote_literal(&self.base());
+        let names = masked
+            .iter()
+            .map(|c| quote_literal(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "\x20   FOR filled IN\n\
+             \x20     SELECT a.attname::text AS col, format_type(a.atttypid, a.atttypmod) AS typ,\n\
+             \x20            pg_get_expr(d.adbin, d.adrelid) AS expr,\n\
+             \x20            pg_get_serial_sequence({base}, a.attname) IS NOT NULL AS drawn\n\
+             \x20       FROM pg_attribute a\n\
+             \x20       LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum\n\
+             \x20      WHERE a.attrelid = {base}::regclass AND a.attname::text IN ({names})\n\
+             \x20   LOOP\n\
+             \x20     sent := to_jsonb(NEW) -> filled.col;\n\
+             \x20     dflt := NULL;\n\
+             \x20     IF filled.expr IS NOT NULL AND NOT filled.drawn\n\
+             \x20        AND (sent = 'null'::jsonb OR NOT exempt) THEN\n\
+             \x20       EXECUTE format('SELECT to_jsonb((%s)::%s)', filled.expr, filled.typ) INTO dflt;\n\
+             \x20     END IF;\n\
+             \x20     IF sent = 'null'::jsonb THEN\n\
+             \x20       IF dflt IS NOT NULL THEN\n\
+             \x20         NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, dflt));\n\
+             \x20       END IF;\n\
+             \x20     ELSIF dflt IS DISTINCT FROM sent THEN\n\
+             \x20       wrote := wrote || filled.col;\n\
+             \x20     END IF;\n\
+             \x20   END LOOP;\n"
+        )
+    }
+
+    /// Each masked column the caller wrote, judged against the completed `NEW`, `service_role`
+    /// exempt. `IS NOT TRUE`, so a rule answering NULL refuses.
+    fn insert_checks(&self, masked: &[&String]) -> String {
+        masked
+            .iter()
             .filter_map(|column| {
                 let test = write_predicate(self.ast, self.model, self.schema, column)
                     .or_else(|| read_predicate(self.ast, self.model, self.schema, column))?;
                 Some(format!(
-                    "\x20     IF {} IS NOT TRUE THEN\n\
-                     \x20       written := array_remove(written, {});\n\
-                     \x20     END IF;\n",
-                    self.against(&test, &null_row),
-                    quote_literal(column),
+                    "\x20   IF NOT exempt AND {name} = ANY (wrote) AND {judged} IS NOT TRUE THEN\n\
+                     \x20     RAISE EXCEPTION {denied} USING ERRCODE = '42501';\n\
+                     \x20   END IF;\n",
+                    name = quote_literal(column),
+                    judged = self.against(&test, "NEW"),
+                    denied = self.denied(column),
                 ))
             })
             .collect()
@@ -1022,7 +1111,7 @@ impl WriteTrigger<'_> {
     /// 3. A real edit, so the write rule decides. `IS NOT TRUE` is load-bearing here: a predicate
     ///    comparing a column to an absent claim is NULL, and `NOT NULL` would let the write through.
     fn update_guards(&self) -> String {
-        self.masked_columns()
+        masked_columns(self.model, self.entry)
             .into_iter()
             .map(|column| {
                 let readable = read_predicate(self.ast, self.model, self.schema, column)
@@ -1040,10 +1129,7 @@ impl WriteTrigger<'_> {
                      \x20     RAISE EXCEPTION {denied} USING ERRCODE = '42501';\n\
                      \x20   END IF;\n",
                     label = comment_text(column),
-                    denied = raise_message(&format!(
-                        "permission denied for column {column} of relation {}",
-                        self.entry.table
-                    )),
+                    denied = self.denied(column),
                 )
             })
             .collect()

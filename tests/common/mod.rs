@@ -111,18 +111,32 @@ pub fn force_integration_tests() -> bool {
     std::env::var("SUPATYPE_FORCE_INTEGRATION_TESTS").is_ok()
 }
 
-/// Runs `f` against an isolated Postgres (ephemeral DB or testcontainers).
-/// Skips when `DATABASE_URL` is unset and Docker/testcontainers is unavailable.
+/// Runs `f` against an isolated, empty database: a fresh one created for the test on the server
+/// `DATABASE_URL` names, or inside a testcontainers `supatype/postgres` when it is unset.
+///
+/// A fresh database in both modes, never the container's own `postgres`: that one has had the
+/// image's init run in it, which creates `supatype_mask`, so a suite asserting tier 2 there got
+/// tier 1 and failed in testcontainers mode only. A test that needs the extension creates it
+/// ([`mask_extension_available`]). Skips when `DATABASE_URL` is unset and Docker is unavailable.
 pub async fn with_integration_pool<F, Fut>(f: F)
 where
     F: FnOnce(sqlx::PgPool) -> Fut,
     Fut: Future<Output = ()>,
 {
-    if std::env::var("DATABASE_URL").is_ok() {
-        with_ephemeral_database(f).await;
-        return;
-    }
+    with_admin_url(|admin_url| async move { with_ephemeral_database(&admin_url, f).await }).await
+}
 
+/// Runs `f` with a superuser URL: `DATABASE_URL`, or that of a testcontainers
+/// `supatype/postgres` removed afterwards. Without `DATABASE_URL` and Docker, panics when
+/// integration tests are forced and skips otherwise.
+pub async fn with_admin_url<F, Fut>(f: F)
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    if let Ok(admin_url) = std::env::var("DATABASE_URL") {
+        return f(admin_url).await;
+    }
     let (container, url) = match start_supatype_postgres().await {
         Ok(c) => c,
         Err(e) => {
@@ -136,11 +150,7 @@ where
             return;
         }
     };
-    let pool = sqlx::PgPool::connect(&url)
-        .await
-        .expect("connect testcontainers supatype/postgres");
-    f(pool.clone()).await;
-    pool.close().await;
+    f(url).await;
     drop(container);
 }
 
@@ -193,50 +203,20 @@ where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = ()>,
 {
-    if let Ok(admin_url) = std::env::var("DATABASE_URL") {
-        let admin = sqlx::PgPool::connect(&admin_url)
-            .await
-            .expect("DATABASE_URL: connect admin pool");
-        let db_name = ephemeral_name("st_engine_url");
-        sqlx::raw_sql(&format!(r#"CREATE DATABASE "{db_name}""#))
-            .execute(&admin)
-            .await
-            .unwrap_or_else(|e| panic!("CREATE DATABASE {db_name} failed: {e}"));
-        // Caught so the database is dropped whether the test passes or panics.
-        let outcome = std::panic::AssertUnwindSafe(f(database_url_with_name(&admin_url, &db_name)))
-            .catch_unwind()
-            .await;
-        terminate_db_sessions(&admin, &db_name).await;
-        let _ = sqlx::raw_sql(&format!(r#"DROP DATABASE IF EXISTS "{db_name}""#))
-            .execute(&admin)
-            .await;
-        admin.close().await;
-        if let Err(panic) = outcome {
-            std::panic::resume_unwind(panic);
-        }
-        return;
-    }
-
-    match start_supatype_postgres().await {
-        Ok((container, url)) => {
-            f(url).await;
-            drop(container);
-        }
-        Err(e) if force_integration_tests() => panic!("no database: {e}"),
-        Err(e) => eprintln!("SKIP integration: DATABASE_URL not set and Docker unavailable ({e})"),
-    }
+    with_admin_url(|admin_url| async move { with_ephemeral_url(&admin_url, f).await }).await
 }
 
-async fn with_ephemeral_database<F, Fut>(f: F)
+/// Runs `f` with the URL of a database created for it on the server `admin_url` reaches as a
+/// superuser, dropped afterwards whether the test passes or panics: a failing test used to leave
+/// its database behind, and a long session of red runs left hundreds.
+async fn with_ephemeral_url<F, Fut>(admin_url: &str, f: F)
 where
-    F: FnOnce(sqlx::PgPool) -> Fut,
+    F: FnOnce(String) -> Fut,
     Fut: Future<Output = ()>,
 {
-    let admin_url =
-        std::env::var("DATABASE_URL").expect("with_ephemeral_database requires DATABASE_URL");
-    let admin = sqlx::PgPool::connect(&admin_url)
+    let admin = sqlx::PgPool::connect(admin_url)
         .await
-        .expect("DATABASE_URL: connect admin pool");
+        .expect("connect the admin pool");
     let db_name = ephemeral_name("st_engine_it");
     assert!(
         db_name
@@ -244,29 +224,15 @@ where
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
         "generated db name must be a safe identifier: {db_name}"
     );
-
     sqlx::raw_sql(&format!(r#"CREATE DATABASE "{db_name}""#))
         .execute(&admin)
         .await
         .unwrap_or_else(|e| {
-            panic!(
-                "CREATE DATABASE {db_name} failed: {e} \
-                 (DATABASE_URL user needs CREATEDB / superuser)"
-            )
+            panic!("CREATE DATABASE {db_name} failed: {e} (the admin user needs CREATEDB)")
         });
-
-    let child_url = database_url_with_name(&admin_url, &db_name);
-    let pool = sqlx::PgPool::connect(&child_url)
-        .await
-        .unwrap_or_else(|e| panic!("connect ephemeral database {db_name}: {e}"));
-
-    // Caught so the database is dropped whether the test passes or panics; a failing test used to
-    // leave its database behind, and a long session of red runs left hundreds.
-    let outcome = std::panic::AssertUnwindSafe(f(pool.clone()))
+    let outcome = std::panic::AssertUnwindSafe(f(database_url_with_name(admin_url, &db_name)))
         .catch_unwind()
         .await;
-    pool.close().await;
-
     terminate_db_sessions(&admin, &db_name).await;
     let _ = sqlx::raw_sql(&format!(r#"DROP DATABASE IF EXISTS "{db_name}""#))
         .execute(&admin)
@@ -277,27 +243,50 @@ where
     }
 }
 
+/// [`with_ephemeral_url`], handing `f` a pool on the database, closed before it is dropped.
+async fn with_ephemeral_database<F, Fut>(admin_url: &str, f: F)
+where
+    F: FnOnce(sqlx::PgPool) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    // A panic in `f` leaves the pool open; [`with_ephemeral_url`] terminates its sessions
+    // before dropping the database either way.
+    with_ephemeral_url(admin_url, |url| async move {
+        let pool = sqlx::PgPool::connect(&url)
+            .await
+            .unwrap_or_else(|e| panic!("connect the ephemeral database: {e}"));
+        f(pool.clone()).await;
+        pool.close().await;
+    })
+    .await
+}
+
 /// Runs `f` against the database `pg_cron` runs in, for a test of what a push schedules.
 ///
 /// `pg_cron` can only be created in the one database `cron.database_name` names (`postgres` on
 /// `supatype/postgres`), so in the ephemeral database [`with_integration_pool`] makes,
 /// `CREATE EXTENSION pg_cron` fails with "can only create extension in database postgres" even
 /// on an image that preloads it. Where it is preloaded the test runs in that database instead,
-/// and everything it adds is dropped after, pass or panic: new schemas, new objects in `public`,
-/// new extensions and new cron jobs. Where it is not, this is [`with_integration_pool`], and the
-/// test's own `CREATE EXTENSION` reports the image as unable to load it.
+/// on the server `DATABASE_URL` names or in a testcontainers one, and everything it adds is
+/// dropped after, pass or panic: new schemas, new objects in `public`, new extensions and new
+/// cron jobs. Where it is not, this is [`with_integration_pool`], and the test's own
+/// `CREATE EXTENSION` reports the image as unable to load it.
 pub async fn with_cron_database<F, Fut>(f: F)
 where
     F: FnOnce(sqlx::PgPool) -> Fut,
     Fut: Future<Output = ()>,
 {
-    let Ok(admin_url) = std::env::var("DATABASE_URL") else {
-        // A testcontainers database is the image's `postgres`, which is where pg_cron runs.
-        return with_integration_pool(f).await;
-    };
-    let admin = sqlx::PgPool::connect(&admin_url)
+    with_admin_url(|admin_url| async move { with_cron_database_at(&admin_url, f).await }).await
+}
+
+async fn with_cron_database_at<F, Fut>(admin_url: &str, f: F)
+where
+    F: FnOnce(sqlx::PgPool) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let admin = sqlx::PgPool::connect(admin_url)
         .await
-        .expect("DATABASE_URL: connect admin pool");
+        .expect("connect the admin pool");
     let cron_db: Option<String> =
         sqlx::query_scalar("SELECT current_setting('cron.database_name', true)")
             .fetch_one(&admin)
@@ -305,12 +294,12 @@ where
             .expect("read cron.database_name");
     admin.close().await;
     let Some(cron_db) = cron_db.filter(|d| !d.is_empty()) else {
-        return with_integration_pool(f).await;
+        return with_ephemeral_database(admin_url, f).await;
     };
 
     // One database for every such test, so one at a time; a suite's tests otherwise run at once.
     let _one_at_a_time = CRON_DATABASE.lock().await;
-    let url = database_url_with_name(&admin_url, &cron_db);
+    let url = database_url_with_name(admin_url, &cron_db);
     let connect = || async {
         sqlx::PgPool::connect(&url)
             .await

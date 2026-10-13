@@ -5,6 +5,46 @@ one-line entries say. Newest first.
 
 ## Unreleased
 
+### A field write rule judges the row being inserted (MASK-N1)
+
+On `INSERT`, a field's write rule (or its read rule, where it has no write rule) used to be judged
+against a row of NULLs, there being no stored row. A rule that reads the row (`Owner<"id">`,
+`OwnerFrom`, a membership) was then NULL for every caller, and the value was silently replaced by
+the column's default, usually NULL: a user creating their own row could not set their own
+owner-only field. Both tiers now judge the values the row stores, defaults included, as an RLS
+`WITH CHECK` does: an `owner_id DEFAULT auth.uid()`, a `gen_random_uuid()` key or a serial key is
+what a rule reads, and each is evaluated once.
+
+| The caller sends | What happens |
+|---|---|
+| A value the rule allows | It is stored. |
+| A value the rule refuses, other than the column's default | The statement fails with `42501` (`permission denied for column <column> of relation <table>` under tier 2, `column "<table>"."<column>" cannot be written by this role` under tier 1). It used to succeed and drop the value. |
+| Nothing, `DEFAULT`, NULL, or the column default's own value | The column takes its default, and is not judged. |
+
+The default's own value counts as no write because PostgREST's `Prefer: missing=default` sends it
+for a key a row leaves out. So an admin-only `verified DEFAULT false` is accepted from anyone when
+left out or sent as `false`, and `verified: true` from a non-admin is refused. A volatile default
+(`gen_random_uuid()`, a sequence) never equals a value sent.
+
+What changes for an existing project:
+
+- **Tier 2 (the `api` views):** the next push rewrites each masked view's write trigger, and stops
+  copying a masked column's default onto its view (the base table's is filled in by the trigger).
+- **Tier 1 (`supatype_mask`):** the behaviour comes with the Postgres image whose `supatype_mask`
+  judges the inserted row. Nothing in the database changes: restarting on that image is enough.
+- **Column privileges:** the push no longer takes `INSERT` on a column whose write rule reads the
+  row away from `authenticated`, since such a column is now writable on insert. Until the next
+  push, an insert naming such a column is refused by the old privilege rather than dropped.
+- **`diff` no longer refuses** a required column without a default whose write rule reads the row.
+  It still refuses one whose write rule denies everyone, or one narrower than a public create rule.
+- **Clients that sent a value they could not write** on create, and relied on it being dropped,
+  now get an error, unless the value is the column's default. Send NULL or leave the field out.
+- **`service_role` sending NULL** for a masked column that has a default gets the default under
+  tier 2 (the trigger cannot tell a NULL it was sent from a column left out), where tier 1 stores
+  the NULL. No other caller sees a difference between the tiers.
+- **A BEFORE INSERT trigger** on the table (a slug, say) runs after the rules are judged, in both
+  tiers, so a rule does not see what such a trigger changes.
+
 ### Auto-increment columns: identity on new tables, the table's own style on existing ones (D8)
 
 `AutoIncrement` fields used to be created as `SERIAL` columns. They are now `INTEGER` (or `BIGINT`)
@@ -53,11 +93,15 @@ been taken back with `adopt --release` since, losing that column's data. It now 
 released object, and suggests `adopt --reclaim` to hand it back first. Released ledger rows whose
 table no longer exists, and that the schema no longer declares, are removed by the next push.
 
-### `migrate` files record what a push records (F7)
+### `migrate --record` files record what a push records (F7)
 
-The SQL file `supatype migrate` prints now also creates the engine's own `_supatype` tables and
+`supatype migrate` still prints only the migration, planned without taking any lock an application
+waits on. Applied by hand, that file changes the schema and records nothing, and its header says
+so: the next push sees objects it did not make.
+
+`supatype migrate --record` prints a file that also creates the engine's own `_supatype` tables and
 writes the history row and the ledger rows the push would write, inside the file's own transaction.
-Applying the file by hand is therefore the same as pushing: the next push is up to date, and
-`rollback` undoes it. To work out those rows, `migrate` runs the migration in a transaction that it
-always rolls back, so it needs a role that may run the migration, and it briefly takes the locks the
-migration takes. It still changes nothing.
+Applying that file by hand is the same as pushing: the next push is up to date, and `rollback` undoes
+it. To work out those rows, `--record` rehearses the push in a transaction that it always rolls back,
+so it needs a role that may run the migration, and it takes the table locks a push takes. It still
+changes nothing.
