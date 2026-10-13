@@ -3476,6 +3476,8 @@ fn test_studio_metadata_relation_field() {
           "kind": "relation",
           "cardinality": "belongsTo",
           "target": "User",
+          "onDelete": "cascade",
+          "onUpdate": "restrict",
           "uniqueFk": false
         }
       },
@@ -3512,6 +3514,9 @@ fn test_studio_metadata_relation_field() {
     assert_eq!(author["kind"], "relation");
     assert_eq!(author["cardinality"], "belongsTo");
     assert_eq!(author["target"], "User");
+    // Both of the key's actions, as the schema spelled them.
+    assert_eq!(author["onDelete"], "cascade");
+    assert_eq!(author["onUpdate"], "restrict", "{author}");
 }
 
 // ─── Scenario 40: OpenAPI paths for basic model ───────────────────────────────

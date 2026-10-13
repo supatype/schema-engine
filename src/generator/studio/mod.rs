@@ -114,6 +114,7 @@ fn field_to_json(name: &str, field: &FieldAst) -> Value {
                 "references": rel.references,
                 "through": rel.through,
                 "onDelete": rel.on_delete,
+                "onUpdate": rel.on_update,
                 "uniqueFk": rel.unique_fk,
             })
         }

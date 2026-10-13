@@ -2191,6 +2191,13 @@ fn add_unique_constraint_sql(
 
 // ─── FOREIGN KEY ─────────────────────────────────────────────────────────────
 
+/// A relation's `ON UPDATE` when it declares no `onUpdate`. Every key was made `ON UPDATE CASCADE`
+/// before the option was read, so a project that never set it keeps exactly the keys it has: no
+/// diff on its next push, and the same behaviour when a referenced key changes.
+const DEFAULT_ON_UPDATE: &str = "cascade";
+
+/// A relation's `onDelete` or `onUpdate`, as the SQL action it names. Case, spaces, `_` and `-`
+/// are ignored (`set null`, `setNull`, `SET_NULL`); anything unrecognised is `RESTRICT`.
 pub(crate) fn normalize_fk_action(action: &str) -> &'static str {
     match action.to_lowercase().replace([' ', '_', '-'], "").as_str() {
         "cascade" => "CASCADE",
@@ -2222,11 +2229,12 @@ fn add_fk_sql(
     };
     let ref_col = rel.references.as_deref().unwrap_or("id");
     let on_delete = normalize_fk_action(rel.on_delete.as_deref().unwrap_or("restrict"));
+    let on_update = normalize_fk_action(rel.on_update.as_deref().unwrap_or(DEFAULT_ON_UPDATE));
     let constraint = names.foreign_key(table, fk_col);
 
     Ok(format!(
         "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) \
-         ON DELETE {on_delete} ON UPDATE CASCADE;",
+         ON DELETE {on_delete} ON UPDATE {on_update};",
         quote_qualified(schema, table),
         quote_ident(&constraint),
         quote_ident(fk_col),
@@ -2450,5 +2458,59 @@ mod tests {
         let at_drop = up.find(&drop).unwrap_or_else(|| panic!("no drop:\n{up}"));
         let at_rename = up.find("RENAME TO \"post_items\"").expect("the rename");
         assert!(at_drop < at_rename, "the drop runs after the rename:\n{up}");
+    }
+
+    /// `posts.author_id` to `users`, with the relation's `onUpdate` set to `on_update` when given.
+    fn foreign_key_sql_with_on_update(on_update: Option<&str>) -> String {
+        let mut relation = serde_json::json!({
+            "kind": "relation", "cardinality": "belongsTo", "target": "User",
+            "onDelete": "cascade",
+            "annotations": { "db": { "foreignKey": "author_id" } }
+        });
+        if let Some(action) = on_update {
+            relation["onUpdate"] = action.into();
+        }
+        let id = serde_json::json!({ "kind": "integer", "primaryKey": true, "required": true,
+            "annotations": { "db": { "pgType": "INTEGER", "unique": false } } });
+        let model = |name: &str, table: &str, fields: serde_json::Value| {
+            serde_json::json!({ "name": name, "fields": fields,
+                "options": { "timestamps": false, "softDelete": false },
+                "annotations": { "db": { "tableName": table, "indexes": [] },
+                                 "platform": { "access": {} } } })
+        };
+        let doc = serde_json::json!({ "astVersion": 2, "models": [
+            model("User", "users", serde_json::json!({ "id": id })),
+            model("Post", "posts", serde_json::json!({ "id": id, "author": relation })),
+        ] });
+        let ast = parser::parse(&doc.to_string()).unwrap();
+        let post = ast.models.iter().find(|m| m.name == "Post").unwrap();
+        let Some(crate::parser::ast::FieldAst::Relation(rel)) = post.fields.get("author") else {
+            panic!("the fixture's relation");
+        };
+        let op = Operation::AddForeignKey {
+            table: "posts".into(),
+            field_name: "author".into(),
+            relation: Box::new(rel.clone()),
+            ref_table: "users".into(),
+            ref_schema: None,
+            risk: Risk::Safe,
+        };
+        render_operation(&op, "public", &ast).unwrap()
+    }
+
+    /// A relation's `onUpdate` is the key's `ON UPDATE`, spelled as `onDelete` is; left out, it
+    /// stays `CASCADE`, what every key had before the option was read.
+    #[test]
+    fn a_relations_on_update_is_the_foreign_keys_on_update() {
+        for (on_update, expected) in [
+            (Some("restrict"), "ON DELETE CASCADE ON UPDATE RESTRICT;"),
+            (Some("setNull"), "ON DELETE CASCADE ON UPDATE SET NULL;"),
+            (Some("noAction"), "ON DELETE CASCADE ON UPDATE NO ACTION;"),
+            (Some("cascade"), "ON DELETE CASCADE ON UPDATE CASCADE;"),
+            (None, "ON DELETE CASCADE ON UPDATE CASCADE;"),
+        ] {
+            let sql = foreign_key_sql_with_on_update(on_update);
+            assert!(sql.ends_with(expected), "{on_update:?}: {sql}");
+        }
     }
 }
