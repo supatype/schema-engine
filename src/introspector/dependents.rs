@@ -25,7 +25,9 @@ pub struct DbColumnDependent {
     pub name: String,
     pub kind: DependentKind,
     /// How the restore makes it again: `pg_get_indexdef` for an index, `pg_get_constraintdef` for
-    /// a constraint, `pg_get_triggerdef` for a trigger, and for a policy what follows
+    /// a constraint, `pg_get_triggerdef` for a trigger (then, on a line of its own, the `ALTER
+    /// TABLE` that puts back a state other than enabled on origin: disabled, replica or always,
+    /// which `pg_get_triggerdef` leaves out), and for a policy what follows
     /// `CREATE POLICY name ON table` (` AS RESTRICTIVE FOR SELECT TO ... USING (...)`). Empty for a
     /// view, which is never made again.
     pub definition: String,
@@ -97,7 +99,17 @@ const DEPENDENT_OBJECTS: &str = r#"
               WHERE own.classid = 'pg_class'::regclass AND own.objid = ix.indexrelid
                 AND own.refclassid = 'pg_constraint'::regclass AND own.deptype = 'i')
     UNION ALL
-    SELECT tg.tgrelid, tg.tgname::text, 'trigger', pg_get_triggerdef(tg.oid)
+    SELECT tg.tgrelid, tg.tgname::text, 'trigger',
+           pg_get_triggerdef(tg.oid)
+           || CASE tg.tgenabled
+                WHEN 'D' THEN ';' || chr(10) || 'ALTER TABLE ' || tg.tgrelid::regclass::text
+                              || ' DISABLE TRIGGER ' || quote_ident(tg.tgname)
+                WHEN 'R' THEN ';' || chr(10) || 'ALTER TABLE ' || tg.tgrelid::regclass::text
+                              || ' ENABLE REPLICA TRIGGER ' || quote_ident(tg.tgname)
+                WHEN 'A' THEN ';' || chr(10) || 'ALTER TABLE ' || tg.tgrelid::regclass::text
+                              || ' ENABLE ALWAYS TRIGGER ' || quote_ident(tg.tgname)
+                ELSE ''
+              END
       FROM pg_trigger tg
      WHERE d.classid = 'pg_trigger'::regclass AND tg.oid = d.objid AND NOT tg.tgisinternal
     UNION ALL

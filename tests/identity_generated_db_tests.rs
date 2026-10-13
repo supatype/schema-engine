@@ -809,10 +809,11 @@ async fn a_recreated_column_keeps_its_constraints_and_the_keys_that_reference_it
 }
 
 /// What a user made by hand on `posts.title_lower`, besides keys and indexes: each trigger's
-/// `pg_get_triggerdef`, and each policy as `pg_policies` describes it, by name.
+/// `pg_get_triggerdef` and `tgenabled` (`O` origin, `D` disabled, `R` replica, `A` always), and
+/// each policy as `pg_policies` describes it, by name.
 async fn hand_made_triggers_and_policies(pool: &PgPool) -> Vec<(String, String)> {
     sqlx::query_as(
-        "SELECT tgname::text, pg_get_triggerdef(oid) FROM pg_trigger
+        "SELECT tgname::text, pg_get_triggerdef(oid) || ' | ' || tgenabled::text FROM pg_trigger
           WHERE tgrelid = 'public.posts'::regclass AND tgname LIKE 'mine_%'
          UNION ALL
          SELECT policyname::text,
@@ -827,8 +828,9 @@ async fn hand_made_triggers_and_policies(pool: &PgPool) -> Vec<(String, String)>
 }
 
 /// A trigger that fires on the recreated column and a policy that reads it come back exactly as
-/// they were. A restrictive policy that went missing would widen who sees what, so losing one is
-/// a security fault, not an inconvenience.
+/// they were, a trigger's enabled state (here: always, and disabled) included. A restrictive
+/// policy that went missing would widen who sees what, so losing one is a security fault, not an
+/// inconvenience.
 #[tokio::test]
 async fn a_recreated_column_keeps_a_users_triggers_and_policies() {
     common::with_integration_pool(|pool| async move {
@@ -839,6 +841,8 @@ async fn a_recreated_column_keeps_a_users_triggers_and_policies() {
                      CREATE TRIGGER mine_when_title_lower AFTER INSERT ON public.posts
                        FOR EACH ROW WHEN (NEW.title_lower IS NOT NULL)
                        EXECUTE FUNCTION public.mine_touch();
+                     ALTER TABLE public.posts ENABLE ALWAYS TRIGGER mine_on_title_lower;
+                     ALTER TABLE public.posts DISABLE TRIGGER mine_when_title_lower;
                      CREATE POLICY mine_hide_secret ON public.posts AS RESTRICTIVE
                        FOR SELECT TO authenticated USING (title_lower <> 'secret');
                      CREATE POLICY mine_write_lower ON public.posts FOR UPDATE TO PUBLIC
@@ -854,11 +858,11 @@ async fn a_recreated_column_keeps_a_users_triggers_and_policies() {
                 ),
                 object(
                     "mine_on_title_lower",
-                    "CREATE TRIGGER mine_on_title_lower BEFORE UPDATE OF title_lower ON public.posts FOR EACH ROW EXECUTE FUNCTION mine_touch()"
+                    "CREATE TRIGGER mine_on_title_lower BEFORE UPDATE OF title_lower ON public.posts FOR EACH ROW EXECUTE FUNCTION mine_touch() | A"
                 ),
                 object(
                     "mine_when_title_lower",
-                    "CREATE TRIGGER mine_when_title_lower AFTER INSERT ON public.posts FOR EACH ROW WHEN ((new.title_lower IS NOT NULL)) EXECUTE FUNCTION mine_touch()"
+                    "CREATE TRIGGER mine_when_title_lower AFTER INSERT ON public.posts FOR EACH ROW WHEN ((new.title_lower IS NOT NULL)) EXECUTE FUNCTION mine_touch() | D"
                 ),
                 object(
                     "mine_write_lower",
