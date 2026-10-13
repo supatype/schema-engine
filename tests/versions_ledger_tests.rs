@@ -359,10 +359,12 @@ async fn a_layer_index_changed_by_hand_is_put_back() {
 /// `contrib_regression` (its own test database), which is exactly that case.
 #[tokio::test]
 async fn a_versioned_push_applies_where_pg_cron_runs_for_another_database() {
-    let Ok(admin_url) = std::env::var("DATABASE_URL") else {
-        assert!(!common::force_integration_tests(), "needs DATABASE_URL");
-        return;
-    };
+    common::with_admin_url(pg_cron_in_contrib_regression).await;
+}
+
+/// The body of [`a_versioned_push_applies_where_pg_cron_runs_for_another_database`], against the
+/// server `admin_url` reaches as a superuser: `DATABASE_URL`, or a testcontainers one.
+async fn pg_cron_in_contrib_regression(admin_url: String) {
     let admin = PgPool::connect(&admin_url).await.unwrap();
     for make in [
         "DROP DATABASE IF EXISTS contrib_regression WITH (FORCE)",
