@@ -1,10 +1,11 @@
 use crate::differ::column_diff::field_pg_type;
-use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
+use crate::differ::{DiffOutput, Operation, Risk};
 use crate::generator::sql::column_conversion::{
     add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
 };
 use crate::generator::sql::online::{self, AfterCommit, Online, OnlineTables};
+use crate::generator::sql::recreate::{recreate_column_sql, Reconciled};
 use crate::generator::sql::settled::Settled;
 use crate::introspector::fingerprint::ObjectKind;
 use crate::ledger::reconcile;
@@ -327,6 +328,8 @@ struct Forward<'a> {
     settled: Settled,
     /// The tables with rows, on which `SET NOT NULL` is proved after commit (LK7).
     tables: &'a OnlineTables,
+    /// What the reconcile does with the engine's objects a recreated column's dependents may be.
+    reconciled: Reconciled,
 }
 
 /// `sql` rendered for `op`, with a `SET NOT NULL` on a table with rows replaced by its helper
@@ -393,7 +396,7 @@ fn render_forward_operation_lines(f: &Forward<'_>, after: &mut AfterCommit) -> R
 
         let sql = online_not_null(
             op,
-            render_operation_named(op, schema, ast, &names)?,
+            render_operation_reconciled(op, schema, ast, &names, &f.reconciled)?,
             f,
             after,
         );
@@ -589,6 +592,7 @@ impl Migration {
             ast,
             settled: Settled::of(reconcile, &diff.operations),
             tables,
+            reconciled: Reconciled::of(reconcile),
         };
         body.extend(render_forward_core(&forward, &mut after_commit)?);
         body.extend(reconciled_section(late_removals.clone()));
@@ -941,6 +945,18 @@ pub(crate) fn render_operation_named(
     ast: &SchemaAst,
     names: &ObjectNames,
 ) -> Result<String> {
+    render_operation_reconciled(op, schema, ast, names, &Reconciled::default())
+}
+
+/// [`render_operation_named`], knowing what the push's reconcile does with the engine's objects,
+/// which decides what a recreated column's dependents need of the recreate.
+fn render_operation_reconciled(
+    op: &Operation,
+    schema: &str,
+    ast: &SchemaAst,
+    names: &ObjectNames,
+    reconciled: &Reconciled,
+) -> Result<String> {
     match op {
         Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast, names),
         // Never `CASCADE` (plan 3.3): what depends on the table and is ours is dropped before it
@@ -1018,8 +1034,15 @@ pub(crate) fn render_operation_named(
             changes,
             ..
         } => {
-            let recreate =
-                recreate_column_sql(names, table, column, field.as_ref(), dependencies, schema)?;
+            let recreate = recreate_column_sql(
+                names,
+                table,
+                column,
+                field.as_ref(),
+                dependencies,
+                schema,
+                reconciled,
+            )?;
             Ok(match changes.get("generated") {
                 Some(generated) => {
                     generated_column_sql(schema, table, column, generated, &recreate)
@@ -1329,7 +1352,7 @@ pub(crate) use crate::parser::accessors::implicit_model_indexes;
 
 // ─── COLUMN DEFINITION ───────────────────────────────────────────────────────
 
-fn field_to_column_def(
+pub(super) fn field_to_column_def(
     names: &ObjectNames,
     table: &str,
     name: &str,
@@ -2062,89 +2085,8 @@ fn dollar_quoted(sql: &str, tag: &str) -> String {
     format!("{tag}{sql}{tag}")
 }
 
-/// A column dropped and added again, around what depends on it: its foreign keys and indexes are
-/// dropped first and made again after, each by the name and shape it has in the catalog.
-fn recreate_column_sql(
-    names: &ObjectNames,
-    table: &str,
-    column: &str,
-    field: &FieldAst,
-    dependencies: &[ColumnDependencySnapshot],
-    schema: &str,
-) -> Result<String> {
-    let mut stmts: Vec<String> = dependencies
-        .iter()
-        .filter_map(|dep| drop_dependency_sql(schema, dep))
-        .collect();
-
-    let target = quote_qualified(schema, table);
-    stmts.push(format!(
-        "ALTER TABLE {target} DROP COLUMN IF EXISTS {};",
-        quote_ident(column)
-    ));
-    let col_def = field_to_column_def(names, table, column, field)?;
-    stmts.push(format!("ALTER TABLE {target} ADD COLUMN {col_def};"));
-
-    // Foreign keys before indexes, as they were dropped.
-    for kind in ["foreign_key", "index"] {
-        stmts.extend(
-            dependencies
-                .iter()
-                .filter(|dep| dep.kind == kind)
-                .map(|dep| restore_dependency_sql(schema, column, dep)),
-        );
-    }
-    Ok(stmts.join("\n"))
-}
-
-/// The drop of one object that depends on a recreated column, or `None` for a kind that needs none.
-fn drop_dependency_sql(schema: &str, dep: &ColumnDependencySnapshot) -> Option<String> {
-    match dep.kind.as_str() {
-        "foreign_key" => Some(format!(
-            "ALTER TABLE {} DROP CONSTRAINT IF EXISTS {};",
-            quote_qualified(schema, &dep.table),
-            quote_ident(&dep.name)
-        )),
-        "index" => Some(format!(
-            "DROP INDEX IF EXISTS {};",
-            quote_qualified(schema, &dep.name)
-        )),
-        _ => None,
-    }
-}
-
-/// One foreign key or index on a recreated column, made again as the catalog described it.
-fn restore_dependency_sql(schema: &str, column: &str, dep: &ColumnDependencySnapshot) -> String {
-    let cols = dep
-        .columns
-        .as_deref()
-        .map_or_else(|| quote_ident(column), quote_ident_list);
-    let on = quote_qualified(schema, &dep.table);
-    let name = quote_ident(&dep.name);
-    if dep.kind == "index" {
-        let unique = if dep.unique { "UNIQUE " } else { "" };
-        let method = quote_ident(dep.index_method.as_deref().unwrap_or("btree"));
-        return format!(
-            "CREATE {unique}INDEX IF NOT EXISTS {name} ON {on} USING {method} ({cols});"
-        );
-    }
-    let ref_table = quote_qualified(schema, dep.foreign_table.as_deref().unwrap_or("?"));
-    let ref_cols = dep
-        .foreign_columns
-        .as_deref()
-        .map_or_else(|| "\"id\"".to_string(), quote_ident_list);
-    let on_delete = dep
-        .on_delete
-        .as_deref()
-        .map(|a| format!(" ON DELETE {}", normalize_fk_action(a)))
-        .unwrap_or_default();
-    format!(
-        "ALTER TABLE {on} ADD CONSTRAINT {name} FOREIGN KEY ({cols}) REFERENCES {ref_table} ({ref_cols}){on_delete};"
-    )
-}
-
 /// `"a", "b"`: each name quoted, comma-separated, for a column list.
-fn quote_ident_list(names: &[String]) -> String {
+pub(super) fn quote_ident_list(names: &[String]) -> String {
     names
         .iter()
         .map(|n| quote_ident(n))
@@ -2191,6 +2133,13 @@ fn add_unique_constraint_sql(
 
 // ─── FOREIGN KEY ─────────────────────────────────────────────────────────────
 
+/// A relation's `ON UPDATE` when it declares no `onUpdate`. Every key was made `ON UPDATE CASCADE`
+/// before the option was read, so a project that never set it keeps exactly the keys it has: no
+/// diff on its next push, and the same behaviour when a referenced key changes.
+const DEFAULT_ON_UPDATE: &str = "cascade";
+
+/// A relation's `onDelete` or `onUpdate`, as the SQL action it names. Case, spaces, `_` and `-`
+/// are ignored (`set null`, `setNull`, `SET_NULL`); anything unrecognised is `RESTRICT`.
 pub(crate) fn normalize_fk_action(action: &str) -> &'static str {
     match action.to_lowercase().replace([' ', '_', '-'], "").as_str() {
         "cascade" => "CASCADE",
@@ -2222,11 +2171,12 @@ fn add_fk_sql(
     };
     let ref_col = rel.references.as_deref().unwrap_or("id");
     let on_delete = normalize_fk_action(rel.on_delete.as_deref().unwrap_or("restrict"));
+    let on_update = normalize_fk_action(rel.on_update.as_deref().unwrap_or(DEFAULT_ON_UPDATE));
     let constraint = names.foreign_key(table, fk_col);
 
     Ok(format!(
         "ALTER TABLE {} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) \
-         ON DELETE {on_delete} ON UPDATE CASCADE;",
+         ON DELETE {on_delete} ON UPDATE {on_update};",
         quote_qualified(schema, table),
         quote_ident(&constraint),
         quote_ident(fk_col),
@@ -2450,5 +2400,59 @@ mod tests {
         let at_drop = up.find(&drop).unwrap_or_else(|| panic!("no drop:\n{up}"));
         let at_rename = up.find("RENAME TO \"post_items\"").expect("the rename");
         assert!(at_drop < at_rename, "the drop runs after the rename:\n{up}");
+    }
+
+    /// `posts.author_id` to `users`, with the relation's `onUpdate` set to `on_update` when given.
+    fn foreign_key_sql_with_on_update(on_update: Option<&str>) -> String {
+        let mut relation = serde_json::json!({
+            "kind": "relation", "cardinality": "belongsTo", "target": "User",
+            "onDelete": "cascade",
+            "annotations": { "db": { "foreignKey": "author_id" } }
+        });
+        if let Some(action) = on_update {
+            relation["onUpdate"] = action.into();
+        }
+        let id = serde_json::json!({ "kind": "integer", "primaryKey": true, "required": true,
+            "annotations": { "db": { "pgType": "INTEGER", "unique": false } } });
+        let model = |name: &str, table: &str, fields: serde_json::Value| {
+            serde_json::json!({ "name": name, "fields": fields,
+                "options": { "timestamps": false, "softDelete": false },
+                "annotations": { "db": { "tableName": table, "indexes": [] },
+                                 "platform": { "access": {} } } })
+        };
+        let doc = serde_json::json!({ "astVersion": 2, "models": [
+            model("User", "users", serde_json::json!({ "id": id })),
+            model("Post", "posts", serde_json::json!({ "id": id, "author": relation })),
+        ] });
+        let ast = parser::parse(&doc.to_string()).unwrap();
+        let post = ast.models.iter().find(|m| m.name == "Post").unwrap();
+        let Some(crate::parser::ast::FieldAst::Relation(rel)) = post.fields.get("author") else {
+            panic!("the fixture's relation");
+        };
+        let op = Operation::AddForeignKey {
+            table: "posts".into(),
+            field_name: "author".into(),
+            relation: Box::new(rel.clone()),
+            ref_table: "users".into(),
+            ref_schema: None,
+            risk: Risk::Safe,
+        };
+        render_operation(&op, "public", &ast).unwrap()
+    }
+
+    /// A relation's `onUpdate` is the key's `ON UPDATE`, spelled as `onDelete` is; left out, it
+    /// stays `CASCADE`, what every key had before the option was read.
+    #[test]
+    fn a_relations_on_update_is_the_foreign_keys_on_update() {
+        for (on_update, expected) in [
+            (Some("restrict"), "ON DELETE CASCADE ON UPDATE RESTRICT;"),
+            (Some("setNull"), "ON DELETE CASCADE ON UPDATE SET NULL;"),
+            (Some("noAction"), "ON DELETE CASCADE ON UPDATE NO ACTION;"),
+            (Some("cascade"), "ON DELETE CASCADE ON UPDATE CASCADE;"),
+            (None, "ON DELETE CASCADE ON UPDATE CASCADE;"),
+        ] {
+            let sql = foreign_key_sql_with_on_update(on_update);
+            assert!(sql.ends_with(expected), "{on_update:?}: {sql}");
+        }
     }
 }

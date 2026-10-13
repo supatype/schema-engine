@@ -430,3 +430,68 @@ async fn junction_and_versions_foreign_keys_are_recorded_from_their_tables_creat
     })
     .await;
 }
+
+/// `posts.author_id` to `users`, its relation declaring `onUpdate`.
+fn posts_on_update(on_update: &str) -> Value {
+    let mut author = belongs_to("User", "author_id");
+    author["onUpdate"] = on_update.into();
+    model(
+        "Post",
+        "posts",
+        json!({ "id": int_pk(), "author": author, "reviewer_id": integer() }),
+    )
+}
+
+/// `pg_constraint.confupdtype` of `posts_author_id_fkey` (`r` restrict, `c` cascade, ...) and
+/// whether the key is validated.
+async fn posts_author_on_update(pool: &PgPool) -> (String, bool) {
+    sqlx::query_as::<_, (String, bool)>(
+        "SELECT k.confupdtype::text, k.convalidated FROM pg_constraint k \
+         JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = 'public' AND c.relname = 'posts' AND k.conname = 'posts_author_id_fkey'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// A relation's `onUpdate` is applied, reads back equal on the next push, and a change to it
+/// replaces the key, online on a table with rows; leaving it out keeps the `ON UPDATE CASCADE`
+/// every key had before.
+#[tokio::test]
+async fn a_relations_on_update_is_applied_kept_and_changed() {
+    common::with_integration_pool(|pool| async move {
+        let restrict = schema(vec![users(), posts_on_update("restrict")]);
+        assert!(applied(&push(&pool, &restrict).await.unwrap()));
+        assert_eq!(posts_author_on_update(&pool).await, ("r".into(), true));
+        let again = push(&pool, &restrict).await.unwrap();
+        assert!(up_to_date(&again), "no perpetual diff: {again:?}");
+
+        exec(
+            &pool,
+            "INSERT INTO public.users (id) VALUES (1);
+             INSERT INTO public.posts (id, author_id) VALUES (1, 1);",
+        )
+        .await
+        .unwrap();
+        let cascade = schema(vec![users(), posts_on_update("cascade")]);
+        let plan = push::prepare(&pool, &cascade, "public").await.unwrap();
+        let file = plan.migration(false).unwrap().file();
+        assert!(
+            file.contains("ON DELETE RESTRICT ON UPDATE CASCADE NOT VALID;"),
+            "the key is replaced, added NOT VALID on a table with rows:\n{file}"
+        );
+        let outcome = push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
+            .unwrap();
+        assert!(applied(&outcome), "{outcome:?}");
+        assert_eq!(posts_author_on_update(&pool).await, ("c".into(), true));
+        assert!(up_to_date(&push(&pool, &cascade).await.unwrap()));
+
+        // Omitted is `CASCADE`, so the same key: nothing to do.
+        let omitted = schema(vec![users(), posts_by("User")]);
+        let outcome = push(&pool, &omitted).await.unwrap();
+        assert!(up_to_date(&outcome), "{outcome:?}");
+    })
+    .await;
+}

@@ -1,5 +1,6 @@
 pub mod catalog;
 pub mod constraints;
+pub mod dependents;
 pub mod enums;
 pub mod extensions;
 pub mod fingerprint;
