@@ -1,4 +1,4 @@
-use super::{constraints, enums, extensions, indexes, rls, tables, triggers};
+use super::{constraints, dependents, enums, extensions, indexes, rls, tables, triggers};
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 use sqlx::PgConnection;
@@ -12,6 +12,7 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
     let db_triggers = triggers::read(conn, schema).await?;
     let db_extensions = extensions::read(conn).await?;
     let db_enums = enums::read(conn, schema).await?;
+    let column_dependents = dependents::read(conn, schema).await?;
     let database: String = sqlx::query_scalar("SELECT current_database()::text")
         .fetch_one(&mut *conn)
         .await?;
@@ -33,5 +34,6 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
         column_ownership: Default::default(),
         adopted_columns: Default::default(),
         database,
+        column_dependents,
     })
 }
