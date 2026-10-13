@@ -1,53 +1,17 @@
 //! A required column nobody can write is a table nobody can insert into.
 //!
 //! The failure without this check is `23502 not-null violation`, which points the developer
-//! at the column's NOT NULL constraint — the one thing in the picture that is not the
+//! at the column's NOT NULL constraint, the one thing in the picture that is not the
 //! problem. The rule, the constraint and the absence of a default are all visible here, so
 //! the contradiction can be named at `diff` time instead.
+//!
+//! A rule that reads the row is not one: on INSERT a write rule judges the row being inserted
+//! (MASK-N1), so `Owner<"id">` admits a caller creating their own row.
 
 use crate::parser::accessors::{db_table_name, platform_access, resolve_owner_column};
-use crate::parser::ast::{AccessRule, FieldAst, ModelAst, Operand, SchemaAst};
+use crate::parser::ast::{AccessRule, FieldAst, ModelAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
-
-/// Whether a rule's outcome depends on the row it is tested against.
-///
-/// Not the same question as identity-dependence, which
-/// `supatype-auth/internal/studiobootstrap` answers for cache safety: `Role<"admin">`
-/// depends on the caller and not the row, `Lte<"published_at", Now>` on the row and not the
-/// caller. Row-dependence is what matters here, because the masking extension evaluates a
-/// write predicate against `NULL::t` on INSERT — there is no row yet — so a row-dependent
-/// rule yields NULL, which is not `true`, for *every* caller.
-pub(crate) fn rule_is_row_dependent(rule: &AccessRule) -> bool {
-    match rule {
-        AccessRule::Public | AccessRule::Private | AccessRule::Authenticated => false,
-        AccessRule::Role { .. } => false,
-        // `Owner<"author_id">` compares a column to the caller.
-        AccessRule::Owner { .. } => true,
-        AccessRule::Any { rules } | AccessRule::All { rules } => {
-            rules.iter().any(rule_is_row_dependent)
-        }
-        AccessRule::Not { rule } => rule_is_row_dependent(rule),
-        AccessRule::Compare { left, right, .. } => {
-            operand_is_row_dependent(left) || operand_is_row_dependent(right)
-        }
-        // Membership and existence tests correlate a column of this row against another
-        // table.
-        AccessRule::In { .. } | AccessRule::Exists { .. } => true,
-        // An unrecognised rule is assumed row-dependent, which only ever suppresses a
-        // diagnostic — never adds a false refusal.
-        _ => true,
-    }
-}
-
-fn operand_is_row_dependent(operand: &Operand) -> bool {
-    matches!(operand, Operand::Column { .. })
-}
-
-/// Whether a caller could ever satisfy this write rule on an INSERT.
-fn writable_on_insert(rule: &AccessRule) -> bool {
-    !matches!(rule, AccessRule::Private) && !rule_is_row_dependent(rule)
-}
 
 /// Whether a row can acquire a value for this column without the caller supplying one.
 ///
@@ -113,7 +77,7 @@ fn before_insert_trigger(db: &DatabaseState, table: &str) -> bool {
 
 /// Whether the table exists in the introspected state.
 ///
-/// When it does not — a brand new table, or a `diff` run with no connection — a
+/// When it does not (a brand new table, or a `diff` run with no connection), a
 /// `BEFORE INSERT` trigger cannot be ruled out, so the contradiction is reported as a
 /// warning rather than refused. Never a false refusal; the error arrives on the next push,
 /// once the table is real and the absence of a trigger is a fact.
@@ -171,18 +135,11 @@ fn describe_problem(
     let create = platform_access(model).create.as_ref();
 
     // Nobody can write it, so nobody can insert a row at all.
-    if !writable_on_insert(write) {
-        let why = if matches!(write, AccessRule::Private) {
-            "its write rule denies every caller"
-        } else {
-            "its write rule depends on the row, and there is no row yet when a value is \
-             checked on INSERT"
-        };
+    if matches!(write, AccessRule::Private) {
         return Some(format!(
-            "\"{table}\".\"{column}\" is required, has no default, and {why} — so no caller \
-             can ever insert a row. Give the column a default, relax the field's write rule \
-             to one that does not read the row (a role or claim check), or make the column \
-             optional."
+            "\"{table}\".\"{column}\" is required, has no default, and its write rule denies \
+             every caller, so no caller can ever insert a row. Give the column a default, \
+             relax the field's write rule, or make the column optional."
         ));
     }
 
@@ -191,7 +148,7 @@ fn describe_problem(
     if matches!(create, Some(AccessRule::Public)) && !matches!(write, AccessRule::Public) {
         return Some(format!(
             "\"{table}\".\"{column}\" is required and has no default, but its write rule is \
-             narrower than the table's create rule, which is public — so a caller who may \
+             narrower than the table's create rule, which is public, so a caller who may \
              insert cannot supply it. Give the column a default, widen the field's write \
              rule, or narrow the table's create rule."
         ));

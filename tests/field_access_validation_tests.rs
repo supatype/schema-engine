@@ -1,7 +1,7 @@
 //! A required column nobody can write is a table nobody can insert into.
 //!
 //! Without this check the developer meets `23502 not-null violation`, which names the NOT
-//! NULL constraint — the one part of the picture that is not the problem. These tests pin
+//! NULL constraint, the one part of the picture that is not the problem. These tests pin
 //! both halves: that the provable contradictions are named, and that everything undecidable
 //! stays silent. A false refusal breaks a working schema, so silence is the default.
 
@@ -73,11 +73,24 @@ fn diff_warnings(schema: &str, db: &DatabaseState) -> Vec<String> {
 
 // ─── The provable contradictions ─────────────────────────────────────────────
 
-// The commonest case. `Owner<"author_id">` reads the row, and on INSERT there is no row —
-// the masking extension evaluates the write predicate against `NULL::t`, which yields NULL
-// for every caller. So the column is unwritable by anyone and the row can never be created.
+// The commonest case, and not a contradiction. `Owner<"id">` reads the row, and on INSERT a
+// write rule judges the row being inserted (MASK-N1), so a user creating their own row
+// supplies their own value. Refusing this, as when the rule was judged against a row of NULLs,
+// would refuse the schema every sign-up flow writes.
 #[test]
-fn a_row_dependent_write_rule_on_a_required_column_is_refused() {
+fn a_row_dependent_write_rule_on_a_required_column_is_not_refused() {
+    let schema = schema_with(
+        r#"{ "type": "owner", "field": "id" }"#,
+        r#"{ "type": "owner", "field": "id" }"#,
+        "",
+    );
+    assert_eq!(diff_error(&schema, &db_with_posts()), None);
+}
+
+// The same rule under a public create rule: a caller who may insert need not own the row, so
+// the narrowing is named, for that reason and not for depending on the row.
+#[test]
+fn a_row_dependent_write_rule_narrower_than_a_public_create_rule_is_refused() {
     let schema = schema_with(
         r#"{ "type": "owner", "field": "id" }"#,
         r#"{ "type": "public" }"#,
@@ -85,12 +98,8 @@ fn a_row_dependent_write_rule_on_a_required_column_is_refused() {
     );
     let error = diff_error(&schema, &db_with_posts()).expect("expected a refusal");
     assert!(
-        error.contains("no caller can ever insert a row"),
+        error.contains("narrower than the table's create rule"),
         "unexpected message: {error}"
-    );
-    assert!(
-        error.contains("depends on the row"),
-        "the message must say why: {error}"
     );
 }
 
@@ -104,7 +113,7 @@ fn a_write_rule_denying_everyone_is_refused() {
     );
 }
 
-// Identity-only write rule, but the table's create rule admits everyone — so a caller who
+// Identity-only write rule, but the table's create rule admits everyone, so a caller who
 // may insert cannot supply the column.
 #[test]
 fn a_write_rule_narrower_than_a_public_create_rule_is_refused() {
@@ -197,15 +206,11 @@ fn a_read_only_field_rule_is_not_a_problem() {
 
 // ─── Offline / new table degrades to a warning ───────────────────────────────
 
-// With the table absent from the introspected state — a brand new table, or a `diff` with no
-// connection — a BEFORE INSERT trigger cannot be ruled out. Report it, never refuse it.
+// With the table absent from the introspected state (a brand new table, or a `diff` with no
+// connection), a BEFORE INSERT trigger cannot be ruled out. Report it, never refuse it.
 #[test]
 fn an_unintrospected_table_warns_instead_of_refusing() {
-    let schema = schema_with(
-        r#"{ "type": "owner", "field": "id" }"#,
-        r#"{ "type": "public" }"#,
-        "",
-    );
+    let schema = schema_with(r#"{ "type": "private" }"#, r#"{ "type": "public" }"#, "");
     let empty = DatabaseState::default();
     assert!(
         diff_error(&schema, &empty).is_none(),

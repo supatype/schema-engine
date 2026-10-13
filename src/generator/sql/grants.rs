@@ -447,7 +447,7 @@ pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String>
             rules
                 .write
                 .as_ref()
-                .is_some_and(|write| !write_satisfiable(op, role, write))
+                .is_some_and(|write| !write_satisfiable(role, write))
         })
         .map(|(column, _)| column.clone())
         .collect()
@@ -550,31 +550,21 @@ $grants$;
     )
 }
 
-/// Whether any caller connecting as `role` could ever satisfy this write rule for `op`.
+/// Whether any caller connecting as `role` could ever satisfy this write rule, on INSERT or
+/// UPDATE alike: on INSERT the rule judges the row being inserted (MASK-N1), so a rule that
+/// reads the row is satisfiable there too, by a caller creating their own row.
 ///
 /// Conservative in one direction only, like the table grants: a wrong revoke breaks a working
 /// app, a missed one just leaves today's behaviour. So this answers true unless the rule
 /// *proves* otherwise.
-fn write_satisfiable(op: &str, role: &str, write: &AccessRule) -> bool {
+fn write_satisfiable(role: &str, write: &AccessRule) -> bool {
     if role == "anon" {
         return reachable_by_anon(write);
     }
 
     // `authenticated` is every signed-in caller, so an application-role or ownership rule is
     // satisfiable by *some* of them and the column privilege must stay.
-    if matches!(write, AccessRule::Private) {
-        return false;
-    }
-
-    // On INSERT there is no row yet: the masking extension evaluates the write predicate
-    // against `NULL::t`, so a rule that reads the row yields NULL for every caller. Nobody
-    // can write the column on this path, which makes the privilege provably unusable,
-    // whereas on UPDATE the same rule is satisfiable and the privilege must stay.
-    if op == "INSERT" && crate::differ::field_access_diff::rule_is_row_dependent(write) {
-        return false;
-    }
-
-    true
+    !matches!(write, AccessRule::Private)
 }
 
 /// Grant `op` on `columns`, inside a block already guarded on the role: the declared columns the
