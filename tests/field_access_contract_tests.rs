@@ -75,6 +75,56 @@ const CONTRACT_SCHEMA: &str = r#"{
         }
       } }
     }
+  }, {
+    "name": "ContractVault",
+    "fields": {
+      "id":     { "kind": "integer", "primaryKey": true, "required": true,
+                  "annotations": { "db": { "pgType": "INTEGER", "unique": false } } },
+      "ref":    { "kind": "uuid",
+                  "annotations": { "db": { "pgType": "UUID", "unique": false } } },
+      "owner":  { "kind": "text",
+                  "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+      "secret": { "kind": "text",
+                  "annotations": { "db": { "pgType": "TEXT", "unique": false } } },
+      "status": { "kind": "text",
+                  "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
+    },
+    "annotations": {
+      "db": { "tableName": "contract_vault", "indexes": [] },
+      "platform": { "access": {
+        "read":   { "type": "public" },
+        "create": { "type": "public" },
+        "fields": {
+          "owner": {
+            "read": { "type": "compare",
+                      "left":  { "kind": "column", "name": "owner" },
+                      "op":    "eq",
+                      "right": { "kind": "claim", "path": "uid" } }
+          },
+          "secret": {
+            "read": { "type": "all", "rules": [
+                      { "type": "compare",
+                        "left":  { "kind": "column", "name": "owner" },
+                        "op":    "eq",
+                        "right": { "kind": "claim", "path": "uid" } },
+                      { "type": "compare",
+                        "left":  { "kind": "column", "name": "id" },
+                        "op":    "gt",
+                        "right": { "kind": "literal", "value": 0 } },
+                      { "type": "nullCheck",
+                        "operand": { "kind": "column", "name": "ref" },
+                        "isNull": false }
+                    ] }
+          },
+          "status": {
+            "write": { "type": "compare",
+                       "left":  { "kind": "claim", "path": "writer" },
+                       "op":    "eq",
+                       "right": { "kind": "literal", "value": "on" } }
+          }
+        }
+      } }
+    }
   }]
 }"#;
 
@@ -115,8 +165,10 @@ async fn install_tier_two(pool: &sqlx::PgPool) {
     sqlx::raw_sql(
         "GRANT USAGE ON SCHEMA api TO contract_app; \
          GRANT USAGE ON SCHEMA _supatype TO contract_app; \
-         GRANT SELECT, INSERT, UPDATE, DELETE ON api.contract_posts TO contract_app; \
-         REVOKE ALL ON public.contract_posts FROM contract_app;",
+         GRANT SELECT, INSERT, UPDATE, DELETE ON api.contract_posts, api.contract_vault \
+           TO contract_app; \
+         REVOKE ALL ON public.contract_posts, public.contract_vault FROM contract_app; \
+         REVOKE ALL ON SEQUENCE public.contract_vault_id_seq FROM contract_app;",
     )
     .execute(pool)
     .await
@@ -137,6 +189,13 @@ impl Tier {
         match self {
             Tier::Extension => "\"public\".\"contract_posts\"",
             Tier::Views => "\"api\".\"contract_posts\"",
+        }
+    }
+
+    fn vault(self) -> &'static str {
+        match self {
+            Tier::Extension => "\"public\".\"contract_vault\"",
+            Tier::Views => "\"api\".\"contract_vault\"",
         }
     }
 
@@ -186,25 +245,82 @@ DO $$ BEGIN
   EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL;
   END;
 END $$;
-GRANT SELECT, UPDATE ON public.contract_posts TO contract_app;
+GRANT SELECT, INSERT, UPDATE ON public.contract_posts TO contract_app;
+
+-- MK3: rules that read values filled in by defaults (a serial key, a random key, an owner
+-- taken from the caller), an owner column with a rule of its own, and an admin-only status
+-- whose default value is no write (MK6).
+CREATE TABLE public.contract_vault (
+  id     serial primary key,
+  ref    uuid NOT NULL DEFAULT gen_random_uuid(),
+  owner  text DEFAULT current_setting('contract.uid', true),
+  secret text,
+  status text NOT NULL DEFAULT 'draft'
+);
+
+CREATE FUNCTION public.can_read_contract_vault__owner(contract_vault public.contract_vault)
+  RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT owner = current_setting('contract.uid', true) FROM (SELECT ($1).*) AS contract_vault;
+  $$;
+
+CREATE FUNCTION public.can_read_contract_vault__secret(contract_vault public.contract_vault)
+  RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT owner = current_setting('contract.uid', true) AND id > 0 AND ref IS NOT NULL
+      FROM (SELECT ($1).*) AS contract_vault;
+  $$;
+
+CREATE FUNCTION public.can_write_contract_vault__status(contract_vault public.contract_vault)
+  RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT current_setting('contract.writer', true) = 'on' FROM (SELECT ($1).*) AS contract_vault;
+  $$;
+
+SECURITY LABEL FOR supatype ON COLUMN public.contract_vault.owner
+  IS 'MASK READ public."can_read_contract_vault__owner"';
+SECURITY LABEL FOR supatype ON COLUMN public.contract_vault.secret
+  IS 'MASK READ public."can_read_contract_vault__secret"';
+SECURITY LABEL FOR supatype ON COLUMN public.contract_vault.status
+  IS 'MASK WRITE public."can_write_contract_vault__status"';
+
+GRANT SELECT, INSERT ON public.contract_vault TO contract_app;
+GRANT USAGE ON SEQUENCE public.contract_vault_id_seq TO contract_app;
 "#;
+
+/// The labels tier 1 enforces, taken off before tier 2 is asserted alone.
+const DROP_LABELS: &str = "
+SECURITY LABEL FOR supatype ON COLUMN public.contract_posts.salary IS NULL;
+SECURITY LABEL FOR supatype ON COLUMN public.contract_vault.owner IS NULL;
+SECURITY LABEL FOR supatype ON COLUMN public.contract_vault.secret IS NULL;
+SECURITY LABEL FOR supatype ON COLUMN public.contract_vault.status IS NULL;
+";
+
+/// Assume the application role with a given identity, holding the `writer` claim the write rule
+/// needs when `writer` is set. Without it the claim is absent, not false, so the write rule is
+/// NULL for its owner: the case `IS NOT TRUE` exists for.
+///
+/// Two settings per claim, one identity. Tier 1's fixture is hand-written and reads `contract.*`
+/// directly; tier 2 is produced by the generator, so its predicate is whatever the AST compiles
+/// to: `_supatype.jwt_claim_text('uid')`, which reads `request.jwt.claims`. Setting both is what
+/// lets the assertions below be written once.
+async fn assume(tx: &mut sqlx::PgConnection, uid: &str, writer: bool) {
+    let (setting, claim) = if writer {
+        ("SET LOCAL contract.writer = 'on';", r#", "writer": "on""#)
+    } else {
+        ("", "")
+    };
+    sqlx::raw_sql(&format!(
+        "SET LOCAL contract.uid = '{uid}'; {setting} \
+         SET LOCAL \"request.jwt.claims\" = '{{\"uid\": \"{uid}\"{claim}}}'; \
+         SET LOCAL ROLE contract_app;"
+    ))
+    .execute(&mut *tx)
+    .await
+    .expect("assume identity");
+}
 
 /// Run one statement as the application role with a given identity, returning the error if any.
 async fn as_caller(pool: &sqlx::PgPool, uid: &str, sql: &str) -> Result<(), String> {
     let mut tx = pool.begin().await.expect("begin");
-    // Two settings, one identity. Tier 1's fixture is hand-written and reads `contract.uid`
-    // directly; tier 2 is produced by the generator, so its predicate is whatever the AST compiles
-    // to: `_supatype.jwt_claim_text('uid')`, which reads `request.jwt.claims`. Setting both is what lets the
-    // assertions below be written once.
-    let prelude = format!(
-        "SET LOCAL contract.uid = '{uid}'; \
-         SET LOCAL \"request.jwt.claims\" = '{{\"uid\": \"{uid}\"}}'; \
-         SET LOCAL ROLE contract_app;"
-    );
-    sqlx::raw_sql(&prelude)
-        .execute(&mut *tx)
-        .await
-        .expect("assume identity");
+    assume(&mut tx, uid, false).await;
 
     let result = sqlx::raw_sql(sql).execute(&mut *tx).await;
     let answer = match result {
@@ -218,14 +334,7 @@ async fn as_caller(pool: &sqlx::PgPool, uid: &str, sql: &str) -> Result<(), Stri
 /// Read one row's `salary` as a given identity. `None` means the column came back NULL.
 async fn read_salary(pool: &sqlx::PgPool, tier: Tier, uid: &str, id: i32) -> Option<String> {
     let mut tx = pool.begin().await.expect("begin");
-    sqlx::raw_sql(&format!(
-        "SET LOCAL contract.uid = '{uid}'; \
-         SET LOCAL \"request.jwt.claims\" = '{{\"uid\": \"{uid}\"}}'; \
-         SET LOCAL ROLE contract_app;"
-    ))
-    .execute(&mut *tx)
-    .await
-    .expect("assume identity");
+    assume(&mut tx, uid, false).await;
 
     let row = sqlx::query(&format!(
         "SELECT salary::text AS salary FROM {} WHERE id = {id}",
@@ -248,6 +357,255 @@ async fn stored_salary(pool: &sqlx::PgPool, id: i32) -> Option<String> {
     .fetch_one(pool)
     .await
     .expect("read the stored value")
+}
+
+/// What one INSERT did: the SQLSTATE it was refused with, if it was, and the row's stored
+/// salary (`None` when no row was stored, `Some(None)` for a stored NULL).
+#[derive(Debug, PartialEq)]
+struct Inserted {
+    refused: Option<String>,
+    stored: Option<Option<String>>,
+}
+
+/// Run `sql` inside a savepoint, returning the SQLSTATE it was refused with, if it was, and
+/// leaving the transaction usable either way.
+async fn refusal(tx: &mut sqlx::PgConnection, sql: &str) -> Option<String> {
+    sqlx::raw_sql("SAVEPOINT caller")
+        .execute(&mut *tx)
+        .await
+        .expect("savepoint");
+    let error = sqlx::raw_sql(sql).execute(&mut *tx).await.err()?;
+    sqlx::raw_sql("ROLLBACK TO SAVEPOINT caller")
+        .execute(&mut *tx)
+        .await
+        .expect("back to the savepoint");
+    Some(
+        error
+            .as_database_error()
+            .and_then(|d| d.code())
+            .map_or_else(|| error.to_string(), |c| c.into_owned()),
+    )
+}
+
+/// Run `sql` as `uid` (with the `writer` claim when set), then `read` with no tier in the way,
+/// and roll it all back: the SQLSTATE `sql` was refused with, if it was, and the rows `read`
+/// returned.
+async fn write_then_read(
+    pool: &sqlx::PgPool,
+    (uid, writer): (&str, bool),
+    sql: &str,
+    read: &str,
+) -> (Option<String>, Vec<Option<String>>) {
+    let mut tx = pool.begin().await.expect("begin");
+    assume(&mut tx, uid, writer).await;
+    let refused = refusal(&mut tx, sql).await;
+    sqlx::raw_sql("RESET ROLE")
+        .execute(&mut *tx)
+        .await
+        .expect("reset role");
+    let rows = sqlx::query_scalar::<_, Option<String>>(read)
+        .fetch_all(&mut *tx)
+        .await
+        .expect("read what is stored");
+    let _ = tx.rollback().await;
+    (refused, rows)
+}
+
+/// Insert `(id, title, salary, author_id)` row `values` through `tier` as `uid`, then read what
+/// the table holds for `id` with no tier in the way, and roll it all back.
+async fn insert_as(
+    pool: &sqlx::PgPool,
+    tier: Tier,
+    who: (&str, bool),
+    id: i32,
+    values: &str,
+) -> Inserted {
+    let insert = format!(
+        "INSERT INTO {} (id, title, salary, author_id) VALUES {values}",
+        tier.relation()
+    );
+    let read = format!("SELECT salary::text FROM public.contract_posts WHERE id = {id}");
+    let (refused, rows) = write_then_read(pool, who, &insert, &read).await;
+    Inserted {
+        refused,
+        stored: rows.into_iter().next(),
+    }
+}
+
+/// `id|has ref|owner|secret|status` per stored vault row whose secret is in `secrets`, by id.
+fn vault_rows(secrets: &str) -> String {
+    format!(
+        "SELECT concat_ws('|', id, ref IS NOT NULL, owner, secret, status)
+           FROM public.contract_vault WHERE secret IN ({secrets}) ORDER BY id"
+    )
+}
+
+/// The ids in `rows` from [`vault_rows`], which must be consecutive: a key drawn once per row.
+fn consecutive_ids(rows: &[Option<String>]) -> bool {
+    let ids: Vec<i64> = rows
+        .iter()
+        .filter_map(|r| r.as_deref()?.split('|').next()?.parse().ok())
+        .collect();
+    ids.windows(2).all(|w| w[1] == w[0] + 1)
+}
+
+/// What is stored after inserting into the vault as `who`: the refusal, and the rows of `secrets`
+/// with their ids taken out, which differ per run since a sequence is not rolled back.
+async fn vault_insert(
+    pool: &sqlx::PgPool,
+    who: (&str, bool),
+    sql: &str,
+    secrets: &str,
+) -> (Option<String>, Vec<String>) {
+    let (refused, rows) = write_then_read(pool, who, sql, &vault_rows(secrets)).await;
+    assert!(consecutive_ids(&rows), "a key was drawn twice: {rows:?}");
+    let rows = rows
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            r.split_once('|')
+                .map_or(r.clone(), |(_, rest)| rest.to_string())
+        })
+        .collect();
+    (refused, rows)
+}
+
+/// The INSERT contract over defaults (MK3, MK4, MK6): every rule judges the values stored,
+/// defaults included, and a value equal to the column's default is no write.
+async fn assert_insert_defaults_contract(pool: &sqlx::PgPool, tier: Tier) {
+    let where_ = tier.label();
+    let vault = tier.vault();
+    let ok = |rows: &[&str]| (None, rows.iter().map(|r| r.to_string()).collect::<Vec<_>>());
+    let refused = (Some("42501".to_string()), Vec::<String>::new());
+
+    // 12. The owner, a random key and a serial key are filled in by their defaults, and the
+    //     secret's rule reads all three: the values stored, so it is stored.
+    assert_eq!(
+        vault_insert(
+            pool,
+            ("alice", false),
+            &format!("INSERT INTO {vault} (secret) VALUES ('one'), ('two')"),
+            "'one', 'two'"
+        )
+        .await,
+        ok(&["t|alice|one|draft", "t|alice|two|draft"]),
+        "{where_}: a rule reading defaulted values must see them"
+    );
+
+    // 13. The owner column carries a rule of its own: writing someone else's is refused.
+    assert_eq!(
+        vault_insert(
+            pool,
+            ("bob", false),
+            &format!("INSERT INTO {vault} (owner, secret) VALUES ('alice', 'planted')"),
+            "'planted'"
+        )
+        .await,
+        refused.clone(),
+        "{where_}: a row planted as another owner must be refused"
+    );
+
+    // 14. The default's own value is no write; any other value from a non-writer is refused.
+    assert_eq!(
+        vault_insert(
+            pool,
+            ("bob", false),
+            &format!("INSERT INTO {vault} (secret, status) VALUES ('s', 'draft')"),
+            "'s'"
+        )
+        .await,
+        ok(&["t|bob|s|draft"]),
+        "{where_}: the default's value sent explicitly must be accepted"
+    );
+    assert_eq!(
+        vault_insert(
+            pool,
+            ("bob", false),
+            &format!("INSERT INTO {vault} (secret, status) VALUES ('p', 'published')"),
+            "'p'"
+        )
+        .await,
+        refused,
+        "{where_}: a value the caller may not write must be refused"
+    );
+
+    // 15. MK4: a multi-row DEFAULT, and PostgREST's `Prefer: missing=default` bulk shape, which
+    //     sends the default's value for a key a row leaves out.
+    assert_eq!(
+        vault_insert(
+            pool,
+            ("bob", false),
+            &format!("INSERT INTO {vault} (secret, status) VALUES ('d1', DEFAULT), ('d2', NULL)"),
+            "'d1', 'd2'"
+        )
+        .await,
+        ok(&["t|bob|d1|draft", "t|bob|d2|draft"]),
+        "{where_}: DEFAULT and NULL in a multi-row VALUES are no write"
+    );
+    assert_eq!(
+        vault_insert(
+            pool,
+            ("bob", false),
+            &format!(
+                "INSERT INTO {vault} (secret, status) SELECT b.secret, b.status
+               FROM (SELECT '[{{\"secret\": \"m1\"}}]'::jsonb AS json_data) p,
+                    LATERAL (SELECT jsonb_agg(jsonb_build_object('status', 'draft') || elem) AS val
+                               FROM jsonb_array_elements(p.json_data) elem) d,
+                    LATERAL (SELECT secret, status
+                               FROM jsonb_to_recordset(d.val) AS _(secret text, status text)) b"
+            ),
+            "'m1'"
+        )
+        .await,
+        ok(&["t|bob|m1|draft"]),
+        "{where_}: PostgREST's missing=default must not be refused"
+    );
+}
+
+/// The INSERT half of the contract (MASK-N1): the write rule judges the row being inserted, as an
+/// RLS `WITH CHECK` would. A value it allows is stored, one it refuses is an error, and a NULL is
+/// no write at all.
+async fn assert_insert_contract(pool: &sqlx::PgPool, tier: Tier) {
+    let where_ = tier.label();
+    let stored = |salary: Option<&str>| Inserted {
+        refused: None,
+        stored: Some(salary.map(str::to_string)),
+    };
+    let refused = Inserted {
+        refused: Some("42501".to_string()),
+        stored: None,
+    };
+
+    // 8. A writer creating their own row sets the guarded column: the rule reads the row, and
+    //    the row being inserted is theirs. Before MASK-N1 this was judged against a row of NULLs
+    //    and silently stored NULL.
+    assert_eq!(
+        insert_as(pool, tier, ("alice", true), 3, "(3, 'mine', 555, 'alice')").await,
+        stored(Some("555")),
+        "{where_}: the owner's value must be stored"
+    );
+
+    // 9. The same writer setting it on someone else's row: refused, never stored as NULL.
+    assert_eq!(
+        insert_as(pool, tier, ("alice", true), 4, "(4, 'theirs', 1, 'bob')").await,
+        refused,
+        "{where_}: a value the rule refuses must be an error"
+    );
+
+    // 10. The owner without the write claim: the rule is NULL, which is not a yes.
+    assert_eq!(
+        insert_as(pool, tier, ("bob", false), 5, "(5, 'mine', 7, 'bob')").await,
+        refused,
+        "{where_}: a NULL rule must refuse"
+    );
+
+    // 11. NULL is not a write: a whole-object POST from a caller who may not write the column
+    //     still works.
+    assert_eq!(
+        insert_as(pool, tier, ("bob", false), 6, "(6, 'mine', NULL, 'bob')").await,
+        stored(None),
+        "{where_}: a NULL from a caller who may not write the column must not error"
+    );
 }
 
 /// Whether this tier is available in the database yet.
@@ -369,6 +727,9 @@ async fn assert_contract(pool: &sqlx::PgPool, tier: Tier) {
              divergence is gone and the comment and docs are stale: {aggregate:?}"
         ),
     }
+
+    assert_insert_contract(pool, tier).await;
+    assert_insert_defaults_contract(pool, tier).await;
 }
 
 #[tokio::test]
@@ -391,7 +752,7 @@ async fn both_tiers_present_the_same_contract() {
         // a write the view wrongly permitted was refused by the extension instead. That was
         // measured by mutating the view's write guard and watching the suite still pass. Tier 2 has to be tested
         // alone or it is not being tested at all.
-        sqlx::raw_sql("SECURITY LABEL FOR supatype ON COLUMN public.contract_posts.salary IS NULL")
+        sqlx::raw_sql(DROP_LABELS)
             .execute(&pool)
             .await
             .expect("drop tier 1's label before asserting tier 2");
