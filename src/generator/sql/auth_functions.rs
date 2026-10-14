@@ -76,7 +76,7 @@ pub const AUTH_SCHEMA_USAGE_TAG: &str = "auth_schema_usage";
 ///
 /// Guarded on role existence, as `grants.rs` guards its own statements: `anon` and `authenticated`
 /// belong to a deployment, and a database may legitimately have neither.
-fn for_each_api_role(tag: &str, statements: impl Fn(&str) -> Vec<String>) -> String {
+pub(crate) fn for_each_api_role(tag: &str, statements: impl Fn(&str) -> Vec<String>) -> String {
     let body: String = API_ROLES
         .iter()
         .map(|role| {

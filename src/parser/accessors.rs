@@ -357,6 +357,7 @@ pub fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
                 fields: vec![field_name.clone()],
                 unique: false,
                 using: IndexMethod::Btree,
+                distance: None,
             });
         }
     }
@@ -370,6 +371,7 @@ pub fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
             fields: vec!["deleted_at".into()],
             unique: false,
             using: IndexMethod::Btree,
+            distance: None,
         });
     }
 
@@ -385,6 +387,7 @@ pub fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
                     fields: vec![field_name.clone()],
                     unique: false,
                     using: IndexMethod::Gin,
+                    distance: None,
                 });
             }
         }

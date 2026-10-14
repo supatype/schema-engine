@@ -164,22 +164,6 @@
         "definition": "CREATE INDEX locations_region_idx ON public.locations USING gist (region)",
         "include": [],
         "options": ""
-      },
-      {
-        "table": "spatial_ref_sys",
-        "name": "spatial_ref_sys_pkey",
-        "columns": [
-          "srid"
-        ],
-        "unique": true,
-        "method": "btree",
-        "isPrimary": true,
-        "comment": null,
-        "expressions": null,
-        "predicate": null,
-        "definition": "CREATE UNIQUE INDEX spatial_ref_sys_pkey ON public.spatial_ref_sys USING btree (srid)",
-        "include": [],
-        "options": ""
       }
     ],
     "constraints": [
@@ -207,34 +191,6 @@
         "foreignSchema": null,
         "foreignColumns": null,
         "checkExpression": null,
-        "onDelete": null,
-        "definition": null,
-        "comment": null
-      },
-      {
-        "table": "spatial_ref_sys",
-        "name": "spatial_ref_sys_pkey",
-        "constraintType": "primaryKey",
-        "columns": [
-          "srid"
-        ],
-        "foreignTable": null,
-        "foreignSchema": null,
-        "foreignColumns": null,
-        "checkExpression": null,
-        "onDelete": null,
-        "definition": null,
-        "comment": null
-      },
-      {
-        "table": "spatial_ref_sys",
-        "name": "spatial_ref_sys_srid_check",
-        "constraintType": "check",
-        "columns": [],
-        "foreignTable": null,
-        "foreignSchema": null,
-        "foreignColumns": null,
-        "checkExpression": "CHECK (((srid > 0) AND (srid <= 998999)))",
         "onDelete": null,
         "definition": null,
         "comment": null
@@ -292,6 +248,28 @@
       "plpgsql",
       "postgis",
       "unaccent"
+    ],
+    "installedExtensions": [
+      {
+        "name": "pgcrypto",
+        "schema": "extensions",
+        "relocatable": true
+      },
+      {
+        "name": "plpgsql",
+        "schema": "pg_catalog",
+        "relocatable": false
+      },
+      {
+        "name": "postgis",
+        "schema": "extensions",
+        "relocatable": false
+      },
+      {
+        "name": "unaccent",
+        "schema": "extensions",
+        "relocatable": true
+      }
     ],
     "enums": [],
     "rlsEnabledTables": [
@@ -353,13 +331,15 @@
         "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
         "comment": null,
         "arguments": "val text",
-        "config": [],
+        "config": [
+          "search_path=pg_catalog, extensions, public"
+        ],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\n SET search_path TO 'pg_catalog', 'extensions', 'public'\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n",
         "acl": [
           "PUBLIC=EXECUTE"
         ]

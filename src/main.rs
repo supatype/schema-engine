@@ -796,6 +796,7 @@ fn risky_op_summary(op: &supatype_engine::differ::Operation) -> Option<String> {
                         format!("Recreate column '{table}.{column}' (data loss)")
                     }))
                 }
+                Operation::RelocateExtension { warning, .. } => Some(warning.clone()),
                 other => Some(destructive_op_summary(other)),
             }
         }

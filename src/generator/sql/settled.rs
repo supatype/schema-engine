@@ -123,7 +123,7 @@ fn tables_of(op: &Operation) -> Vec<&str> {
         | Operation::AddUniqueConstraint { table, .. }
         | Operation::CreateRlsPolicy { table, .. }
         | Operation::CreateJunctionTable { table, .. } => vec![table],
-        Operation::EnableExtension { .. } => Vec::new(),
+        Operation::EnableExtension { .. } | Operation::RelocateExtension { .. } => Vec::new(),
     }
 }
 

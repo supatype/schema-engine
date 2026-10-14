@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use crate::generator::sql::{auth_functions, field_views, versions};
+use crate::generator::sql::{auth_functions, extensions, field_views, versions};
 use crate::introspector::fingerprint::{ObjectKind, REPLICA_IDENTITY};
 
 use super::ObjectKey;
@@ -424,8 +424,12 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
     if h.is_empty() || starts("BEGIN;") || starts("COMMIT;") {
         return Attribution::Ignored("transaction marker");
     }
-    if starts("CREATE EXTENSION") {
+    if starts("CREATE EXTENSION") || starts("ALTER EXTENSION ") {
         return Attribution::Ignored("extension");
+    }
+    // The transaction's search path, which every extension type the push names resolves through.
+    if starts("SELECT PG_CATALOG.SET_CONFIG('SEARCH_PATH'") {
+        return Attribution::Ignored("search path");
     }
     if starts("ALTER DEFAULT PRIVILEGES ") {
         return Attribution::Ignored("default privileges");
@@ -821,6 +825,11 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
         return attribute(schema, &executed, &mut Context::default());
     }
     let tagged = |tag: &str| h.starts_with(&format!("DO ${tag}$"));
+    // The schema extensions are installed in and the API roles' usage of it: shared with whatever
+    // else installed extensions there, so no object of Supatype's.
+    if tagged(extensions::SCHEMA_TAG) || tagged(extensions::SCHEMA_USAGE_TAG) {
+        return Attribution::Ignored("extensions schema");
+    }
     if tagged(versions::RLS_ON_TAG) {
         // Row-level security turned on where it is off: the statement it executes names the table.
         let Some(at) = h.find("ALTER TABLE ") else {
