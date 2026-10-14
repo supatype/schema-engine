@@ -10,7 +10,7 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
     let db_rls = rls::read(conn, schema).await?;
     let db_rls_enabled = rls::read_rls_enabled_tables(conn, schema).await?;
     let db_triggers = triggers::read(conn, schema).await?;
-    let db_extensions = extensions::read(conn).await?;
+    let installed_extensions = extensions::read(conn).await?;
     let db_enums = enums::read(conn, schema).await?;
     let column_dependents = dependents::read(conn, schema).await?;
     let database: String = sqlx::query_scalar("SELECT current_database()::text")
@@ -24,7 +24,11 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
         constraints: db_constraints,
         rls_policies: db_rls,
         triggers: db_triggers,
-        extensions: db_extensions,
+        extensions: installed_extensions
+            .iter()
+            .map(|e| e.name.clone())
+            .collect(),
+        installed_extensions,
         enums: db_enums,
         rls_enabled_tables: db_rls_enabled,
         // The ledger's, filled by whoever reads it.

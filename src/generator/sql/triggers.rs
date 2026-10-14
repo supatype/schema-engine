@@ -47,6 +47,9 @@ pub struct TriggerFunction {
     pub volatility: char,
     /// The body between the dollar quotes, verbatim.
     pub body: String,
+    /// The path the body runs under, for one that calls an extension's function: resolved when
+    /// it runs, so the writer's own path would otherwise decide whether it is found.
+    pub search_path: Option<&'static str>,
 }
 
 impl TriggerFunction {
@@ -68,8 +71,12 @@ impl TriggerFunction {
             's' => " STABLE",
             _ => "",
         };
+        let path = self
+            .search_path
+            .map(|p| format!(" SET search_path = {p}"))
+            .unwrap_or_default();
         format!(
-            "CREATE OR REPLACE FUNCTION {}({})\nRETURNS {} AS $${}$$ LANGUAGE plpgsql{volatility};\n",
+            "CREATE OR REPLACE FUNCTION {}({})\nRETURNS {} AS $${}$$ LANGUAGE plpgsql{volatility}{path};\n",
             self.qualified(),
             self.args,
             self.returns.to_ascii_uppercase(),
@@ -121,14 +128,18 @@ pub fn shared_functions() -> Vec<TriggerFunction> {
             returns: "trigger",
             volatility: 'v',
             body: "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n".into(),
+            search_path: None,
         },
-        // Portable: Unicode via unaccent, then the regexps.
+        // Portable: Unicode via unaccent, then the regexps. `unaccent` is found through the
+        // function's own path, in `extensions` or where an older engine left it, whatever path the
+        // row's writer has.
         TriggerFunction {
             name: "slugify".into(),
             args: "val TEXT",
             returns: "text",
             volatility: 'i',
             body: "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n".into(),
+            search_path: Some(super::extensions::OBJECT_SEARCH_PATH),
         },
     ]
 }
@@ -177,6 +188,7 @@ pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunc
                 slug = quote_ident(slug_field),
                 source = quote_ident(source_field),
             ),
+            search_path: None,
         })
         .collect();
 
@@ -204,6 +216,7 @@ pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunc
             returns: "trigger",
             volatility: 'v',
             body: format!("\nBEGIN\n{assignments}  RETURN NEW;\nEND;\n"),
+            search_path: None,
         });
     }
     out
@@ -244,7 +257,11 @@ pub fn model_triggers(model: &ModelAst, names: &ObjectNames) -> Vec<ModelTrigger
 /// applies piece by piece through the reconcile.
 pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
     let mut out = platform_schema_sql();
-    out.push_str("\nCREATE EXTENSION IF NOT EXISTS \"unaccent\";\n\n");
+    out.push_str(&format!(
+        "\n{}\n{}\n\n",
+        super::extensions::schema_sql(),
+        super::extensions::create_sql("unaccent")
+    ));
     let names = ObjectNames::for_schema(ast);
     let functions = shared_functions()
         .into_iter()

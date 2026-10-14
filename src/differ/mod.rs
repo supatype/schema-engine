@@ -1,6 +1,7 @@
 pub mod column_diff;
 pub mod constraint_diff;
 pub mod doctor;
+pub mod extension_diff;
 pub mod field_access_diff;
 pub mod integrity;
 pub mod ordering;
@@ -178,6 +179,17 @@ pub enum Operation {
         name: String,
         risk: Risk,
     },
+    /// Moves an extension an older engine created in `public` (or the project schema) to
+    /// `extensions`, where the API does not serve its functions. Cautious, so a push asks first: SQL
+    /// written by hand that names one of its objects as `public.<name>` stops resolving.
+    RelocateExtension {
+        name: String,
+        from: String,
+        to: String,
+        /// What the move means, for the person asked to consent to it.
+        warning: String,
+        risk: Risk,
+    },
 }
 
 /// What depends on a column, captured before the column is dropped and recreated. `kind` is
@@ -250,6 +262,7 @@ pub fn diff_with_previous(
     // plugin built for another API) first: it was dropped here, so nothing ever showed it.
     let mut warnings: Vec<String> = ast.warnings.clone();
 
+    extension_diff::diff(db, &mut ops, &mut warnings);
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
     rls_diff::diff(ast, db, &mut warnings)?;
     field_access_diff::validate(ast, db, &mut warnings)?;
@@ -407,6 +420,7 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::CreateRlsPolicy { risk, .. }
         | Operation::CreateJunctionTable { risk, .. }
         | Operation::CreateVersionsTable { risk, .. }
-        | Operation::EnableExtension { risk, .. } => risk,
+        | Operation::EnableExtension { risk, .. }
+        | Operation::RelocateExtension { risk, .. } => risk,
     }
 }
