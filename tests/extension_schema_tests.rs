@@ -19,6 +19,11 @@ use common::{exec, push};
 /// One model with every field that needs an extension: a geography point and a vector (PostGIS and
 /// pgvector), a slug (`unaccent`, through `_platform.slugify`) and a generated UUID key.
 fn places() -> SchemaAst {
+    places_with(json!({ "fields": ["embedding"], "unique": false, "using": "hnsw" }))
+}
+
+/// [`places`] with `vector_index` as the index on `embedding`.
+fn places_with(vector_index: Value) -> SchemaAst {
     let doc = json!({
         "astVersion": 2,
         "models": [{
@@ -38,10 +43,9 @@ fn places() -> SchemaAst {
             },
             "options": { "timestamps": false, "softDelete": false },
             "annotations": {
-                // No `hnsw` index on `embedding`: the generator emits it without the operator
-                // class pgvector requires (golden_tests.rs, NOT_PUSHABLE `vector_search`).
                 "db": { "tableName": "places", "indexes": [
-                    { "fields": ["point"], "unique": false, "using": "gist" }
+                    { "fields": ["point"], "unique": false, "using": "gist" },
+                    vector_index
                 ] },
                 "platform": { "access": { "read": { "type": "public" } } }
             }
@@ -343,4 +347,78 @@ async fn a_slug_is_made_whatever_search_path_the_writer_has() {
         assert_eq!(slug, "creme-brulee");
     })
     .await;
+}
+
+/// The `hnsw` index on `embedding`, as the catalog renders it.
+async fn vector_index_definition(pool: &PgPool) -> String {
+    sqlx::query_scalar(
+        "SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_am am ON am.oid = c.relam
+         WHERE i.indrelid = 'public.places'::regclass AND am.amname = 'hnsw'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// pgvector has no default operator class for `hnsw`, so the index names one: cosine distance
+/// unless the schema asks for L2 or inner product. A change of distance builds the index again.
+#[tokio::test]
+async fn a_vector_index_uses_the_distance_the_schema_names() {
+    common::with_integration_pool(|pool| async move {
+        create_auth_users(&pool).await;
+        push(&pool, &places())
+            .await
+            .expect("the hnsw index is created");
+        let cosine = vector_index_definition(&pool).await;
+        assert!(cosine.contains("vector_cosine_ops"), "{cosine}");
+        assert!(
+            matches!(
+                push(&pool, &places()).await.unwrap(),
+                push::Outcome::UpToDate { .. }
+            ),
+            "the same index again is up to date"
+        );
+
+        for (distance, opclass) in [("l2", "vector_l2_ops"), ("innerProduct", "vector_ip_ops")] {
+            let index = json!({ "fields": ["embedding"], "unique": false, "using": "hnsw",
+                                "distance": distance });
+            push(&pool, &places_with(index.clone()))
+                .await
+                .unwrap_or_else(|e| panic!("{distance}: {e}"));
+            let definition = vector_index_definition(&pool).await;
+            assert!(definition.contains(opclass), "{distance}: {definition}");
+            assert!(
+                matches!(
+                    push(&pool, &places_with(index)).await.unwrap(),
+                    push::Outcome::UpToDate { .. }
+                ),
+                "{distance}: the same index again is up to date"
+            );
+        }
+    })
+    .await;
+}
+
+/// A schema that asks for a distance on an index that has none, or an `hnsw` index on a column
+/// pgvector cannot index, is refused when it is read, naming the field.
+#[test]
+fn a_vector_index_option_out_of_place_is_refused() {
+    let doc = |index: Value| {
+        let ast = places_with(json!({ "fields": ["embedding"], "unique": false, "using": "hnsw" }));
+        let mut doc = serde_json::to_value(&ast).unwrap();
+        doc["models"][0]["annotations"]["db"]["indexes"][1] = index;
+        parser::parse(&doc.to_string())
+            .map(|_| ())
+            .unwrap_err()
+            .to_string()
+    };
+    let on_gist =
+        doc(json!({ "fields": ["point"], "unique": false, "using": "gist", "distance": "l2" }));
+    assert!(on_gist.contains("only an `hnsw` index"), "{on_gist}");
+    let on_text = doc(json!({ "fields": ["name"], "unique": false, "using": "hnsw" }));
+    assert!(
+        on_text.contains("'name', which is not a Vector field"),
+        "{on_text}"
+    );
 }

@@ -242,7 +242,7 @@ CREATE TABLE IF NOT EXISTS "public"."documents" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding");
+CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding" vector_cosine_ops);
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."documents", "not_in_graphql" boolean DEFAULT NULL)

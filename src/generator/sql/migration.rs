@@ -2121,7 +2121,17 @@ fn create_index_sql(
 ) -> Result<String> {
     let unique = if index.unique { "UNIQUE " } else { "" };
     let method = index.using.as_sql();
-    let cols = quote_ident_list(&index.fields);
+    // Each key with its operator class where the method names one; resolved through the push's
+    // search path, so wherever the extension that defines it is installed.
+    let cols = match index.operator_class() {
+        Some(class) => index
+            .fields
+            .iter()
+            .map(|f| format!("{} {class}", quote_ident(f)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        None => quote_ident_list(&index.fields),
+    };
     // The name the desired set records: the one chosen for the whole schema, never the full
     // `{table}_{fields}_idx`, which Postgres would cut to 63 bytes behind our back.
     let idx_name = quote_ident(&names.index(table, index));

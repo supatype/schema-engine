@@ -43,7 +43,8 @@ const FIXTURES: &[&str] = &[
 
 /// The fixtures whose SQL is kept as a golden too: between them they exercise every inline
 /// constraint the generator writes (scalar primary keys and uniques, type checks, junction tables,
-/// versions tables, soft delete, the kitchen sink's lot).
+/// versions tables, soft delete, the kitchen sink's lot), and the operator class a vector index
+/// names (`vector_search`).
 const SQL_GOLDEN_FIXTURES: &[&str] = &[
     "basic_blog",
     "ecommerce",
@@ -51,6 +52,7 @@ const SQL_GOLDEN_FIXTURES: &[&str] = &[
     "many_to_many",
     "versioned_blog",
     "kitchen_sink_example",
+    "vector_search",
 ];
 
 /// Fixtures whose migration a real database refuses, with the reason. They keep a SQL golden and
@@ -73,11 +75,6 @@ const NOT_PUSHABLE: &[(&str, &str)] = &[
         "kitchen_sink",
         "a declared index names jsonb_field while the column is jsonbField; nothing validates \
          index fields against the model (column \"jsonb_field\" does not exist)",
-    ),
-    (
-        "vector_search",
-        "the hnsw index is emitted with no operator class, which pgvector requires \
-         (data type vector has no default operator class for access method \"hnsw\")",
     ),
 ];
 

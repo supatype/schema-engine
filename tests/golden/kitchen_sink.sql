@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS "public"."kitchen_sink" (
 
 CREATE INDEX IF NOT EXISTS "kitchen_sink_jsonb_field_idx" ON "public"."kitchen_sink" USING gin ("jsonb_field");
 
-CREATE INDEX IF NOT EXISTS "kitchen_sink_vector_field_idx" ON "public"."kitchen_sink" USING hnsw ("vector_field");
+CREATE INDEX IF NOT EXISTS "kitchen_sink_vector_field_idx" ON "public"."kitchen_sink" USING hnsw ("vector_field" vector_cosine_ops);
 
 CREATE INDEX IF NOT EXISTS "kitchen_sink_deleted_at_idx" ON "public"."kitchen_sink" USING btree ("deleted_at");
 
