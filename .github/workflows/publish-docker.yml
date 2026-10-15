@@ -98,9 +98,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: supatype/schema-engine
+          # A prerelease (any version with a '-', such as 0.8.0-rc.1) is pushed under its own tag
+          # only. `:latest` is what the control-plane image and self-host compose pull when nothing
+          # pins a version, so it moves for stable releases alone, the same rule as
+          # engine/latest.json.
           tags: |
             type=raw,value=v${{ inputs.version }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(inputs.version, '-') }}
 
       - name: Create multi-platform manifest
         working-directory: /tmp/digests
