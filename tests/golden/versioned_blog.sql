@@ -1100,6 +1100,53 @@ GRANT EXECUTE ON FUNCTION "supatype".publish(text, text, integer, text[]) TO aut
 GRANT EXECUTE ON FUNCTION "supatype".unpublish(text, text, text[]) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION "supatype".restore_version(text, text, integer) TO authenticated, service_role;
 
+CREATE OR REPLACE FUNCTION "supatype".create_record(model_table text, data jsonb)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public, extensions AS $fn$
+  DECLARE
+    entry _supatype.versioned_models := _supatype.versioned_model(model_table);
+    live jsonb := COALESCE(data, '{}'::jsonb);
+    col text;
+    columns text;
+    created jsonb;
+  BEGIN
+    IF NOT entry."drafts" THEN
+      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry."model_name"
+        USING ERRCODE = '22023',
+              HINT = 'Insert into the table directly; every change is recorded as a version.';
+    END IF;
+
+    FOREACH col IN ARRAY entry."localized_columns" LOOP
+      IF live ? col THEN
+        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);
+      END IF;
+    END LOOP;
+
+    SELECT string_agg(format('%I', c.column_name), ', ')
+      INTO columns
+      FROM information_schema.columns c
+     WHERE c.table_schema = entry."schema_name"
+       AND c.table_name = entry."table_name"
+       AND live ? c.column_name;
+
+    IF columns IS NULL THEN
+      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',
+        entry."schema_name", entry."table_name")
+        INTO created;
+    ELSE
+      EXECUTE format(
+        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)
+          RETURNING to_jsonb(t)',
+        entry."schema_name", entry."table_name", columns, columns,
+        entry."schema_name", entry."table_name")
+        INTO created USING live;
+    END IF;
+
+    RETURN "supatype".create_draft(model_table, created ->> entry."primary_key", data);
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION "supatype".create_record(text, jsonb) TO authenticated, service_role;
+
 REVOKE ALL ON SCHEMA "draft" FROM anon;
 GRANT USAGE ON SCHEMA "draft" TO authenticated, service_role;
 

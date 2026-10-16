@@ -5146,6 +5146,33 @@
       },
       {
         "schema": "supatype",
+        "name": "create_record",
+        "identityArguments": "model_table text, data jsonb",
+        "identityTypes": "text, jsonb",
+        "returnType": "jsonb",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created jsonb;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created;\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)\n          RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created USING live;\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, created ->> entry.\"primary_key\", data);\n  END;\n  ",
+        "comment": null,
+        "arguments": "model_table text, data jsonb",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.create_record(model_table text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created jsonb;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created;\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)\n          RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created USING live;\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, created ->> entry.\"primary_key\", data);\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "supatype",
         "name": "publish",
         "identityArguments": "model_table text, record_id text, version integer, locales text[]",
         "identityTypes": "text, text, integer, text[]",
