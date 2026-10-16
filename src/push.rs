@@ -478,10 +478,15 @@ pub fn with_recorded_names<'a>(
             ObjectKind::Index => "index",
             _ => continue,
         };
-        let columns = reconcile::parse_definition(&row.live_def)
-            .get("columns")
-            .copied();
-        recorded.record(&row.key.parent, group, &row.key.name, columns);
+        // A check covers no columns the catalog states; it is told apart by the expression its
+        // statement records, which lets a model rule keep the name recorded for it (CK1).
+        let covers = match row.key.kind {
+            ObjectKind::Check => crate::desired::statements::check_expression(&row.desired_sql),
+            _ => reconcile::parse_definition(&row.live_def)
+                .get("columns")
+                .copied(),
+        };
+        recorded.record(&row.key.parent, group, &row.key.name, covers);
     }
     if recorded.is_empty() {
         return Cow::Borrowed(ast);
@@ -1070,10 +1075,13 @@ fn assert_renames_still_planned(plan: &Plan<'_>) -> Result<()> {
         .actions
         .iter()
         .filter_map(|action| match action {
+            // A rename on a table that keeps its name (a check named by an older rule, CK1)
+            // rests on no table rename.
             reconcile::Action::Rename { key, from, .. }
-                if renamed
-                    .iter()
-                    .all(|(table, to)| table.name != from.parent || *to != key.parent) =>
+                if from.parent != key.parent
+                    && renamed
+                        .iter()
+                        .all(|(table, to)| table.name != from.parent || *to != key.parent) =>
             {
                 Some(from.to_string())
             }

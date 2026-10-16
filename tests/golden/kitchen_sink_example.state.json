@@ -1653,7 +1653,7 @@
       },
       {
         "table": "chat_message",
-        "name": "chat_message_check_1",
+        "name": "chat_message_body_min_length",
         "constraintType": "check",
         "columns": [],
         "foreignTable": null,
@@ -1998,19 +1998,6 @@
       },
       {
         "table": "talk",
-        "name": "talk_check_1",
-        "constraintType": "check",
-        "columns": [],
-        "foreignTable": null,
-        "foreignSchema": null,
-        "foreignColumns": null,
-        "checkExpression": "CHECK ((starts_at <= ends_at))",
-        "onDelete": null,
-        "definition": null,
-        "comment": null
-      },
-      {
-        "table": "talk",
         "name": "talk_pkey",
         "constraintType": "primaryKey",
         "columns": [
@@ -2084,6 +2071,19 @@
           "deferrable": false,
           "initiallyDeferred": false
         }
+      },
+      {
+        "table": "talk",
+        "name": "talk_starts_at_lte_ends_at",
+        "constraintType": "check",
+        "columns": [],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": "CHECK ((starts_at <= ends_at))",
+        "onDelete": null,
+        "definition": null,
+        "comment": null
       },
       {
         "table": "talk_versions",

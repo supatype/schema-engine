@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use crate::desired::ObjectKey;
 use crate::generator::sql::triggers::{slug_fields, PLATFORM_SCHEMA};
 use crate::introspector::fingerprint::ObjectKind;
-use crate::managed::{clip_identifier, MAX_IDENTIFIER_BYTES};
+use crate::managed::{clip_identifier, is_managed_comment, MAX_IDENTIFIER_BYTES};
 use crate::parser::accessors::{
     column_names_for, db_foreign_key, default_foreign_key_column, implicit_model_indexes,
 };
@@ -85,6 +85,27 @@ fn cut(name: &str) -> Option<String> {
         None => (name, ""),
     };
     (ident.len() > MAX_IDENTIFIER_BYTES).then(|| format!("{}{args}", clip_identifier(ident)))
+}
+
+/// The fingerprint 0.6.0 stamped on a check it made, over the expression it generated: the first
+/// 16 hex characters of its SHA-256 (`check_fingerprint` in its `managed.rs`).
+pub fn engine_0_6_check_fingerprint(expression: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(expression.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// The fingerprint in a check's 0.6.0 stamp (`...;bounds=<fingerprint>`), if it carries one.
+pub fn engine_0_6_stamp_fingerprint(comment: Option<&str>) -> Option<&str> {
+    let comment = comment.filter(|c| is_managed_comment(Some(c)))?;
+    comment
+        .lines()
+        .next()?
+        .split(';')
+        .find_map(|part| part.strip_prefix("bounds="))
 }
 
 /// `{table}_{column}_fkey` for each foreign key (`differ/table_diff.rs`, `migration.rs`).

@@ -325,7 +325,8 @@ async fn run_fixture(pool: &sqlx::PgPool, name: &str) {
         .map(|c| c.name.as_str())
         .filter(|n| {
             // Postgres appends the digit straight after the suffix (`posts_status_check1`).
-            // Our model constraints are `{t}_check_{n}`, with an underscore, and are not this.
+            // Our model constraints are named for what they check, and a second that wants the
+            // same name takes `_2`, with an underscore, so none is this.
             let stem = n.trim_end_matches(|c: char| c.is_ascii_digit());
             stem.len() < n.len()
                 && ["_check", "_key", "_fkey", "_pkey"]

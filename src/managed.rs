@@ -4,7 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{FieldAst, IndexAst, JunctionTableAst, ModelAst, SchemaAst};
+use crate::parser::ast::{AccessRule, FieldAst, IndexAst, JunctionTableAst, ModelAst, SchemaAst};
+use crate::rule_names::{rule_constraint_name, rule_descriptor};
 use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 
 pub const MANAGED_PREFIX: &str = "supatype:managed";
@@ -220,15 +221,32 @@ impl RecordedNames {
         columns: Option<&str>,
         name: Seq<'_>,
     ) -> Option<String> {
-        let recorded = self.names.get_mut(&(table.to_string(), group))?;
-        let at = recorded.iter().position(|r| {
+        self.take_where(table, group, |r| {
             let same_columns = match (columns, r.columns.as_deref()) {
                 (Some(want), Some(have)) => want == have,
                 _ => true,
             };
             same_columns && in_sequence(&r.name, name.name1, name.name2, name.label)
-        })?;
+        })
+    }
+
+    /// Takes the first recorded name on `table` in `group` that `wanted` accepts.
+    fn take_where(
+        &mut self,
+        table: &str,
+        group: &'static str,
+        wanted: impl Fn(&RecordedName) -> bool,
+    ) -> Option<String> {
+        let recorded = self.names.get_mut(&(table.to_string(), group))?;
+        let at = recorded.iter().position(wanted)?;
         Some(recorded.remove(at).name)
+    }
+
+    /// How many names are recorded on `table` in `group`.
+    fn count(&self, table: &str, group: &'static str) -> usize {
+        self.names
+            .get(&(table.to_string(), group))
+            .map_or(0, Vec::len)
     }
 }
 
@@ -329,6 +347,28 @@ impl Choosers {
             .take(table, group, columns, seq)
             .unwrap_or_else(|| self.constraints.choose(table, column, label))
     }
+
+    /// The first free name in a model rule's sequence ([`rule_constraint_name`]), then taken.
+    fn rule(&mut self, table: &str, descriptor: &str) -> String {
+        let mut pass = 0;
+        loop {
+            let name = rule_constraint_name(table, descriptor, pass);
+            if !self.constraints.taken.contains(&name) {
+                self.constraints.claim(&name);
+                return name;
+            }
+            pass += 1;
+        }
+    }
+}
+
+/// One model rule as [`ObjectNames::model_rules`] names it: its place in the declared list, what it
+/// checks, the rule itself for ordering, and the `CHECK` expression it renders to, where known.
+struct RuleToName {
+    index: usize,
+    descriptor: String,
+    order: String,
+    expression: Option<String>,
 }
 
 /// Postgres's own default name for a table's primary key, before any collision is resolved.
@@ -358,19 +398,11 @@ pub fn expected_check_constraint_name(table: &str, column: &str) -> String {
     make_object_name(table, Some(column), "bounds")
 }
 
-/// The label of a model-level constraint, by its position in the declared list.
-fn model_constraint_label(index: usize) -> String {
-    format!("check_{}", index + 1)
-}
-
-/// Name for a model-level constraint, by its position in the declared list.
-///
-/// Positional because the rule itself has no name: the author writes an expression, not an
-/// identifier. Reordering `constraints` therefore renames them, which the differ handles as a drop
-/// and an add of the same expression, and the fingerprint in the comment keeps that from churning
-/// when nothing actually changed.
-pub fn expected_model_constraint_name(table: &str, index: usize) -> String {
-    make_object_name(table, None, &model_constraint_label(index))
+/// Name for a model-level constraint, read off what it checks ([`crate::rule_names`]), before any
+/// collision is resolved: `chat_message_body_min_length` for `Gte<Length<"body">, Literal<2>>`.
+/// [`ObjectNames::model_constraint`] is the one a push uses.
+pub fn expected_model_constraint_name(table: &str, rule: &AccessRule) -> String {
+    rule_constraint_name(table, &rule_descriptor(rule), 0)
 }
 
 /// Postgres default name for a single-column UNIQUE constraint, before any collision is resolved.
@@ -424,6 +456,11 @@ mod engine {
         crate::generator::sql::migration::field_check_expression(field, column).is_some()
     }
 
+    /// The `CHECK` expression a model rule renders to, which a ledger row's statement records.
+    pub(super) fn rule_expression(rule: &crate::parser::ast::AccessRule) -> Option<String> {
+        crate::generator::sql::constraints::constraint_to_expr(rule).ok()
+    }
+
     pub(super) fn shared_function_names() -> Vec<String> {
         crate::generator::sql::triggers::shared_functions()
             .into_iter()
@@ -448,6 +485,10 @@ mod engine {
 
     pub(super) fn has_bounds(_: &FieldAst, _: &str) -> bool {
         false
+    }
+
+    pub(super) fn rule_expression(_: &crate::parser::ast::AccessRule) -> Option<String> {
+        None
     }
 
     pub(super) fn shared_function_names() -> Vec<String> {
@@ -714,11 +755,62 @@ impl ObjectNames {
                 }
             }
         }
-        for index in 0..model.annotations.db.constraints.len() {
-            let label = model_constraint_label(index);
-            self.pick(table, "rule", &index.to_string(), || {
-                ch.constraint(table, "check", None, &label)
+        self.model_rules(model, ch);
+    }
+
+    /// A model's rules, named for what they check (CK1). In order of what they check and then of
+    /// the rule itself, never of declaration, so reordering renames nothing. A rule keeps a name
+    /// the ledger records in its sequence: first one recorded for exactly its expression, then any
+    /// (a tightened bound keeps its name); otherwise it takes the first free name in the sequence.
+    fn model_rules(&mut self, model: &ModelAst, ch: &mut Choosers) {
+        let table = model.table_name();
+        let mut rules: Vec<RuleToName> = model
+            .annotations
+            .db
+            .constraints
+            .iter()
+            .enumerate()
+            .map(|(index, rule)| RuleToName {
+                index,
+                descriptor: rule_descriptor(rule),
+                order: serde_json::to_string(rule).unwrap_or_default(),
+                expression: engine::rule_expression(rule),
+            })
+            .collect();
+        rules.sort_by(|a, b| (&a.descriptor, &a.order).cmp(&(&b.descriptor, &b.order)));
+        for exact in [true, false] {
+            self.keep_recorded_rule_names(table, &rules, exact, ch);
+        }
+        for rule in &rules {
+            self.pick(table, "rule", &rule.index.to_string(), || {
+                ch.rule(table, &rule.descriptor)
             });
+        }
+    }
+
+    /// Gives each rule still unnamed a name the ledger records in its sequence: with `exact`, only
+    /// one recorded for exactly the rule's expression.
+    fn keep_recorded_rule_names(
+        &mut self,
+        table: &str,
+        rules: &[RuleToName],
+        exact: bool,
+        ch: &mut Choosers,
+    ) {
+        let passes = rules.len() + ch.recorded.count(table, "check");
+        for rule in rules {
+            let detail = rule.index.to_string();
+            if self.get(table, "rule", &detail).is_some() || (exact && rule.expression.is_none()) {
+                continue;
+            }
+            let recorded = ch.recorded.take_where(table, "check", |r| {
+                (!exact || r.columns == rule.expression)
+                    && (0..=passes)
+                        .any(|pass| rule_constraint_name(table, &rule.descriptor, pass) == r.name)
+            });
+            if let Some(name) = recorded {
+                self.set(table, "rule", &detail, name);
+            }
         }
     }
 
@@ -976,10 +1068,10 @@ impl ObjectNames {
             .unwrap_or_else(|| expected_check_constraint_name(table, column))
     }
 
-    /// A model-level constraint, by its position in the declared list.
-    pub fn model_constraint(&self, table: &str, index: usize) -> String {
+    /// The model-level constraint `rule`, the `index`-th the model declares.
+    pub fn model_constraint(&self, table: &str, index: usize, rule: &AccessRule) -> String {
         self.get(table, "rule", &index.to_string())
-            .unwrap_or_else(|| expected_model_constraint_name(table, index))
+            .unwrap_or_else(|| expected_model_constraint_name(table, rule))
     }
 }
 
