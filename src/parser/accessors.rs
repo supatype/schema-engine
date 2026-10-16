@@ -453,3 +453,35 @@ pub fn never_written(field: &FieldAst) -> bool {
         f.generated.is_some() || f.identity == Some(super::ast::IdentityGeneration::Always)
     })
 }
+
+/// Whether a field declares itself the primary key.
+pub(crate) fn is_primary_key(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Text(s)
+        | FieldAst::RichText(s)
+        | FieldAst::Integer(s)
+        | FieldAst::Float(s)
+        | FieldAst::Boolean(s)
+        | FieldAst::Datetime(s)
+        | FieldAst::Uuid(s)
+        | FieldAst::Email(s)
+        | FieldAst::BigInt(s)
+        | FieldAst::Bytes(s)
+        | FieldAst::SmallInt(s)
+        | FieldAst::Date(s)
+        | FieldAst::Timestamp(s)
+        | FieldAst::Serial(s)
+        | FieldAst::BigSerial(s)
+        | FieldAst::Money(s)
+        | FieldAst::Url(s)
+        | FieldAst::Ip(s)
+        | FieldAst::Cidr(s)
+        | FieldAst::Macaddr(s)
+        | FieldAst::Interval(s)
+        | FieldAst::TsQuery(s)
+        | FieldAst::TsVector(s)
+        | FieldAst::Xml(s)
+        | FieldAst::Color(s) => s.primary_key,
+        _ => false,
+    }
+}
