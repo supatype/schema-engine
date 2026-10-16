@@ -276,6 +276,37 @@ END $$"#
     )
 }
 
+/// Deleting a project user deletes their membership, by any route, a raw SQL delete included, as
+/// it already deletes their identity link. A row left behind kept a Studio role for an id nobody
+/// can sign in as.
+///
+/// Only `user_id` references `auth.users`: a Cloud account's row has no project user, and its
+/// NULL `user_id` is never checked. Like the link table's, the key is added once `auth.users`
+/// exists, since a project can be pushed before its auth schema is, and a membership whose user
+/// is already gone is dropped first so the constraint can be added to an existing database. Runs
+/// after the identities migration, which leaves `user_id` nullable on a pre-cloud table.
+pub fn ensure_studio_members_user_foreign_key_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    IF to_regclass('{SCHEMA}.studio_members') IS NOT NULL
+       AND to_regclass('auth.users') IS NOT NULL
+       AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_members'::regclass
+           AND conname = 'studio_members_user_id_fkey'
+    ) THEN
+        DELETE FROM {SCHEMA}.studio_members m
+         WHERE m.user_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id = m.user_id);
+        ALTER TABLE {SCHEMA}.studio_members
+            ADD CONSTRAINT studio_members_user_id_fkey
+            FOREIGN KEY (user_id) REFERENCES auth.users (id) ON DELETE CASCADE;
+    END IF;
+END $$"#
+    )
+}
+
 /// Seed `studio_members` from the admin roles that used to live in
 /// `app_metadata`.
 ///
@@ -1416,6 +1447,10 @@ fn bootstrap_statements() -> Vec<(&'static str, String)> {
         (
             "studio_members identities",
             ensure_studio_members_platform_identity_sql(),
+        ),
+        (
+            "studio_members user foreign key",
+            ensure_studio_members_user_foreign_key_sql(),
         ),
         ("studio_audit table", create_studio_audit_table_sql()),
         ("studio_audit columns", ensure_studio_audit_columns_sql()),

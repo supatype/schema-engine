@@ -90,16 +90,15 @@ pub(crate) fn expected_checks(model: &ModelAst, names: &ObjectNames) -> Vec<Expe
         }
     }
 
-    // Model-level constraints: named by position, because the author writes an expression and
-    // not an identifier. Reordering therefore renames, which the ledger sees as a drop and a
-    // create rather than a change.
+    // Model-level constraints: named for what they check (CK1), never by position, so
+    // reordering renames nothing.
     for (index, rule) in model.annotations.db.constraints.iter().enumerate() {
         let Ok(expression) = constraint_to_expr(rule) else {
             // A rule that cannot be rendered fails the migration, loudly, in the generator.
             continue;
         };
         out.push(ExpectedCheck {
-            constraint: names.model_constraint(table, index),
+            constraint: names.model_constraint(table, index, rule),
             expression,
         });
     }

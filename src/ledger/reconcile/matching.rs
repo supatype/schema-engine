@@ -45,11 +45,21 @@ fn moves_with_its_table(kind: ObjectKind) -> bool {
 
 /// F2(b): every owned object on a table this push renames, unchanged since the last apply, that is
 /// the same object as one desired on the table's new name. Renamed to that name, its row moved.
+///
+/// And CK1: a check on a table that keeps its name, recorded under a name the schema no longer
+/// gives it, that is the same rule as a desired check there with no row and nothing live under its
+/// name. An engine before CK1 named a model rule by its place in the list (`chat_message_check_1`):
+/// it is renamed to the name it has now, which validates nothing and rewrites nothing, rather than
+/// dropped and added again.
 pub(super) fn moved_with_their_tables(inputs: &Inputs<'_>, sides: &Sides<'_>) -> Moved {
     let mut moved = Moved::default();
     for (&key, row) in &sides.ledger {
-        let Some(table) = new_table_name(inputs, key) else {
-            continue;
+        let table = match new_table_name(inputs, key) {
+            Some(table) => table,
+            None if key.kind == ObjectKind::Check && !sides.desired.contains_key(key) => {
+                key.parent.as_str()
+            }
+            None => continue,
         };
         if row.status == Status::Released || !moves_with_its_table(key.kind) {
             continue;
@@ -66,6 +76,7 @@ pub(super) fn moved_with_their_tables(inputs: &Inputs<'_>, sides: &Sides<'_>) ->
                 && d.key.schema == key.schema
                 && d.key.parent == table
                 && !sides.ledger.contains_key(&d.key)
+                && !sides.live.contains_key(&d.key)
                 && !moved.to.contains(&d.key)
                 && same_object(inputs, d, row, l)
         });
@@ -174,6 +185,33 @@ fn found_by_structure<'s>(
         .map(|(k, l)| (*l, k.clone()))
 }
 
+/// A check on `d`'s table under another name, that no row records, nothing else desires and nothing
+/// has taken, stamped by 0.6.0 with the fingerprint of exactly the expression `d` checks. A check
+/// has no structure to compare, but 0.6.0 stamped each with a hash of the expression it generated,
+/// and named a model rule by its place in the list where this engine names it for what it checks
+/// (CK1): such a check is the desired one under its old name.
+fn found_by_stamp<'s>(
+    sides: &Sides<'s>,
+    d: &DesiredObject,
+    taken: &BTreeSet<ObjectKey>,
+) -> Option<(&'s ObjectFingerprint, ObjectKey)> {
+    let want = crate::legacy_names::engine_0_6_check_fingerprint(check_expression(&d.create_sql)?);
+    sides
+        .live
+        .iter()
+        .find(|(k, l)| {
+            k.kind == d.key.kind
+                && k.schema == d.key.schema
+                && k.parent == d.key.parent
+                && !sides.ledger.contains_key(*k)
+                && !sides.desired.contains_key(*k)
+                && !taken.contains(*k)
+                && crate::legacy_names::engine_0_6_stamp_fingerprint(l.comment.as_deref())
+                    == Some(want.as_str())
+        })
+        .map(|(k, l)| (*l, k.clone()))
+}
+
 /// Whether a live object found under another name is ours: stamped, in a place only the engine
 /// writes, named as an engine names it (this one, or 0.6.0 before it), or recorded under that name
 /// on a table since renamed. A row under the same name on another table is this object before its
@@ -204,10 +242,13 @@ pub(super) fn under_another_name(
     d: &DesiredObject,
     taken: &mut BTreeSet<ObjectKey>,
 ) -> Option<Action> {
-    if !matched_by_structure(d.key.kind) {
+    let (l, from) = if d.key.kind == ObjectKind::Check {
+        found_by_stamp(sides, d, taken)?
+    } else if matched_by_structure(d.key.kind) {
+        found_by_structure(sides, d, taken)?
+    } else {
         return None;
-    }
-    let (l, from) = found_by_structure(sides, d, taken)?;
+    };
     let reason = match (l.stamped(), ours(inputs, sides, &from)) {
         (true, _) => AdoptReason::Stamped,
         (false, true) => AdoptReason::OwnedSchema,

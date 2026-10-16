@@ -6457,12 +6457,12 @@ fn test_model_constraints_render_as_table_checks() {
     let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
 
     for expected in [
-        r#"ADD CONSTRAINT "events_check_1" CHECK ("starts_at" <= "ends_at")"#,
-        r#"ADD CONSTRAINT "events_check_2" CHECK ("sku" ~ '^[A-Z]{3}$')"#,
-        r#"ADD CONSTRAINT "events_check_3" CHECK (cardinality("tags") <= 3)"#,
+        r#"ADD CONSTRAINT "events_starts_at_lte_ends_at" CHECK ("starts_at" <= "ends_at")"#,
+        r#"ADD CONSTRAINT "events_sku_format" CHECK ("sku" ~ '^[A-Z]{3}$')"#,
+        r#"ADD CONSTRAINT "events_tags_max_items" CHECK (cardinality("tags") <= 3)"#,
         // The JSONB measure carries its type guard, or an object value raises at insert instead of
         // failing the check.
-        r#"ADD CONSTRAINT "events_check_4" CHECK (jsonb_typeof("refs") = 'array' AND jsonb_array_length("refs") >= 1)"#,
+        r#"ADD CONSTRAINT "events_refs_min_items" CHECK (jsonb_typeof("refs") = 'array' AND jsonb_array_length("refs") >= 1)"#,
     ] {
         assert!(
             forward.contains(expected),
@@ -6472,7 +6472,9 @@ fn test_model_constraints_render_as_table_checks() {
 
     // Combinators nest.
     assert!(
-        forward.contains(r#""events_check_5" CHECK ((("sku" = 'AAA') OR ("sku" IS NOT NULL)))"#),
+        forward.contains(
+            r#""events_sku_eq_or_sku_not_null" CHECK ((("sku" = 'AAA') OR ("sku" IS NOT NULL)))"#
+        ),
         "{forward}"
     );
 }

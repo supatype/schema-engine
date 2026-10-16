@@ -130,7 +130,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
             let mut columns = Vec::new();
             crate::parser::ast::columns_in(rule, &mut columns);
             json!({
-                "name": names.model_constraint(model.table_name(), index),
+                "name": names.model_constraint(model.table_name(), index, rule),
                 "columns": columns,
                 "rule": rule,
             })

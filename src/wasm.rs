@@ -1,11 +1,11 @@
-/// WASM entry points for supatype-engine.
-///
-/// Each function is annotated with `#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]`
-/// so it compiles to a wasm_bindgen export when targeting WASM, and is a plain Rust
-/// function in all other contexts (unit tests, native CLI).
-///
-/// All functions follow a JSON-in / string-out convention compatible with both the
-/// browser (JS interop) and the CLI (stdin/stdout).
+//! WASM entry points for supatype-engine.
+//!
+//! Each function is annotated with `#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]`
+//! so it compiles to a wasm_bindgen export when targeting WASM, and is a plain Rust
+//! function in all other contexts (unit tests, native CLI).
+//!
+//! All functions follow a JSON-in / string-out convention compatible with both the
+//! browser (JS interop) and the CLI (stdin/stdout).
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;

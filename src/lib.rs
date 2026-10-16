@@ -11,6 +11,7 @@ pub mod seed;
 pub mod wasm;
 
 pub mod managed;
+pub mod rule_names;
 pub mod sql_quote;
 
 // DB-dependent modules, not needed in WASM context
