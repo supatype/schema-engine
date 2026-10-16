@@ -87,6 +87,7 @@ jobs:
             --test admin_labels_tests \
             --test generated_types_contract_tests \
             --test generated_types_relationships_tests \
+            --test generated_types_blocks_tests \
             --test exact_value_types_tests \
             --test sdk_exact_value_types_tests \
             --test column_shape_tests \
