@@ -397,6 +397,11 @@ pub struct JsonFieldAst {
     pub localized: bool,
     #[serde(default)]
     pub read_only: bool,
+    /// The TypeScript the column holds, when the schema said: `JSON<T>`'s `T` written out, or
+    /// the shape of a kind stored as JSON (`Duration`, `Code`, `Currency`). Read only by the
+    /// TypeScript generators; the column is JSONB either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts_type: Option<String>,
     #[serde(default)]
     pub annotations: FieldAnnotations,
 }

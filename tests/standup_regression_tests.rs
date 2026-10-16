@@ -66,8 +66,9 @@ fn relation_and_explicit_fk_scalar_emit_column_once() {
 fn generated_types_do_not_duplicate_fk_column() {
     let ast = parser::parse(FIXTURE).unwrap();
     let ts = types::generate(&ast).unwrap();
-    // owner_id appears once each in Row / Insert / Update: three times total.
-    let occurrences = ts.matches("owner_id").count();
+    // owner_id is declared once each in Row / Insert / Update: three times total. Counted as a
+    // property, because the table's `Relationships` also names it as the key's column.
+    let occurrences = ts.matches("owner_id:").count() + ts.matches("owner_id?:").count();
     assert_eq!(
         occurrences, 3,
         "owner_id should appear 3x (Row/Insert/Update), got {occurrences}:\n{ts}"

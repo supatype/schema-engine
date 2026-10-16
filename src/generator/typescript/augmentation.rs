@@ -12,6 +12,7 @@
 //! part of the project's program, so the augmentation applies wherever the client is
 //! imported.
 
+use super::relationships::quote_key;
 use super::types::{emit_fields, emit_shared_types, Mode};
 use crate::parser::ast::{ModelAst, SchemaAst};
 use anyhow::Result;
@@ -27,7 +28,10 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
     // says, and two generated files describing the same tables should not disagree about
     // the order of them.
     for model in &ast.models {
-        emit_model(model, &mut out);
+        emit_model(ast, model, &mut out);
+    }
+    for junction in &ast.junction_tables {
+        super::relationships::emit_junction(ast, junction, &mut out, "    ");
     }
     out.push_str("  }\n");
     out.push_str("}\n\n");
@@ -40,7 +44,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
     Ok(out)
 }
 
-fn emit_model(model: &ModelAst, out: &mut String) {
+fn emit_model(ast: &SchemaAst, model: &ModelAst, out: &mut String) {
     let indent = "        ";
     out.push_str(&format!("    {}: {{\n", quote_key(model.table_name())));
 
@@ -53,25 +57,10 @@ fn emit_model(model: &ModelAst, out: &mut String) {
         emit_fields(model, mode, out, indent);
         out.push_str("      }\n");
     }
+    let relationships = super::relationships::of_model(ast, model);
+    super::relationships::emit(&relationships, out, "      ");
 
     out.push_str("    }\n");
-}
-
-/// An object key, quoted only where it has to be.
-fn quote_key(key: &str) -> String {
-    let valid = !key.is_empty()
-        && key
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_' || c == '$')
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-    if valid {
-        key.to_string()
-    } else {
-        serde_json::to_string(key).unwrap_or_else(|_| format!("\"{key}\""))
-    }
 }
 
 #[cfg(test)]

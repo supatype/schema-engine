@@ -1298,40 +1298,6 @@ fn declared_renames(
     Ok(renamed)
 }
 
-/// Whether a field declares itself the primary key.
-///
-/// Lives here beside [`field_pg_type`] because both answer questions about a declared field that
-/// several layers need: the migration renderer needs the key to build a foreign key, and the differ
-/// needs it to type the `record_id` on a snapshot table. It was private to the migration renderer,
-/// which is why `field_views.rs` reaches for the serialised form instead, a workaround for a helper
-/// that existed and could not be seen.
-pub(crate) fn field_is_primary_key(field: &FieldAst) -> bool {
-    match field {
-        FieldAst::Text(s)
-        | FieldAst::RichText(s)
-        | FieldAst::Integer(s)
-        | FieldAst::Float(s)
-        | FieldAst::Boolean(s)
-        | FieldAst::Datetime(s)
-        | FieldAst::Uuid(s)
-        | FieldAst::Email(s)
-        | FieldAst::BigInt(s)
-        | FieldAst::Bytes(s)
-        | FieldAst::SmallInt(s)
-        | FieldAst::Date(s)
-        | FieldAst::Timestamp(s)
-        | FieldAst::Serial(s)
-        | FieldAst::BigSerial(s)
-        | FieldAst::Money(s)
-        | FieldAst::Url(s)
-        | FieldAst::Ip(s)
-        | FieldAst::Cidr(s)
-        | FieldAst::Macaddr(s)
-        | FieldAst::Interval(s)
-        | FieldAst::TsQuery(s)
-        | FieldAst::TsVector(s)
-        | FieldAst::Xml(s)
-        | FieldAst::Color(s) => s.primary_key,
-        _ => false,
-    }
-}
+/// Re-exported where the differ and the SQL generator have always found it. It lives with the
+/// parser's accessors so the TypeScript generators, which also build for wasm, can ask it too.
+pub(crate) use crate::parser::accessors::is_primary_key as field_is_primary_key;
