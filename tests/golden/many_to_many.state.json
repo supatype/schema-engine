@@ -569,7 +569,26 @@
         "comment": null
       }
     ],
-    "rlsPolicies": [],
+    "rlsPolicies": [
+      {
+        "table": "course_tags",
+        "name": "course_tags_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((EXISTS ( SELECT 1\n   FROM tags\n  WHERE (tags.id = course_tags.tag_id))) AND (EXISTS ( SELECT 1\n   FROM courses\n  WHERE (courses.id = course_tags.course_id))))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "enrollments",
+        "name": "enrollments_select",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((EXISTS ( SELECT 1\n   FROM students\n  WHERE (students.id = enrollments.student_id))) AND (EXISTS ( SELECT 1\n   FROM courses\n  WHERE (courses.id = enrollments.course_id))))",
+        "checkExpr": null,
+        "managed": false
+      }
+    ],
     "triggers": [
       {
         "table": "courses",
@@ -1629,7 +1648,34 @@
         "replicaIdentity": "f"
       }
     ],
-    "policies": [],
+    "policies": [
+      {
+        "schema": "public",
+        "table": "course_tags",
+        "name": "course_tags_select",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((EXISTS ( SELECT 1\n   FROM public.tags\n  WHERE (tags.id = course_tags.tag_id))) AND (EXISTS ( SELECT 1\n   FROM public.courses\n  WHERE (courses.id = course_tags.course_id))))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "enrollments",
+        "name": "enrollments_select",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((EXISTS ( SELECT 1\n   FROM public.students\n  WHERE (students.id = enrollments.student_id))) AND (EXISTS ( SELECT 1\n   FROM public.courses\n  WHERE (courses.id = enrollments.course_id))))",
+        "checkExpr": null,
+        "comment": null
+      }
+    ],
     "engineTables": [],
     "pending": []
   }

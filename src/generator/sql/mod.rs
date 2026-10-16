@@ -5,6 +5,7 @@ pub mod constraints;
 pub mod extensions;
 pub mod field_views;
 pub mod grants;
+pub mod junction_access;
 pub mod migration;
 pub mod migration_errors;
 pub mod online;

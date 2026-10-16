@@ -899,6 +899,11 @@ CREATE OR REPLACE TRIGGER "every_required_slug_req_trigger"
 BEFORE INSERT OR UPDATE ON "public"."every_required"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_every_required_slug_req();
 
+CREATE POLICY "relations_every_select" ON "public"."relations_every"
+FOR SELECT USING (
+    EXISTS (SELECT 1 FROM "public"."relations" WHERE "relations"."id" = "relations_every"."relations_id")
+    AND EXISTS (SELECT 1 FROM "public"."every" WHERE "every"."id" = "relations_every"."every_id")
+  );
 ALTER TABLE "public"."composites" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."every" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."every_defaulted" ENABLE ROW LEVEL SECURITY;

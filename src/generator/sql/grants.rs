@@ -19,7 +19,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use crate::differ::rls_diff::intersect_access;
+use crate::generator::sql::junction_access::{junction_access, JunctionAccess};
 use crate::parser::accessors::{column_names_for, db_table_name, platform_access};
 use crate::parser::ast::{
     AccessAst, AccessRule, JunctionTableAst, MembershipSource, ModelAst, Operand, SchemaAst,
@@ -284,22 +284,16 @@ pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
     out
 }
 
-/// What each API role may do on a many-to-many junction table (E27): what the intersection of its
-/// parents' rules allows, the rule its policies are made from (`differ::rls_diff`), which no
-/// default privilege widens. Without these the table kept whatever the database's default
-/// privileges gave, `TRUNCATE` included. A junction has no fields of its own, so nothing is
-/// narrowed to columns, and tier 2 changes nothing: no view is made over it.
+/// What each API role may do on a many-to-many junction table (E27): what its policies can admit
+/// the role to (`junction_access`), which no default privilege widens. Without these the table kept
+/// whatever the database's default privileges gave, `TRUNCATE` included. A junction has no fields of
+/// its own, so nothing is narrowed to columns, and tier 2 changes nothing: no view is made over it.
 ///
 /// `SELECT` stays wherever another rule reads the junction as a membership source (`Rows`), since
 /// a policy's subquery reads it as the caller and would fail rather than find no row; its own
 /// read policy still decides which rows that subquery sees.
 fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGrant> {
-    let parent = |name: &str| ast.models.iter().find(|m| m.name == name);
-    let derived = match (parent(&junction.model_a), parent(&junction.model_b)) {
-        (Some(a), Some(b)) => intersect_access(a.access(), b.access()),
-        // Unresolved parents leave every operation denied, as its policies do.
-        _ => AccessAst::default(),
-    };
+    let access = junction_access(ast, junction);
     let read_by_a_rule = read_as_membership(ast, &junction.name);
     GRANTED_ROLES
         .iter()
@@ -307,7 +301,7 @@ fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGra
             let privileges = RULED
                 .into_iter()
                 .filter(|&privilege| {
-                    allowed(role, rule_for(&derived, privilege))
+                    junction_allows(&access, role, privilege)
                         || (privilege == "SELECT" && read_by_a_rule)
                 })
                 .collect();
@@ -317,6 +311,23 @@ fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGra
             }
         })
         .collect()
+}
+
+/// Whether a junction's policies can admit `role` to `privilege`: for a linked junction, reading
+/// both ends and, for a write, updating either.
+fn junction_allows(access: &JunctionAccess<'_>, role: &str, privilege: &str) -> bool {
+    match access {
+        JunctionAccess::Intersected(derived) => allowed(role, rule_for(derived, privilege)),
+        JunctionAccess::Linked(ends) => {
+            let reads = ends
+                .iter()
+                .all(|end| allowed(role, platform_access(end.model).read.as_ref()));
+            let updates = ends
+                .iter()
+                .any(|end| allowed(role, platform_access(end.model).update.as_ref()));
+            reads && (privilege == "SELECT" || updates)
+        }
+    }
 }
 
 /// Whether any model's rule, a field rule included, reads `table` as a membership source.
