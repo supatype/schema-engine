@@ -567,6 +567,7 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
     out.push('\n');
     out.push_str(&registry_sql(ast, schema));
     out.push_str(&rpc_functions_sql(schema));
+    out.push_str(&create_record_sql(schema));
     out.push_str(&draft_schema_preamble());
     let names = crate::managed::ObjectNames::for_schema(ast);
 
@@ -1658,6 +1659,75 @@ BEGIN
     'SELECT {HELPER_SCHEMA}.prune_versions(), {HELPER_SCHEMA}.prune_preview_links()');
 END;
 $cron$;
+
+"#
+    )
+}
+
+/// `supatype.create_record`: a new record of a model with drafts, as its first draft.
+///
+/// The live row is the target of the snapshot table's foreign key, so it has to exist, but it is
+/// made holding no locale: every localized column the caller filled in is written as `{}`, and what
+/// they typed goes into version 1. Publishing a locale is then the only way any translation reaches
+/// the live row, as it is for every later edit. Studio used to insert the live row with the whole
+/// form and draft it after, so a record created with an English and a German title put the German
+/// live the moment English was published.
+///
+/// Only the columns the caller names are inserted, so the table's defaults fill the rest (the key
+/// and timestamps), and `create_draft` then snapshots the row it made with the caller's values on
+/// top. `SECURITY INVOKER` like the rest: the insert is the caller's own, under the model's create
+/// rule.
+fn create_record_sql(schema: &str) -> String {
+    let write_path = write_search_path(schema);
+    let helper = HELPER_SCHEMA;
+    let rpc_q = quote_ident(RPC_SCHEMA);
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {rpc_q}.create_record(model_table text, data jsonb)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = {write_path} AS $fn$
+  DECLARE
+    entry {helper}.versioned_models := {helper}.versioned_model(model_table);
+    live jsonb := COALESCE(data, '{{}}'::jsonb);
+    col text;
+    columns text;
+    created jsonb;
+  BEGIN
+    IF NOT entry."drafts" THEN
+      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry."model_name"
+        USING ERRCODE = '22023',
+              HINT = 'Insert into the table directly; every change is recorded as a version.';
+    END IF;
+
+    FOREACH col IN ARRAY entry."localized_columns" LOOP
+      IF live ? col THEN
+        live := jsonb_set(live, ARRAY[col], '{{}}'::jsonb);
+      END IF;
+    END LOOP;
+
+    SELECT string_agg(format('%I', c.column_name), ', ')
+      INTO columns
+      FROM information_schema.columns c
+     WHERE c.table_schema = entry."schema_name"
+       AND c.table_name = entry."table_name"
+       AND live ? c.column_name;
+
+    IF columns IS NULL THEN
+      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',
+        entry."schema_name", entry."table_name")
+        INTO created;
+    ELSE
+      EXECUTE format(
+        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)
+          RETURNING to_jsonb(t)',
+        entry."schema_name", entry."table_name", columns, columns,
+        entry."schema_name", entry."table_name")
+        INTO created USING live;
+    END IF;
+
+    RETURN {rpc_q}.create_draft(model_table, created ->> entry."primary_key", data);
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION {rpc_q}.create_record(text, jsonb) TO authenticated, service_role;
 
 "#
     )

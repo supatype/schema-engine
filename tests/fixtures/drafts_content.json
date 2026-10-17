@@ -1,0 +1,1403 @@
+{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Author",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "name",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "avatar": {
+          "kind": "image",
+          "required": false,
+          "bucket": "avatars",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "bio": {
+          "kind": "richText",
+          "required": false,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "twitter": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "github": {
+          "kind": "text",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "website": {
+          "kind": "url",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "posts": {
+          "kind": "relation",
+          "cardinality": "hasMany",
+          "target": "BlogPost"
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "authors",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Tag",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "label": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "label",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "posts": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "BlogPost",
+          "through": "blog_post_tags",
+          "onDelete": "cascade"
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "tags",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "BlogPost",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "title",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "excerpt": {
+          "kind": "text",
+          "required": false,
+          "localized": true,
+          "check": "char_length(\"{name}\") <= 300",
+          "validation": {
+            "maxLength": 300
+          },
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "body": {
+          "kind": "richText",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "cover_image": {
+          "kind": "image",
+          "required": false,
+          "bucket": "blogImages",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "author": {
+          "kind": "relation",
+          "required": true,
+          "cardinality": "belongsTo",
+          "target": "Author",
+          "onDelete": "restrict",
+          "annotations": {
+            "db": {
+              "foreignKey": "author_id"
+            }
+          }
+        },
+        "tags": {
+          "kind": "relation",
+          "cardinality": "manyToMany",
+          "target": "Tag",
+          "through": "blog_post_tags",
+          "onDelete": "cascade"
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": true
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "deleted_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "softDelete": true,
+        "versions": {
+          "drafts": true,
+          "keep": 20
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "blog_posts",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "compare",
+              "op": "lte",
+              "left": {
+                "kind": "column",
+                "name": "published_at"
+              },
+              "right": {
+                "kind": "now"
+              }
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "editor"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "editor"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Changelog",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "version": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "body": {
+          "kind": "richText",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "versions": {
+          "drafts": true,
+          "keep": 20
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "changelog",
+          "indexes": [
+            {
+              "using": "btree",
+              "unique": false,
+              "fields": [
+                "version",
+                "published_at"
+              ]
+            }
+          ]
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "compare",
+              "op": "lte",
+              "left": {
+                "kind": "column",
+                "name": "published_at"
+              },
+              "right": {
+                "kind": "now"
+              }
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ProductPage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "tagline": {
+          "kind": "text",
+          "required": false,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "hero_image": {
+          "kind": "image",
+          "required": false,
+          "bucket": "productImages",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "body": {
+          "kind": "richText",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "features": {
+          "kind": "json",
+          "required": false,
+          "localized": true,
+          "jsonArray": true,
+          "tsType": "{ title: string; description: string; icon: string }[]",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "customer_stories": {
+          "kind": "relation",
+          "cardinality": "hasMany",
+          "target": "CustomerStory"
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "versions": {
+          "drafts": true,
+          "keep": 20
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "product_pages",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "compare",
+              "op": "lte",
+              "left": {
+                "kind": "column",
+                "name": "published_at"
+              },
+              "right": {
+                "kind": "now"
+              }
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "CustomerStory",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "company": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "company",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "logo": {
+          "kind": "image",
+          "required": false,
+          "bucket": "customerLogos",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "quote": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "case_study_body": {
+          "kind": "richText",
+          "required": false,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "product_page": {
+          "kind": "relation",
+          "cardinality": "belongsTo",
+          "target": "ProductPage",
+          "onDelete": "setNull",
+          "annotations": {
+            "db": {
+              "foreignKey": "product_page_id"
+            }
+          }
+        },
+        "website": {
+          "kind": "url",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "versions": {
+          "drafts": true,
+          "keep": 20
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "customer_stories",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "compare",
+              "op": "lte",
+              "left": {
+                "kind": "column",
+                "name": "published_at"
+              },
+              "right": {
+                "kind": "now"
+              }
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "LegalPage",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "body": {
+          "kind": "richText",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            },
+            "platform": {
+              "editor": "rich"
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "versions": {
+          "drafts": true,
+          "keep": 20
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "legal_pages",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "compare",
+              "op": "lte",
+              "left": {
+                "kind": "column",
+                "name": "published_at"
+              },
+              "right": {
+                "kind": "now"
+              }
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "NavigationMenu",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "key": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "items": {
+          "kind": "json",
+          "required": true,
+          "localized": true,
+          "jsonArray": true,
+          "tsType": "{ label: string; href: string; children?: { label: string; href: string }[] }[]",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "navigation_menus",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "SiteSettings",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "site_name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "tagline": {
+          "kind": "text",
+          "required": false,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "logo": {
+          "kind": "image",
+          "required": false,
+          "bucket": "branding",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "social_links": {
+          "kind": "json",
+          "required": false,
+          "tsType": "{ twitter?: string; github?: string; discord?: string; linkedin?: string }",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "default_locale": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {
+        "singleton": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "_global_site_settings",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "admin"
+              ]
+            }
+          }
+        }
+      }
+    }
+  ],
+  "locales": [
+    "en",
+    "de",
+    "fr",
+    "es",
+    "ja"
+  ],
+  "defaultLocale": "en",
+  "publishing": {
+    "draftVisibility": [
+      "admin",
+      "developer",
+      "editor"
+    ],
+    "previewDefaultTtl": 900,
+    "previewMaxRecordTtl": 604800,
+    "previewMaxProjectTtl": 86400,
+    "previewAllowProjectScope": true
+  }
+}

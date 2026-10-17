@@ -421,6 +421,16 @@ CREATE OR REPLACE TRIGGER "students_updated_at_trigger"
 BEFORE UPDATE ON "public"."students"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "course_tags_select" ON "public"."course_tags"
+FOR SELECT USING (
+    EXISTS (SELECT 1 FROM "public"."tags" WHERE "tags"."id" = "course_tags"."tag_id")
+    AND EXISTS (SELECT 1 FROM "public"."courses" WHERE "courses"."id" = "course_tags"."course_id")
+  );
+CREATE POLICY "enrollments_select" ON "public"."enrollments"
+FOR SELECT USING (
+    EXISTS (SELECT 1 FROM "public"."students" WHERE "students"."id" = "enrollments"."student_id")
+    AND EXISTS (SELECT 1 FROM "public"."courses" WHERE "courses"."id" = "enrollments"."course_id")
+  );
 ALTER TABLE "public"."course_tags" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."courses" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."enrollments" ENABLE ROW LEVEL SECURITY;

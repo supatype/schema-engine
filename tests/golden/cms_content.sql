@@ -500,6 +500,11 @@ CREATE OR REPLACE TRIGGER "tags_slug_trigger"
 BEFORE INSERT OR UPDATE ON "public"."tags"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_tags_slug();
 
+CREATE POLICY "article_tags_select" ON "public"."article_tags"
+FOR SELECT USING (
+    EXISTS (SELECT 1 FROM "public"."articles" WHERE "articles"."id" = "article_tags"."article_tag_id")
+    AND EXISTS (SELECT 1 FROM "public"."tags" WHERE "tags"."id" = "article_tags"."tag_id")
+  );
 CREATE POLICY "articles_delete" ON "public"."articles"
 FOR DELETE USING (
     (SELECT _supatype.jwt_role()) = 'admin'

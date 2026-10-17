@@ -159,6 +159,24 @@ fn policy_head(schema: &str, table: &str, suffix: &str) -> String {
     )
 }
 
+/// The `CREATE POLICY` for `table`'s `suffix` policy whose every clause is `expr`: `USING` for a
+/// select or delete, `WITH CHECK` for an insert, both for an update.
+pub(crate) fn render_policy_with_expr(
+    schema: &str,
+    table: &str,
+    suffix: &str,
+    expr: &str,
+) -> String {
+    let head = policy_head(schema, table, suffix);
+    let clauses = match suffix {
+        "select" => format!("FOR SELECT USING (\n    {expr}\n  )"),
+        "insert" => format!("FOR INSERT WITH CHECK (\n    {expr}\n  )"),
+        "update" => format!("FOR UPDATE USING (\n    {expr}\n  ) WITH CHECK (\n    {expr}\n  )"),
+        _ => format!("FOR DELETE USING (\n    {expr}\n  )"),
+    };
+    format!("{head}\n{clauses};")
+}
+
 pub(crate) fn render_select_policy_sql(
     schema: &str,
     table: &str,
