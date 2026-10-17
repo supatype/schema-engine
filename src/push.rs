@@ -43,6 +43,7 @@ use crate::online::{online_tables, table_sizes, EngineSession};
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use crate::state::migration_history;
+use crate::state::refused_push::{self, RefusalReason};
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
@@ -1337,15 +1338,9 @@ pub(crate) fn refuse_conflicts(plan: &Plan<'_>) -> Result<()> {
 }
 
 pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<Outcome> {
-    refuse_conflicts(&plan)?;
-    assert_renames_still_planned(&plan)?;
-
-    // Plan 3.5: access changed outside Supatype is put back only with consent.
-    if !opts.overwrite_drift {
-        let objects = drift::security_drift(&plan.reconcile);
-        if !objects.is_empty() {
-            return Err(drift::SecurityDrift { objects }.into());
-        }
+    if let Some(refusal) = refusal_before_apply(&plan, &opts)? {
+        record_refusal(pool, &plan, &opts, &refusal).await;
+        return Err(refusal.error);
     }
 
     let outcome = if !plan.has_changes() {
@@ -1362,6 +1357,91 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
         } => tracing::info!(name = %name, ops = operations, "Migration applied"),
     }
     Ok(outcome)
+}
+
+/// A push refused before it wrote anything, with what to record about it.
+struct PreApplyRefusal {
+    reason: RefusalReason,
+    /// The objects in the way, for a conflict or a security drift.
+    objects: Vec<String>,
+    error: anyhow::Error,
+}
+
+/// The refusals a push makes before it writes anything, in the order it makes them: an object in
+/// the way, access changed outside Supatype (plan 3.5), and a change that drops data or rewrites a
+/// large table without `force`. A rename the plan no longer holds is refused too, and returned as
+/// an error rather than recorded: it is a stale plan, not a schema the database refused.
+fn refusal_before_apply(plan: &Plan<'_>, opts: &ApplyOptions) -> Result<Option<PreApplyRefusal>> {
+    if let Err(error) = refuse_conflicts(plan) {
+        let conflicts = plan.reconcile.conflicts().map(|a| a.key().to_string());
+        let objects = conflicts.collect();
+        let reason = RefusalReason::Conflicts;
+        return Ok(Some(PreApplyRefusal {
+            reason,
+            objects,
+            error,
+        }));
+    }
+    assert_renames_still_planned(plan)?;
+    if let Some(refusal) = drift_refusal(plan, opts.overwrite_drift) {
+        return Ok(Some(refusal));
+    }
+    let Err(error) = migration::assert_consent(&plan.diff, opts.force) else {
+        return Ok(None);
+    };
+    let reason = if plan.diff.summary.is_destructive {
+        RefusalReason::Destructive
+    } else {
+        RefusalReason::Rewrite
+    };
+    let objects = Vec::new();
+    Ok(Some(PreApplyRefusal {
+        reason,
+        objects,
+        error,
+    }))
+}
+
+/// Plan 3.5: access changed outside Supatype is put back only with consent (`overwrite_drift`).
+fn drift_refusal(plan: &Plan<'_>, overwrite_drift: bool) -> Option<PreApplyRefusal> {
+    let drifted = drift::security_drift(&plan.reconcile);
+    if overwrite_drift || drifted.is_empty() {
+        return None;
+    }
+    let objects = drifted.iter().map(|o| o.key.to_string()).collect();
+    let error = drift::SecurityDrift { objects: drifted }.into();
+    let reason = RefusalReason::SecurityDrift;
+    Some(PreApplyRefusal {
+        reason,
+        objects,
+        error,
+    })
+}
+
+/// Record `refusal` in the history as `refused`, with the migration the push would have applied.
+/// Best effort: the push is refused whether or not the record is written.
+async fn record_refusal(
+    pool: &PgPool,
+    plan: &Plan<'_>,
+    opts: &ApplyOptions,
+    refusal: &PreApplyRefusal,
+) {
+    let migration = match plan.migration(true) {
+        Ok(migration) => migration,
+        Err(e) => return eprintln!("Warning: could not record the refused push: {e}"),
+    };
+    let refused = refused_push::RefusedPush {
+        hash: &migration.hash,
+        sql: &migration.recorded_up(),
+        error: &refusal.error.to_string(),
+        reason: refusal.reason,
+        operations: refused_push::named_operations(refusal.reason, &plan.diff, &refusal.objects),
+        rename_candidates: &plan.diff.rename_candidates,
+        audit: &opts.audit,
+    };
+    if let Err(e) = refused_push::record(pool, &refused).await {
+        eprintln!("Warning: could not record the refused push: {e}");
+    }
 }
 
 /// The steady-state push. Applied at all because the publishing layer, the trigger functions and
@@ -1737,6 +1817,9 @@ async fn record_push(
     )
     .await
     .context("Failed to record migration in history")?;
+    refused_push::supersede(tx)
+        .await
+        .context("Failed to supersede earlier refused pushes")?;
     let recording = Recording {
         plan: &plan.reconcile,
         after: &after.fingerprints,
