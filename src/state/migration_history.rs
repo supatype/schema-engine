@@ -1199,6 +1199,7 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
             .clone()
             .filter(|s| !s.trim().is_empty())
             .ok_or(RollbackRefused::NoRollbackSql)?;
+        refuse_lost_data(&latest.name, &sql_down, schema)?;
         let prior = load_prior_applied_migration(&mut tx, latest.id).await?;
         let (left, index_drops) = undo_migration(&mut tx, &latest, &sql_down, schema).await?;
         restore_studio_metadata(&mut tx, prior.as_ref()).await?;
@@ -1212,30 +1213,74 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
     Ok(result)
 }
 
-/// A rollback with nothing to undo (CL3): told apart by its reason, not its wording. The message
-/// keeps the reason as its first word, as it always has.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Refuses, before anything runs, the rollback of a migration that dropped a table or a column:
+/// its data went with it, and the rollback could only warn so and then fail partway, putting back
+/// a key or an index on a column that is gone, or succeed with the column still gone.
+fn refuse_lost_data(migration: &str, sql_down: &str, schema: &str) -> Result<()> {
+    let lost = crate::generator::sql::rollback::unrestorable(sql_down, schema);
+    if lost.is_empty() {
+        return Ok(());
+    }
+    Err(RollbackRefused::DataNotRestorable {
+        migration: migration.to_string(),
+        lost,
+    }
+    .into())
+}
+
+/// A rollback refused (CL3): with nothing to undo, or undoing a migration whose dropped data it
+/// cannot bring back. Told apart by its reason, not its wording. The message keeps the reason as
+/// its first word, as it always has.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RollbackRefused {
     NoAppliedMigration,
     NoRollbackSql,
+    /// `migration` dropped each of `lost` (`table <schema>.<table>`, `column <schema>.<table>.<column>`).
+    DataNotRestorable {
+        migration: String,
+        lost: Vec<String>,
+    },
 }
 
+/// The stable name a caller matches a [`RollbackRefused::DataNotRestorable`] refusal on.
+pub const DATA_NOT_RESTORABLE: &str = "data_not_restorable";
+
 impl RollbackRefused {
-    pub fn reason(self) -> &'static str {
+    pub fn reason(&self) -> &'static str {
         match self {
             RollbackRefused::NoAppliedMigration => "no_applied_migration",
             RollbackRefused::NoRollbackSql => "no_rollback_sql",
+            RollbackRefused::DataNotRestorable { .. } => DATA_NOT_RESTORABLE,
+        }
+    }
+
+    /// What the refusal names beside its reason.
+    pub fn details(&self) -> serde_json::Value {
+        match self {
+            RollbackRefused::DataNotRestorable { migration, lost } => {
+                serde_json::json!({ "migration": migration, "lost": lost })
+            }
+            _ => serde_json::json!({}),
         }
     }
 }
 
 impl std::fmt::Display for RollbackRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let said = match self {
-            RollbackRefused::NoAppliedMigration => "No applied migration to roll back",
-            RollbackRefused::NoRollbackSql => "Migration has no rollback SQL (metadata-only push?)",
-        };
-        write!(f, "{}: {said}", self.reason())
+        write!(f, "{}: ", self.reason())?;
+        match self {
+            RollbackRefused::NoAppliedMigration => write!(f, "No applied migration to roll back"),
+            RollbackRefused::NoRollbackSql => {
+                write!(f, "Migration has no rollback SQL (metadata-only push?)")
+            }
+            RollbackRefused::DataNotRestorable { migration, lost } => write!(
+                f,
+                "Migration {migration} dropped {}, and the data it held cannot be restored by \
+                 undo. Nothing was rolled back. To get the data back, restore the database from a \
+                 backup; to change the schema from here, make a new forward change to it and push.",
+                lost.join(", ")
+            ),
+        }
     }
 }
 

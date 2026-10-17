@@ -263,6 +263,7 @@ jobs:
             --test rebaseline_preview_tests \
             --test security_consent_tests \
             --test rollback_ledger_tests \
+            --test rollback_lost_data_tests \
             --test migrate_file_tests \
             --test replica_identity_tests \
             --test object_names_tests \
