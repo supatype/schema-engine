@@ -1243,7 +1243,7 @@ pub enum RollbackRefused {
 }
 
 /// The stable name a caller matches a [`RollbackRefused::DataNotRestorable`] refusal on.
-pub const DATA_NOT_RESTORABLE: &str = "data_not_restorable";
+pub use crate::generator::sql::rollback::DATA_NOT_RESTORABLE;
 
 impl RollbackRefused {
     pub fn reason(&self) -> &'static str {
@@ -1267,20 +1267,18 @@ impl RollbackRefused {
 
 impl std::fmt::Display for RollbackRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: ", self.reason())?;
-        match self {
-            RollbackRefused::NoAppliedMigration => write!(f, "No applied migration to roll back"),
-            RollbackRefused::NoRollbackSql => {
-                write!(f, "Migration has no rollback SQL (metadata-only push?)")
+        let said = match self {
+            RollbackRefused::NoAppliedMigration => "No applied migration to roll back",
+            RollbackRefused::NoRollbackSql => "Migration has no rollback SQL (metadata-only push?)",
+            // Worded once, with a migration file's rollback section, which raises the same.
+            RollbackRefused::DataNotRestorable { migration, lost } => {
+                let subject = format!("Migration {migration}");
+                return f.write_str(&crate::generator::sql::rollback::data_not_restorable(
+                    &subject, lost,
+                ));
             }
-            RollbackRefused::DataNotRestorable { migration, lost } => write!(
-                f,
-                "Migration {migration} dropped {}, and the data it held cannot be restored by \
-                 undo. Nothing was rolled back. To get the data back, restore the database from a \
-                 backup; to change the schema from here, make a new forward change to it and push.",
-                lost.join(", ")
-            ),
-        }
+        };
+        write!(f, "{}: {said}", self.reason())
     }
 }
 

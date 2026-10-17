@@ -5,18 +5,18 @@
 //! rather than silently omitted.
 
 use super::migration::{
-    identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
+    dollar_quoted, identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
 };
 use crate::differ::{DiffOutput, Operation};
 use crate::managed::make_object_name;
 use crate::parser::ast::SchemaAst;
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
 use anyhow::Result;
 use serde_json::json;
 
 /// The rollback as a script of its own: the statements of [`statements`] inside one transaction.
 pub fn generate(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<String> {
-    Ok(script(&statements(diff, schema, ast)?))
+    Ok(script(&statements(diff, schema, ast)?, schema))
 }
 
 /// The inverse of each forward operation, newest first, each under a comment naming what it
@@ -37,8 +37,12 @@ pub fn statements(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Result<Ve
     Ok(lines)
 }
 
-/// `lines` as the rollback section of a migration file: headed, inside `BEGIN`/`COMMIT`.
-pub fn script(lines: &[String]) -> String {
+/// `lines` as the rollback section of a migration file: headed, inside `BEGIN`/`COMMIT`. When the
+/// migration dropped a table or a column of `schema`, the section's first statement raises the
+/// refusal `supatype rollback` gives, so a person running it by hand changes nothing: every
+/// statement after it fails in the aborted transaction, and its `COMMIT` rolls back. The rest of
+/// the section stays, to show what undo would otherwise have run.
+pub fn script(lines: &[String], schema: &str) -> String {
     let mut out = vec![
         "-- ============================================================".into(),
         "-- ROLLBACK MIGRATION".into(),
@@ -47,9 +51,35 @@ pub fn script(lines: &[String]) -> String {
         "BEGIN;".into(),
         String::new(),
     ];
+    let lost = unrestorable(&lines.join("\n"), schema);
+    if !lost.is_empty() {
+        out.push(raise_refusal(&data_not_restorable("This migration", &lost)));
+        out.push(String::new());
+    }
     out.extend(lines.iter().cloned());
     out.push("COMMIT;".into());
     out.join("\n")
+}
+
+/// The stable name a caller matches the refusal of a rollback that would need dropped data on.
+pub const DATA_NOT_RESTORABLE: &str = "data_not_restorable";
+
+/// The refusal of a rollback of a migration that dropped each of `lost` ([`unrestorable`]), led by
+/// its reason: what the engine's refusal says and what a migration file's rollback section raises.
+/// `subject` names the migration.
+pub fn data_not_restorable(subject: &str, lost: &[String]) -> String {
+    format!(
+        "{DATA_NOT_RESTORABLE}: {subject} dropped {}, and the data it held cannot be restored by \
+         undo. Nothing was rolled back. To get the data back, restore the database from a backup; \
+         to change the schema from here, make a new forward change to it and push.",
+        lost.join(", ")
+    )
+}
+
+/// A statement that stops a script with `said` as its error.
+fn raise_refusal(said: &str) -> String {
+    let body = format!("BEGIN RAISE EXCEPTION {}; END", raise_message(said));
+    format!("DO {};", dollar_quoted(&body, "refused"))
 }
 
 /// The sequence a serial column owns renamed back to Postgres's name for it under `table`, as the
@@ -475,6 +505,41 @@ mod tests {
     fn a_rollback_that_drops_nothing_loses_nothing() {
         let sql_down = "ALTER TABLE \"public\".\"posts\" DROP COLUMN IF EXISTS \"note\";";
         assert!(unrestorable(sql_down, "public").is_empty());
+    }
+
+    #[test]
+    fn a_rollback_section_that_cannot_restore_dropped_data_raises_first() {
+        let lines = [
+            warning(&format!(
+                "{LOST_COLUMN}{}. Restore.",
+                column_label("it's", "c")
+            )),
+            "ALTER TABLE \"public\".\"it's\" ADD CONSTRAINT \"k\" UNIQUE (\"c\");".to_string(),
+        ];
+        let section = script(&lines, "public");
+        let after_begin = section.split_once("BEGIN;\n\n").expect("a transaction").1;
+        let said = data_not_restorable("This migration", &["column public.it's.c".into()]);
+        assert!(
+            after_begin.starts_with(&format!(
+                "DO $refused$BEGIN RAISE EXCEPTION {}; END$refused$;\n",
+                raise_message(&said)
+            )),
+            "{section}"
+        );
+        assert!(
+            raise_message(&said).contains("it''s"),
+            "the quote is escaped"
+        );
+        assert!(
+            section.contains("ADD CONSTRAINT \"k\""),
+            "the rest stays: {section}"
+        );
+    }
+
+    #[test]
+    fn a_rollback_section_that_loses_nothing_raises_nothing() {
+        let lines = ["ALTER TABLE \"public\".\"t\" DROP COLUMN IF EXISTS \"c\";".to_string()];
+        assert!(!script(&lines, "public").contains("RAISE"));
     }
 
     #[test]

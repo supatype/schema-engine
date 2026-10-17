@@ -495,6 +495,9 @@ pub struct Migration {
     /// How many of the forward statements the reconcile contributed.
     pub reconciled: usize,
     risk: &'static str,
+    /// The project schema the migration applies to, which names what the file's rollback section
+    /// refuses to undo.
+    schema: String,
     /// What runs once the transaction has committed: the concurrent index builds and the
     /// validations (IN-C 2). Empty when every table the push changes is new or has no rows.
     pub after_commit: AfterCommit,
@@ -660,6 +663,7 @@ impl Migration {
             } else {
                 "safe"
             },
+            schema: schema.to_string(),
         };
         migration.after_commit = after_commit;
         migration.hash = migration_hash(&migration.hashed());
@@ -731,7 +735,7 @@ impl Migration {
             hash = self.hash,
             risk = self.risk,
             forward = self.applied_script(recording),
-            rollback = super::rollback::script(&self.down_recording(recording)),
+            rollback = super::rollback::script(&self.down_recording(recording), &self.schema),
         )
     }
 
@@ -2055,7 +2059,7 @@ fn generated_column_sql(
 }
 
 /// `sql` as a dollar-quoted literal whose tag does not occur in it.
-fn dollar_quoted(sql: &str, tag: &str) -> String {
+pub(super) fn dollar_quoted(sql: &str, tag: &str) -> String {
     let mut tag = format!("${tag}$");
     while sql.contains(&tag) {
         tag.insert(tag.len() - 1, '_');
