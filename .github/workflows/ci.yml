@@ -222,6 +222,8 @@ jobs:
             --test tier_two_api_tests \
             --test field_bounds_enforcement_tests \
             --test versions_runtime_tests \
+            --test versions_doctor_tests \
+            --test junction_access_tests \
             --test ownership_evidence_tests \
             --test owner_scalar_field_tests \
             --test introspection_coverage_tests \
