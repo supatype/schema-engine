@@ -175,6 +175,8 @@ async fn recorded(conn: &mut PgConnection, name: &str, migration_id: i32) -> Res
     );
     Ok([
         insert("migrations", &written.migration, &[], ""),
+        // As a push does: a refusal or failure before it no longer describes the project.
+        Some(crate::state::refused_push::SUPERSEDE_SQL.to_string()),
         insert(
             "managed_objects_undo",
             &written.undo,
