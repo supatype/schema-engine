@@ -279,3 +279,72 @@ async fn plain_migrate_takes_no_lock_stronger_than_access_share() {
     })
     .await;
 }
+
+/// A migrate file's forced migration that drops `widgets.note`.
+const RECORD_FORCED: migrate_file::Options = migrate_file::Options {
+    force: true,
+    record: true,
+};
+
+/// Every column, migration and ledger row a rollback section could change, in order.
+async fn database(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT 'column ' || table_name || '.' || column_name FROM information_schema.columns
+          WHERE table_schema = 'public'
+         UNION ALL
+         SELECT 'migration ' || name || ' ' || status || ' ' || rolled_back FROM _supatype.migrations
+         UNION ALL
+         SELECT 'ledger ' || concat_ws(' ', kind, parent, name, status) FROM _supatype.managed_objects
+         ORDER BY 1",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// The rollback section of a file whose migration dropped a column stops at its first statement
+/// with the refusal `supatype rollback` gives, so running it by hand changes nothing. It used to
+/// run, mark the migration rolled back and leave the column gone.
+#[tokio::test]
+async fn a_migrate_files_rollback_section_refuses_when_the_migration_dropped_a_column() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &widgets(true)).await.unwrap();
+        let file = migrate_file::render(&pool, &widgets(false), "public", RECORD_FORCED)
+            .await
+            .expect("the file renders");
+        exec(&pool, forward(&file)).await.expect("applies");
+        assert!(
+            !column_exists(&pool).await,
+            "the forward section dropped note"
+        );
+        let before = database(&pool).await;
+
+        let (_, rollback) = file
+            .split_once("ROLLBACK MIGRATION")
+            .expect("the file has a rollback section");
+        let rollback = rollback.split_once("BEGIN;").map(|(_, r)| r).unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let err = sqlx::raw_sql(&format!("BEGIN;{rollback}"))
+            .execute(&mut *conn)
+            .await
+            .expect_err("the rollback section ran");
+        let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await;
+        drop(conn);
+
+        let said = err.to_string();
+        assert!(
+            said.contains("data_not_restorable: This migration dropped column public.widgets.note"),
+            "{said}"
+        );
+        assert!(
+            said.contains("restore the database from a backup"),
+            "{said}"
+        );
+        assert_eq!(
+            database(&pool).await,
+            before,
+            "the refused section changed the database"
+        );
+    })
+    .await;
+}
