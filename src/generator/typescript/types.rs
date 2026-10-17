@@ -1,16 +1,25 @@
-use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, SchemaAst};
+use super::relationships::quote_key;
+use crate::parser::ast::{BlockDefinitionAst, FieldAst, ModelAst, RelationCardinality, SchemaAst};
 use anyhow::Result;
 
-/// True if a field is (or contains) a RichText field, which is what emits the RichText alias.
-fn field_is_richtext(field: &FieldAst) -> bool {
-    match field {
-        FieldAst::RichText(_) => true,
-        FieldAst::Blocks(b) => b
-            .blocks
-            .iter()
-            .any(|bl| bl.fields.iter().any(|(_, bf)| field_is_richtext(bf))),
-        _ => false,
-    }
+/// True if `field`, or a field one of its blocks declares, satisfies `test`. A block's fields are
+/// typed in the generated file like columns, so they name the same aliases a column would.
+fn field_or_block_field(field: &FieldAst, test: &dyn Fn(&FieldAst) -> bool) -> bool {
+    test(field)
+        || match field {
+            FieldAst::Blocks(b) => b
+                .blocks
+                .iter()
+                .any(|bl| bl.fields.values().any(|bf| field_or_block_field(bf, test))),
+            _ => false,
+        }
+}
+
+/// True if any field in the schema, or in a block it declares, satisfies `test`.
+fn schema_uses(ast: &SchemaAst, test: &dyn Fn(&FieldAst) -> bool) -> bool {
+    ast.models
+        .iter()
+        .any(|m| m.fields.values().any(|f| field_or_block_field(f, test)))
 }
 
 pub fn generate(ast: &SchemaAst) -> Result<String> {
@@ -41,29 +50,17 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 /// Emitted only where the schema uses them, and shared with the client augmentation so the
 /// two generated files cannot disagree about what a localized column or a stored file is.
 pub(crate) fn emit_shared_types(ast: &SchemaAst, out: &mut String) {
-    let has_storage = ast.models.iter().any(|m| {
-        m.fields
-            .values()
-            .any(|f| matches!(f, FieldAst::Image(_) | FieldAst::File(_)))
+    let has_storage = schema_uses(ast, &|f| {
+        matches!(f, FieldAst::Image(_) | FieldAst::File(_))
     });
 
     // A localized column is jsonb holding {"en": ..., "fr": ...}. Typing it as the bare value
     // invited `.toUpperCase()` on an object, which compiled and then failed in the browser.
-    let has_localized = ast.models.iter().any(|m| {
-        m.fields
-            .values()
-            .any(crate::parser::accessors::is_localized)
-    });
+    let has_localized = schema_uses(ast, &crate::parser::accessors::is_localized);
 
-    let has_richtext = ast
-        .models
-        .iter()
-        .any(|m| m.fields.values().any(field_is_richtext));
+    let has_richtext = schema_uses(ast, &|f| matches!(f, FieldAst::RichText(_)));
 
-    let has_button = ast
-        .models
-        .iter()
-        .any(|m| m.fields.values().any(|f| matches!(f, FieldAst::Button(_))));
+    let has_button = schema_uses(ast, &|f| matches!(f, FieldAst::Button(_)));
 
     // RichText columns store a Lexical document; type them as SerializedEditorState
     // rather than generic Json so editors/clients get the real shape.
@@ -336,6 +333,33 @@ fn field_has_default(field: &FieldAst) -> bool {
     }
 }
 
+/// One block's entry: its name under `type`, its fields under `data`, each typed as the same field
+/// would be on a column (a localized one is a locale map). A relation stores nothing in the entry.
+fn block_variant(block: &BlockDefinitionAst) -> String {
+    let fields: Vec<String> = block
+        .fields
+        .iter()
+        .filter(|(_, bf)| !matches!(bf, FieldAst::Relation(_)))
+        .map(|(name, bf)| {
+            let (ts, nullable) = ts_type_of(bf);
+            let ts = if crate::parser::accessors::is_localized(bf) {
+                format!("LocalizedValue<{ts}>")
+            } else {
+                ts
+            };
+            let opt = if nullable { "?" } else { "" };
+            format!("{}{opt}: {ts}", quote_key(name))
+        })
+        .collect();
+    let data = if fields.is_empty() {
+        "{}".to_string()
+    } else {
+        format!("{{ {} }}", fields.join("; "))
+    };
+    let name = serde_json::to_string(&block.name).unwrap_or_else(|_| format!("\"{}\"", block.name));
+    format!("{{ type: {name}; data: {data} }}")
+}
+
 pub(crate) fn ts_type_of(field: &FieldAst) -> (String, bool) {
     match field {
         FieldAst::Text(f)
@@ -395,31 +419,16 @@ pub(crate) fn ts_type_of(field: &FieldAst) -> (String, bool) {
         FieldAst::Image(f) | FieldAst::File(f) => ("StorageReference".into(), !f.required),
         FieldAst::Geo(f) => ("Json".into(), !f.required),
         FieldAst::Vector(f) => (format!("number[] /* dim {} */", f.dimensions), !f.required),
+        // Studio's block editor stores `{ "type": <block>, "data": { <its fields> } }` per entry.
+        // With no block declared the entry still has that shape; only its fields are unknown.
         FieldAst::Blocks(f) => {
             if f.blocks.is_empty() {
-                ("Json[]".into(), !f.required)
+                (
+                    "{ type: string; data: { [key: string]: unknown } }[]".into(),
+                    !f.required,
+                )
             } else {
-                let variants: Vec<String> = f
-                    .blocks
-                    .iter()
-                    .map(|b| {
-                        let defs: Vec<String> = b
-                            .fields
-                            .iter()
-                            .filter(|(_, bf)| !matches!(bf, FieldAst::Relation(_)))
-                            .map(|(fname, bf)| {
-                                let (ts, nullable) = ts_type_of(bf);
-                                let opt = if nullable { "?" } else { "" };
-                                format!("{fname}{opt}: {ts}")
-                            })
-                            .collect();
-                        format!(
-                            "{{ type: \"{}\"; data: {{ {} }} }}",
-                            b.name,
-                            defs.join("; ")
-                        )
-                    })
-                    .collect();
+                let variants: Vec<String> = f.blocks.iter().map(block_variant).collect();
                 let union = variants.join(" | ");
                 (format!("({union})[]"), !f.required)
             }
