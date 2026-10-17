@@ -12,6 +12,9 @@
 //! * `validation_failed`: the migration applied, and a step after its commit did not (LK6).
 //! * `no_schema_snapshot`: a migration with no schema sources to return (CL3).
 //! * `no_applied_migration`, `no_rollback_sql`: a rollback with nothing to undo (CL3).
+//! * `data_not_restorable`: a rollback of a migration that dropped a table or a column, whose data
+//!   undo cannot bring back, refused before anything runs; it names the `migration` and what was
+//!   `lost`.
 
 use serde_json::{json, Map, Value};
 
@@ -110,7 +113,7 @@ fn nothing_to_return(e: &anyhow::Error) -> Option<Refusal> {
         return Some(Refusal::new(NO_SCHEMA_SNAPSHOT, r.to_string(), details));
     }
     let r = e.downcast_ref::<RollbackRefused>()?;
-    Some(Refusal::new(r.reason(), r.to_string(), json!({})))
+    Some(Refusal::new(r.reason(), r.to_string(), r.details()))
 }
 
 #[cfg(test)]
@@ -174,6 +177,24 @@ mod tests {
         let r = refused(RollbackRefused::NoAppliedMigration.into());
         assert_eq!(r.reason, "no_applied_migration");
         assert!(r.message.starts_with("no_applied_migration: "));
+    }
+
+    #[test]
+    fn a_rollback_that_cannot_restore_dropped_data_names_what_was_lost() {
+        let r = refused(
+            RollbackRefused::DataNotRestorable {
+                migration: "push_2".into(),
+                lost: vec!["column public.posts.title".into()],
+            }
+            .into(),
+        );
+        assert_eq!(r.reason, "data_not_restorable");
+        assert_eq!(r.details["migration"], "push_2");
+        assert_eq!(r.details["lost"][0], "column public.posts.title");
+        assert!(r.message.starts_with(
+            "data_not_restorable: Migration push_2 dropped column public.posts.title"
+        ));
+        assert_eq!(r.line()["status"], "refused");
     }
 
     #[test]

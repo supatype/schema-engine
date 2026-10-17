@@ -73,6 +73,72 @@ fn column_label(table: &str, column: &str) -> String {
     format!("{}.{}", quote_ident(table), quote_ident(column))
 }
 
+/// How the warning for a dropped table starts, its quoted name next. Every engine since Phase 01
+/// has written these three the same way, so [`unrestorable`] reads them from any stored rollback.
+const LOST_TABLE: &str = "Cannot automatically roll back DROP TABLE ";
+/// The warning for a dropped column, `"table"."column"` next.
+const LOST_COLUMN: &str = "Cannot automatically roll back DROP COLUMN ";
+/// The warning for a column dropped and added again, its data discarded, `"table"."column"` next.
+const RECREATED_COLUMN: &str = "Cannot automatically roll back RECREATE COLUMN ";
+
+/// What a migration's rollback cannot bring back, read from the warnings in its `sql_down`: each
+/// table the forward migration dropped as `table <schema>.<table>`, and each column it dropped or
+/// recreated as `column <schema>.<table>.<column>`. Its data went with it, so undo cannot restore it.
+pub fn unrestorable(sql_down: &str, schema: &str) -> Vec<String> {
+    let mut lost: Vec<String> = Vec::new();
+    for line in sql_down.lines() {
+        let Some(said) = line.trim().strip_prefix("-- WARNING: ") else {
+            continue;
+        };
+        let named = [
+            ("table", LOST_TABLE),
+            ("column", LOST_COLUMN),
+            ("column", RECREATED_COLUMN),
+        ]
+        .into_iter()
+        .find_map(|(kind, start)| Some((kind, quoted_names(said.strip_prefix(start)?)?)));
+        if let Some((kind, names)) = named {
+            let label = format!("{kind} {schema}.{}", names.join("."));
+            if !lost.contains(&label) {
+                lost.push(label);
+            }
+        }
+    }
+    lost
+}
+
+/// The dot-separated quoted names `text` starts with: `"t"` or `"t"."c"`.
+fn quoted_names(text: &str) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    let mut rest = text;
+    loop {
+        let (name, after) = quoted_name(rest)?;
+        names.push(name);
+        match after.strip_prefix('.') {
+            Some(next) if next.starts_with('"') => rest = next,
+            _ => return Some(names),
+        }
+    }
+}
+
+/// The quoted identifier `text` starts with, its doubled quotes made single, and what follows it.
+fn quoted_name(text: &str) -> Option<(String, &str)> {
+    let mut rest = text.strip_prefix('"')?;
+    let mut name = String::new();
+    loop {
+        let end = rest.find('"')?;
+        name.push_str(&rest[..end]);
+        rest = &rest[end + 1..];
+        match rest.strip_prefix('"') {
+            Some(after) => {
+                name.push('"');
+                rest = after;
+            }
+            None => return Some((name, rest)),
+        }
+    }
+}
+
 fn rollback_op(
     op: &Operation,
     schema: &str,
@@ -87,9 +153,10 @@ fn rollback_op(
         }
         // RenameTable → rename back, and its serials' sequences with it.
         Operation::RenameTable { from, to, .. } => rename_table_back(schema, ast, diff, from, to),
-        // DropTable → cannot restore (need snapshot); emit a commented placeholder
+        // DropTable → cannot restore (need snapshot); emit a commented placeholder, which
+        // [`unrestorable`] reads back to refuse the rollback.
         Operation::DropTable { table, .. } => warning(&format!(
-            "Cannot automatically roll back DROP TABLE {}. Restore from backup or snapshot.",
+            "{LOST_TABLE}{}. Restore from backup or snapshot.",
             quote_ident(table)
         )),
         // AddColumn → DROP COLUMN
@@ -100,7 +167,7 @@ fn rollback_op(
         ),
         // DropColumn → cannot restore without snapshot
         Operation::DropColumn { table, column, .. } => warning(&format!(
-            "Cannot automatically roll back DROP COLUMN {}. Restore from backup or snapshot.",
+            "{LOST_COLUMN}{}. Restore from backup or snapshot.",
             column_label(table, column)
         )),
         // RenameColumn → rename back
@@ -127,7 +194,7 @@ fn rollback_op(
             ..
         } => rollback_alter_column(table, column, changes, schema),
         Operation::RecreateColumn { table, column, .. } => warning(&format!(
-            "Cannot automatically roll back RECREATE COLUMN {}. Original column data was discarded. \
+            "{RECREATED_COLUMN}{}. Original column data was discarded. \
              Restore from backup or snapshot.",
             column_label(table, column)
         )),
@@ -145,9 +212,7 @@ fn rollback_op(
         // CreateVersionsTable → DROP TABLE. Safe to roll back exactly because the operation only
         // ever *creates*: it runs when the table is absent, so a rollback removes a table this
         // migration made and no history that predates it.
-        Operation::CreateVersionsTable { versions_table, .. } => {
-            drop_table(schema, versions_table)
-        }
+        Operation::CreateVersionsTable { versions_table, .. } => drop_table(schema, versions_table),
         // EnableExtension → DROP EXTENSION (risky, so only emit a warning)
         Operation::EnableExtension { name, .. } => warning(&format!(
             "Rollback of CREATE EXTENSION {} would DROP it. Remove manually if safe to do so.",
@@ -377,5 +442,53 @@ fn forward_description(op: &Operation) -> String {
         }
         Operation::EnableExtension { name, .. } => format!("enable extension {name}"),
         Operation::RelocateExtension { name, to, .. } => format!("move extension {name} to {to}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_dropped_tables_and_columns_are_read_from_the_warnings() {
+        let sql_down = [
+            "-- rollback: drop column posts.title",
+            "-- WARNING: Cannot automatically roll back DROP COLUMN \"posts\".\"title\". Restore from backup or snapshot.",
+            "-- WARNING: Cannot automatically roll back DROP TABLE \"tags\". Restore from backup or snapshot.",
+            "-- WARNING: Cannot automatically roll back RECREATE COLUMN \"my\"\"t\".\"a.b\". Original column data was discarded.",
+            "-- WARNING: Rollback of CREATE EXTENSION \"pgcrypto\" would DROP it. Remove manually if safe to do so.",
+            "-- WARNING: Cannot automatically roll back ALTER COLUMN \"posts\".\"body\".",
+            "ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"posts_title_key\" UNIQUE (\"title\");",
+        ]
+        .join("\n");
+        assert_eq!(
+            unrestorable(&sql_down, "public"),
+            [
+                "column public.posts.title",
+                "table public.tags",
+                "column public.my\"t.a.b",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_rollback_that_drops_nothing_loses_nothing() {
+        let sql_down = "ALTER TABLE \"public\".\"posts\" DROP COLUMN IF EXISTS \"note\";";
+        assert!(unrestorable(sql_down, "public").is_empty());
+    }
+
+    #[test]
+    fn each_warning_the_generator_writes_is_read_back() {
+        let lines = [
+            warning(&format!("{LOST_TABLE}{}. Restore.", quote_ident("t"))),
+            warning(&format!(
+                "{LOST_COLUMN}{}. Restore.",
+                column_label("t", "c")
+            )),
+        ];
+        assert_eq!(
+            unrestorable(&lines.join("\n"), "s"),
+            ["table s.t", "column s.t.c"]
+        );
     }
 }
