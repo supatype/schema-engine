@@ -235,10 +235,111 @@ fn settings_sql(publishing: &PublishingAst) -> String {
          UPDATE {helper}.publishing_settings\n   \
          SET \"configured_visibility\" = {roles}, \"updated_at\" = now()\n \
          WHERE \"singleton\" AND \"configured_visibility\" IS DISTINCT FROM {roles};\n\n\
-         {links}{helpers}",
+         {links}{fresh}{helpers}",
         helper = HELPER_SCHEMA,
         links = preview_links_sql(),
+        fresh = created_records_sql(),
         helpers = visibility_helpers_sql(),
+    )
+}
+
+/// The rows each running transaction has inserted into a drafts model's table, and the helpers that
+/// note and ask about them (DR8).
+///
+/// # Why
+///
+/// A creator sees an unpublished record through a version they wrote. A brand new record has none
+/// yet, and writing version 1 needs the record to be visible to its author (the snapshot table's
+/// insert policy asks `can_edit_<table>`, which reads the row as the caller). So an editor calling
+/// the API, with no Studio role that shows every draft, could not create a record on a model whose
+/// read rule hides unpublished rows: `create_record` failed `42501 new row violates row-level
+/// security policy`. This makes a row visible to the transaction that inserted it, for that
+/// transaction only, which is enough to write version 1; from then on the version keeps it visible
+/// to its author.
+///
+/// # Why it is safe
+///
+/// * **Only rows actually inserted.** The note is written by an `AFTER INSERT` row trigger, which
+///   fires for a row that was inserted and for nothing else: not for an `ON CONFLICT DO NOTHING`
+///   that met someone else's record, not for the `DO UPDATE` arm of an upsert, not for a cascade.
+///   A `BEFORE` trigger would fire for all of those, and an insert that conflicted with a hidden
+///   record would have shown it to whoever guessed its key.
+/// * **Only the inserting transaction.** A note matches `pg_current_xact_id_if_assigned()`, and
+///   transaction ids are never reused, so a note outlives its transaction harmlessly until
+///   `prune_versions` clears it. A read-only transaction has no id and matches nothing.
+/// * **Nothing to forge.** The table is granted to nobody and the only writer is the trigger. The
+///   note says a row exists that its own transaction just wrote: nothing the caller did not supply.
+///
+/// # What it does not do
+///
+/// Admit the row to the `RETURNING` of the insert itself. Postgres checks `RETURNING` against the
+/// SELECT policies as the row is inserted, before any `AFTER` trigger has run, so a plain
+/// `POST /posts` asking for the row back on a hidden model is still refused. `create_record` inserts
+/// without `RETURNING` and reads the key from the note instead.
+fn created_records_sql() -> String {
+    let helper = HELPER_SCHEMA;
+    format!(
+        r#"
+CREATE TABLE IF NOT EXISTS {helper}.created_records (
+  "seq" BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  "xact" XID8 NOT NULL,
+  "model_table" TEXT NOT NULL,
+  "record_id" TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS "created_records_by_transaction"
+  ON {helper}.created_records ("xact", "model_table", "record_id");
+
+REVOKE ALL ON {helper}.created_records FROM PUBLIC;
+REVOKE ALL ON {helper}.created_records FROM anon, authenticated, service_role;
+
+-- The trigger behind every drafts model's `<table>_created_note`. The first argument names the
+-- table's key column.
+CREATE OR REPLACE FUNCTION {helper}.note_created_record() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  BEGIN
+    INSERT INTO {helper}.created_records ("xact", "model_table", "record_id")
+    VALUES (pg_current_xact_id(), TG_TABLE_NAME, to_jsonb(NEW) ->> TG_ARGV[0]);
+    RETURN NULL;
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION {helper}.note_created_record() FROM PUBLIC;
+{readers}"#,
+        readers = created_records_readers_sql(),
+    )
+}
+
+/// The two questions asked of [`created_records_sql`]'s notes, both about the caller's own
+/// transaction only.
+fn created_records_readers_sql() -> String {
+    let helper = HELPER_SCHEMA;
+    format!(
+        r#"
+-- Whether this transaction inserted the record. Asked by each `sees_draft_<table>`.
+CREATE OR REPLACE FUNCTION {helper}.created_in_this_transaction(p_table text, p_record text)
+  RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+    SELECT EXISTS (
+      SELECT 1 FROM {helper}.created_records c
+       WHERE c."xact" = pg_current_xact_id_if_assigned()
+         AND c."model_table" = p_table
+         AND c."record_id" = p_record
+    );
+  $fn$;
+
+-- The key of the newest row this transaction inserted into the table, for `create_record`, which
+-- inserts without `RETURNING`. Only ever a key the caller's own insert produced.
+CREATE OR REPLACE FUNCTION {helper}.newest_created_record(p_table text)
+  RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+    SELECT c."record_id" FROM {helper}.created_records c
+     WHERE c."xact" = pg_current_xact_id_if_assigned() AND c."model_table" = p_table
+     ORDER BY c."seq" DESC LIMIT 1;
+  $fn$;
+
+REVOKE ALL ON FUNCTION {helper}.created_in_this_transaction(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION {helper}.newest_created_record(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION {helper}.newest_created_record(text) TO authenticated, service_role;
+"#
     )
 }
 
@@ -591,6 +692,12 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
                 &primary_key,
                 &names,
             ));
+            out.push_str(&created_note_trigger_sql(
+                schema,
+                table,
+                &primary_key,
+                &names,
+            ));
             out.push_str(&versions_write_access_sql(
                 schema,
                 table,
@@ -803,6 +910,27 @@ fn can_edit_function_sql(
     )
 }
 
+/// The trigger that notes each row a drafts model's table gains, for the transaction that inserted
+/// it. See [`created_records_sql`] for why it is `AFTER`, not `BEFORE`.
+fn created_note_trigger_sql(
+    schema: &str,
+    table: &str,
+    primary_key: &str,
+    names: &crate::managed::ObjectNames,
+) -> String {
+    let trigger = names.created_note_trigger(table);
+    format!(
+        "DROP TRIGGER IF EXISTS {trigger_q} ON {schema_q}.{table_q};\n\
+         CREATE TRIGGER {trigger_q} AFTER INSERT ON {schema_q}.{table_q}\n  \
+         FOR EACH ROW EXECUTE FUNCTION {helper}.note_created_record({pk_lit});\n\n",
+        helper = HELPER_SCHEMA,
+        trigger_q = quote_ident(&trigger),
+        schema_q = quote_ident(schema),
+        table_q = quote_ident(table),
+        pk_lit = quote_literal(primary_key),
+    )
+}
+
 /// The extra SELECT policy that lets the right people read an unpublished row, and the helper it
 /// asks.
 ///
@@ -844,7 +972,7 @@ fn draft_aware_select_policy_sql(
          OR (SELECT {helper}.sees_all_drafts())\n           \
          OR {helper}.preview_allows({table_lit}, v.\"record_id\"::text)\n         \
          )\n    \
-         );\n  \
+         ) OR {helper}.created_in_this_transaction({table_lit}, p_record);\n  \
          $fn$;\n\
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}(text) TO anon, authenticated, service_role;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
@@ -1549,6 +1677,10 @@ CREATE OR REPLACE FUNCTION {helper}.prune_versions()
       GET DIAGNOSTICS n = ROW_COUNT;
       removed := removed + n;
     END LOOP;
+
+    -- And the notes of transactions that have ended, which no caller can match any more.
+    DELETE FROM {helper}.created_records
+     WHERE pg_xact_status("xact") IS DISTINCT FROM 'in progress';
     RETURN removed;
   END;
   $fn$;
@@ -1676,7 +1808,8 @@ $cron$;
 /// Only the columns the caller names are inserted, so the table's defaults fill the rest (the key
 /// and timestamps), and `create_draft` then snapshots the row it made with the caller's values on
 /// top. `SECURITY INVOKER` like the rest: the insert is the caller's own, under the model's create
-/// rule.
+/// rule. It does not read the new row back, so a caller whose read rule hides unpublished rows can
+/// still create one (DR8, see [`created_records_sql`]).
 fn create_record_sql(schema: &str) -> String {
     let write_path = write_search_path(schema);
     let helper = HELPER_SCHEMA;
@@ -1689,7 +1822,7 @@ fn create_record_sql(schema: &str) -> String {
     live jsonb := COALESCE(data, '{{}}'::jsonb);
     col text;
     columns text;
-    created jsonb;
+    created text;
   BEGIN
     IF NOT entry."drafts" THEN
       RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry."model_name"
@@ -1710,20 +1843,22 @@ fn create_record_sql(schema: &str) -> String {
        AND c.table_name = entry."table_name"
        AND live ? c.column_name;
 
+    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and
+    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the
+    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.
     IF columns IS NULL THEN
-      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',
-        entry."schema_name", entry."table_name")
-        INTO created;
+      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',
+        entry."schema_name", entry."table_name");
     ELSE
       EXECUTE format(
-        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)
-          RETURNING to_jsonb(t)',
+        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',
         entry."schema_name", entry."table_name", columns, columns,
         entry."schema_name", entry."table_name")
-        INTO created USING live;
+        USING live;
     END IF;
 
-    RETURN {rpc_q}.create_draft(model_table, created ->> entry."primary_key", data);
+    created := {helper}.newest_created_record(model_table);
+    RETURN {rpc_q}.create_draft(model_table, created, data);
   END;
   $fn$;
 

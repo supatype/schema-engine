@@ -2680,6 +2680,13 @@
       },
       {
         "table": "page",
+        "name": "page_created_note",
+        "event": "INSERT",
+        "timing": "AFTER",
+        "functionName": "EXECUTE FUNCTION _supatype.note_created_record('id')"
+      },
+      {
+        "table": "page",
         "name": "page_slug_trigger",
         "event": "INSERT",
         "timing": "BEFORE",
@@ -2719,6 +2726,13 @@
         "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "speaker",
+        "name": "speaker_created_note",
+        "event": "INSERT",
+        "timing": "AFTER",
+        "functionName": "EXECUTE FUNCTION _supatype.note_created_record('id')"
       },
       {
         "table": "speaker",
@@ -2775,6 +2789,13 @@
         "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "talk",
+        "name": "talk_created_note",
+        "event": "INSERT",
+        "timing": "AFTER",
+        "functionName": "EXECUTE FUNCTION _supatype.note_created_record('id')"
       },
       {
         "table": "talk",
@@ -2934,6 +2955,21 @@
       {
         "schema": "public",
         "table": "page",
+        "name": "page_created_note",
+        "timing": "AFTER",
+        "events": [
+          "INSERT"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.note_created_record",
+        "definition": "CREATE TRIGGER page_created_note AFTER INSERT ON public.page FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id')",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page",
         "name": "page_slug_trigger",
         "timing": "BEFORE",
         "events": [
@@ -2990,6 +3026,21 @@
         "forEachRow": true,
         "function": "_platform.set_updated_at",
         "definition": "CREATE TRIGGER room_updated_at_trigger BEFORE UPDATE ON public.room FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker",
+        "name": "speaker_created_note",
+        "timing": "AFTER",
+        "events": [
+          "INSERT"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.note_created_record",
+        "definition": "CREATE TRIGGER speaker_created_note AFTER INSERT ON public.speaker FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id')",
         "enabled": true,
         "comment": null
       },
@@ -3068,6 +3119,21 @@
         "forEachRow": true,
         "function": "_platform.set_updated_at",
         "definition": "CREATE TRIGGER sponsor_updated_at_trigger BEFORE UPDATE ON public.sponsor FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk",
+        "name": "talk_created_note",
+        "timing": "AFTER",
+        "events": [
+          "INSERT"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.note_created_record",
+        "definition": "CREATE TRIGGER talk_created_note AFTER INSERT ON public.talk FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id')",
         "enabled": true,
         "comment": null
       },
@@ -3419,6 +3485,29 @@
       },
       {
         "schema": "_supatype",
+        "name": "created_in_this_transaction",
+        "identityArguments": "p_table text, p_record text",
+        "identityTypes": "text, text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": true,
+        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM _supatype.created_records c\n       WHERE c.\"xact\" = pg_current_xact_id_if_assigned()\n         AND c.\"model_table\" = p_table\n         AND c.\"record_id\" = p_record\n    );\n  ",
+        "comment": null,
+        "arguments": "p_table text, p_record text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.created_in_this_transaction(p_table text, p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM _supatype.created_records c\n       WHERE c.\"xact\" = pg_current_xact_id_if_assigned()\n         AND c.\"model_table\" = p_table\n         AND c.\"record_id\" = p_record\n    );\n  $function$\n",
+        "acl": []
+      },
+      {
+        "schema": "_supatype",
         "name": "default_locales",
         "identityArguments": "entry _supatype.versioned_models",
         "identityTypes": "_supatype.versioned_models",
@@ -3697,6 +3786,55 @@
       },
       {
         "schema": "_supatype",
+        "name": "newest_created_record",
+        "identityArguments": "p_table text",
+        "identityTypes": "text",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": true,
+        "body": "\n    SELECT c.\"record_id\" FROM _supatype.created_records c\n     WHERE c.\"xact\" = pg_current_xact_id_if_assigned() AND c.\"model_table\" = p_table\n     ORDER BY c.\"seq\" DESC LIMIT 1;\n  ",
+        "comment": null,
+        "arguments": "p_table text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.newest_created_record(p_table text)\n RETURNS text\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT c.\"record_id\" FROM _supatype.created_records c\n     WHERE c.\"xact\" = pg_current_xact_id_if_assigned() AND c.\"model_table\" = p_table\n     ORDER BY c.\"seq\" DESC LIMIT 1;\n  $function$\n",
+        "acl": [
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "note_created_record",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": true,
+        "body": "\n  BEGIN\n    INSERT INTO _supatype.created_records (\"xact\", \"model_table\", \"record_id\")\n    VALUES (pg_current_xact_id(), TG_TABLE_NAME, to_jsonb(NEW) ->> TG_ARGV[0]);\n    RETURN NULL;\n  END;\n  ",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.note_created_record()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    INSERT INTO _supatype.created_records (\"xact\", \"model_table\", \"record_id\")\n    VALUES (pg_current_xact_id(), TG_TABLE_NAME, to_jsonb(NEW) ->> TG_ARGV[0]);\n    RETURN NULL;\n  END;\n  $function$\n",
+        "acl": []
+      },
+      {
+        "schema": "_supatype",
         "name": "page_versions_guard",
         "identityArguments": "",
         "identityTypes": "",
@@ -3808,7 +3946,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": true,
-        "body": "\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n    RETURN removed;\n  END;\n  ",
+        "body": "\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n\n    -- And the notes of transactions that have ended, which no caller can match any more.\n    DELETE FROM _supatype.created_records\n     WHERE pg_xact_status(\"xact\") IS DISTINCT FROM 'in progress';\n    RETURN removed;\n  END;\n  ",
         "comment": null,
         "arguments": "",
         "config": [
@@ -3819,7 +3957,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_versions()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n    RETURN removed;\n  END;\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_versions()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n\n    -- And the notes of transactions that have ended, which no caller can match any more.\n    DELETE FROM _supatype.created_records\n     WHERE pg_xact_status(\"xact\") IS DISTINCT FROM 'in progress';\n    RETURN removed;\n  END;\n  $function$\n",
         "acl": []
       },
       {
@@ -3905,7 +4043,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": true,
-        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('page', v.\"record_id\"::text)\n         )\n    );\n  ",
+        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('page', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('page', p_record);\n  ",
         "comment": null,
         "arguments": "p_record text",
         "config": [
@@ -3916,7 +4054,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_page(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('page', v.\"record_id\"::text)\n         )\n    );\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_page(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('page', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('page', p_record);\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "anon=EXECUTE",
@@ -3933,7 +4071,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": true,
-        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('speaker', v.\"record_id\"::text)\n         )\n    );\n  ",
+        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('speaker', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('speaker', p_record);\n  ",
         "comment": null,
         "arguments": "p_record text",
         "config": [
@@ -3944,7 +4082,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_speaker(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('speaker', v.\"record_id\"::text)\n         )\n    );\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_speaker(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('speaker', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('speaker', p_record);\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "anon=EXECUTE",
@@ -3961,7 +4099,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": true,
-        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('talk', v.\"record_id\"::text)\n         )\n    );\n  ",
+        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('talk', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('talk', p_record);\n  ",
         "comment": null,
         "arguments": "p_record text",
         "config": [
@@ -3972,7 +4110,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_talk(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('talk', v.\"record_id\"::text)\n         )\n    );\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_talk(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('talk', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('talk', p_record);\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "anon=EXECUTE",
@@ -5153,7 +5291,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created jsonb;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created;\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)\n          RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created USING live;\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, created ->> entry.\"primary_key\", data);\n  END;\n  ",
+        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created text;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and\n    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the\n    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',\n        entry.\"schema_name\", entry.\"table_name\");\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        USING live;\n    END IF;\n\n    created := _supatype.newest_created_record(model_table);\n    RETURN \"supatype\".create_draft(model_table, created, data);\n  END;\n  ",
         "comment": null,
         "arguments": "model_table text, data jsonb",
         "config": [
@@ -5164,7 +5302,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.create_record(model_table text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created jsonb;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created;\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)\n          RETURNING to_jsonb(t)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        INTO created USING live;\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, created ->> entry.\"primary_key\", data);\n  END;\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.create_record(model_table text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created text;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and\n    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the\n    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',\n        entry.\"schema_name\", entry.\"table_name\");\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        USING live;\n    END IF;\n\n    created := _supatype.newest_created_record(model_table);\n    RETURN \"supatype\".create_draft(model_table, created, data);\n  END;\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "authenticated=EXECUTE",
@@ -5364,9 +5502,35 @@
         "comment": null
       }
     ],
-    "sequences": [],
+    "sequences": [
+      {
+        "schema": "_supatype",
+        "name": "created_records_seq_seq",
+        "ownedBy": "created_records.seq",
+        "comment": null
+      }
+    ],
     "enumTypes": [],
     "tableGrants": [
+      {
+        "schema": "_supatype",
+        "table": "created_records",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
       {
         "schema": "_supatype",
         "table": "preview_links",
@@ -6103,6 +6267,13 @@
     "securityLabels": [],
     "cronJobs": [],
     "rlsAttributes": [
+      {
+        "schema": "_supatype",
+        "table": "created_records",
+        "enabled": false,
+        "forced": false,
+        "replicaIdentity": "d"
+      },
       {
         "schema": "_supatype",
         "table": "preview_links",
@@ -7018,6 +7189,55 @@
         "tables": [
           {
             "schema": "_supatype",
+            "name": "created_records",
+            "columns": [
+              {
+                "name": "seq",
+                "dataType": "bigint",
+                "udtName": "int8",
+                "nullable": false,
+                "default": null,
+                "ordinalPosition": 1,
+                "numericPrecision": 64,
+                "numericScale": 0,
+                "isIdentity": true,
+                "identityGeneration": "ALWAYS"
+              },
+              {
+                "name": "xact",
+                "dataType": "xid8",
+                "udtName": "xid8",
+                "nullable": false,
+                "default": null,
+                "ordinalPosition": 2,
+                "numericPrecision": null,
+                "numericScale": null
+              },
+              {
+                "name": "model_table",
+                "dataType": "text",
+                "udtName": "text",
+                "nullable": false,
+                "default": null,
+                "ordinalPosition": 3,
+                "numericPrecision": null,
+                "numericScale": null
+              },
+              {
+                "name": "record_id",
+                "dataType": "text",
+                "udtName": "text",
+                "nullable": false,
+                "default": null,
+                "ordinalPosition": 4,
+                "numericPrecision": null,
+                "numericScale": null
+              }
+            ],
+            "comment": null
+          },
+          {
+            "schema": "_supatype",
             "name": "preview_links",
             "columns": [
               {
@@ -7300,6 +7520,40 @@
         ],
         "indexes": [
           {
+            "table": "created_records",
+            "name": "created_records_by_transaction",
+            "columns": [
+              "xact",
+              "model_table",
+              "record_id"
+            ],
+            "unique": false,
+            "method": "btree",
+            "isPrimary": false,
+            "comment": null,
+            "expressions": null,
+            "predicate": null,
+            "definition": "CREATE INDEX created_records_by_transaction ON _supatype.created_records USING btree (xact, model_table, record_id)",
+            "include": [],
+            "options": ""
+          },
+          {
+            "table": "created_records",
+            "name": "created_records_pkey",
+            "columns": [
+              "seq"
+            ],
+            "unique": true,
+            "method": "btree",
+            "isPrimary": true,
+            "comment": null,
+            "expressions": null,
+            "predicate": null,
+            "definition": "CREATE UNIQUE INDEX created_records_pkey ON _supatype.created_records USING btree (seq)",
+            "include": [],
+            "options": ""
+          },
+          {
             "table": "preview_links",
             "name": "preview_links_live_for_record",
             "columns": [
@@ -7366,6 +7620,21 @@
           }
         ],
         "constraints": [
+          {
+            "table": "created_records",
+            "name": "created_records_pkey",
+            "constraintType": "primaryKey",
+            "columns": [
+              "seq"
+            ],
+            "foreignTable": null,
+            "foreignSchema": null,
+            "foreignColumns": null,
+            "checkExpression": null,
+            "onDelete": null,
+            "definition": null,
+            "comment": null
+          },
           {
             "table": "preview_links",
             "name": "preview_links_pkey",

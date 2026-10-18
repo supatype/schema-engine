@@ -867,6 +867,10 @@ impl ObjectNames {
                 self.pick(table, "versions_audit", "", || {
                     choose_free(&mut [&mut helper, &mut triggers], &vt, None, "audit")
                 });
+                // A drafts model's table notes each row it gains, for the inserting transaction.
+                self.pick(table, "created_note", "", || {
+                    triggers.choose(table, None, "created_note")
+                });
             }
             self.pick(table, "write_function", "", || {
                 api.choose(table, None, "_write")
@@ -967,6 +971,13 @@ impl ObjectNames {
     pub fn versions_guard(&self, table: &str, versions_table: &str) -> String {
         self.named(table, "versions_guard", "", || {
             make_object_name(versions_table, None, "guard")
+        })
+    }
+
+    /// `{table}_created_note`, the trigger on a drafts model's table that notes each new row.
+    pub fn created_note_trigger(&self, table: &str) -> String {
+        self.named(table, "created_note", "", || {
+            make_object_name(table, None, "created_note")
         })
     }
 
