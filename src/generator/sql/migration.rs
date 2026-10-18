@@ -670,6 +670,24 @@ impl Migration {
         Ok(migration)
     }
 
+    /// This migration with `statements` last in its transaction: the data a push moves once
+    /// every change to the tables has been made (block entries kept in the flat shape, say). The
+    /// hash covers them, so the history records the migration that ran. Their effect on the rows
+    /// is not undone by a rollback, which the rollback section says.
+    pub fn with_data_section(mut self, header: &str, statements: Vec<String>) -> Migration {
+        if statements.is_empty() {
+            return self;
+        }
+        self.body.push(format!("-- {header}"));
+        self.body.extend(statements);
+        self.body.push(String::new());
+        // Newest effect first, as the rest of `down` is ordered.
+        self.down
+            .insert(0, format!("-- Not undone, the rows keep it: {header}"));
+        self.hash = migration_hash(&self.hashed());
+        self
+    }
+
     /// What [`Migration::hash`] is taken over: [`Migration::up`], then what runs after commit.
     fn hashed(&self) -> String {
         let after = self.after_commit.statements();

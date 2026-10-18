@@ -4,6 +4,7 @@ pub mod constraint_helpers;
 pub mod constraints;
 pub mod extensions;
 pub mod field_views;
+pub mod flat_blocks;
 pub mod grants;
 pub mod junction_access;
 pub mod migration;
