@@ -2,7 +2,7 @@
 
 use crate::differ::Risk;
 use crate::parser::ast::{BlocksFieldAst, DefaultValueAst, FieldAst, ScalarFieldAst};
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{quote_ident, quote_literal, quote_qualified, raise_message};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,21 +191,54 @@ fn storage_ref_from_text_expr(col: &str, bucket: &str) -> String {
     )
 }
 
-fn blocks_wrap_expr(col: &str, block_name: &str) -> String {
-    let name = quote_literal(block_name);
+/// One stored value as a block entry: kept when it already is one (a string `type` beside an object
+/// `data`), else the whole object becomes the `data` of a `block_name` entry.
+fn block_entry_expr(value: &str, block_name: &str) -> String {
     format!(
-        "CASE WHEN {col} IS NULL THEN NULL \
-         WHEN jsonb_typeof({col}) = 'array' AND EXISTS (\
-           SELECT 1 FROM jsonb_array_elements({col}) elem \
-           WHERE elem ? 'type' AND elem ? 'data'\
-         ) THEN {col} \
-         WHEN jsonb_typeof({col}) = 'object' THEN \
-           jsonb_build_array(jsonb_build_object('type', {name}, 'data', {col})) \
-         ELSE jsonb_build_array(jsonb_build_object(\
-           'type', {name}, 'data', jsonb_build_object('value', {col})\
-         )) END",
-        col = col,
-        name = name,
+        "CASE WHEN jsonb_typeof({value}->'type') = 'string' \
+           AND jsonb_typeof({value}->'data') = 'object' THEN {value} \
+         ELSE jsonb_build_object('type', {name}, 'data', {value}) END",
+        name = quote_literal(block_name),
+    )
+}
+
+/// JSON to blocks: an object is one entry, an array is one entry per element in order, and `[]`
+/// stays `[]`. SQL NULL and JSON `null` are left as they are.
+///
+/// A value that is not an object, at the top or as an element, is refused before anything is
+/// written ([`blocks_refusal_sql`]): a block keeps its fields in an object under `data`, so a
+/// string or a number has no field to go in. Wrapping it as `{ "value": ... }` kept it in the row,
+/// but under a key no block declares, so Studio showed an empty block and the value could no
+/// longer be seen or edited anywhere.
+fn json_to_blocks_sql(target: &str, col: &str, table: &str, column: &str, block: &str) -> String {
+    let each = block_entry_expr("e.elem", block);
+    let one = block_entry_expr(col, block);
+    format!(
+        "{refusal}\nUPDATE {target} SET {col} = CASE \
+           WHEN jsonb_typeof({col}) = 'object' THEN jsonb_build_array({one}) \
+           ELSE (SELECT COALESCE(jsonb_agg({each} ORDER BY e.ord), '[]'::jsonb) \
+                 FROM jsonb_array_elements({col}) WITH ORDINALITY AS e(elem, ord)) END \
+         WHERE jsonb_typeof({col}) IN ('object', 'array');",
+        refusal = blocks_refusal_sql(target, col, table, column),
+    )
+}
+
+/// Raises, naming the column, when any row holds a value [`json_to_blocks_sql`] cannot convert.
+fn blocks_refusal_sql(target: &str, col: &str, table: &str, column: &str) -> String {
+    let refused = raise_message(&format!(
+        "Cannot convert {table}.{column} to blocks: a value is not an object. Each block keeps its \
+         fields in an object, so every value must be an object or an array of objects. Change or \
+         remove the values that are not, then push again."
+    ));
+    format!(
+        "DO $$ BEGIN\n  \
+         IF EXISTS (SELECT 1 FROM {target} t \
+           WHERE jsonb_typeof(t.{col}) NOT IN ('object', 'array', 'null') \
+              OR (jsonb_typeof(t.{col}) = 'array' AND EXISTS (\
+                SELECT 1 FROM jsonb_array_elements(t.{col}) e WHERE jsonb_typeof(e) <> 'object'))) THEN\n    \
+         RAISE EXCEPTION {refused};\n  \
+         END IF;\n\
+         END $$;"
     )
 }
 
@@ -315,10 +348,7 @@ pub fn kind_migrate_pre_update(
         )),
         ("json", "blocks") => {
             let block = first_block_name(target_field).unwrap_or_else(|| "block".into());
-            Some(format!(
-                "UPDATE {target} SET {col} = {expr} WHERE {col} IS NOT NULL;",
-                expr = blocks_wrap_expr(&col, &block),
-            ))
+            Some(json_to_blocks_sql(&target, &col, table, column, &block))
         }
         ("blocks", "richText") => {
             let array_text = format!(
