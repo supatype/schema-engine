@@ -29,6 +29,7 @@ use crate::desired::{
 };
 use crate::differ::rewrites::{self, TableRewrite};
 use crate::differ::{self, DiffOutput, FieldMaskingTier, Operation};
+use crate::flat_blocks::BlockMove;
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
 use crate::generator::sql::online::{AfterCommit, OnlineTables};
@@ -130,7 +131,14 @@ pub struct Plan<'a> {
     /// Which of the tables the push changes hold rows, and what an earlier push left to finish:
     /// what decides the statements that run online (IN-C 2).
     pub online: OnlineTables,
+    /// The `Blocks` columns holding entries in the flat shape, which the migration moves to
+    /// `{ type, data }` last in its transaction.
+    pub block_moves: Vec<BlockMove>,
 }
+
+/// The heading of the migration's section that moves flat block entries.
+const BLOCK_MOVES_HEADER: &str =
+    "block entries kept in the flat shape, moved to { type, data, meta? } (0.7.0)";
 
 /// The ledger and the live objects a reconcile was decided from, each in key order.
 ///
@@ -206,38 +214,53 @@ impl Plan<'_> {
     pub fn to_json(&self) -> Result<serde_json::Value> {
         let mut json = serde_json::to_value(&self.diff)?;
         json["reconcile"] = serde_json::to_value(&self.reconcile.actions)?;
+        json["blockConversions"] = self.block_moves.iter().map(BlockMove::to_json).collect();
         Ok(json)
     }
 
-    /// Whether applying this plan writes a migration: a DDL operation or a reconcile change.
+    /// Whether applying this plan writes a migration: a DDL operation, a reconcile change or block
+    /// entries to move.
     pub fn has_changes(&self) -> bool {
-        !self.diff.operations.is_empty() || self.reconcile.has_changes()
+        !self.diff.operations.is_empty()
+            || self.reconcile.has_changes()
+            || !self.block_moves.is_empty()
     }
 
     /// The one migration this plan is: what `supatype migrate` prints, what `apply` runs and what
     /// the history records. On a table with rows an index is built, and a key or check validated,
     /// after the transaction commits.
     pub fn migration(&self, force: bool) -> Result<Migration> {
-        Migration::render_online(
+        let migration = Migration::render_online(
             &self.diff,
             &self.reconcile.actions,
             force,
             &self.schema,
             &self.ast,
             &self.online,
-        )
+        )?;
+        Ok(self.with_block_moves(migration))
     }
 
     /// [`Plan::migration`] with every statement in the transaction, as `migrate --record`
     /// rehearses it.
     pub fn migration_in_transaction(&self, force: bool) -> Result<Migration> {
-        Migration::render(
+        let migration = Migration::render(
             &self.diff,
             &self.reconcile.actions,
             force,
             &self.schema,
             &self.ast,
-        )
+        )?;
+        Ok(self.with_block_moves(migration))
+    }
+
+    fn with_block_moves(&self, migration: Migration) -> Migration {
+        let statements = self
+            .block_moves
+            .iter()
+            .flat_map(|m| m.statements(&self.schema))
+            .collect();
+        migration.with_data_section(BLOCK_MOVES_HEADER, statements)
     }
 }
 
@@ -409,14 +432,12 @@ pub(crate) async fn plan_on<'a>(
     // Supatype since, so `diff` showed one plan and push applied another.
     // Which tables are ours is the ledger's to say (Phase 4.11), so the table and column differs
     // drop, rename and attach rules only where it does: `read_state` puts that in the state.
-    let (
-        state,
-        Decision {
-            mut diff,
-            reconcile,
-            ..
-        },
-    ) = read_and_decide(conn, ast, schema).await?;
+    let (state, decision) = read_and_decide(conn, ast, schema).await?;
+    let Decision {
+        mut diff,
+        reconcile,
+        ..
+    } = decision;
 
     // An unchanged schema produces an empty diff, so the renderer's own check would never run and
     // the push would report success while a declared table sat in the API with none of its rules
@@ -424,14 +445,13 @@ pub(crate) async fn plan_on<'a>(
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
     let sizes = table_sizes(conn, schema, &diff, &reconcile).await?;
-    let estimates: BTreeMap<String, i64> = sizes.iter().map(|(t, s)| (t.clone(), s.rows)).collect();
-    diff.rewrites = rewrites::rewrites(&diff, &estimates);
-    let flagged: Vec<String> = diff.rewrites.iter().map(TableRewrite::message).collect();
-    diff.warnings.extend(flagged);
+    flag_rewrites(&mut diff, &sizes);
     let online = online_tables(&state, &reconcile, &sizes, schema);
+    let block_moves = crate::flat_blocks::plan(conn, ast, (&state, &mut diff), schema).await?;
 
     Ok(Plan {
         online,
+        block_moves,
         // Rendered with the names the ledger records, as the decision was (F2d).
         ast: with_recorded_names(ast, &state.ledger, schema),
         schema: schema.to_string(),
@@ -439,6 +459,15 @@ pub(crate) async fn plan_on<'a>(
         reconcile,
         inputs: ReconcileInputs::of(&state),
     })
+}
+
+/// The operations of `diff` that rewrite a table under a lock, each with the table's estimated
+/// rows from `sizes`, and a warning for each.
+fn flag_rewrites(diff: &mut DiffOutput, sizes: &BTreeMap<String, crate::online::TableSize>) {
+    let estimates: BTreeMap<String, i64> = sizes.iter().map(|(t, s)| (t.clone(), s.rows)).collect();
+    diff.rewrites = rewrites::rewrites(diff, &estimates);
+    let flagged: Vec<String> = diff.rewrites.iter().map(TableRewrite::message).collect();
+    diff.warnings.extend(flagged);
 }
 
 /// What a push decides against `state`: the migration diff, gated on the ledger, and the reconcile,
@@ -1642,14 +1671,22 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
     if let Some(unfinished) = unfinished {
         crate::online::finished(unfinished?, Some(&rendered.name))?;
     }
-    let operations = plan.diff.operations.len() + rendered.migration.reconciled;
+    Ok(applied_outcome(plan, rendered, applied))
+}
+
+/// What a push that applied its migration reports: what it counted, the plan's warnings, what the
+/// database looked like once applied, and what it moved of each column's flat block entries.
+fn applied_outcome(plan: Plan<'_>, rendered: Rendered, applied: Applied) -> Outcome {
+    let operations =
+        plan.diff.operations.len() + rendered.migration.reconciled + plan.block_moves.len();
     let mut warnings = plan.diff.warnings;
     warnings.extend(applied.drift_warnings);
-    Ok(Outcome::Applied {
+    warnings.extend(applied.converted);
+    Outcome::Applied {
         name: rendered.name,
         operations,
         warnings,
-    })
+    }
 }
 
 /// The migration's transaction, tried again while it gives up on a lock, under the engine's lock
@@ -1760,6 +1797,8 @@ struct Applied {
     studio_metadata: Option<(serde_json::Value, serde_json::Value)>,
     /// The history row this push wrote.
     migration_id: i32,
+    /// What the push moved of each column's flat block entries, as it reports it.
+    converted: Vec<String>,
 }
 
 /// The writes, in order. Any error here rolls the whole transaction back and records a failed
@@ -1770,6 +1809,8 @@ async fn within_transaction(
     strict: bool,
     rendered: &Rendered,
 ) -> Result<Applied> {
+    // Counted in this transaction, before the move, so what is reported is what it moved.
+    let converted = crate::flat_blocks::converted(tx, &plan.block_moves, &plan.schema).await?;
     apply_statements(tx, plan, rendered).await?;
     let after = live(tx, &plan.schema)
         .await
@@ -1777,9 +1818,24 @@ async fn within_transaction(
     let schema_snap = serde_json::to_value(&plan.ast).ok();
     let admin_cfg = admin::generate(&plan.ast).ok();
     let metadata = (admin_cfg.clone(), schema_snap.clone());
-    let migration_id = record_push(tx, plan, rendered, &after, metadata).await?;
+    let migration_id = record_push(tx, plan, (rendered, &converted), &after, metadata).await?;
+    let drift_warnings = check_after_push(tx, (plan, rendered), after, strict).await?;
+    Ok(Applied {
+        drift_warnings,
+        studio_metadata: admin_cfg.zip(schema_snap),
+        migration_id,
+        converted,
+    })
+}
 
-    // Checked last, with the rows just written, so it reads the database as the next push will.
+/// The database as the next push will read it, compared with the schema: what differs, which in
+/// strict mode rolls the push back. Checked last, with the rows just written.
+async fn check_after_push(
+    tx: &mut PgConnection,
+    (plan, rendered): (&Plan<'_>, &Rendered),
+    after: Live,
+    strict: bool,
+) -> Result<Vec<String>> {
     let deferred = rendered.migration.after_commit.unfinished_keys();
     let state = after_push(after, tx).await?;
     let check = differ::integrity::post_push(&plan.ast, &state, &deferred);
@@ -1789,12 +1845,17 @@ async fn within_transaction(
             check.warnings.join("; ")
         );
     }
+    Ok(check.warnings)
+}
 
-    Ok(Applied {
-        drift_warnings: check.warnings,
-        studio_metadata: admin_cfg.zip(schema_snap),
-        migration_id,
-    })
+/// `sql_up` with each of `notes` after it as a comment, so the history says what the statements
+/// did to the rows as well as what they were.
+fn with_notes(sql_up: String, notes: &[String]) -> String {
+    if notes.is_empty() {
+        return sql_up;
+    }
+    let lines: Vec<String> = notes.iter().map(|n| format!("-- {n}")).collect();
+    format!("{sql_up}\n\n{}", lines.join("\n"))
 }
 
 /// What a push records once its statements ran: the history row, the ledger, the schema state
@@ -1802,17 +1863,18 @@ async fn within_transaction(
 async fn record_push(
     tx: &mut PgConnection,
     plan: &Plan<'_>,
-    rendered: &Rendered,
+    (rendered, converted): (&Rendered, &[String]),
     after: &Live,
     (admin_cfg, schema_snap): (Option<serde_json::Value>, Option<serde_json::Value>),
 ) -> Result<i32> {
+    let sql_up = with_notes(rendered.migration.recorded_up(), converted);
     let migration_id = migration_history::insert_applied_migration(
         &mut *tx,
         &rendered.name,
         &rendered.migration.hash,
         schema_snap,
         admin_cfg,
-        &rendered.migration.recorded_up(),
+        &sql_up,
         &rendered.sources,
     )
     .await
@@ -1820,6 +1882,18 @@ async fn record_push(
     refused_push::supersede(tx)
         .await
         .context("Failed to supersede earlier refused pushes")?;
+    record_objects(tx, (plan, rendered), after, migration_id).await?;
+    Ok(migration_id)
+}
+
+/// The ledger rows for what migration `migration_id` made, the schema state cache and the field
+/// enforcement in use.
+async fn record_objects(
+    tx: &mut PgConnection,
+    (plan, rendered): (&Plan<'_>, &Rendered),
+    after: &Live,
+    migration_id: i32,
+) -> Result<()> {
     let recording = Recording {
         plan: &plan.reconcile,
         after: &after.fingerprints,
@@ -1838,7 +1912,7 @@ async fn record_push(
     if let Err(e) = migration_history::record_field_enforcement(tx, &plan.ast, &plan.schema).await {
         eprintln!("Warning: failed to record field-enforcement capability: {e}");
     }
-    Ok(migration_id)
+    Ok(())
 }
 
 /// Re-reads what the reconcile was decided from, refuses if it moved, and runs the migration's

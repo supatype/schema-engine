@@ -1,0 +1,459 @@
+{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Page",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "localized": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "slug": {
+          "kind": "slug",
+          "required": true,
+          "from": "title",
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "summary": {
+          "kind": "text",
+          "required": false,
+          "sources": [
+            "title"
+          ],
+          "check": "char_length(\"{name}\") <= 200",
+          "validation": {
+            "maxLength": 200
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "body": {
+          "kind": "blocks",
+          "required": true,
+          "blocks": [
+            {
+              "name": "hero",
+              "label": "Hero",
+              "icon": "megaphone",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": true,
+                  "unique": false,
+                  "localized": true
+                },
+                "subheading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": true
+                },
+                "cta": {
+                  "kind": "button",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            },
+            {
+              "name": "prose",
+              "label": "Prose",
+              "icon": "text",
+              "fields": {
+                "body": {
+                  "kind": "richText",
+                  "pgType": "JSONB",
+                  "required": true,
+                  "unique": false,
+                  "localized": true
+                }
+              }
+            },
+            {
+              "name": "speakerGrid",
+              "label": "Speaker grid",
+              "icon": "users",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": true
+                },
+                "limit": {
+                  "kind": "integer",
+                  "pgType": "INTEGER",
+                  "required": true,
+                  "unique": false,
+                  "localized": false,
+                  "check": "(\"{name}\" >= 3) AND (\"{name}\" <= 24)",
+                  "validation": {
+                    "min": 3,
+                    "max": 24
+                  }
+                }
+              }
+            }
+          ],
+          "check": "jsonb_typeof(\"{name}\") = 'array' AND jsonb_array_length(\"{name}\") <= 20",
+          "validation": {
+            "maxItems": 20
+          },
+          "index": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true,
+        "versions": {
+          "drafts": true,
+          "keep": 20
+        }
+      },
+      "annotations": {
+        "db": {
+          "tableName": "page",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "compare",
+              "op": "lte",
+              "left": {
+                "kind": "column",
+                "name": "published_at"
+              },
+              "right": {
+                "kind": "now"
+              }
+            },
+            "create": {
+              "type": "role",
+              "roles": [
+                "editor"
+              ]
+            },
+            "update": {
+              "type": "role",
+              "roles": [
+                "editor"
+              ]
+            },
+            "delete": {
+              "type": "role",
+              "roles": [
+                "editor"
+              ]
+            }
+          },
+          "cache": {
+            "enabled": true,
+            "maxTtl": 300,
+            "public": true,
+            "rows": true
+          }
+        }
+      }
+    },
+    {
+      "name": "Section",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "body": {
+          "kind": "blocks",
+          "required": false,
+          "blocks": [
+            {
+              "name": "hero",
+              "label": "Hero",
+              "icon": "megaphone",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": true,
+                  "unique": false,
+                  "localized": true
+                },
+                "subheading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": true
+                },
+                "cta": {
+                  "kind": "button",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            },
+            {
+              "name": "prose",
+              "label": "Prose",
+              "icon": "text",
+              "fields": {
+                "body": {
+                  "kind": "richText",
+                  "pgType": "JSONB",
+                  "required": true,
+                  "unique": false,
+                  "localized": true
+                }
+              }
+            },
+            {
+              "name": "speakerGrid",
+              "label": "Speaker grid",
+              "icon": "users",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": true
+                },
+                "limit": {
+                  "kind": "integer",
+                  "pgType": "INTEGER",
+                  "required": true,
+                  "unique": false,
+                  "localized": false,
+                  "check": "(\"{name}\" >= 3) AND (\"{name}\" <= 24)",
+                  "validation": {
+                    "min": 3,
+                    "max": 24
+                  }
+                }
+              }
+            }
+          ],
+          "index": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "localizedBody": {
+          "kind": "blocks",
+          "required": false,
+          "blocks": [
+            {
+              "name": "hero",
+              "label": "Hero",
+              "icon": "megaphone",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": true,
+                  "unique": false,
+                  "localized": true
+                },
+                "subheading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": true
+                },
+                "cta": {
+                  "kind": "button",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": false
+                }
+              }
+            },
+            {
+              "name": "prose",
+              "label": "Prose",
+              "icon": "text",
+              "fields": {
+                "body": {
+                  "kind": "richText",
+                  "pgType": "JSONB",
+                  "required": true,
+                  "unique": false,
+                  "localized": true
+                }
+              }
+            },
+            {
+              "name": "speakerGrid",
+              "label": "Speaker grid",
+              "icon": "users",
+              "fields": {
+                "heading": {
+                  "kind": "text",
+                  "pgType": "JSONB",
+                  "required": false,
+                  "unique": false,
+                  "localized": true
+                },
+                "limit": {
+                  "kind": "integer",
+                  "pgType": "INTEGER",
+                  "required": true,
+                  "unique": false,
+                  "localized": false,
+                  "check": "(\"{name}\" >= 3) AND (\"{name}\" <= 24)",
+                  "validation": {
+                    "min": 3,
+                    "max": 24
+                  }
+                }
+              }
+            }
+          ],
+          "index": true,
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          },
+          "localized": true
+        }
+      },
+      "options": {
+        "timestamps": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "section",
+          "indexes": []
+        },
+        "platform": {
+          "access": {}
+        }
+      }
+    }
+  ],
+  "locales": [
+    "en",
+    "fr"
+  ],
+  "defaultLocale": "en",
+  "publishing": {
+    "draftVisibility": [
+      "admin",
+      "developer",
+      "editor"
+    ],
+    "previewDefaultTtl": 900,
+    "previewMaxRecordTtl": 604800,
+    "previewMaxProjectTtl": 86400,
+    "previewAllowProjectScope": true
+  }
+}
