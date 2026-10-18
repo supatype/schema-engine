@@ -1203,6 +1203,27 @@ CREATE OR REPLACE FUNCTION "supatype".create_record(model_table text, data jsonb
 
 GRANT EXECUTE ON FUNCTION "supatype".create_record(text, jsonb) TO authenticated, service_role;
 
+CREATE OR REPLACE FUNCTION "supatype".create_records(model_table text, data jsonb)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    item jsonb;
+    created jsonb := '[]'::jsonb;
+  BEGIN
+    IF jsonb_typeof(data) IS DISTINCT FROM 'array' THEN
+      RAISE EXCEPTION 'create_records takes a JSON array of records, not %', COALESCE(jsonb_typeof(data), 'null')
+        USING ERRCODE = '22023',
+              HINT = 'Send one object per record, or call create_record for a single one.';
+    END IF;
+
+    FOR item IN SELECT value FROM jsonb_array_elements(data) WITH ORDINALITY ORDER BY ordinality LOOP
+      created := created || jsonb_build_array("supatype".create_record(model_table, item));
+    END LOOP;
+    RETURN created;
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION "supatype".create_records(text, jsonb) TO authenticated, service_role;
+
 REVOKE ALL ON SCHEMA "draft" FROM anon;
 GRANT USAGE ON SCHEMA "draft" TO authenticated, service_role;
 
