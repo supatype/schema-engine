@@ -1,2 +1,9 @@
 # Shell scripts run under bash on every platform, which a CRLF checkout breaks.
 *.sh text eol=lf
+
+# THIRD-PARTY-NOTICES is cargo-about output, and CI fails unless a fresh generation matches it byte
+# for byte. Some dependencies ship their licence with CRLF line endings and cargo-about copies them
+# verbatim, so git must store the file exactly as generated and never convert its line endings.
+THIRD-PARTY-NOTICES -text
+# The template must render the same on every platform, so it is never checked out with CRLF.
+about.hbs text eol=lf
