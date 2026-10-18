@@ -1850,3 +1850,94 @@ async fn an_insert_that_conflicts_with_a_hidden_record_is_not_shown_it() {
     })
     .await;
 }
+
+/// How many `posts` rows hold this title, counted as the table's owner rather than as a caller.
+async fn posts_titled(pool: &sqlx::PgPool, title: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM public.posts WHERE title = $1")
+        .bind(title)
+        .fetch_one(pool)
+        .await
+        .expect("count posts by title")
+}
+
+/// Several records in one call, as the client's multi-row insert sends them: each created as its
+/// first draft, answered in the order given, and visible to its author afterwards.
+#[tokio::test]
+async fn an_api_editor_creates_several_records_in_one_call() {
+    as_api_editor(|db| {
+        Box::pin(async move {
+            let created: serde_json::Value = sqlx::query_scalar(
+                r#"SELECT supatype.create_records('posts', '[{"title": "Batch one"}, {"title": "Batch two"}]')"#,
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("an editor creates two records in one call");
+            let answers = created.as_array().expect("an array, one answer per record");
+            assert_eq!(answers.len(), 2, "{created}");
+            for (answer, title) in answers.iter().zip(["Batch one", "Batch two"]) {
+                assert_eq!(answer["version"], 1, "{created}");
+                let id = answer["record_id"].as_str().expect("a record id");
+                let drafted: Option<String> =
+                    sqlx::query_scalar("SELECT title FROM draft.posts WHERE id = $1::uuid")
+                        .bind(id)
+                        .fetch_optional(&mut *db)
+                        .await
+                        .expect("read the draft view");
+                assert_eq!(drafted.as_deref(), Some(title), "answers come in the order given");
+            }
+        })
+    })
+    .await;
+}
+
+/// All or nothing: a record the database refuses takes the ones before it in the same call with it.
+#[tokio::test]
+async fn a_refused_record_leaves_none_of_the_call_created() {
+    common::with_integration_pool(|pool| async move {
+        let _guard = FIXTURE_LOCK.lock().await;
+        common::push(&pool, &withheld_ast()).await.expect("the withheld fixture pushes");
+        let mut conn = pool.acquire().await.expect("acquire one connection");
+        become_api_editor(&mut conn, EDITOR).await;
+        conn.execute("SET ROLE authenticated").await.expect("become authenticated");
+
+        // `title` is required, so the second record fails its NOT NULL after the first was inserted.
+        let refused = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"SELECT supatype.create_records('posts', '[{"title": "Only half"}, {"title": null}]')"#,
+        )
+        .fetch_one(&mut *conn)
+        .await
+        .expect_err("a record with no title must be refused");
+        let code = refused
+            .as_database_error()
+            .and_then(|e| e.code())
+            .map(|c| c.to_string());
+        assert_eq!(
+            code.as_deref(),
+            Some("23502"),
+            "refused by the missing title, not for another reason: {refused}"
+        );
+        assert_eq!(
+            posts_titled(&pool, "Only half").await,
+            0,
+            "the first record must not survive the second's refusal"
+        );
+    })
+    .await;
+}
+
+/// Anything but an array is refused up front, naming what to send.
+#[tokio::test]
+async fn create_records_refuses_anything_but_an_array() {
+    as_api_editor(|db| {
+        Box::pin(async move {
+            let refused = sqlx::query_scalar::<_, serde_json::Value>(
+                r#"SELECT supatype.create_records('posts', '{"title": "One"}')"#,
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect_err("an object is not an array of records");
+            assert!(refused.to_string().contains("JSON array"), "{refused}");
+        })
+    })
+    .await;
+}

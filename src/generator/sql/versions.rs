@@ -669,6 +669,7 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
     out.push_str(&registry_sql(ast, schema));
     out.push_str(&rpc_functions_sql(schema));
     out.push_str(&create_record_sql(schema));
+    out.push_str(&create_records_sql());
     out.push_str(&draft_schema_preamble());
     let names = crate::managed::ObjectNames::for_schema(ast);
 
@@ -1863,6 +1864,48 @@ fn create_record_sql(schema: &str) -> String {
   $fn$;
 
 GRANT EXECUTE ON FUNCTION {rpc_q}.create_record(text, jsonb) TO authenticated, service_role;
+
+"#
+    )
+}
+
+/// `supatype.create_records`: several new records of a model with drafts, all or none.
+///
+/// One call is one statement and so one transaction: if any record is refused (its create rule,
+/// a constraint, a bad value), none of them is created. The client sends a multi-row `insert` on a
+/// drafts model here, because a call to [`create_record_sql`]'s function per row would no longer be
+/// all or nothing, and PostgREST cannot batch an RPC: given an array body for `create_record` it ran
+/// only the first object and answered as if that were all.
+///
+/// `data` is a JSON array of the objects `create_record` takes, rather than `jsonb[]`, so the
+/// signature matches `create_record`'s and a PostgREST caller sends a plain JSON array. Each element
+/// goes through `create_record` itself, so the caller's rules, the localized columns written as `{}`,
+/// version 1 and the created-in-this-transaction visibility are exactly those of one record, and the
+/// key of each comes from its own insert's note. The answer is `create_record`'s for each element,
+/// in the order given.
+fn create_records_sql() -> String {
+    let rpc_q = quote_ident(RPC_SCHEMA);
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {rpc_q}.create_records(model_table text, data jsonb)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    item jsonb;
+    created jsonb := '[]'::jsonb;
+  BEGIN
+    IF jsonb_typeof(data) IS DISTINCT FROM 'array' THEN
+      RAISE EXCEPTION 'create_records takes a JSON array of records, not %', COALESCE(jsonb_typeof(data), 'null')
+        USING ERRCODE = '22023',
+              HINT = 'Send one object per record, or call create_record for a single one.';
+    END IF;
+
+    FOR item IN SELECT value FROM jsonb_array_elements(data) WITH ORDINALITY ORDER BY ordinality LOOP
+      created := created || jsonb_build_array({rpc_q}.create_record(model_table, item));
+    END LOOP;
+    RETURN created;
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION {rpc_q}.create_records(text, jsonb) TO authenticated, service_role;
 
 "#
     )

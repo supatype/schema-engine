@@ -2175,6 +2175,33 @@
       },
       {
         "schema": "supatype",
+        "name": "create_records",
+        "identityArguments": "model_table text, data jsonb",
+        "identityTypes": "text, jsonb",
+        "returnType": "jsonb",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\n  DECLARE\n    item jsonb;\n    created jsonb := '[]'::jsonb;\n  BEGIN\n    IF jsonb_typeof(data) IS DISTINCT FROM 'array' THEN\n      RAISE EXCEPTION 'create_records takes a JSON array of records, not %', COALESCE(jsonb_typeof(data), 'null')\n        USING ERRCODE = '22023',\n              HINT = 'Send one object per record, or call create_record for a single one.';\n    END IF;\n\n    FOR item IN SELECT value FROM jsonb_array_elements(data) WITH ORDINALITY ORDER BY ordinality LOOP\n      created := created || jsonb_build_array(\"supatype\".create_record(model_table, item));\n    END LOOP;\n    RETURN created;\n  END;\n  ",
+        "comment": null,
+        "arguments": "model_table text, data jsonb",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.create_records(model_table text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\n  DECLARE\n    item jsonb;\n    created jsonb := '[]'::jsonb;\n  BEGIN\n    IF jsonb_typeof(data) IS DISTINCT FROM 'array' THEN\n      RAISE EXCEPTION 'create_records takes a JSON array of records, not %', COALESCE(jsonb_typeof(data), 'null')\n        USING ERRCODE = '22023',\n              HINT = 'Send one object per record, or call create_record for a single one.';\n    END IF;\n\n    FOR item IN SELECT value FROM jsonb_array_elements(data) WITH ORDINALITY ORDER BY ordinality LOOP\n      created := created || jsonb_build_array(\"supatype\".create_record(model_table, item));\n    END LOOP;\n    RETURN created;\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "supatype",
         "name": "publish",
         "identityArguments": "model_table text, record_id text, version integer, locales text[]",
         "identityTypes": "text, text, integer, text[]",
