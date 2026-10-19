@@ -85,6 +85,7 @@ jobs:
             --test field_write_privileges_tests \
             --test versions_tests \
             --test admin_labels_tests \
+            --test admin_primary_key_tests \
             --test generated_types_contract_tests \
             --test generated_types_relationships_tests \
             --test generated_types_blocks_tests \

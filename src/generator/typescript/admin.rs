@@ -107,11 +107,10 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     let fields = build_fields_config(model, default_locale, ast);
     let list_columns = derive_list_columns(model, has_publishing, has_timestamps);
     let search_fields = derive_search_fields(model);
-    let default_sort = if has_timestamps {
-        json!({ "field": "created_at", "direction": "desc" })
-    } else {
-        json!({ "field": "id", "direction": "desc" })
-    };
+    // Every key column, so Studio can end each list order on something unique: two rows with the
+    // same sort value otherwise trade places between pages. Studio assumed `id` before this was sent.
+    let primary_key = crate::parser::accessors::primary_key_columns(model);
+    let default_sort = default_sort(has_timestamps, &primary_key);
 
     // Model constraints travel to Studio as the node the CLI parsed, not as SQL.
     //
@@ -185,8 +184,22 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         "listColumns": list_columns,
         "searchFields": search_fields,
         "defaultSort": default_sort,
+        "primaryKey": primary_key,
         "fields": fields,
     })
+}
+
+/// Newest first where the model has timestamps, otherwise its first key column descending.
+///
+/// The key, not `id`: a model keyed on another column has no `id`, and sorting on it was an error
+/// from PostgREST on every list load.
+fn default_sort(has_timestamps: bool, primary_key: &[String]) -> Value {
+    let field = if has_timestamps {
+        "created_at"
+    } else {
+        primary_key.first().map_or("id", String::as_str)
+    };
+    json!({ "field": field, "direction": "desc" })
 }
 
 fn has_composite(model: &ModelAst, key: &str) -> bool {
