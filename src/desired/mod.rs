@@ -24,11 +24,8 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 
 use crate::differ::{
-    column_diff::{expected_udt, field_is_primary_key},
-    constraint_diff::expected_column_uniques,
-    rls_diff::expected_policies,
-    table_diff::versions_record_id,
-    Operation, Risk,
+    column_diff::expected_udt, constraint_diff::expected_column_uniques,
+    rls_diff::expected_policies, table_diff::versions_record_id, Operation, Risk,
 };
 use crate::generator::sql::triggers::{self, PLATFORM_SCHEMA};
 use crate::generator::sql::{
@@ -58,7 +55,8 @@ use crate::managed::{
     membership_index_name, policy_name, ObjectNames,
 };
 use crate::parser::accessors::{
-    column_names_for, db_foreign_key, default_foreign_key_column, versions_of, versions_table_name,
+    column_names_for, db_foreign_key, default_foreign_key_column, primary_key_columns, versions_of,
+    versions_table_name,
 };
 use crate::parser::ast::{AccessAst, FieldAst, IndexAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
@@ -528,12 +526,7 @@ impl<'a> Builder<'a> {
     }
 
     fn model_primary_key(&mut self, model: &ModelAst) {
-        let columns: Vec<String> = model
-            .fields
-            .iter()
-            .filter(|(_, field)| field_is_primary_key(field))
-            .flat_map(|(name, field)| column_names_for(name, field))
-            .collect();
+        let columns = primary_key_columns(model);
         if !columns.is_empty() {
             self.primary_key(model.table_name(), &columns);
         }

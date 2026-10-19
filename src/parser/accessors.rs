@@ -485,3 +485,17 @@ pub(crate) fn is_primary_key(field: &FieldAst) -> bool {
         _ => false,
     }
 }
+
+/// The columns of a model's primary key, in the order the schema declares them.
+///
+/// One list for every consumer: the DDL that creates the key and the admin config that tells Studio
+/// which columns make a row unique. Empty when no field claims the role; the normaliser gives a
+/// model with no key and no `id` field an `id` key, so that takes a model with an unkeyed `id`.
+pub fn primary_key_columns(model: &ModelAst) -> Vec<String> {
+    model
+        .fields
+        .iter()
+        .filter(|(_, field)| is_primary_key(field))
+        .flat_map(|(name, field)| column_names_for(name, field))
+        .collect()
+}
