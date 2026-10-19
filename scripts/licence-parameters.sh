@@ -92,6 +92,10 @@ selftest() {
   # Global, so the EXIT trap still sees it when a failed step exits from inside a function.
   trap 'rm -f "$copy"' EXIT
   cp "$1" "$copy"
+  set_parameters 9.9.9 2026-10-20 "$copy" >/dev/null
+  # The version matches, so only the missing date can refuse it. Written here rather than read from
+  # the file, because once a release merges, main carries a real date and no placeholder.
+  sed -i -E "s/^${DATE}:.*$/$(label "$DATE")[unreleased]/" "$copy"
   if (check_parameters 9.9.9 2026-10-20 "$copy") 2>/dev/null; then
     die "selftest: check passed a licence with no Change Date"
   fi
