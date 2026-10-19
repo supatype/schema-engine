@@ -545,6 +545,12 @@ fn datetime_field(
 
 // ─── Field attribute helpers ──────────────────────────────────────────────────
 
+/// A point in WGS 84, the one geometry Studio edits as latitude and longitude. No SRID is WGS 84,
+/// because the migration writes `GEOGRAPHY(POINT, 4326)` when none is given.
+fn is_wgs84_point(geo: &crate::parser::ast::GeoFieldAst) -> bool {
+    geo.geo_type.eq_ignore_ascii_case("point") && geo.srid.is_none_or(|srid| srid == 4326)
+}
+
 fn field_widget(field: &FieldAst) -> &'static str {
     match field {
         FieldAst::Text(s) if !s.sources.is_empty() || s.template.is_some() => "derivedText",
@@ -569,6 +575,7 @@ fn field_widget(field: &FieldAst) -> &'static str {
         FieldAst::Button(_) => "button",
         FieldAst::Image(_) => "image",
         FieldAst::File(_) => "file",
+        FieldAst::Geo(g) if is_wgs84_point(g) => "geopoint",
         FieldAst::Geo(_) => "text",
         FieldAst::Vector(_) => "text",
         FieldAst::Blocks(_) => "blocks",
