@@ -24,6 +24,7 @@
 //! `update` breaks in both directions, hiding a draft from the developer debugging it on an
 //! `Owner<>` model and exposing every draft to every signed-in user on a `LoggedIn` one.
 
+use super::baseline_versions::{BaselineModel, CREATING_RECORD_SETTING};
 use crate::parser::accessors::{db_table_name, versions_of, versions_table_name};
 use crate::parser::ast::{ModelAst, PublishingAst, SchemaAst};
 use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
@@ -705,6 +706,11 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
                 &versions_table,
                 &names,
             ));
+            // After the guard, which numbers and stamps the version the trigger writes.
+            if let Some(baseline) = BaselineModel::of(model, ast) {
+                let name = names.versions_baseline(table, &versions_table);
+                out.push_str(&baseline.trigger_sql(schema, &name));
+            }
             out.push_str(&draft_view_sql(schema, table, &versions_table));
         } else {
             // History without withholding writes. The table is written directly and each write
@@ -830,7 +836,7 @@ fn text_array(values: &[String]) -> String {
 /// publishing possible at all: publishing one locale merges that key and leaves the rest of the
 /// column alone, so an unpublished translation is simply absent from the live row and needs no
 /// policy to hide it.
-fn localized_columns(model: &ModelAst) -> Vec<String> {
+pub(crate) fn localized_columns(model: &ModelAst) -> Vec<String> {
     model
         .fields
         .iter()
@@ -841,14 +847,14 @@ fn localized_columns(model: &ModelAst) -> Vec<String> {
 }
 
 /// The column publishing stamps, when the model has it.
-const PUBLISHED_AT_COLUMN: &str = "published_at";
+pub(crate) const PUBLISHED_AT_COLUMN: &str = "published_at";
 
 /// The model's primary key column and its Postgres type.
 ///
 /// Falls back to `id UUID`, which is what every scaffolded model has. A model with no primary key
 /// cannot be versioned meaningfully and will have failed earlier for reasons that name the real
 /// problem.
-fn model_primary_key(model: &ModelAst) -> (String, String) {
+pub(crate) fn model_primary_key(model: &ModelAst) -> (String, String) {
     model
         .fields
         .iter()
@@ -1813,6 +1819,7 @@ $cron$;
 /// still create one (DR8, see [`created_records_sql`]).
 fn create_record_sql(schema: &str) -> String {
     let write_path = write_search_path(schema);
+    let setting = quote_literal(CREATING_RECORD_SETTING);
     let helper = HELPER_SCHEMA;
     let rpc_q = quote_ident(RPC_SCHEMA);
     format!(
@@ -1847,6 +1854,9 @@ fn create_record_sql(schema: &str) -> String {
     -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and
     -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the
     -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.
+    -- Version 1 is the caller's values, written below, so the table's baseline trigger, which
+    -- would snapshot the row holding no locale, stands aside for this insert.
+    PERFORM set_config({setting}, 'on', true);
     IF columns IS NULL THEN
       EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',
         entry."schema_name", entry."table_name");
@@ -1857,6 +1867,7 @@ fn create_record_sql(schema: &str) -> String {
         entry."schema_name", entry."table_name")
         USING live;
     END IF;
+    PERFORM set_config({setting}, '', true);
 
     created := {helper}.newest_created_record(model_table);
     RETURN {rpc_q}.create_draft(model_table, created, data);

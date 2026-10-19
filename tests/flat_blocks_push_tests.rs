@@ -39,19 +39,26 @@ const MIXED: &str = r#"[
 ]"#;
 
 /// Pushes the schema, then writes `home` and `mixed` pages and two snapshots of `home`, as a
-/// project that saved them before upgrading has them.
+/// project that saved them before upgrading has them. The pages go in with the session's triggers
+/// off, as an engine before baseline versions left them: with no version row of their own.
 async fn flat_pages(pool: &sqlx::PgPool) {
     common::push(pool, &schema()).await.expect("first push");
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::query("SET LOCAL session_replication_role = replica")
+        .execute(&mut *tx)
+        .await
+        .expect("triggers off");
     for (slug, body) in [("home", HOME), ("mixed", MIXED)] {
         sqlx::query(
             "INSERT INTO page (title, slug, body) VALUES (jsonb_build_object('en', $1::text), $1, $2::jsonb)",
         )
         .bind(slug)
         .bind(body)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .expect("seed a page");
     }
+    tx.commit().await.expect("commit");
     for status in ["published", "draft"] {
         sqlx::query(
             "INSERT INTO page_versions (record_id, status, data) \
@@ -72,12 +79,16 @@ async fn bodies(pool: &sqlx::PgPool) -> Value {
     pages
 }
 
+/// The bodies of `home`'s snapshots, oldest first. `mixed` has none until the push gives it its
+/// version 1.
 async fn snapshot_bodies(pool: &sqlx::PgPool) -> Vec<Value> {
-    let rows: Vec<(Value,)> =
-        sqlx::query_as("SELECT data -> 'body' FROM page_versions ORDER BY version")
-            .fetch_all(pool)
-            .await
-            .expect("read snapshots");
+    let rows: Vec<(Value,)> = sqlx::query_as(
+        "SELECT v.data -> 'body' FROM page_versions v JOIN page p ON p.id = v.record_id \
+         WHERE p.slug = 'home' ORDER BY v.version",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read snapshots");
     rows.into_iter().map(|(v,)| v).collect()
 }
 
@@ -111,6 +122,16 @@ async fn a_push_moves_flat_kitchen_sink_pages_and_their_snapshots() {
             vec![expected["home"].clone(), expected["home"].clone()],
             "every snapshot is moved, not only the newest"
         );
+        // `mixed` had no version, and the version 1 the same push gives it is taken after the
+        // move, so it holds the moved shape.
+        let mixed_v1: Value = sqlx::query_scalar(
+            "SELECT v.data -> 'body' FROM page_versions v JOIN page p ON p.id = v.record_id \
+             WHERE p.slug = 'mixed' AND v.version = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read mixed's version 1");
+        assert_eq!(mixed_v1, expected["mixed"]);
         let said = "Converted 6 block entries in page.body (2 version rows)";
         assert!(
             warnings(&outcome).iter().any(|w| w == said),

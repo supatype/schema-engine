@@ -56,6 +56,9 @@ async fn become_caller(db: &mut PgConnection, subject: Option<&str>) {
 
 /// Push the versioned fixture, then become an editor on `db` and seed one post.
 ///
+/// The insert gives the post its version 1, a draft by the editor holding "First cut", so the
+/// first draft a test saves is version 2.
+///
 /// The fixture rows are cleared first. With `DATABASE_URL` set each test gets its own database, but
 /// under testcontainers they share one, and a seed that assumed an empty table would fail on the
 /// second test for a reason that had nothing to do with the feature.
@@ -211,7 +214,8 @@ async fn restoring_a_version_creates_a_draft_and_does_not_go_live() {
             publish(tx).await.expect("publish");
             assert_eq!(live_title(tx).await, "Version two");
 
-            sqlx::query("SELECT supatype.restore_version('posts', $1, 1)")
+            // Version 1 is the seeded row; "Version one" is the first draft saved over it.
+            sqlx::query("SELECT supatype.restore_version('posts', $1, 2)")
                 .bind(POST)
                 .execute(&mut *tx)
                 .await
@@ -303,7 +307,8 @@ async fn a_direct_insert_cannot_forge_a_published_version_or_another_author() {
             .await
             .expect("read the version back");
 
-            assert_eq!(row.0, 2, "the submitted version number must be discarded");
+            // The seeded row's version 1, the draft's 2, and this one next.
+            assert_eq!(row.0, 3, "the submitted version number must be discarded");
             assert_eq!(row.1, "draft", "a version is born a draft");
             assert_eq!(
                 row.2.as_deref(),
@@ -324,7 +329,7 @@ async fn history_cannot_be_rewritten_by_someone_who_may_still_edit_the_record() 
             sqlx::query(
                 "UPDATE public.posts_versions
                     SET data = '{\"title\": \"Rewritten\"}'::jsonb, created_by = NULL
-                  WHERE record_id = $1::uuid AND version = 1",
+                  WHERE record_id = $1::uuid AND version = 2",
             )
             .bind(POST)
             .execute(&mut *tx)
@@ -333,7 +338,7 @@ async fn history_cannot_be_rewritten_by_someone_who_may_still_edit_the_record() 
 
             let row: (String, bool) = sqlx::query_as(
                 "SELECT data->>'title', created_by IS NOT NULL FROM public.posts_versions
-                  WHERE record_id = $1::uuid AND version = 1",
+                  WHERE record_id = $1::uuid AND version = 2",
             )
             .bind(POST)
             .fetch_one(&mut *tx)
@@ -358,7 +363,8 @@ async fn a_request_with_no_subject_records_no_creator() {
             save_draft(tx, r#"{"title": "Saved without a subject"}"#).await;
 
             let creator: Option<String> = sqlx::query_scalar(
-                "SELECT created_by::text FROM public.posts_versions WHERE record_id = $1::uuid",
+                "SELECT created_by::text FROM public.posts_versions WHERE record_id = $1::uuid
+                  ORDER BY version DESC LIMIT 1",
             )
             .bind(POST)
             .fetch_one(&mut *tx)
@@ -482,11 +488,12 @@ async fn any_version_can_be_restored_including_one_from_the_middle_of_a_history(
             assert_eq!(live_title(db).await, "Five");
 
             // Not just the first or the last: a version from the middle, while a later one is live.
-            sqlx::query("SELECT supatype.restore_version('posts', $1, 2)")
+            // Version 1 is the seeded row, so "Two" is version 3.
+            sqlx::query("SELECT supatype.restore_version('posts', $1, 3)")
                 .bind(POST)
                 .execute(&mut *db)
                 .await
-                .expect("restore version 2");
+                .expect("restore version 3");
 
             assert_eq!(
                 draft_title(db).await.as_deref(),
@@ -515,10 +522,10 @@ async fn any_version_can_be_restored_including_one_from_the_middle_of_a_history(
             .expect("read history");
             assert_eq!(
                 history.len(),
-                6,
+                7,
                 "restoring appends rather than rewriting, so the act is in the history too"
             );
-            assert_eq!(history[5].1, "published");
+            assert_eq!(history[6].1, "published");
 
             // And a version that was never written is refused rather than silently doing nothing.
             let err = sqlx::query("SELECT supatype.restore_version('posts', $1, 99)")
@@ -714,21 +721,21 @@ async fn a_named_version_can_be_published_directly() {
             save_draft(db, r#"{"title": "Two"}"#).await;
             save_draft(db, r#"{"title": "Three"}"#).await;
 
-            // Straight to version 1, with two newer drafts above it.
-            sqlx::query("SELECT supatype.publish('posts', $1, 1)")
+            // Straight to "One", version 2 above the seeded row, with two newer drafts above it.
+            sqlx::query("SELECT supatype.publish('posts', $1, 2)")
                 .bind(POST)
                 .execute(&mut *db)
                 .await
-                .expect("publish version 1");
+                .expect("publish version 2");
             assert_eq!(live_title(db).await, "One");
 
             // Exactly one version claims a locale, so publishing another moves the claim rather
             // than leaving two versions both saying they are live.
-            sqlx::query("SELECT supatype.publish('posts', $1, 3)")
+            sqlx::query("SELECT supatype.publish('posts', $1, 4)")
                 .bind(POST)
                 .execute(&mut *db)
                 .await
-                .expect("publish version 3");
+                .expect("publish version 4");
             assert_eq!(live_title(db).await, "Three");
 
             let claims: Vec<(i32, bool)> = sqlx::query_as(
@@ -741,7 +748,7 @@ async fn a_named_version_can_be_published_directly() {
             .expect("read the claims");
             assert_eq!(
                 claims,
-                vec![(1, false), (2, false), (3, true)],
+                vec![(1, false), (2, false), (3, false), (4, true)],
                 "only the published version may claim a locale"
             );
         })
@@ -1791,10 +1798,10 @@ async fn posts_seen(db: &mut PgConnection, id: &str) -> i64 {
 }
 
 /// The visibility DR8 adds is the inserting transaction's own: inside it the editor can read the
-/// row they inserted (which is what writing its first draft needs), and once it ends a row with no
-/// draft by them is as hidden as any other unpublished row.
+/// row they inserted (which is what writing its first draft needs). Once it ends, the author sees
+/// the row through the version 1 the insert gave it, by them, and anyone else is shown nothing.
 #[tokio::test]
-async fn a_new_row_is_visible_to_the_transaction_that_inserted_it_and_no_longer() {
+async fn a_new_row_is_visible_to_the_transaction_that_inserted_it_and_then_to_its_author() {
     as_api_editor(|db| {
         Box::pin(async move {
             let id = "55555555-5555-5555-5555-555555555555";
@@ -1812,8 +1819,14 @@ async fn a_new_row_is_visible_to_the_transaction_that_inserted_it_and_no_longer(
             db.execute("COMMIT").await.expect("commit");
             assert_eq!(
                 posts_seen(db, id).await,
+                1,
+                "the author sees their row through its version 1"
+            );
+            become_api_editor(db, "44444444-4444-4444-4444-444444444444").await;
+            assert_eq!(
+                posts_seen(db, id).await,
                 0,
-                "an unpublished row with no draft is hidden again"
+                "an unpublished row is hidden from anyone who did not write it"
             );
         })
     })
