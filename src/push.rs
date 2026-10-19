@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
+use crate::baseline_versions::Baseline;
 use crate::desired::{
     desired_objects_for, security_relevant, statements, FieldEnforcement, ObjectKey,
 };
@@ -134,11 +135,18 @@ pub struct Plan<'a> {
     /// The `Blocks` columns holding entries in the flat shape, which the migration moves to
     /// `{ type, data }` last in its transaction.
     pub block_moves: Vec<BlockMove>,
+    /// The drafts models with records lacking a version, which the migration gives version 1
+    /// after the block moves, so a version holds the moved shape.
+    pub baselines: Vec<Baseline>,
 }
 
 /// The heading of the migration's section that moves flat block entries.
 const BLOCK_MOVES_HEADER: &str =
     "block entries kept in the flat shape, moved to { type, data, meta? } (0.7.0)";
+
+/// The heading of the migration's section that writes version 1 of records that have none.
+const BASELINES_HEADER: &str =
+    "records of a drafts model with no version, given version 1 from the live row";
 
 /// The ledger and the live objects a reconcile was decided from, each in key order.
 ///
@@ -215,6 +223,7 @@ impl Plan<'_> {
         let mut json = serde_json::to_value(&self.diff)?;
         json["reconcile"] = serde_json::to_value(&self.reconcile.actions)?;
         json["blockConversions"] = self.block_moves.iter().map(BlockMove::to_json).collect();
+        json["baselineVersions"] = self.baselines.iter().map(Baseline::to_json).collect();
         Ok(json)
     }
 
@@ -224,6 +233,7 @@ impl Plan<'_> {
         !self.diff.operations.is_empty()
             || self.reconcile.has_changes()
             || !self.block_moves.is_empty()
+            || !self.baselines.is_empty()
     }
 
     /// The one migration this plan is: what `supatype migrate` prints, what `apply` runs and what
@@ -238,7 +248,7 @@ impl Plan<'_> {
             &self.ast,
             &self.online,
         )?;
-        Ok(self.with_block_moves(migration))
+        Ok(self.with_data_sections(migration))
     }
 
     /// [`Plan::migration`] with every statement in the transaction, as `migrate --record`
@@ -251,16 +261,24 @@ impl Plan<'_> {
             &self.schema,
             &self.ast,
         )?;
-        Ok(self.with_block_moves(migration))
+        Ok(self.with_data_sections(migration))
     }
 
-    fn with_block_moves(&self, migration: Migration) -> Migration {
-        let statements = self
+    /// `migration` with the block moves and then the baseline versions last in its transaction.
+    fn with_data_sections(&self, migration: Migration) -> Migration {
+        let moves = self
             .block_moves
             .iter()
             .flat_map(|m| m.statements(&self.schema))
             .collect();
-        migration.with_data_section(BLOCK_MOVES_HEADER, statements)
+        let baselines = self
+            .baselines
+            .iter()
+            .flat_map(|b| b.statements(&self.schema))
+            .collect();
+        migration
+            .with_data_section(BLOCK_MOVES_HEADER, moves)
+            .with_data_section(BASELINES_HEADER, baselines)
     }
 }
 
@@ -448,10 +466,12 @@ pub(crate) async fn plan_on<'a>(
     flag_rewrites(&mut diff, &sizes);
     let online = online_tables(&state, &reconcile, &sizes, schema);
     let block_moves = crate::flat_blocks::plan(conn, ast, (&state, &mut diff), schema).await?;
+    let baselines = crate::baseline_versions::plan(conn, ast, &mut diff, schema).await?;
 
     Ok(Plan {
         online,
         block_moves,
+        baselines,
         // Rendered with the names the ledger records, as the decision was (F2d).
         ast: with_recorded_names(ast, &state.ledger, schema),
         schema: schema.to_string(),
@@ -1677,8 +1697,10 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
 /// What a push that applied its migration reports: what it counted, the plan's warnings, what the
 /// database looked like once applied, and what it moved of each column's flat block entries.
 fn applied_outcome(plan: Plan<'_>, rendered: Rendered, applied: Applied) -> Outcome {
-    let operations =
-        plan.diff.operations.len() + rendered.migration.reconciled + plan.block_moves.len();
+    let operations = plan.diff.operations.len()
+        + rendered.migration.reconciled
+        + plan.block_moves.len()
+        + plan.baselines.len();
     let mut warnings = plan.diff.warnings;
     warnings.extend(applied.drift_warnings);
     warnings.extend(applied.converted);
@@ -1810,7 +1832,8 @@ async fn within_transaction(
     rendered: &Rendered,
 ) -> Result<Applied> {
     // Counted in this transaction, before the move, so what is reported is what it moved.
-    let converted = crate::flat_blocks::converted(tx, &plan.block_moves, &plan.schema).await?;
+    let mut converted = crate::flat_blocks::converted(tx, &plan.block_moves, &plan.schema).await?;
+    converted.extend(crate::baseline_versions::created(tx, &plan.baselines, &plan.schema).await?);
     apply_statements(tx, plan, rendered).await?;
     let after = live(tx, &plan.schema)
         .await

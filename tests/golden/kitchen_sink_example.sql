@@ -1518,6 +1518,9 @@ CREATE OR REPLACE FUNCTION "supatype".create_record(model_table text, data jsonb
     -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and
     -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the
     -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.
+    -- Version 1 is the caller's values, written below, so the table's baseline trigger, which
+    -- would snapshot the row holding no locale, stands aside for this insert.
+    PERFORM set_config('supatype.creating_record', 'on', true);
     IF columns IS NULL THEN
       EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',
         entry."schema_name", entry."table_name");
@@ -1528,6 +1531,7 @@ CREATE OR REPLACE FUNCTION "supatype".create_record(model_table text, data jsonb
         entry."schema_name", entry."table_name")
         USING live;
     END IF;
+    PERFORM set_config('supatype.creating_record', '', true);
 
     created := _supatype.newest_created_record(model_table);
     RETURN "supatype".create_draft(model_table, created, data);
@@ -1655,6 +1659,36 @@ DROP TRIGGER IF EXISTS "page_versions_guard" ON "public"."page_versions";
 CREATE TRIGGER "page_versions_guard" BEFORE INSERT OR UPDATE ON "public"."page_versions"
   FOR EACH ROW EXECUTE FUNCTION _supatype."page_versions_guard"();
 
+CREATE OR REPLACE FUNCTION _supatype."page_versions_baseline"() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  DECLARE
+    live jsonb := to_jsonb(NEW);
+    live_at timestamptz := (live ->> 'published_at')::timestamptz;
+    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['title']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '""'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;
+    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['title']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '""'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;
+  BEGIN
+    -- `create_record` writes version 1 itself, from what the caller typed.
+    IF current_setting('supatype.creating_record', true) = 'on' THEN
+      RETURN NULL;
+    END IF;
+    IF EXISTS (SELECT 1 FROM "public"."page_versions" v WHERE v."record_id" = NEW."id") THEN
+      RETURN NULL;
+    END IF;
+    INSERT INTO "public"."page_versions" ("record_id", "data") VALUES (NEW."id", live);
+    UPDATE "public"."page_versions" v
+       SET "published_locales" = published, "scheduled_locales" = scheduled,
+           "status" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END
+     WHERE v."record_id" = NEW."id";
+    RETURN NULL;
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION _supatype."page_versions_baseline"() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS "page_versions_baseline" ON "public"."page";
+CREATE TRIGGER "page_versions_baseline" AFTER INSERT ON "public"."page"
+  FOR EACH ROW EXECUTE FUNCTION _supatype."page_versions_baseline"();
+
 DROP VIEW IF EXISTS "draft"."page";
 CREATE VIEW "draft"."page" WITH (security_invoker = true) AS
 SELECT (jsonb_populate_record(NULL::"public"."page", v."data")).*
@@ -1761,6 +1795,36 @@ DROP TRIGGER IF EXISTS "speaker_versions_guard" ON "public"."speaker_versions";
 CREATE TRIGGER "speaker_versions_guard" BEFORE INSERT OR UPDATE ON "public"."speaker_versions"
   FOR EACH ROW EXECUTE FUNCTION _supatype."speaker_versions_guard"();
 
+CREATE OR REPLACE FUNCTION _supatype."speaker_versions_baseline"() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  DECLARE
+    live jsonb := to_jsonb(NEW);
+    live_at timestamptz := (live ->> 'published_at')::timestamptz;
+    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['bio']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '""'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;
+    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['bio']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '""'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;
+  BEGIN
+    -- `create_record` writes version 1 itself, from what the caller typed.
+    IF current_setting('supatype.creating_record', true) = 'on' THEN
+      RETURN NULL;
+    END IF;
+    IF EXISTS (SELECT 1 FROM "public"."speaker_versions" v WHERE v."record_id" = NEW."id") THEN
+      RETURN NULL;
+    END IF;
+    INSERT INTO "public"."speaker_versions" ("record_id", "data") VALUES (NEW."id", live);
+    UPDATE "public"."speaker_versions" v
+       SET "published_locales" = published, "scheduled_locales" = scheduled,
+           "status" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END
+     WHERE v."record_id" = NEW."id";
+    RETURN NULL;
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION _supatype."speaker_versions_baseline"() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS "speaker_versions_baseline" ON "public"."speaker";
+CREATE TRIGGER "speaker_versions_baseline" AFTER INSERT ON "public"."speaker"
+  FOR EACH ROW EXECUTE FUNCTION _supatype."speaker_versions_baseline"();
+
 DROP VIEW IF EXISTS "draft"."speaker";
 CREATE VIEW "draft"."speaker" WITH (security_invoker = true) AS
 SELECT (jsonb_populate_record(NULL::"public"."speaker", v."data")).*
@@ -1866,6 +1930,36 @@ CREATE OR REPLACE FUNCTION _supatype."talk_versions_guard"() RETURNS trigger
 DROP TRIGGER IF EXISTS "talk_versions_guard" ON "public"."talk_versions";
 CREATE TRIGGER "talk_versions_guard" BEFORE INSERT OR UPDATE ON "public"."talk_versions"
   FOR EACH ROW EXECUTE FUNCTION _supatype."talk_versions_guard"();
+
+CREATE OR REPLACE FUNCTION _supatype."talk_versions_baseline"() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  DECLARE
+    live jsonb := to_jsonb(NEW);
+    live_at timestamptz := (live ->> 'published_at')::timestamptz;
+    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['abstract']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '""'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;
+    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['abstract']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '""'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;
+  BEGIN
+    -- `create_record` writes version 1 itself, from what the caller typed.
+    IF current_setting('supatype.creating_record', true) = 'on' THEN
+      RETURN NULL;
+    END IF;
+    IF EXISTS (SELECT 1 FROM "public"."talk_versions" v WHERE v."record_id" = NEW."id") THEN
+      RETURN NULL;
+    END IF;
+    INSERT INTO "public"."talk_versions" ("record_id", "data") VALUES (NEW."id", live);
+    UPDATE "public"."talk_versions" v
+       SET "published_locales" = published, "scheduled_locales" = scheduled,
+           "status" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END
+     WHERE v."record_id" = NEW."id";
+    RETURN NULL;
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION _supatype."talk_versions_baseline"() FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS "talk_versions_baseline" ON "public"."talk";
+CREATE TRIGGER "talk_versions_baseline" AFTER INSERT ON "public"."talk"
+  FOR EACH ROW EXECUTE FUNCTION _supatype."talk_versions_baseline"();
 
 DROP VIEW IF EXISTS "draft"."talk";
 CREATE VIEW "draft"."talk" WITH (security_invoker = true) AS

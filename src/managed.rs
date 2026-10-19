@@ -871,6 +871,11 @@ impl ObjectNames {
                 self.pick(table, "created_note", "", || {
                     triggers.choose(table, None, "created_note")
                 });
+                // A drafts model's table gives each row inserted outside `create_record` its
+                // version 1; the trigger shares its function's name, as the audit one does.
+                self.pick(table, "versions_baseline", "", || {
+                    choose_free(&mut [&mut helper, &mut triggers], &vt, None, "baseline")
+                });
             }
             self.pick(table, "write_function", "", || {
                 api.choose(table, None, "_write")
@@ -978,6 +983,14 @@ impl ObjectNames {
     pub fn created_note_trigger(&self, table: &str) -> String {
         self.named(table, "created_note", "", || {
             make_object_name(table, None, "created_note")
+        })
+    }
+
+    /// `{versions_table}_baseline`, the function and the trigger on a drafts model's table that
+    /// write version 1 of a row inserted outside `create_record`.
+    pub fn versions_baseline(&self, table: &str, versions_table: &str) -> String {
+        self.named(table, "versions_baseline", "", || {
+            make_object_name(versions_table, None, "baseline")
         })
     }
 

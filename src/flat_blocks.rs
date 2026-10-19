@@ -228,7 +228,7 @@ fn touched(diff: &DiffOutput, column: &BlockColumn) -> bool {
 }
 
 /// The tables `op` creates, drops or renames, under each name it gives them.
-fn tables_named(op: &Operation) -> Vec<&str> {
+pub(crate) fn tables_named(op: &Operation) -> Vec<&str> {
     match op {
         Operation::CreateTable { table, .. } | Operation::DropTable { table, .. } => vec![table],
         Operation::RenameTable { from, to, .. } => vec![from, to],

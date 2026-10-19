@@ -2707,6 +2707,13 @@
         "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
       },
       {
+        "table": "page",
+        "name": "page_versions_baseline",
+        "event": "INSERT",
+        "timing": "AFTER",
+        "functionName": "EXECUTE FUNCTION _supatype.page_versions_baseline()"
+      },
+      {
         "table": "page_versions",
         "name": "page_versions_guard",
         "event": "INSERT",
@@ -2770,6 +2777,13 @@
         "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
       },
       {
+        "table": "speaker",
+        "name": "speaker_versions_baseline",
+        "event": "INSERT",
+        "timing": "AFTER",
+        "functionName": "EXECUTE FUNCTION _supatype.speaker_versions_baseline()"
+      },
+      {
         "table": "speaker_versions",
         "name": "speaker_versions_guard",
         "event": "INSERT",
@@ -2831,6 +2845,13 @@
         "event": "UPDATE",
         "timing": "BEFORE",
         "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "talk",
+        "name": "talk_versions_baseline",
+        "event": "INSERT",
+        "timing": "AFTER",
+        "functionName": "EXECUTE FUNCTION _supatype.talk_versions_baseline()"
       },
       {
         "table": "talk_versions",
@@ -3000,6 +3021,21 @@
       },
       {
         "schema": "public",
+        "table": "page",
+        "name": "page_versions_baseline",
+        "timing": "AFTER",
+        "events": [
+          "INSERT"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.page_versions_baseline",
+        "definition": "CREATE TRIGGER page_versions_baseline AFTER INSERT ON public.page FOR EACH ROW EXECUTE FUNCTION _supatype.page_versions_baseline()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
         "table": "page_versions",
         "name": "page_versions_guard",
         "timing": "BEFORE",
@@ -3093,6 +3129,21 @@
       },
       {
         "schema": "public",
+        "table": "speaker",
+        "name": "speaker_versions_baseline",
+        "timing": "AFTER",
+        "events": [
+          "INSERT"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.speaker_versions_baseline",
+        "definition": "CREATE TRIGGER speaker_versions_baseline AFTER INSERT ON public.speaker FOR EACH ROW EXECUTE FUNCTION _supatype.speaker_versions_baseline()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
         "table": "speaker_versions",
         "name": "speaker_versions_guard",
         "timing": "BEFORE",
@@ -3181,6 +3232,21 @@
         "forEachRow": true,
         "function": "_platform.set_updated_at",
         "definition": "CREATE TRIGGER talk_updated_at_trigger BEFORE UPDATE ON public.talk FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk",
+        "name": "talk_versions_baseline",
+        "timing": "AFTER",
+        "events": [
+          "INSERT"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.talk_versions_baseline",
+        "definition": "CREATE TRIGGER talk_versions_baseline AFTER INSERT ON public.talk FOR EACH ROW EXECUTE FUNCTION _supatype.talk_versions_baseline()",
         "enabled": true,
         "comment": null
       },
@@ -3835,6 +3901,29 @@
       },
       {
         "schema": "_supatype",
+        "name": "page_versions_baseline",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": true,
+        "body": "\n  DECLARE\n    live jsonb := to_jsonb(NEW);\n    live_at timestamptz := (live ->> 'published_at')::timestamptz;\n    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['title']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['title']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n  BEGIN\n    -- `create_record` writes version 1 itself, from what the caller typed.\n    IF current_setting('supatype.creating_record', true) = 'on' THEN\n      RETURN NULL;\n    END IF;\n    IF EXISTS (SELECT 1 FROM \"public\".\"page_versions\" v WHERE v.\"record_id\" = NEW.\"id\") THEN\n      RETURN NULL;\n    END IF;\n    INSERT INTO \"public\".\"page_versions\" (\"record_id\", \"data\") VALUES (NEW.\"id\", live);\n    UPDATE \"public\".\"page_versions\" v\n       SET \"published_locales\" = published, \"scheduled_locales\" = scheduled,\n           \"status\" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END\n     WHERE v.\"record_id\" = NEW.\"id\";\n    RETURN NULL;\n  END;\n  ",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.page_versions_baseline()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    live jsonb := to_jsonb(NEW);\n    live_at timestamptz := (live ->> 'published_at')::timestamptz;\n    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['title']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['title']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n  BEGIN\n    -- `create_record` writes version 1 itself, from what the caller typed.\n    IF current_setting('supatype.creating_record', true) = 'on' THEN\n      RETURN NULL;\n    END IF;\n    IF EXISTS (SELECT 1 FROM \"public\".\"page_versions\" v WHERE v.\"record_id\" = NEW.\"id\") THEN\n      RETURN NULL;\n    END IF;\n    INSERT INTO \"public\".\"page_versions\" (\"record_id\", \"data\") VALUES (NEW.\"id\", live);\n    UPDATE \"public\".\"page_versions\" v\n       SET \"published_locales\" = published, \"scheduled_locales\" = scheduled,\n           \"status\" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END\n     WHERE v.\"record_id\" = NEW.\"id\";\n    RETURN NULL;\n  END;\n  $function$\n",
+        "acl": []
+      },
+      {
+        "schema": "_supatype",
         "name": "page_versions_guard",
         "identityArguments": "",
         "identityTypes": "",
@@ -4120,6 +4209,29 @@
       },
       {
         "schema": "_supatype",
+        "name": "speaker_versions_baseline",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": true,
+        "body": "\n  DECLARE\n    live jsonb := to_jsonb(NEW);\n    live_at timestamptz := (live ->> 'published_at')::timestamptz;\n    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['bio']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['bio']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n  BEGIN\n    -- `create_record` writes version 1 itself, from what the caller typed.\n    IF current_setting('supatype.creating_record', true) = 'on' THEN\n      RETURN NULL;\n    END IF;\n    IF EXISTS (SELECT 1 FROM \"public\".\"speaker_versions\" v WHERE v.\"record_id\" = NEW.\"id\") THEN\n      RETURN NULL;\n    END IF;\n    INSERT INTO \"public\".\"speaker_versions\" (\"record_id\", \"data\") VALUES (NEW.\"id\", live);\n    UPDATE \"public\".\"speaker_versions\" v\n       SET \"published_locales\" = published, \"scheduled_locales\" = scheduled,\n           \"status\" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END\n     WHERE v.\"record_id\" = NEW.\"id\";\n    RETURN NULL;\n  END;\n  ",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.speaker_versions_baseline()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    live jsonb := to_jsonb(NEW);\n    live_at timestamptz := (live ->> 'published_at')::timestamptz;\n    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['bio']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['bio']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n  BEGIN\n    -- `create_record` writes version 1 itself, from what the caller typed.\n    IF current_setting('supatype.creating_record', true) = 'on' THEN\n      RETURN NULL;\n    END IF;\n    IF EXISTS (SELECT 1 FROM \"public\".\"speaker_versions\" v WHERE v.\"record_id\" = NEW.\"id\") THEN\n      RETURN NULL;\n    END IF;\n    INSERT INTO \"public\".\"speaker_versions\" (\"record_id\", \"data\") VALUES (NEW.\"id\", live);\n    UPDATE \"public\".\"speaker_versions\" v\n       SET \"published_locales\" = published, \"scheduled_locales\" = scheduled,\n           \"status\" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END\n     WHERE v.\"record_id\" = NEW.\"id\";\n    RETURN NULL;\n  END;\n  $function$\n",
+        "acl": []
+      },
+      {
+        "schema": "_supatype",
         "name": "speaker_versions_guard",
         "identityArguments": "",
         "identityTypes": "",
@@ -4142,6 +4254,29 @@
         "acl": [
           "PUBLIC=EXECUTE"
         ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "talk_versions_baseline",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": true,
+        "body": "\n  DECLARE\n    live jsonb := to_jsonb(NEW);\n    live_at timestamptz := (live ->> 'published_at')::timestamptz;\n    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['abstract']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['abstract']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n  BEGIN\n    -- `create_record` writes version 1 itself, from what the caller typed.\n    IF current_setting('supatype.creating_record', true) = 'on' THEN\n      RETURN NULL;\n    END IF;\n    IF EXISTS (SELECT 1 FROM \"public\".\"talk_versions\" v WHERE v.\"record_id\" = NEW.\"id\") THEN\n      RETURN NULL;\n    END IF;\n    INSERT INTO \"public\".\"talk_versions\" (\"record_id\", \"data\") VALUES (NEW.\"id\", live);\n    UPDATE \"public\".\"talk_versions\" v\n       SET \"published_locales\" = published, \"scheduled_locales\" = scheduled,\n           \"status\" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END\n     WHERE v.\"record_id\" = NEW.\"id\";\n    RETURN NULL;\n  END;\n  ",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.talk_versions_baseline()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    live jsonb := to_jsonb(NEW);\n    live_at timestamptz := (live ->> 'published_at')::timestamptz;\n    published jsonb := CASE WHEN live_at <= now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['abstract']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n    scheduled jsonb := CASE WHEN live_at > now() THEN COALESCE((SELECT jsonb_object_agg(lc.code, live_at) FROM unnest(ARRAY['en', 'fr']::text[]) AS lc(code) WHERE EXISTS (SELECT 1 FROM unnest(ARRAY['abstract']::text[]) AS lcol(name) WHERE (live -> lcol.name -> lc.code) NOT IN ('null'::jsonb, '\"\"'::jsonb, '{}'::jsonb, '[]'::jsonb))), '{}'::jsonb) ELSE '{}'::jsonb END;\n  BEGIN\n    -- `create_record` writes version 1 itself, from what the caller typed.\n    IF current_setting('supatype.creating_record', true) = 'on' THEN\n      RETURN NULL;\n    END IF;\n    IF EXISTS (SELECT 1 FROM \"public\".\"talk_versions\" v WHERE v.\"record_id\" = NEW.\"id\") THEN\n      RETURN NULL;\n    END IF;\n    INSERT INTO \"public\".\"talk_versions\" (\"record_id\", \"data\") VALUES (NEW.\"id\", live);\n    UPDATE \"public\".\"talk_versions\" v\n       SET \"published_locales\" = published, \"scheduled_locales\" = scheduled,\n           \"status\" = CASE WHEN published = '{}'::jsonb THEN 'draft' ELSE 'published' END\n     WHERE v.\"record_id\" = NEW.\"id\";\n    RETURN NULL;\n  END;\n  $function$\n",
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -5291,7 +5426,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created text;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and\n    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the\n    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',\n        entry.\"schema_name\", entry.\"table_name\");\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        USING live;\n    END IF;\n\n    created := _supatype.newest_created_record(model_table);\n    RETURN \"supatype\".create_draft(model_table, created, data);\n  END;\n  ",
+        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created text;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and\n    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the\n    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.\n    -- Version 1 is the caller's values, written below, so the table's baseline trigger, which\n    -- would snapshot the row holding no locale, stands aside for this insert.\n    PERFORM set_config('supatype.creating_record', 'on', true);\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',\n        entry.\"schema_name\", entry.\"table_name\");\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        USING live;\n    END IF;\n    PERFORM set_config('supatype.creating_record', '', true);\n\n    created := _supatype.newest_created_record(model_table);\n    RETURN \"supatype\".create_draft(model_table, created, data);\n  END;\n  ",
         "comment": null,
         "arguments": "model_table text, data jsonb",
         "config": [
@@ -5302,7 +5437,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.create_record(model_table text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created text;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and\n    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the\n    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',\n        entry.\"schema_name\", entry.\"table_name\");\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        USING live;\n    END IF;\n\n    created := _supatype.newest_created_record(model_table);\n    RETURN \"supatype\".create_draft(model_table, created, data);\n  END;\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.create_record(model_table text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    live jsonb := COALESCE(data, '{}'::jsonb);\n    col text;\n    columns text;\n    created text;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Insert into the table directly; every change is recorded as a version.';\n    END IF;\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      IF live ? col THEN\n        live := jsonb_set(live, ARRAY[col], '{}'::jsonb);\n      END IF;\n    END LOOP;\n\n    SELECT string_agg(format('%I', c.column_name), ', ')\n      INTO columns\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND live ? c.column_name;\n\n    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and\n    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the\n    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.\n    -- Version 1 is the caller's values, written below, so the table's baseline trigger, which\n    -- would snapshot the row holding no locale, stands aside for this insert.\n    PERFORM set_config('supatype.creating_record', 'on', true);\n    IF columns IS NULL THEN\n      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',\n        entry.\"schema_name\", entry.\"table_name\");\n    ELSE\n      EXECUTE format(\n        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',\n        entry.\"schema_name\", entry.\"table_name\", columns, columns,\n        entry.\"schema_name\", entry.\"table_name\")\n        USING live;\n    END IF;\n    PERFORM set_config('supatype.creating_record', '', true);\n\n    created := _supatype.newest_created_record(model_table);\n    RETURN \"supatype\".create_draft(model_table, created, data);\n  END;\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "authenticated=EXECUTE",
