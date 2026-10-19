@@ -9,6 +9,10 @@ Licensor:             Supatype Ltd
 Licensed Work:        Supatype Schema Engine 0.6.0
                       The Licensed Work is (c) 2026 Supatype Ltd.
 
+                      Commits made after the version named above and
+                      before the next release are part of that next
+                      release and take its Change Date.
+
 Additional Use Grant: You may make production use of the Licensed Work,
                       provided that you do not use it to provide a
                       Competing Service or a Competing Product.
@@ -69,7 +73,7 @@ Additional Use Grant: You may make production use of the Licensed Work,
                       Licensor offers under the Supatype name. "You"
                       includes your affiliates under common control.
 
-Change Date:          [unreleased: set to the release date plus four years when this version is released]
+Change Date:          [unreleased: the next release's date plus four years, written when it is released]
 
 Change License:       Apache License, Version 2.0
 
