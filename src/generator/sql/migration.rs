@@ -249,6 +249,21 @@ fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
     ]
 }
 
+/// The schema's names for each end of a relation, in the `@graphql` directive pg_graphql reads
+/// from the key's comment. Re-asserted on every push, after the reconcile's additions, which make
+/// the keys; a key whose comment already holds its directive is not touched.
+fn render_graphql_name_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = super::graphql_names::graphql_names_sql(ast, schema);
+    if sql.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- GraphQL relation names, as the schema declares them".into(),
+        sql,
+        String::new(),
+    ]
+}
+
 /// The checks that field rules can be enforced here, emitted after the affordance functions the
 /// labels point at. The labels themselves are ledger objects, set by the reconcile after these
 /// have run: a schema that declares a masked column, pushed to a database without the masking
@@ -619,6 +634,7 @@ impl Migration {
         body.extend(render_forward_core(&forward, &mut after_commit)?);
         body.extend(reconciled_section(late_removals.clone()));
         body.extend(reconciled_section(additions.clone()));
+        body.extend(render_graphql_name_lines(ast, schema));
 
         // Undone in reverse: the additions, the late removals, the operations, then what the
         // early removals took.

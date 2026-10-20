@@ -48,11 +48,10 @@
 //!   a prototype: an unauthorised write succeeded silently.
 
 use crate::generator::sql::auth_functions::CLAIMS_SCHEMA;
+use crate::generator::sql::graphql_names::model_relation_names;
 use crate::generator::sql::rls::AUTH_ROLE;
-use crate::parser::accessors::{
-    db_foreign_key, db_table_name, default_foreign_key_column, platform_access,
-};
-use crate::parser::ast::{FieldAst, JunctionTableAst, ModelAst, RelationCardinality, SchemaAst};
+use crate::parser::accessors::{db_table_name, platform_access};
+use crate::parser::ast::{JunctionTableAst, ModelAst, SchemaAst};
 use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
 use crate::state::database_state::DatabaseState;
 
@@ -680,27 +679,36 @@ fn graphql_comment_sql(
 /// One foreign key between two `api` views, in pg_graphql's comment directive for views.
 ///
 /// Read from the schema rather than the catalog, so the first push, which creates the tables a few
-/// statements earlier, writes them too. pg_graphql names it as it names the same key between
-/// tables, so a tier 2 query is a tier 1 query: the to-one field after the table it points at, the
-/// reverse collection after the referencing table. One shape differs, and no directive can change
-/// it: a one-to-one key's reverse. pg_graphql makes it a single row only when it finds a unique
-/// index on the key, and a view has no index, so under tier 2 it is a collection (`badgeCollection`
-/// where tier 1 has `badge`). Naming the collection as tier 1 names the row would not make the
-/// query the same, only the error less clear.
+/// statements earlier, writes them too. Each end carries the name the schema gave it, as the same
+/// key between tables does (`graphql_names`), so a tier 2 query is a tier 1 query; an end the
+/// schema does not name keeps pg_graphql's own name, as it does under tier 1. One shape differs,
+/// and no directive can change it: a one-to-one key's reverse. pg_graphql makes it a single row
+/// only when it finds a unique index on the key, and a view has no index, so under tier 2 it is a
+/// collection (`badgeCollection` where tier 1 has `badge`), and keeps pg_graphql's name. Naming
+/// the collection as tier 1 names the row would not make the query the same, only the error less
+/// clear.
 struct ViewForeignKey {
     local_columns: Vec<String>,
     foreign_table: String,
     foreign_columns: Vec<String>,
+    /// `foreign_name` and `local_name`, for the ends the schema names.
+    names: Option<serde_json::Value>,
 }
 
 impl ViewForeignKey {
     fn directive(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut directive = serde_json::json!({
             "local_columns": self.local_columns,
             "foreign_schema": VIEW_SCHEMA,
             "foreign_table": self.foreign_table,
             "foreign_columns": self.foreign_columns,
-        })
+        });
+        if let Some(serde_json::Value::Object(names)) = &self.names {
+            for (key, name) in names {
+                directive[key] = name.clone();
+            }
+        }
+        directive
     }
 
     fn is_served(&self, entry: &FieldViewTable, plan: &[FieldViewTable]) -> bool {
@@ -719,24 +727,13 @@ impl ViewForeignKey {
 /// The foreign keys a model's table holds, one per `belongsTo` relation to another model, a
 /// self-reference included. A key into a system table (`auth.users`) has no view to point at.
 fn model_foreign_keys(ast: &SchemaAst, model: &ModelAst) -> Vec<ViewForeignKey> {
-    model
-        .fields
-        .iter()
-        .filter_map(|(field_name, field)| {
-            let FieldAst::Relation(rel) = field else {
-                return None;
-            };
-            if !matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                return None;
-            }
-            let target = ast.models.iter().find(|m| m.name == rel.target)?;
-            let column = db_foreign_key(field, field_name)
-                .unwrap_or_else(|| default_foreign_key_column(field_name));
-            Some(ViewForeignKey {
-                local_columns: vec![column],
-                foreign_table: db_table_name(target).to_string(),
-                foreign_columns: vec![rel.references.clone().unwrap_or_else(|| "id".into())],
-            })
+    model_relation_names(ast, model)
+        .into_iter()
+        .map(|key| ViewForeignKey {
+            names: key.view_directive(),
+            local_columns: vec![key.column],
+            foreign_table: key.foreign_table,
+            foreign_columns: vec![key.foreign_column],
         })
         .collect()
 }
@@ -755,6 +752,7 @@ fn junction_foreign_keys(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<Vi
             local_columns: vec![column.clone()],
             foreign_table: db_table_name(parent).to_string(),
             foreign_columns: vec![key],
+            names: None,
         })
     })
     .collect()

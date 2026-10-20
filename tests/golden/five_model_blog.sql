@@ -628,4 +628,33 @@ ALTER TABLE "public"."posts" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."tags" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."users" REPLICA IDENTITY FULL;
 
+-- GraphQL relation names, as the schema declares them
+DO $graphql_names$
+DECLARE
+  k record;
+  wanted text;
+BEGIN
+  FOR k IN
+    SELECT c.conname, c.conrelid::regclass AS rel,
+           obj_description(c.oid, 'pg_constraint') AS old, d.directive
+    FROM (VALUES
+      ('"public"."posts"', 'author_id', '@graphql({"foreign_name":"authorId"})'),
+      ('"public"."posts"', 'category_id', '@graphql({"foreign_name":"categoryId"})'),
+      ('"public"."comments"', 'post_id', '@graphql({"foreign_name":"postId"})'),
+      ('"public"."comments"', 'author_id', '@graphql({"foreign_name":"authorId"})')
+    ) AS d(rel, col, directive)
+    JOIN pg_constraint c ON c.conrelid = to_regclass(d.rel) AND c.contype = 'f'
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = d.col
+     AND c.conkey = ARRAY[a.attnum]
+  LOOP
+    SELECT concat_ws(E'\n', string_agg(l.line, E'\n' ORDER BY l.n), k.directive) INTO wanted
+      FROM regexp_split_to_table(k.old, E'\n') WITH ORDINALITY AS l(line, n)
+     WHERE l.line NOT LIKE '@graphql(%';
+    IF wanted IS DISTINCT FROM k.old THEN
+      EXECUTE format('COMMENT ON CONSTRAINT %I ON %s IS %L', k.conname, k.rel, wanted);
+    END IF;
+  END LOOP;
+END
+$graphql_names$;
+
 COMMIT;

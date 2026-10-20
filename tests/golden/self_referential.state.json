@@ -271,7 +271,7 @@
         "checkExpression": null,
         "onDelete": "SET NULL",
         "definition": "FOREIGN KEY (parent_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"parentId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -352,7 +352,7 @@
         "checkExpression": null,
         "onDelete": "SET NULL",
         "definition": "FOREIGN KEY (manager_id) REFERENCES employees(id) ON UPDATE CASCADE ON DELETE SET NULL",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"managerId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",

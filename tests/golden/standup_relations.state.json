@@ -178,7 +178,7 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (owner_id) REFERENCES profile(id) ON UPDATE CASCADE ON DELETE CASCADE",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"owner\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
