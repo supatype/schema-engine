@@ -177,6 +177,10 @@ fn rich_text_fields(model: &ModelAst) -> Vec<(&str, bool)> {
 /// not find the function it had just created.
 pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunction> {
     let table = model.table_name();
+    // An empty or NULL slug is filled from its source on every write, not only on insert:
+    // `publish` moves a version into the live row with an UPDATE, and a version saved with an
+    // empty slug was refused by a required column. A slug that is set is never overwritten, except
+    // that one still derived from its source follows a renamed source.
     let mut out: Vec<TriggerFunction> = slug_fields(model)
         .map(|(slug_field, source_field)| TriggerFunction {
             name: names.slug_function(table, slug_field),
@@ -184,7 +188,7 @@ pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunc
             returns: "trigger",
             volatility: 'v',
             body: format!(
-                "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.{slug} IS NULL OR BTRIM(NEW.{slug}::TEXT) = '' THEN\n      NEW.{slug} = {PLATFORM_SCHEMA}.slugify(NEW.{source}::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.{source} IS DISTINCT FROM OLD.{source} THEN\n      IF OLD.{slug} IS NOT DISTINCT FROM {PLATFORM_SCHEMA}.slugify(OLD.{source}::TEXT) THEN\n        NEW.{slug} = {PLATFORM_SCHEMA}.slugify(NEW.{source}::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+                "\nBEGIN\n  IF NEW.{slug} IS NULL OR BTRIM(NEW.{slug}::TEXT) = '' THEN\n    NEW.{slug} = {PLATFORM_SCHEMA}.slugify(NEW.{source}::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.{source} IS DISTINCT FROM OLD.{source} THEN\n      IF OLD.{slug} IS NOT DISTINCT FROM {PLATFORM_SCHEMA}.slugify(OLD.{source}::TEXT) THEN\n        NEW.{slug} = {PLATFORM_SCHEMA}.slugify(NEW.{source}::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
                 slug = quote_ident(slug_field),
                 source = quote_ident(source_field),
             ),

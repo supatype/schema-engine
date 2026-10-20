@@ -749,10 +749,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_defaulted_slug_def()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_def" IS NULL OR BTRIM(NEW."slug_def"::TEXT) = '' THEN
-      NEW."slug_def" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_def" IS NULL OR BTRIM(NEW."slug_def"::TEXT) = '' THEN
+    NEW."slug_def" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_def" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -767,10 +765,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_localised_slug_loc()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_loc" IS NULL OR BTRIM(NEW."slug_loc"::TEXT) = '' THEN
-      NEW."slug_loc" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_loc" IS NULL OR BTRIM(NEW."slug_loc"::TEXT) = '' THEN
+    NEW."slug_loc" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_loc" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -785,10 +781,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_read_only_slug_ro()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_ro" IS NULL OR BTRIM(NEW."slug_ro"::TEXT) = '' THEN
-      NEW."slug_ro" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_ro" IS NULL OR BTRIM(NEW."slug_ro"::TEXT) = '' THEN
+    NEW."slug_ro" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_ro" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -803,10 +797,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_required_slug_req()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_req" IS NULL OR BTRIM(NEW."slug_req"::TEXT) = '' THEN
-      NEW."slug_req" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_req" IS NULL OR BTRIM(NEW."slug_req"::TEXT) = '' THEN
+    NEW."slug_req" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_req" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -821,10 +813,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_slug_plain()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_plain" IS NULL OR BTRIM(NEW."slug_plain"::TEXT) = '' THEN
-      NEW."slug_plain" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_plain" IS NULL OR BTRIM(NEW."slug_plain"::TEXT) = '' THEN
+    NEW."slug_plain" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_plain" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
