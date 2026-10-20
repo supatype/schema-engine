@@ -105,7 +105,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     let has_soft_delete = has_composite(model, "softDelete") || model.options.soft_delete;
 
     let fields = build_fields_config(model, default_locale, ast);
-    let list_columns = derive_list_columns(model, has_publishing, has_timestamps);
+    let list_columns = derive_list_columns(model);
     let search_fields = derive_search_fields(model);
     // Every key column, so Studio can end each list order on something unique: two rows with the
     // same sort value otherwise trade places between pages. Studio assumed `id` before this was sent.
@@ -323,45 +323,71 @@ fn has_composite(model: &ModelAst, key: &str) -> bool {
     model.fields.contains_key(key)
 }
 
-fn derive_list_columns(
-    model: &ModelAst,
-    has_publishing: bool,
-    has_timestamps: bool,
-) -> Vec<String> {
-    let mut cols: Vec<String> = Vec::new();
+/// How many columns a Studio list shows when nothing else decides, the key included.
+const LIST_COLUMN_COUNT: usize = 3;
 
-    // First text-like field (name, title, slug, email)
-    for (name, field) in &model.fields {
-        if matches!(
-            field,
-            FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_)
-        ) {
-            cols.push(name.clone());
-            break;
-        }
-    }
-
-    if has_publishing {
-        cols.push("status".into());
-    }
-
-    for (name, field) in &model.fields {
-        if let FieldAst::Enum(e) = field {
-            if e.values.len() <= 8 && !cols.contains(name) {
-                cols.push(name.clone());
-            }
-        }
-    }
-
-    if has_timestamps {
-        cols.push("created_at".into());
-    }
-
+/// The columns a Studio list opens with: the record's key first, then the first fields, in
+/// declaration order, that read in a table cell, up to [`LIST_COLUMN_COUNT`] in all. A field that
+/// does not read in a cell is skipped and the next one taken.
+///
+/// The rule used to be the first text field, a publish status, short enums and `created_at`, which
+/// left a model of plain text columns with one column: every chat message in a room read the same.
+/// The key says which record a row is even when its other values repeat; a composite key shows its
+/// first column. Other keys (UUIDs, relation foreign keys) stay out of the remaining places. A
+/// composite field stands for the columns it adds, where it is declared, so `timestamps` last in a
+/// short model fills the list and costs a longer one nothing.
+fn derive_list_columns(model: &ModelAst) -> Vec<String> {
+    let key = crate::parser::accessors::primary_key_columns(model)
+        .into_iter()
+        .next();
+    let mut cols: Vec<String> = key.into_iter().collect();
+    let room = LIST_COLUMN_COUNT - cols.len();
+    cols.extend(
+        model
+            .fields
+            .iter()
+            .flat_map(|(name, field)| list_candidates(name, field))
+            .take(room),
+    );
     if cols.is_empty() {
         cols.push("id".into());
     }
-
     cols
+}
+
+/// The list columns one declared field contributes: none, its own, or a composite's.
+fn list_candidates(name: &str, field: &FieldAst) -> Vec<String> {
+    match field {
+        FieldAst::Timestamps => vec!["created_at".into(), "updated_at".into()],
+        FieldAst::Publishable => vec!["status".into()],
+        _ if reads_in_a_cell(field) => vec![name.to_string()],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a field's value reads as a short line in a list cell.
+///
+/// Not rich text, JSON, blocks, binary, geometry, vectors or search documents, which come out as
+/// markup or noise; not an array of objects; and not a bare key (a UUID, a relation's foreign key),
+/// which is an identifier rather than something a person knows a row by. The primary key is left
+/// out here because [`derive_list_columns`] puts it first itself.
+fn reads_in_a_cell(field: &FieldAst) -> bool {
+    if crate::parser::accessors::is_primary_key(field) {
+        return false;
+    }
+    match field {
+        FieldAst::Array(a) => !is_object_element(&a.element_type),
+        FieldAst::Uuid(_) | FieldAst::Relation(_) => false,
+        other => field_show_in_list(other),
+    }
+}
+
+/// An array whose elements are documents, which a cell can only show as raw JSON.
+fn is_object_element(element_type: &str) -> bool {
+    matches!(
+        element_type.trim().to_ascii_uppercase().as_str(),
+        "JSON" | "JSONB"
+    )
 }
 
 /// The columns Studio's list view searches.
@@ -756,6 +782,8 @@ fn field_widget_named(field: &FieldAst, name: &str) -> &'static str {
     field_widget(field)
 }
 
+/// A scalar whose value reads as a short line in a list cell. The field config's `showInList` and
+/// the model's `listColumns` both read this, so the two never disagree about a kind.
 fn field_show_in_list(field: &FieldAst) -> bool {
     matches!(
         field,
@@ -773,6 +801,14 @@ fn field_show_in_list(field: &FieldAst) -> bool {
             | FieldAst::BigInt(_)
             | FieldAst::Money(_)
             | FieldAst::Url(_)
+            | FieldAst::Decimal(_)
+            | FieldAst::Timestamp(_)
+            | FieldAst::Serial(_)
+            | FieldAst::BigSerial(_)
+            | FieldAst::Interval(_)
+            | FieldAst::Ip(_)
+            | FieldAst::Cidr(_)
+            | FieldAst::Macaddr(_)
     )
 }
 

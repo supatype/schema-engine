@@ -85,6 +85,7 @@ jobs:
             --test field_write_privileges_tests \
             --test versions_tests \
             --test admin_labels_tests \
+            --test admin_list_columns_tests \
             --test admin_primary_key_tests \
             --test admin_default_sort_tests \
             --test admin_geopoint_widget_tests \
