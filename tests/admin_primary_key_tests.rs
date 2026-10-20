@@ -3,8 +3,8 @@
 //! Studio pages through a list with `order=...` and needs a unique last column so two rows with the
 //! same sort value never swap places between pages. It used to assume `id`, which is wrong for a
 //! model keyed on another column and incomplete for a composite key. These pin that the engine
-//! names the key columns itself, in declaration order, and that the default sort of a model
-//! without timestamps uses its real key rather than a column it may not have.
+//! names the key columns itself, in declaration order, and that a default sort which falls back to
+//! the key uses its real key rather than a column it may not have.
 
 use serde_json::{json, Value};
 use supatype_engine::generator::typescript::admin;
@@ -49,7 +49,9 @@ fn a_composite_key_sends_every_column_in_declaration_order() {
 
 #[test]
 fn a_model_without_timestamps_sorts_by_its_own_key_not_by_id() {
-    let thing = model_with(json!({ "code": key("text") }), json!({}));
+    // An integer key with no default and no other column: nothing says which rows are newer and
+    // there is no text to sort by, so the order falls back to the key.
+    let thing = model_with(json!({ "code": key("integer") }), json!({}));
     assert_eq!(
         thing["defaultSort"],
         json!({ "field": "code", "direction": "desc" })

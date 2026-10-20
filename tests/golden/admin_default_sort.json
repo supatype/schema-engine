@@ -1,0 +1,240 @@
+{
+  "basic_blog": {
+    "users": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "posts": {
+      "field": "created_at",
+      "direction": "desc"
+    }
+  },
+  "cms_content": {
+    "authors": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "articles": {
+      "field": "id",
+      "direction": "desc"
+    },
+    "tags": {
+      "field": "name",
+      "direction": "asc"
+    }
+  },
+  "conformance_matrix": {
+    "every": {
+      "field": "text_plain",
+      "direction": "asc"
+    },
+    "every_localised": {
+      "field": "text_plain",
+      "direction": "asc"
+    },
+    "every_required": {
+      "field": "text_plain",
+      "direction": "asc"
+    },
+    "every_defaulted": {
+      "field": "text_plain",
+      "direction": "asc"
+    },
+    "every_read_only": {
+      "field": "text_plain",
+      "direction": "asc"
+    },
+    "relations": {
+      "field": "id",
+      "direction": "desc"
+    },
+    "composites": {
+      "field": "created_at",
+      "direction": "desc"
+    }
+  },
+  "ecommerce": {
+    "customers": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "products": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "orders": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "order_items": {
+      "field": "id",
+      "direction": "desc"
+    }
+  },
+  "five_model_blog": {
+    "users": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "categories": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "posts": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "comments": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "tags": {
+      "field": "name",
+      "direction": "asc"
+    }
+  },
+  "geospatial": {
+    "locations": {
+      "field": "created_at",
+      "direction": "desc"
+    }
+  },
+  "kitchen_sink": {
+    "kitchen_sink": {
+      "field": "created_at",
+      "direction": "desc"
+    }
+  },
+  "kitchen_sink_example": {
+    "page": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "speaker": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "room": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "talk": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "sponsor": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "attendee": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "ticket": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "chat_message": {
+      "field": "created_at",
+      "direction": "desc"
+    }
+  },
+  "many_to_many": {
+    "students": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "courses": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "tags": {
+      "field": "name",
+      "direction": "asc"
+    }
+  },
+  "rls_access_rules": {
+    "users": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "categories": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "posts": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "comments": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "tags": {
+      "field": "name",
+      "direction": "asc"
+    }
+  },
+  "rls_field_rules": {
+    "users": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "categories": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "posts": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "comments": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "tags": {
+      "field": "name",
+      "direction": "asc"
+    }
+  },
+  "self_referential": {
+    "categories": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "employees": {
+      "field": "created_at",
+      "direction": "desc"
+    }
+  },
+  "standup_relations": {
+    "profile": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "team": {
+      "field": "name",
+      "direction": "asc"
+    }
+  },
+  "vector_search": {
+    "documents": {
+      "field": "created_at",
+      "direction": "desc"
+    }
+  },
+  "versioned_blog": {
+    "posts": {
+      "field": "created_at",
+      "direction": "desc"
+    },
+    "ledger": {
+      "field": "note",
+      "direction": "asc"
+    },
+    "tags": {
+      "field": "label",
+      "direction": "asc"
+    }
+  }
+}

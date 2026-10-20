@@ -1,7 +1,7 @@
 use crate::parser::accessors::field_annotations;
 use crate::parser::ast::{
     scalar_of, DefaultValueAst, FieldAst, ModelAst, RelationCardinality, RelationFieldAst,
-    SchemaAst,
+    ScalarFieldAst, SchemaAst,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -110,7 +110,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     // Every key column, so Studio can end each list order on something unique: two rows with the
     // same sort value otherwise trade places between pages. Studio assumed `id` before this was sent.
     let primary_key = crate::parser::accessors::primary_key_columns(model);
-    let default_sort = default_sort(has_timestamps, &primary_key);
+    let default_sort = default_sort(model, has_timestamps, &primary_key, &search_fields);
 
     // Model constraints travel to Studio as the node the CLI parsed, not as SQL.
     //
@@ -189,17 +189,134 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     })
 }
 
-/// Newest first where the model has timestamps, otherwise its first key column descending.
+/// The order a Studio list opens in: the first of these rules that applies.
 ///
-/// The key, not `id`: a model keyed on another column has no `id`, and sorting on it was an error
-/// from PostgREST on every list load.
-fn default_sort(has_timestamps: bool, primary_key: &[String]) -> Value {
-    let field = if has_timestamps {
-        "created_at"
+/// 1. The model declares `timestamps`: `created_at` descending, newest first.
+/// 2. A date-time field records when the row was made: the first of [`CREATION_FIELD_NAMES`] the
+///    model has as a date-time column, else the first date-time column, in declaration order,
+///    whose default is the current time. Descending.
+/// 3. The first key column grows over time: a serial, an identity, an integer drawn from a
+///    sequence, or a UUID defaulting to a version 7 generator. Descending.
+/// 4. The key says nothing about age (a random UUID, text): the first searchable text column,
+///    ascending, so the list reads alphabetically by what a row is called. A declared search
+///    field comes first there, which makes it the model's title; the engine has no other title
+///    declaration.
+/// 5. Nothing else applies: the first key column descending. The key, not `id`: a model keyed on
+///    another column has no `id`, and sorting on it was an error from PostgREST on every list load.
+///
+/// Every rule reads declaration order, so a schema always opens in the same order. Studio ends
+/// each order with the key columns to break ties, so only the primary sort is sent.
+fn default_sort(
+    model: &ModelAst,
+    has_timestamps: bool,
+    primary_key: &[String],
+    search_fields: &[String],
+) -> Value {
+    let key = primary_key.first().map_or("id", String::as_str);
+    let (field, direction) = if has_timestamps {
+        ("created_at", "desc")
+    } else if let Some(created) = creation_field(model) {
+        (created, "desc")
+    } else if key_grows(model) {
+        (key, "desc")
+    } else if let Some(title) = title_column(model, search_fields) {
+        (title, "asc")
     } else {
-        primary_key.first().map_or("id", String::as_str)
+        (key, "desc")
     };
-    json!({ "field": field, "direction": "desc" })
+    json!({ "field": field, "direction": direction })
+}
+
+/// Names a project gives the column that records when a row was made, in the order they win.
+/// `created_at` is the engine's own (`timestamps`); the rest are the common alternatives, in both
+/// casings a field name arrives in.
+const CREATION_FIELD_NAMES: [&str; 4] = ["created_at", "createdAt", "inserted_at", "insertedAt"];
+
+/// Default expressions that stamp the current time, lowercased.
+const NOW_EXPRESSIONS: [&str; 6] = [
+    "now()",
+    "current_timestamp",
+    "localtimestamp",
+    "clock_timestamp()",
+    "statement_timestamp()",
+    "transaction_timestamp()",
+];
+
+/// Calls that make a version 7 UUID, which is time ordered: Postgres 18's own and `pg_uuidv7`'s.
+const UUID_V7_GENERATORS: [&str; 2] = ["uuidv7(", "uuid_generate_v7("];
+
+/// A date-time column holding one value per row. A localized one is JSONB and does not sort by time.
+fn date_time_of(field: &FieldAst) -> Option<&ScalarFieldAst> {
+    match field {
+        FieldAst::Datetime(f) | FieldAst::Timestamp(f) if !f.localized => Some(f),
+        _ => None,
+    }
+}
+
+fn creation_field(model: &ModelAst) -> Option<&str> {
+    let named = CREATION_FIELD_NAMES
+        .into_iter()
+        .find(|name| model.fields.get(*name).and_then(date_time_of).is_some());
+    named.or_else(|| {
+        model
+            .fields
+            .iter()
+            .find(|(_, field)| {
+                date_time_of(field).is_some_and(|f| defaults_to_now(f.default.as_ref()))
+            })
+            .map(|(name, _)| name.as_str())
+    })
+}
+
+fn defaults_to_now(default: Option<&DefaultValueAst>) -> bool {
+    match default {
+        Some(DefaultValueAst::Now) => true,
+        Some(DefaultValueAst::Expression { expr }) => {
+            NOW_EXPRESSIONS.contains(&expr.trim().to_ascii_lowercase().as_str())
+        }
+        _ => false,
+    }
+}
+
+fn expression_default(field: &ScalarFieldAst) -> Option<String> {
+    match &field.default {
+        Some(DefaultValueAst::Expression { expr }) => Some(expr.trim().to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+/// Whether the model's first key column takes larger values for newer rows.
+fn key_grows(model: &ModelAst) -> bool {
+    let Some((_, key)) = model
+        .fields
+        .iter()
+        .find(|(_, field)| crate::parser::accessors::is_primary_key(field))
+    else {
+        return false;
+    };
+    let expr = scalar_of(key).and_then(expression_default);
+    match key {
+        _ if crate::parser::accessors::owns_sequence(key) => true,
+        FieldAst::Integer(_) | FieldAst::SmallInt(_) | FieldAst::BigInt(_) => {
+            expr.is_some_and(|e| e.starts_with("nextval("))
+        }
+        FieldAst::Uuid(_) => {
+            expr.is_some_and(|e| UUID_V7_GENERATORS.iter().any(|g| e.starts_with(g)))
+        }
+        _ => false,
+    }
+}
+
+/// The first search field that is plain text in its own column, which sorts the way it reads.
+fn title_column<'a>(model: &ModelAst, search_fields: &'a [String]) -> Option<&'a str> {
+    search_fields
+        .iter()
+        .find(|name| match model.fields.get(name.as_str()) {
+            Some(FieldAst::Text(f) | FieldAst::Email(f)) => !f.localized,
+            Some(FieldAst::Slug(f)) => !f.localized,
+            _ => false,
+        })
+        .map(String::as_str)
 }
 
 fn has_composite(model: &ModelAst, key: &str) -> bool {
