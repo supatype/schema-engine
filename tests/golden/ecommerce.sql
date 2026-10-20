@@ -429,10 +429,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_products_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."name"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."name"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."name" IS DISTINCT FROM OLD."name" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."name"::TEXT) THEN

@@ -310,10 +310,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_kitchen_sink_slugfield()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slugField" IS NULL OR BTRIM(NEW."slugField"::TEXT) = '' THEN
-      NEW."slugField" = _platform.slugify(NEW."textField"::TEXT);
-    END IF;
+  IF NEW."slugField" IS NULL OR BTRIM(NEW."slugField"::TEXT) = '' THEN
+    NEW."slugField" = _platform.slugify(NEW."textField"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."textField" IS DISTINCT FROM OLD."textField" THEN
       IF OLD."slugField" IS NOT DISTINCT FROM _platform.slugify(OLD."textField"::TEXT) THEN

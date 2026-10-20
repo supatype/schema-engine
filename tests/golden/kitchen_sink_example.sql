@@ -2029,10 +2029,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_page_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."title"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."title"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."title" IS DISTINCT FROM OLD."title" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."title"::TEXT) THEN
@@ -2047,10 +2045,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_speaker_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."name"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."name"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."name" IS DISTINCT FROM OLD."name" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."name"::TEXT) THEN
@@ -2065,10 +2061,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_talk_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."title"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."title"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."title" IS DISTINCT FROM OLD."title" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."title"::TEXT) THEN
