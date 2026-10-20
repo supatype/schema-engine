@@ -318,9 +318,17 @@ fn classify(action: &Action, recorded: &BTreeSet<&ObjectKey>, out: &mut DoctorRe
             key,
             "is declared and does not exist: `supatype push` creates it",
         )),
+        // A policy, grant, label or RLS switch is put back only with consent: a push that is not
+        // interactive refuses it without `--overwrite-drift`, so saying it simply recreates it
+        // promised a fix the next push then refused.
         Action::Recreate { key, .. } => out.missing.push(DoctorItem::about(
             key,
-            "is Supatype's and was removed outside Supatype: `supatype push` recreates it",
+            if crate::desired::security_relevant(key) {
+                "is Supatype's and was removed outside Supatype: `supatype push` recreates it, \
+                 after asking, since it decides who may read or write"
+            } else {
+                "is Supatype's and was removed outside Supatype: `supatype push` recreates it"
+            },
         )),
         Action::Drift {
             key,
