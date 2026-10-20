@@ -281,6 +281,7 @@ jobs:
             --test writer_lock_wait_tests \
             --test unanalysed_table_tests \
             --test graphql_affordance_tests \
+            --test graphql_relation_names_tests \
             --test api_owner_role_tests \
             --test doctor_notes_tests \
             --test sequence_grant_tests \

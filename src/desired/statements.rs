@@ -830,6 +830,11 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
     if tagged(extensions::SCHEMA_TAG) || tagged(extensions::SCHEMA_USAGE_TAG) {
         return Attribution::Ignored("extensions schema");
     }
+    // The GraphQL names on each key: a comment, which belongs to whoever writes on the key and is
+    // no part of what the ledger records for it.
+    if tagged(crate::generator::sql::graphql_names::TAG) {
+        return Attribution::Ignored("graphql relation names");
+    }
     if tagged(versions::RLS_ON_TAG) {
         // Row-level security turned on where it is off: the statement it executes names the table.
         let Some(at) = h.find("ALTER TABLE ") else {

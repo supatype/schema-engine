@@ -1502,28 +1502,7 @@ async fn up_to_date(
     plan: Plan<'_>,
     audit: &crate::state::audit::PushAudit,
 ) -> Result<Outcome> {
-    // Rendered before anything is applied, so a schema whose versioned models have no stated
-    // visibility fails the push rather than half-applying it.
-    // Without what is in place as this push wants it: dropping and making again a policy or a
-    // trigger locks its table against every read and write (LK7).
-    let versions_sql = crate::generator::sql::settled::Settled::of(&plan.reconcile.actions, &[])
-        .leave_out(
-            &versions::render_versions_layer(&plan.ast, &plan.schema)?,
-            &plan.schema,
-        );
-    let storage_sql = storage::generate(&plan.ast)?;
-    // AST-only changes (widgets, labels) still need admin_config and the snapshot so Studio and
-    // tooling see the latest schema without a DDL migration.
-    let admin_cfg = admin::generate(&plan.ast)?;
-    let schema_snap = serde_json::to_value(&plan.ast)?;
-    let refresh = Refresh {
-        plan: &plan,
-        storage_sql,
-        versions_sql,
-        admin_cfg,
-        schema_snap,
-        audit,
-    };
+    let refresh = Refresh::of(&plan, audit)?;
 
     // These are writes too: under the engine's lock like any other, and only to the database the
     // plan found up to date. The keys and checks an earlier push left `NOT VALID` are validated
@@ -1549,9 +1528,65 @@ struct Refresh<'p> {
     plan: &'p Plan<'p>,
     storage_sql: String,
     versions_sql: String,
+    graphql_names_sql: String,
     admin_cfg: serde_json::Value,
     schema_snap: serde_json::Value,
     audit: &'p crate::state::audit::PushAudit,
+}
+
+impl<'p> Refresh<'p> {
+    /// Every script an up-to-date push re-asserts, rendered before anything is applied, so a
+    /// schema whose versioned models have no stated visibility fails the push rather than
+    /// half-applying it.
+    fn of(plan: &'p Plan<'p>, audit: &'p crate::state::audit::PushAudit) -> Result<Refresh<'p>> {
+        // Without what is in place as this push wants it: dropping and making again a policy or a
+        // trigger locks its table against every read and write (LK7).
+        let versions_sql =
+            crate::generator::sql::settled::Settled::of(&plan.reconcile.actions, &[]).leave_out(
+                &versions::render_versions_layer(&plan.ast, &plan.schema)?,
+                &plan.schema,
+            );
+        Ok(Refresh {
+            plan,
+            storage_sql: storage::generate(&plan.ast)?,
+            versions_sql,
+            // A key's GraphQL names, written where an earlier engine left none or someone changed
+            // them.
+            graphql_names_sql: crate::generator::sql::graphql_names::graphql_names_sql(
+                &plan.ast,
+                &plan.schema,
+            ),
+            // AST-only changes (widgets, labels) still need admin_config and the snapshot so
+            // Studio and tooling see the latest schema without a DDL migration.
+            admin_cfg: admin::generate(&plan.ast)?,
+            schema_snap: serde_json::to_value(&plan.ast)?,
+            audit,
+        })
+    }
+
+    /// The storage layer, the drafts and publishing layer and the GraphQL relation names.
+    async fn run_scripts(&self, tx: &mut PgConnection) -> Result<()> {
+        let scripts = [
+            (&self.storage_sql, "Failed to apply storage schema/policies"),
+            (
+                &self.versions_sql,
+                "Failed to apply drafts and publishing layer",
+            ),
+            (
+                &self.graphql_names_sql,
+                "Failed to name the relations for GraphQL",
+            ),
+        ];
+        for (sql, failure) in scripts {
+            if !sql.trim().is_empty() {
+                (&mut *tx)
+                    .execute(sqlx::raw_sql(sql))
+                    .await
+                    .context(failure)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl crate::online::Attempt for Refresh<'_> {
@@ -1568,16 +1603,7 @@ impl crate::online::Attempt for Refresh<'_> {
             restate_rows(tx, &plan.reconcile, &now.fingerprints).await?;
             // A project an older engine pushed is handed to its owner by any push, changes or not.
             crate::database_owner::hand_to_owner(tx, &plan.schema).await?;
-            (&mut *tx)
-                .execute(sqlx::raw_sql(&self.storage_sql))
-                .await
-                .context("Failed to apply storage schema/policies")?;
-            if !self.versions_sql.trim().is_empty() {
-                (&mut *tx)
-                    .execute(sqlx::raw_sql(&self.versions_sql))
-                    .await
-                    .context("Failed to apply drafts and publishing layer")?;
-            }
+            self.run_scripts(tx).await?;
             migration_history::refresh_metadata_on_up_to_date_push(
                 tx,
                 &self.admin_cfg,

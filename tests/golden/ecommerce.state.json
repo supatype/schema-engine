@@ -578,7 +578,7 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (order_id) REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"orderId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -616,7 +616,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (product_id) REFERENCES products(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"productId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -639,7 +639,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (customer_id) REFERENCES customers(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"customerId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",

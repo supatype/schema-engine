@@ -1429,16 +1429,17 @@ fn names_in(node: &Value, field: &str) -> Vec<String> {
 }
 
 const STAFF_WITH_RELATIONS: &str = "{ staffCollection { edges { node { name salary \
-     staff { name salary } \
+     manager { name salary } \
      staffCollection { edges { node { name } } } \
-     payslipCollection { edges { node { month amount } } } \
+     payslips { edges { node { month amount } } } \
      badgeCollection { edges { node { code } } } \
      staff_projectCollection { edges { node { project { title budget } } } } } } } }";
 
 /// pg_graphql reads a view's foreign keys from its comment, as it reads the primary key, so under
-/// tier 2 the views offer the relations tier 1's tables do, under the same names: a to-one field
-/// named after the table it points at and the reverse collection, a self-reference both ways, and
-/// a many-to-many through its junction. A one-to-one key's reverse is the one shape that differs:
+/// tier 2 the views offer the relations tier 1's tables do, under the same names: each end the
+/// schema names by its field (`manager`, `payslips`, `holder`), an end it does not name by
+/// pg_graphql's own (`staffCollection` for the managed staff), a self-reference both ways, and a
+/// many-to-many through its junction. A one-to-one key's reverse is the one shape that differs:
 /// pg_graphql finds no unique index on a view, so it is `badgeCollection` where tier 1 offers
 /// `badge`. Read as user A, every nested row is one A may see and every nested value is masked as
 /// A's own read of that table would mask it.
@@ -1471,13 +1472,13 @@ async fn a_reads_down_the_relations(pool: &sqlx::PgPool) {
     assert!(staff.iter().all(|s| s["salary"].is_null()), "{answer}");
 
     let alice = staff_named(&staff, "Alice");
-    assert_eq!(alice["staff"], json!({ "name": "Ada", "salary": null }));
+    assert_eq!(alice["manager"], json!({ "name": "Ada", "salary": null }));
     assert_eq!(
         alice["badgeCollection"]["edges"],
         json!([{ "node": { "code": "A-1" } }])
     );
     assert_eq!(
-        alice["payslipCollection"]["edges"],
+        alice["payslips"]["edges"],
         json!([{ "node": { "month": "2026-09", "amount": 4100 } }])
     );
     assert_eq!(
@@ -1487,11 +1488,11 @@ async fn a_reads_down_the_relations(pool: &sqlx::PgPool) {
 
     let ada = staff_named(&staff, "Ada");
     assert_eq!(names_in(ada, "staffCollection"), ["Alice", "Bob"]);
-    assert_eq!(ada["staff"], Value::Null);
+    assert_eq!(ada["manager"], Value::Null);
     // Nothing A may not read: neither Ada's nor Bob's payslip appears under them.
-    assert_eq!(ada["payslipCollection"]["edges"], json!([]), "{answer}");
+    assert_eq!(ada["payslips"]["edges"], json!([]), "{answer}");
     let bob = staff_named(&staff, "Bob");
-    assert_eq!(bob["payslipCollection"]["edges"], json!([]), "{answer}");
+    assert_eq!(bob["payslips"]["edges"], json!([]), "{answer}");
     assert_eq!(bob["staff_projectCollection"]["edges"], json!([]));
 }
 
@@ -1505,8 +1506,8 @@ async fn a_reads_up_the_relations(pool: &sqlx::PgPool) {
         ),
         (
             "badgeCollection",
-            "{ badgeCollection(filter: {code: {eq: \"B-1\"}}) { edges { node { staff { name } } } } }",
-            json!({ "staff": { "name": "Bob" } }),
+            "{ badgeCollection(filter: {code: {eq: \"B-1\"}}) { edges { node { holder { name } } } } }",
+            json!({ "holder": { "name": "Bob" } }),
         ),
         (
             "staff_projectCollection",
@@ -1525,7 +1526,7 @@ async fn service_role_reads_the_relations_unmasked(pool: &sqlx::PgPool) {
     let answer = gql(pool, Caller::Service, STAFF_WITH_RELATIONS).await;
     let staff = connection(&answer, "staffCollection");
     assert_eq!(
-        staff_named(&staff, "Bob")["payslipCollection"]["edges"],
+        staff_named(&staff, "Bob")["payslips"]["edges"],
         json!([{ "node": { "month": "2026-09", "amount": 7500 } }])
     );
     assert_eq!(staff_named(&staff, "Ada")["salary"], 150000);

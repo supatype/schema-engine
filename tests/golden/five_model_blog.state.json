@@ -537,7 +537,7 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"authorId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -575,7 +575,7 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (post_id) REFERENCES posts(id) ON UPDATE CASCADE ON DELETE CASCADE",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"postId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -598,7 +598,7 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (author_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"authorId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -621,7 +621,7 @@
         "checkExpression": null,
         "onDelete": "SET NULL",
         "definition": "FOREIGN KEY (category_id) REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"categoryId\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",

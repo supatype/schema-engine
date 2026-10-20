@@ -2026,7 +2026,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (room_id) REFERENCES room(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"room\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -2064,7 +2064,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (speaker_id) REFERENCES speaker(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"speaker\",\"local_name\":\"talks\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -2167,7 +2167,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (attendee_id) REFERENCES attendee(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"attendee\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
