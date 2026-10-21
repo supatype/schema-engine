@@ -50,10 +50,12 @@
 //!   a null column) makes `NOT predicate` NULL, and `IF NULL THEN RAISE` does not raise. Measured on
 //!   a prototype: an unauthorised write succeeded silently.
 
-use crate::generator::sql::auth_functions::{API_ROLES, CLAIMS_SCHEMA};
+use std::collections::BTreeMap;
+
+use crate::generator::sql::auth_functions::CLAIMS_SCHEMA;
+use crate::generator::sql::field_rules::{FieldRules, RuleSet};
 use crate::generator::sql::graphql_names::model_relation_names;
 use crate::generator::sql::rls::AUTH_ROLE;
-use crate::generator::sql::rls::IN_RULE_SETTING;
 use crate::parser::accessors::{db_table_name, platform_access};
 use crate::parser::ast::{JunctionTableAst, ModelAst, SchemaAst};
 use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
@@ -226,35 +228,45 @@ pub fn owner_reach_sql(schema: &str, owner: &str) -> String {
     )
 }
 
-/// The read predicate for a column, as SQL over the base table's own columns.
+/// One model's field rules as tier 2 evaluates them ([`FieldRules`]): per masked column, the read
+/// rule, and the write rule conjoined with it, as SQL over the base table's own columns.
 ///
-/// `None` when the column has no read rule: it is then as readable as the table itself, and wrapping
-/// it in `CASE WHEN TRUE` would only make the view harder to read.
-fn read_predicate(ast: &SchemaAst, model: &ModelAst, schema: &str, column: &str) -> Option<String> {
-    let rules = platform_access(model).fields.get(column)?;
-    let rule = rules.read.as_ref()?;
-    Some(crate::generator::sql::rls::access_rule_to_expr(
-        ast, model, rule, schema,
-    ))
+/// A column with no read rule is as readable as the table itself, and wrapping it in `CASE WHEN
+/// TRUE` would only make the view harder to read. Writing a column you cannot read is not a right
+/// the schema can express, and allowing it would let a caller discover the old value by trial:
+/// attempt a write, observe whether it was refused.
+#[derive(Default)]
+struct ColumnRules {
+    read: BTreeMap<String, String>,
+    write: BTreeMap<String, String>,
 }
 
-/// The write predicate, conjoined with the read predicate.
-///
-/// Writing a column you cannot read is not a right the schema can express, and allowing it would let
-/// a caller discover the old value by trial: attempt a write, observe whether it was refused.
-fn write_predicate(
-    ast: &SchemaAst,
-    model: &ModelAst,
-    schema: &str,
-    column: &str,
-) -> Option<String> {
-    let rules = platform_access(model).fields.get(column)?;
-    let write = rules.write.as_ref()?;
-    let write_expr = crate::generator::sql::rls::access_rule_to_expr(ast, model, write, schema);
-    Some(match read_predicate(ast, model, schema, column) {
-        Some(read) => format!("({write_expr}) AND ({read})"),
-        None => write_expr,
-    })
+impl ColumnRules {
+    /// `model`'s rules, with the set helpers they call added to `sets`.
+    fn of(
+        ast: &SchemaAst,
+        model: &ModelAst,
+        schema: &str,
+        sets: &mut BTreeMap<String, RuleSet>,
+    ) -> Self {
+        let mut rules = FieldRules::new(ast, model, schema);
+        let mut out = ColumnRules::default();
+        for (column, field) in &platform_access(model).fields {
+            let read = field.read.as_ref().map(|rule| rules.expr(rule));
+            if let Some(write) = field.write.as_ref().map(|rule| rules.expr(rule)) {
+                let write = match &read {
+                    Some(read) => format!("({write}) AND ({read})"),
+                    None => write,
+                };
+                out.write.insert(column.clone(), write);
+            }
+            if let Some(read) = read {
+                out.read.insert(column.clone(), read);
+            }
+        }
+        sets.extend(rules.into_sets());
+        out
+    }
 }
 
 /// The primary key a model declares, for a table that does not exist yet.
@@ -429,9 +441,20 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
     if plan.is_empty() {
         return String::new();
     }
-    let mut out = preamble(schema, plan_owner(plan));
+    let owner = plan_owner(plan);
     let names = crate::managed::ObjectNames::for_schema(ast);
+    let mut sets = BTreeMap::new();
+    let mut rules = BTreeMap::new();
+    for model in &ast.models {
+        rules.insert(
+            db_table_name(model),
+            ColumnRules::of(ast, model, schema, &mut sets),
+        );
+    }
 
+    let mut out = preamble(schema, owner);
+    // The set helpers first: the views and their triggers call them.
+    out.extend(sets.values().map(|set| set.create_sql(owner)));
     for entry in plan {
         let Some(model) = ast.models.iter().find(|m| db_table_name(m) == entry.table) else {
             if let Some(junction) = ast.junction_tables.iter().find(|j| j.name == entry.table) {
@@ -439,58 +462,76 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
             }
             continue;
         };
-        let helpers = RuleHelpers {
+        let view = ModelView {
             names: &names,
             ast,
             model,
             schema,
             entry,
+            rules: &rules[db_table_name(model)],
         };
-        out.push_str(&helpers.render());
-        out.push_str(&render_view(&helpers, plan));
-        if platform_access(model).fields.is_empty() {
+        out.push_str(&view.render(plan));
+    }
+    out
+}
+
+/// One model's view and what it needs, under tier 2.
+struct ModelView<'a> {
+    names: &'a crate::managed::ObjectNames,
+    ast: &'a SchemaAst,
+    model: &'a ModelAst,
+    schema: &'a str,
+    entry: &'a FieldViewTable,
+    rules: &'a ColumnRules,
+}
+
+impl ModelView<'_> {
+    /// The view, then its write trigger where it masks a column and has a key to write by.
+    fn render(&self, plan: &[FieldViewTable]) -> String {
+        let mut out = render_view(self, plan);
+        if platform_access(self.model).fields.is_empty() {
             // Nothing masked: the view is a plain projection, which Postgres updates by itself.
-            continue;
+            return out;
         }
-        if entry.key.is_empty() {
+        if self.entry.key.is_empty() {
             // Without a key there is no way to say *which* row an INSTEAD OF trigger should
             // write, so the view is left read-only rather than given a trigger that guesses.
             // PostgREST cannot update a keyless relation either, so nothing is lost that worked.
             out.push_str(&format!(
                 "-- No primary key on {}.{}: its masked view is read-only, because an INSTEAD OF\n\
                  -- trigger has no way to identify the row being written.\n\n",
-                comment_text(schema),
-                comment_text(&entry.table)
+                comment_text(self.schema),
+                comment_text(&self.entry.table)
             ));
-            continue;
+            return out;
         }
         let trigger = WriteTrigger {
-            names: &names,
-            ast,
-            model,
-            schema,
-            entry,
+            names: self.names,
+            model: self.model,
+            schema: self.schema,
+            entry: self.entry,
+            rules: self.rules,
         };
         out.push_str(&trigger.render());
+        out
     }
-
-    out
 }
 
 /// One model's view: the masked projection, owned by [`API_OWNER`], with the base table's
 /// defaults, its GraphQL identity and relations, and its privileges.
-fn render_view(helpers: &RuleHelpers<'_>, plan: &[FieldViewTable]) -> String {
-    let RuleHelpers {
+fn render_view(view: &ModelView<'_>, plan: &[FieldViewTable]) -> String {
+    let ModelView {
         ast,
         model,
         schema,
         entry,
+        rules,
         ..
-    } = *helpers;
+    } = *view;
     let projections: Vec<String> = entry
         .columns
         .iter()
-        .map(|column| projection(helpers, column))
+        .map(|column| projection(rules, &entry.table, column))
         .collect();
     let mut out = view_head(entry, &projections, schema, &masked_columns(model, entry));
     out.push_str(&graphql_comment_sql(
@@ -582,98 +623,18 @@ fn view_tail(entry: &FieldViewTable, schema: &str) -> String {
 }
 
 /// One column of the view: the base column, or NULL for a caller its read rule refuses.
-/// `service_role` reads everything, as tier 1 lets it. The rule is asked of the column's helper
-/// over the whole base row, which the view reads under the table's own name.
-fn projection(helpers: &RuleHelpers<'_>, column: &str) -> String {
-    let table = quote_ident(&helpers.entry.table);
-    let qualified = format!("{table}.{}", quote_ident(column));
-    match helpers.call("read", column, &table) {
+/// `service_role` reads everything, as tier 1 lets it.
+fn projection(rules: &ColumnRules, table: &str, column: &str) -> String {
+    let qualified = format!("{}.{}", quote_ident(table), quote_ident(column));
+    match rules.read.get(column) {
         // NULL rather than an error, so `SELECT *` (what PostgREST sends by default) keeps working
         // for a caller who may not read one column.
         Some(predicate) => format!(
-            "    CASE WHEN {} OR {predicate} THEN {qualified} ELSE NULL END AS {}",
+            "    CASE WHEN {} OR ({predicate}) THEN {qualified} ELSE NULL END AS {}",
             service_role_exempt(),
             quote_ident(column)
         ),
         None => format!("    {qualified}"),
-    }
-}
-
-/// Where the tier 2 rule helpers live: the helper schema, which the API never serves, so no helper
-/// is ever an RPC.
-const RULE_SCHEMA: &str = crate::generator::sql::versions::HELPER_SCHEMA;
-
-/// One model's tier 2 rule helpers: per masked column, `can_read_<table>__<column>` and, with a
-/// write rule, `can_write_<table>__<column>`, in [`RULE_SCHEMA`], which the view and its write
-/// trigger call rather than holding the rule inline.
-///
-/// A helper is what keeps Studio out of a rule. The rule's subqueries must be answered by the app's
-/// rules, so the helper turns [`IN_RULE_SETTING`] on for as long as it runs, which the Studio
-/// policies stand aside for; an inline rule had no way to. `SECURITY DEFINER` as the view owner,
-/// because the rule reads base tables the API roles hold nothing on under tier 2, exactly as the
-/// inline rule did inside the owner-rights view; row-level security still applies to the owner and
-/// reads the caller's claims. `search_path` is pinned empty: the engine qualifies everything it
-/// writes, and a `Custom` rule naming a table unqualified fails the push when the helper is
-/// created, under the helper's own name, which names its table and column.
-#[derive(Clone, Copy)]
-struct RuleHelpers<'a> {
-    names: &'a crate::managed::ObjectNames,
-    ast: &'a SchemaAst,
-    model: &'a ModelAst,
-    schema: &'a str,
-    entry: &'a FieldViewTable,
-}
-
-impl RuleHelpers<'_> {
-    /// The rule `op` (`read` or `write`) puts on `column`, as SQL over the row, if it has one.
-    fn rule(&self, op: &str, column: &str) -> Option<String> {
-        match op {
-            "read" => read_predicate(self.ast, self.model, self.schema, column),
-            _ => write_predicate(self.ast, self.model, self.schema, column),
-        }
-    }
-
-    /// The helper deciding `op` on `column`.
-    fn function(&self, op: &str, column: &str) -> String {
-        let name = self.names.field_can_function(&self.entry.table, op, column);
-        quote_qualified(RULE_SCHEMA, &name)
-    }
-
-    /// The call deciding `op` on `column` for `row`, a value of the base table's row type; `None`
-    /// where the column has no such rule.
-    fn call(&self, op: &str, column: &str, row: &str) -> Option<String> {
-        self.rule(op, column)?;
-        Some(format!("{}({row})", self.function(op, column)))
-    }
-
-    /// Every helper the model's masked columns need, made before the view that calls them.
-    fn render(&self) -> String {
-        masked_columns(self.model, self.entry)
-            .into_iter()
-            .flat_map(|column| ["read", "write"].map(|op| (op, column)))
-            .filter_map(|(op, column)| Some(self.render_one(op, column, &self.rule(op, column)?)))
-            .collect()
-    }
-
-    /// One helper over `expr`, owned by the view owner, callable by the API roles only.
-    fn render_one(&self, op: &str, column: &str, expr: &str) -> String {
-        let function = self.function(op, column);
-        let row = quote_qualified(self.schema, &self.entry.table);
-        let alias = quote_ident(&self.entry.table);
-        let signature = format!("{function}({row})");
-        format!(
-            "CREATE OR REPLACE FUNCTION {function}({alias} {row})\n\
-             \x20 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER\n\
-             \x20 SET search_path = '' SET {IN_RULE_SETTING} = 'on' AS $rule$\n\
-             \x20   SELECT {expr}\n\
-             \x20     FROM (SELECT ($1).*) AS {alias};\n\
-             \x20 $rule$;\n\
-             ALTER FUNCTION {signature} OWNER TO {owner};\n\
-             REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;\n\
-             GRANT EXECUTE ON FUNCTION {signature} TO {roles};\n\n",
-            owner = quote_ident(&self.entry.owner),
-            roles = API_ROLES.join(", "),
-        )
     }
 }
 
@@ -857,10 +818,10 @@ fn junction_foreign_keys(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<Vi
 /// refused it (T2-N2), so a refused write reports no row rather than echoing one.
 struct WriteTrigger<'a> {
     names: &'a crate::managed::ObjectNames,
-    ast: &'a SchemaAst,
     model: &'a ModelAst,
     schema: &'a str,
     entry: &'a FieldViewTable,
+    rules: &'a ColumnRules,
 }
 
 impl WriteTrigger<'_> {
@@ -934,23 +895,12 @@ impl WriteTrigger<'_> {
             .collect()
     }
 
-    /// The view's rule helpers ([`RuleHelpers`]), which decide each masked column here too.
-    fn helpers(&self) -> RuleHelpers<'_> {
-        RuleHelpers {
-            names: self.names,
-            ast: self.ast,
-            model: self.model,
-            schema: self.schema,
-            entry: self.entry,
-        }
-    }
-
-    /// `NEW`, a row of the view, as a row of the base table for a helper to judge: the columns the
-    /// view carries, and NULL for any it does not, which the view's rules cannot read either.
-    fn new_as_base(&self) -> String {
+    /// `rule` evaluated against `row`, aliased to the table's name so the rule's unqualified columns
+    /// resolve, which is the same device the `can_*` functions use.
+    fn against(&self, predicate: &str, row: &str) -> String {
         format!(
-            "jsonb_populate_record(NULL::{}, to_jsonb(NEW))",
-            self.base()
+            "(SELECT ({predicate}) FROM (SELECT {row}.*) AS {})",
+            quote_ident(&self.entry.table)
         )
     }
 
@@ -1155,10 +1105,12 @@ impl WriteTrigger<'_> {
         masked
             .iter()
             .filter_map(|column| {
-                let (helpers, row) = (self.helpers(), self.new_as_base());
-                let judged = helpers
-                    .call("write", column, &row)
-                    .or_else(|| helpers.call("read", column, &row))?;
+                let test = self
+                    .rules
+                    .write
+                    .get(*column)
+                    .or_else(|| self.rules.read.get(*column))?;
+                let judged = self.against(test, "NEW");
                 Some(format!(
                     "\x20   IF NOT exempt AND {name} = ANY (wrote) AND {judged} IS NOT TRUE THEN\n\
                      \x20     RAISE EXCEPTION {denied} USING ERRCODE = '42501';\n\
@@ -1212,13 +1164,12 @@ impl WriteTrigger<'_> {
         masked_columns(self.model, self.entry)
             .into_iter()
             .map(|column| {
-                let helpers = self.helpers();
-                let judged = |op| {
-                    helpers
-                        .call(op, column, "stored")
-                        .unwrap_or_else(|| "TRUE".to_string())
+                let judged = |rules: &BTreeMap<String, String>| {
+                    rules
+                        .get(column)
+                        .map_or("TRUE".to_string(), |p| self.against(p, "stored"))
                 };
-                let (readable, writable) = (judged("read"), judged("write"));
+                let (readable, writable) = (judged(&self.rules.read), judged(&self.rules.write));
                 let col = quote_ident(column);
                 format!(
                     "\x20   -- {label}\n\
