@@ -255,7 +255,7 @@ fn a_public_read_does_not_hide_the_related_models_owner() {
     assert_eq!(
         update_expr(&ast, "Comment"),
         format!(
-            "EXISTS (SELECT 1 FROM \"post\" WHERE \"post\".\"id\" = \"post_id\" AND {UID} = \"post\".\"author_id\")"
+            "EXISTS (SELECT 1 FROM \"public\".\"post\" WHERE \"post\".\"id\" = \"post_id\" AND {UID} = \"post\".\"author_id\")"
         )
     );
 }

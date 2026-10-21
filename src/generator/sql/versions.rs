@@ -27,7 +27,7 @@
 use super::baseline_versions::{BaselineModel, CREATING_RECORD_SETTING};
 use crate::parser::accessors::{db_table_name, versions_of, versions_table_name};
 use crate::parser::ast::{ModelAst, PublishingAst, SchemaAst};
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{do_block, dollar_tag_among, quote_ident, quote_literal, quote_qualified};
 use crate::state::migration_history::studio_member_held_by_sql;
 use anyhow::{bail, Result};
 use std::collections::BTreeSet;
@@ -530,13 +530,14 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
 /// the table's ACCESS EXCLUSIVE lock before it looks, and the layer runs on every push.
 fn rls_on_sql(schema: &str, table: &str) -> String {
     let target = quote_qualified(schema, table);
-    format!(
-        "DO ${RLS_ON_TAG}$\nBEGIN\n  \
+    let body = format!(
+        "\nBEGIN\n  \
          IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = {}::regclass) THEN\n    \
          ALTER TABLE {target} ENABLE ROW LEVEL SECURITY;\n  \
-         END IF;\nEND\n${RLS_ON_TAG}$;\n",
+         END IF;\nEND\n",
         quote_literal(&target),
-    )
+    );
+    format!("{}\n", do_block(RLS_ON_TAG, &body))
 }
 
 // ─── The draft schema ─────────────────────────────────────────────────────────
@@ -590,16 +591,16 @@ pub fn drop_draft_views_sql(ast: &SchemaAst, changed: &BTreeSet<String>) -> Stri
 /// assuming it: a plain `DROP VIEW IF EXISTS draft.x` still raises when `draft` itself is absent,
 /// which is every first push.
 pub fn drop_views_in_schema_sql(schema: &str, tables: &[&str]) -> String {
-    let mut out = format!(
-        "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = {}) THEN\n",
+    let mut body = format!(
+        "\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = {}) THEN\n",
         quote_literal(schema)
     );
     for table in tables {
         let drop = format!("DROP VIEW IF EXISTS {}", quote_qualified(schema, table));
-        out.push_str(&format!("    EXECUTE {};\n", quote_literal(&drop)));
+        body.push_str(&format!("    EXECUTE {};\n", quote_literal(&drop)));
     }
-    out.push_str("  END IF;\nEND $$;\n\n");
-    out
+    body.push_str("  END IF;\nEND ");
+    format!("{}\n\n", do_block("", &body))
 }
 
 fn draft_schema_preamble() -> String {
@@ -899,21 +900,24 @@ fn can_edit_function_sql(
         None => "FALSE".to_string(),
     };
     let name = names.can_edit_function(table);
+    let (schema_q, table_q, pk_q) = (
+        quote_ident(schema),
+        quote_ident(table),
+        quote_ident(&primary_key),
+    );
+    let tag = dollar_tag_among(&[&schema_q, &table_q, &pk_q, &expr], "fn");
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record {pk_type})\n  \
-         RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$\n    \
+         RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS ${tag}$\n    \
          SELECT EXISTS (\n      \
          SELECT 1 FROM {schema_q}.{table_q}\n       \
          WHERE {pk_q} = p_record AND ({expr})\n    \
          );\n  \
-         $fn$;\n\
+         ${tag}$;\n\
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}({pk_type}) TO authenticated, service_role;\n\n",
         helper = HELPER_SCHEMA,
         fn_q = quote_ident(&name),
         pk_type = primary_key_type,
-        schema_q = quote_ident(schema),
-        table_q = quote_ident(table),
-        pk_q = quote_ident(&primary_key),
     )
 }
 
@@ -968,9 +972,15 @@ fn draft_aware_select_policy_sql(
 ) -> String {
     let policy = crate::managed::policy_name(table, "draft_select");
     let helper_fn = names.sees_draft_function(table);
+    let (schema_q, versions_q, table_lit) = (
+        quote_ident(schema),
+        quote_ident(versions_table),
+        quote_literal(table),
+    );
+    let tag = dollar_tag_among(&[&schema_q, &versions_q, &table_lit], "fn");
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record text)\n  \
-         RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$\n    \
+         RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS ${tag}$\n    \
          SELECT EXISTS (\n      \
          SELECT 1 FROM {schema_q}.{versions_q} v\n       \
          WHERE v.\"record_id\"::text = p_record\n         \
@@ -980,7 +990,7 @@ fn draft_aware_select_policy_sql(
          OR {helper}.preview_allows({table_lit}, v.\"record_id\"::text)\n         \
          )\n    \
          ) OR {helper}.created_in_this_transaction({table_lit}, p_record);\n  \
-         $fn$;\n\
+         ${tag}$;\n\
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}(text) TO anon, authenticated, service_role;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
          CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
@@ -988,11 +998,8 @@ fn draft_aware_select_policy_sql(
         helper = HELPER_SCHEMA,
         fn_q = quote_ident(&helper_fn),
         policy_q = quote_ident(&policy),
-        schema_q = quote_ident(schema),
         table_q = quote_ident(table),
-        versions_q = quote_ident(versions_table),
         pk_q = quote_ident(primary_key),
-        table_lit = quote_literal(table),
     )
 }
 
@@ -1058,9 +1065,11 @@ fn versions_write_access_sql(
 /// `WITH CHECK`, so the policy still decides whether the write happens; this only fills in fields on
 /// the row being written, and every reference is schema-qualified under an empty `search_path`.
 fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -> String {
+    let (schema_q, versions_q) = (quote_ident(schema), quote_ident(versions_table));
+    let tag = dollar_tag_among(&[&schema_q, &versions_q], "fn");
     format!(
         r#"CREATE OR REPLACE FUNCTION {helper}.{guard_q}() RETURNS trigger
-  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS ${tag}$
   BEGIN
     IF TG_OP = 'INSERT' THEN
       -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other
@@ -1085,7 +1094,7 @@ fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -
     NEW."record_id" := OLD."record_id";
     RETURN NEW;
   END;
-  $fn$;
+  ${tag}$;
 
 DROP TRIGGER IF EXISTS {guard_q} ON {schema_q}.{versions_q};
 CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
@@ -1094,8 +1103,6 @@ CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
 "#,
         helper = HELPER_SCHEMA,
         guard_q = quote_ident(guard),
-        schema_q = quote_ident(schema),
-        versions_q = quote_ident(versions_table),
     )
 }
 
@@ -1119,9 +1126,15 @@ fn audit_trigger_sql(
     names: &crate::managed::ObjectNames,
 ) -> String {
     let audit = names.versions_audit(table, versions_table);
+    let (schema_q, versions_q, pk_q) = (
+        quote_ident(schema),
+        quote_ident(versions_table),
+        quote_ident(primary_key),
+    );
+    let tag = dollar_tag_among(&[&schema_q, &versions_q, &pk_q], "fn");
     format!(
         r#"CREATE OR REPLACE FUNCTION {helper}.{audit_q}() RETURNS trigger
-  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS ${tag}$
   DECLARE
     next_version integer;
   BEGIN
@@ -1132,7 +1145,7 @@ fn audit_trigger_sql(
     VALUES (NEW.{pk_q}, next_version, 'published', to_jsonb(NEW), {helper}.jwt_uid());
     RETURN NULL;
   END;
-  $fn$;
+  ${tag}$;
 
 DROP TRIGGER IF EXISTS {audit_q} ON {schema_q}.{table_q};
 CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
@@ -1141,10 +1154,7 @@ CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
 "#,
         helper = HELPER_SCHEMA,
         audit_q = quote_ident(&audit),
-        schema_q = quote_ident(schema),
         table_q = quote_ident(table),
-        versions_q = quote_ident(versions_table),
-        pk_q = quote_ident(primary_key),
     )
 }
 

@@ -14,7 +14,7 @@
 use crate::desired::identity::{function_key, quote_if_needed};
 use crate::managed::ObjectNames;
 use crate::parser::ast::{FieldAst, ModelAst, SchemaAst};
-use crate::sql_quote::{quote_ident, quote_qualified};
+use crate::sql_quote::{dollar_quote, quote_ident, quote_qualified};
 use anyhow::Result;
 
 /// The schema the trigger functions live in.
@@ -76,11 +76,11 @@ impl TriggerFunction {
             .map(|p| format!(" SET search_path = {p}"))
             .unwrap_or_default();
         format!(
-            "CREATE OR REPLACE FUNCTION {}({})\nRETURNS {} AS $${}$$ LANGUAGE plpgsql{volatility}{path};\n",
+            "CREATE OR REPLACE FUNCTION {}({})\nRETURNS {} AS {} LANGUAGE plpgsql{volatility}{path};\n",
             self.qualified(),
             self.args,
             self.returns.to_ascii_uppercase(),
-            self.body
+            dollar_quote(&self.body, "")
         )
     }
 }

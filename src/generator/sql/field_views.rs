@@ -58,7 +58,10 @@ use crate::generator::sql::graphql_names::model_relation_names;
 use crate::generator::sql::rls::AUTH_ROLE;
 use crate::parser::accessors::{db_table_name, platform_access};
 use crate::parser::ast::{JunctionTableAst, ModelAst, SchemaAst};
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
+use crate::sql_quote::{
+    comment_text, do_block, dollar_quote, quote_ident, quote_literal, quote_qualified,
+    raise_message,
+};
 use crate::state::database_state::DatabaseState;
 
 /// Schema the views live in. PostgREST is pointed here instead of the managed schema.
@@ -148,8 +151,8 @@ fn owner_block(schema: &str, owner_name: &str) -> String {
         "The api views and their write triggers run as this role. As a superuser: ALTER ROLE \
          {owner_name} NOLOGIN NOBYPASSRLS NOSUPERUSER;"
     ));
-    format!(
-        "DO ${OWNER_TAG}$\nBEGIN\n\
+    let body = format!(
+        "\nBEGIN\n\
          \x20 IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {owner_lit}) THEN\n\
          \x20   BEGIN\n\
          \x20     CREATE ROLE {owner} NOLOGIN NOBYPASSRLS NOINHERIT;\n\
@@ -173,11 +176,12 @@ fn owner_block(schema: &str, owner_name: &str) -> String {
          \x20   GRANT USAGE ON SCHEMA \"auth\" TO {owner};\n\
          \x20 END IF;\n\
          {shared}\
-         END\n${OWNER_TAG}$;",
+         END\n",
         api = quote_ident(VIEW_SCHEMA),
         project = quote_ident(schema),
         shared = from_shared_owner(owner_name),
-    )
+    );
+    do_block(OWNER_TAG, &body)
 }
 
 /// The upgrade from the shared [`API_OWNER`] (TI2), inside [`owner_block`]: what it owns in this
@@ -209,8 +213,8 @@ fn from_shared_owner(owner: &str) -> String {
 /// caller could use: nobody connects as it, and it only runs the triggers' own statements.
 pub fn owner_reach_sql(schema: &str, owner: &str) -> String {
     let owner_lit = quote_literal(owner);
-    format!(
-        "DO ${OWNER_REACH_TAG}$\nDECLARE\n  f regprocedure;\nBEGIN\n\
+    let body = format!(
+        "\nDECLARE\n  f regprocedure;\nBEGIN\n\
          \x20 FOR f IN\n\
          \x20   SELECT p.oid::regprocedure FROM pg_proc p\n\
          \x20    WHERE p.pronamespace IN ({claims}::regnamespace, {project}::regnamespace)\n\
@@ -222,10 +226,11 @@ pub fn owner_reach_sql(schema: &str, owner: &str) -> String {
          \x20 LOOP\n\
          \x20   EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', f, {owner_lit});\n\
          \x20 END LOOP;\n\
-         END\n${OWNER_REACH_TAG}$;\n",
+         END\n",
         claims = quote_literal(&quote_ident(CLAIMS_SCHEMA)),
         project = quote_literal(&quote_ident(schema)),
-    )
+    );
+    format!("{}\n", do_block(OWNER_REACH_TAG, &body))
 }
 
 /// One model's field rules as tier 2 evaluates them ([`FieldRules`]): per masked column, the read
@@ -654,8 +659,8 @@ fn projection(rules: &ColumnRules, table: &str, column: &str) -> String {
 fn view_setup(schema: &str, entry: &FieldViewTable, masked: &[&String]) -> String {
     let base = quote_literal(&quote_qualified(schema, &entry.table));
     let view = quote_literal(&quote_qualified(VIEW_SCHEMA, &entry.table));
-    format!(
-        "DO ${VIEW_SETUP_TAG}$\nDECLARE\n  d record;\nBEGIN\n\
+    let body = format!(
+        "\nDECLARE\n  d record;\nBEGIN\n\
          \x20 FOR d IN\n\
          \x20   SELECT a.attname, pg_get_expr(ad.adbin, ad.adrelid) AS expr\n\
          \x20     FROM pg_attrdef ad\n\
@@ -676,10 +681,11 @@ fn view_setup(schema: &str, entry: &FieldViewTable, masked: &[&String]) -> Strin
          \x20 LOOP\n\
          \x20   EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO %I', d.seq, {owner});\n\
          \x20 END LOOP;\n\
-         END\n${VIEW_SETUP_TAG}$;\n",
+         END\n",
         owner = quote_literal(&entry.owner),
         unmasked = unmasked_clause(masked),
-    )
+    );
+    format!("{}\n", do_block(VIEW_SETUP_TAG, &body))
 }
 
 /// The condition in [`view_setup`] that passes over the masked columns' defaults.
@@ -909,7 +915,23 @@ impl WriteTrigger<'_> {
         let owner = quote_ident(&self.entry.owner);
         format!(
             "CREATE OR REPLACE FUNCTION {function}() RETURNS trigger\n\
-             LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $trg$\n\
+             LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS {body};\n\
+             ALTER FUNCTION {function}() OWNER TO {owner};\n\
+             REVOKE ALL ON FUNCTION {function}() FROM PUBLIC;\n\
+             \n\
+             CREATE TRIGGER {trigger}\n\
+             \x20 INSTEAD OF INSERT OR UPDATE OR DELETE ON {view}\n\
+             \x20 FOR EACH ROW EXECUTE FUNCTION {function}();\n\n",
+            body = dollar_quote(&self.trigger_body(), "trg"),
+            trigger = quote_ident(&self.names.write_trigger(&self.entry.table)),
+            view = self.view(),
+        )
+    }
+
+    /// The trigger function's body, which the rules it writes can put any text in.
+    fn trigger_body(&self) -> String {
+        format!(
+            "\n\
              DECLARE\n\
              \x20 stored {base};\n\
              \x20 touched bigint;\n\
@@ -920,20 +942,12 @@ impl WriteTrigger<'_> {
              \x20 dflt jsonb;\n\
              \x20 exempt boolean := {exempt};\n\
              BEGIN\n\
-             {delete}{insert}{update}END $trg$;\n\
-             ALTER FUNCTION {function}() OWNER TO {owner};\n\
-             REVOKE ALL ON FUNCTION {function}() FROM PUBLIC;\n\
-             \n\
-             CREATE TRIGGER {trigger}\n\
-             \x20 INSTEAD OF INSERT OR UPDATE OR DELETE ON {view}\n\
-             \x20 FOR EACH ROW EXECUTE FUNCTION {function}();\n\n",
+             {delete}{insert}{update}END ",
             base = self.base(),
             exempt = service_role_exempt(),
             delete = self.delete_branch(),
             insert = self.insert_branch(),
             update = self.update_branch(),
-            trigger = quote_ident(&self.names.write_trigger(&self.entry.table)),
-            view = self.view(),
         )
     }
 

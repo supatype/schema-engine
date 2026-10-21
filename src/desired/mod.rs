@@ -60,7 +60,7 @@ use crate::parser::accessors::{
 };
 use crate::parser::ast::{AccessAst, FieldAst, IndexAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{do_block, quote_ident, quote_literal, quote_qualified};
 
 /// A check constraint the schema declares on a model: a field's bounds or a model-level rule.
 pub(crate) struct ExpectedCheck {
@@ -153,10 +153,13 @@ impl ObjectKey {
             // Guarded as the schedule is: a database without `pg_cron` has no job to unschedule.
             // Only this database's job, found as introspection finds them
             // ([`crate::generator::sql::versions::cron_job_database`]): `cron.job` is the cluster's.
-            ObjectKind::CronJob => format!(
-                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = {} AND database = {};\n  END IF;\nEND;\n$cron$;",
-                quote_literal(name),
-                crate::generator::sql::versions::cron_job_database()
+            ObjectKind::CronJob => do_block(
+                "cron",
+                &format!(
+                    "\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = {} AND database = {};\n  END IF;\nEND;\n",
+                    quote_literal(name),
+                    crate::generator::sql::versions::cron_job_database()
+                ),
             ),
             // The parent is `table.column`, or the table for a label on the table itself; only our
             // own provider's labels are ever desired or dropped.
@@ -289,7 +292,8 @@ pub fn never_removed(kind: ObjectKind) -> bool {
 /// drafts layer's (E19); and the functions access is decided by: the `can_*` predicates, which the
 /// field masking labels, the tier 2 views and every caller asking "may I" run, and the claim
 /// readers in the engine's helper schema that every generated rule reads the caller through
-/// (F15 (f)). A hand edit to `can_read_note__secret` is as much a change to who may read a column
+/// (F15 (f)), and the tier 2 set helpers (`rule_set_*`) a field rule reads another table
+/// through. A hand edit to `can_read_note__secret` is as much a change to who may read a column
 /// as an edit to its label. Any other function's callers are security relevant too when they
 /// change (`ledger::reconcile`, F14), though its body is not. A table's replica identity is not:
 /// it decides what the WAL carries, not who may read it.
@@ -304,6 +308,8 @@ pub fn security_relevant(key: &ObjectKey) -> bool {
             key.name.starts_with("can_")
                 || (key.schema == crate::generator::sql::auth_functions::CLAIMS_SCHEMA
                     && key.name.starts_with("jwt_"))
+                || (key.schema == crate::generator::sql::field_rules::RULE_SCHEMA
+                    && key.name.starts_with("rule_set_"))
         }
         _ => false,
     }

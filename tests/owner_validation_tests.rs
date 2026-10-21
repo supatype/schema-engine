@@ -244,7 +244,7 @@ fn owner_from_nested_relation_generates_exists_subquery() {
     let rule = photo.access().read.as_ref().expect("read rule must exist");
     let expr = access_rule_to_expr(&ast, photo, rule, "public");
     assert!(
-        expr.contains("EXISTS (SELECT 1 FROM \"album\""),
+        expr.contains("EXISTS (SELECT 1 FROM \"public\".\"album\""),
         "OwnerFrom<album> must check ownership via album table, got: {expr}"
     );
     assert!(

@@ -217,6 +217,8 @@ jobs:
             --test slug_trigger_tests \
             --test schema_isolation_tests \
             --test studio_members_tests \
+            --test dollar_tag_tests \
+            --test owner_rows_filter_tests \
             --test studio_identity_links_tests \
             --test studio_state_security_tests \
             --test table_adoption_tests \

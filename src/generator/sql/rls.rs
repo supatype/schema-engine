@@ -8,7 +8,9 @@ use crate::parser::ast::{
     AccessRule, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst, Operand,
     SchemaAst,
 };
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{
+    comment_text, do_block, dollar_quote, quote_ident, quote_literal, quote_qualified,
+};
 use anyhow::Result;
 
 /// Generates RLS policy SQL for all models that have access rules.
@@ -366,7 +368,7 @@ pub fn access_rule_to_expr(
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
-        AccessRule::Owner { field } => owner_access_expr(ast, model, field),
+        AccessRule::Owner { field } => owner_access_expr(ast, model, field, schema),
         AccessRule::Role { roles } => role_matches(AUTH_ROLE, roles),
         AccessRule::Any { rules } => join_rules(ast, model, rules, "OR", schema),
         AccessRule::All { rules } => join_rules(ast, model, rules, "AND", schema),
@@ -800,14 +802,22 @@ fn interval(text: &str) -> String {
 /// Columns are always quoted, which is also what lets `qualify_bare_columns` find these references
 /// when the same expression is reused inside a `can_*` function, where a bare column has no `FROM`
 /// clause to resolve against. Quoting changes no meaning and the differ's normaliser strips quotes,
-/// so no policy is recreated for it.
-fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
+/// so no policy is recreated for it. The related table is schema-qualified, as a `Rows` source is:
+/// a tier 2 set helper reads it with an empty `search_path`, and a caller's path could otherwise
+/// resolve the name to another schema's table.
+fn owner_access_expr(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    kernel_field: &str,
+    schema: &str,
+) -> String {
     let column = resolve_owner_column(model, kernel_field);
     match owner_join(ast, model, kernel_field) {
         Some(join) => {
             let table = quote_ident(&join.table);
             format!(
-                "EXISTS (SELECT 1 FROM {table} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
+                "EXISTS (SELECT 1 FROM {source} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
+                source = quote_qualified(schema, &join.table),
                 fk_q = quote_ident(&column),
                 owner_q = quote_ident(&join.owner_column)
             )
@@ -1002,12 +1012,18 @@ fn render_field_can_function(can: &FieldCan<'_>, expr: &str) -> String {
     } else {
         String::new()
     };
-    format!(
-        "CREATE OR REPLACE FUNCTION {function}({alias} {row})
-           RETURNS boolean LANGUAGE sql STABLE{set} AS $can$
+    let body = dollar_quote(
+        &format!(
+            "
              SELECT {expr}
                FROM (SELECT ($1).*) AS {alias};
-           $can$;
+           "
+        ),
+        "can",
+    );
+    format!(
+        "CREATE OR REPLACE FUNCTION {function}({alias} {row})
+           RETURNS boolean LANGUAGE sql STABLE{set} AS {body};
 {}
 ",
         can_function_grants(can.schema, can.table, can.name)
@@ -1109,19 +1125,20 @@ pub fn drop_table_label_sql(schema: &str, table: &str) -> String {
 /// `SECURITY LABEL` cannot name it, and a superuser removes the catalog row instead; anyone else
 /// leaves it, inert.
 fn guarded_label_drop(statement: &str, subid: &str, target: &str) -> String {
-    format!(
-        "DO $mask_label$\nBEGIN\n  EXECUTE {};\n\
+    let body = format!(
+        "\nBEGIN\n  EXECUTE {};\n\
          EXCEPTION WHEN invalid_parameter_value THEN\n\
          \x20 BEGIN\n\
          \x20   DELETE FROM pg_catalog.pg_seclabel\n\
          \x20    WHERE provider = {} AND classoid = 'pg_catalog.pg_class'::regclass\n\
          \x20      AND objoid = {}::regclass AND objsubid = {subid};\n\
          \x20 EXCEPTION WHEN insufficient_privilege THEN NULL;\n\
-         \x20 END;\nEND\n$mask_label$;",
+         \x20 END;\nEND\n",
         quote_literal(statement),
         quote_literal(MASK_PROVIDER),
         quote_literal(target),
-    )
+    );
+    do_block("mask_label", &body)
 }
 
 /// `SECURITY LABEL FOR supatype` per field rule: what makes a `fields` rule actually
@@ -1311,12 +1328,13 @@ $claims_usage_probe$;
 /// the state these functions exist to eliminate.
 fn render_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
     let (function, row, alias) = can_function_names(schema, table, name);
+    let body = dollar_quote(
+        &format!("\n    SELECT {expr}\n      FROM (SELECT ($1).*) AS {alias};\n  "),
+        "can",
+    );
     format!(
         "CREATE OR REPLACE FUNCTION {function}({alias} {row}, {OUT_OF_GRAPHQL} boolean DEFAULT NULL)\n  \
-         RETURNS boolean LANGUAGE sql STABLE AS $can$\n    \
-         SELECT {expr}\n      \
-         FROM (SELECT ($1).*) AS {alias};\n  \
-         $can$;\n{}\n",
+         RETURNS boolean LANGUAGE sql STABLE AS {body};\n{}\n",
         grants_on(&format!("{function}({row}, boolean)"))
     )
 }

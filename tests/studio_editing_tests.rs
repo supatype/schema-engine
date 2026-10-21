@@ -637,6 +637,62 @@ async fn tier_two_rule_helpers_follow_their_rules() {
     .await;
 }
 
+/// A hand edit to a set helper changes who may read a column as surely as an edit to the view that
+/// calls it, so it is access drift: a non-interactive push refuses to put it back without consent,
+/// and doctor leaves it drifted unless it is told `--accept-access-drift`.
+#[tokio::test]
+async fn a_hand_edited_rule_set_helper_is_access_drift() {
+    common::with_integration_pool(|pool| async move {
+        use supatype_engine::{inspect, ledger::reconcile::Action};
+        let ast = team_fixture();
+        common::push(&pool, &ast).await.expect("push");
+        let (helpers, _) = staff_helpers(&pool).await;
+        sqlx::raw_sql(&format!(
+            "ALTER FUNCTION _supatype.{}() SECURITY INVOKER",
+            helpers[0]
+        ))
+        .execute(&pool)
+        .await
+        .expect("the hand edit");
+        let plan = supatype_engine::push::prepare(&pool, &ast, "public")
+            .await
+            .expect("plan");
+        let access_drift = plan.reconcile.actions.iter().any(|a| {
+            matches!(a, Action::Drift { key, security_relevant: true, .. }
+                if key.name.starts_with("rule_set_"))
+        });
+        assert!(access_drift, "{:?}", plan.reconcile.actions);
+        let refused = common::push(&pool, &ast).await;
+        assert!(
+            refused.is_err_and(|e| e.to_string().contains("changed outside Supatype")),
+            "a push put the helper back without consent"
+        );
+        let names = |items: &[supatype_engine::differ::doctor::DoctorItem]| -> Vec<String> {
+            items.iter().map(|i| i.name.clone()).collect()
+        };
+        let without = inspect::rebaseline(&pool, &ast, "public", false)
+            .await
+            .expect("rebaseline");
+        assert!(names(&without.rebaselined).is_empty(), "{without:#?}");
+        assert!(
+            names(&without.rebaseline_refused)
+                .iter()
+                .any(|n| n.starts_with(&helpers[0])),
+            "{without:#?}"
+        );
+        let with = inspect::rebaseline(&pool, &ast, "public", true)
+            .await
+            .expect("rebaseline with consent");
+        assert!(
+            names(&with.rebaselined)
+                .iter()
+                .any(|n| n.starts_with(&helpers[0])),
+            "{with:#?}"
+        );
+    })
+    .await;
+}
+
 /// The versioned blog with `title` the app admin's to read.
 fn masked_blog() -> SchemaAst {
     let mut doc: Value =
