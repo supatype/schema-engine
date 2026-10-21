@@ -407,8 +407,12 @@ END $$"#
 /// Studio access moved out of JWT claims and into this table. Without a seed,
 /// the first push after that change locks every existing admin out of their own
 /// Studio: their claim no longer grants anything and they have no membership
-/// row. Runs only while the table is empty, so it cannot resurrect access that
-/// was deliberately revoked later.
+/// row. Runs once per database, recorded in [`STUDIO_SEED_TABLE`], so revoking
+/// every member and then changing the bootstrap cannot hand the claims' admins
+/// their access back. A database that already has members, or an audit trail
+/// showing it once had them, is recorded as seeded without carrying anything
+/// forward: its membership is already somebody's decision. Until `auth.users`
+/// exists there is nobody to carry forward, and nothing is recorded.
 ///
 /// Only the roles that actually admitted anyone are carried over, and they all
 /// become the Studio role `admin`:
@@ -426,28 +430,61 @@ END $$"#
 /// than guessing which app roles were meant to be administrators.
 ///
 /// The insert is marked [`SEED_MEMBERSHIP_SOURCE`], so the audit trail records it
-/// as the seed and Studio does not flag it as a change made around Studio.
+/// as the seed and Studio does not flag it as a change made around Studio. The
+/// record keeps the newest audit row at that moment, and Studio trusts the mark
+/// on no row after it: anyone with SQL access can set the mark, but not on a row
+/// the seed already wrote.
 pub fn seed_studio_members_from_claims_sql() -> String {
     format!(
         r#"DO $$
 DECLARE
-    prior text := coalesce(current_setting('{MEMBERSHIP_SOURCE_SETTING}', true), '');
+    prior   text := coalesce(current_setting('{MEMBERSHIP_SOURCE_SETTING}', true), '');
+    audited boolean := to_regclass('{SCHEMA}.studio_audit') IS NOT NULL;
+    had_members boolean := false;
+    through bigint;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM {SCHEMA}.studio_members) THEN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'auth' AND table_name = 'users'
-        ) THEN
-            PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', '{SEED_MEMBERSHIP_SOURCE}', true);
-            INSERT INTO {SCHEMA}.studio_members (user_id, platform_user_id, role)
-            SELECT id, NULL, 'admin'
-              FROM auth.users
-             WHERE raw_app_meta_data->>'role' IN ('admin', 'supatype_admin')
-            ON CONFLICT (user_id) DO NOTHING;
-            PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', prior, true);
-        END IF;
+    {create_table};
+    IF EXISTS (SELECT 1 FROM {STUDIO_SEED_TABLE}) THEN
+        RETURN;
     END IF;
-END $$"#
+    IF audited THEN
+        had_members := EXISTS (SELECT 1 FROM {SCHEMA}.studio_audit WHERE target_id IS NOT NULL);
+    END IF;
+    IF had_members OR EXISTS (SELECT 1 FROM {SCHEMA}.studio_members) THEN
+        INSERT INTO {STUDIO_SEED_TABLE} (audit_through) VALUES (NULL);
+        RETURN;
+    END IF;
+    IF to_regclass('auth.users') IS NULL THEN
+        RETURN;
+    END IF;
+    PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', '{SEED_MEMBERSHIP_SOURCE}', true);
+    INSERT INTO {SCHEMA}.studio_members (user_id, platform_user_id, role)
+    SELECT id, NULL, 'admin'
+      FROM auth.users
+     WHERE raw_app_meta_data->>'role' IN ('admin', 'supatype_admin')
+    ON CONFLICT (user_id) DO NOTHING;
+    PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', prior, true);
+    IF audited THEN
+        SELECT max(id) INTO through FROM {SCHEMA}.studio_audit;
+    END IF;
+    INSERT INTO {STUDIO_SEED_TABLE} (audit_through) VALUES (through);
+END $$"#,
+        create_table = create_studio_seed_table_sql(),
+    )
+}
+
+/// Where the one membership seed a database ever gets is recorded.
+pub const STUDIO_SEED_TABLE: &str = "_supatype.studio_seed";
+
+/// [`STUDIO_SEED_TABLE`]: one row, once the seed has run. `audit_through` is the newest
+/// `studio_audit` row when it ran, the last that may carry its mark.
+pub fn create_studio_seed_table_sql() -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {STUDIO_SEED_TABLE} (
+        id            INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        seeded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        audit_through BIGINT
+    )"
     )
 }
 
