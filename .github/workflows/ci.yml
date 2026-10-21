@@ -228,6 +228,7 @@ jobs:
             --test field_access_tamper_tests \
             --test field_masking_tier_selection_tests \
             --test tier_two_api_tests \
+            --test studio_editing_tests \
             --test field_bounds_enforcement_tests \
             --test versions_runtime_tests \
             --test versions_doctor_tests \

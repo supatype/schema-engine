@@ -37,19 +37,23 @@
 //!   can reach the divergence; only direct SQL against these views. The contract test asserts the
 //!   difference per tier so it cannot drift silently.
 //!
-//! * **No whole-row references.** The `can_*` affordance functions take the row as a composite, and
-//!   with `supatype_mask` loaded a whole-row reference to a masked table is rejected outright
-//!   (`whole-row reference to "t" is not supported because the table has masked columns`). So the
-//!   predicate is inlined over individual columns, which also lets both tiers coexist in one
-//!   database, as the contract test requires.
+//! * **Each rule runs in a helper, not inline.** The view and its write trigger call a rule helper
+//!   per masked column ([`RuleHelpers`]) with the base row, so the rule runs with the setting that
+//!   keeps the Studio policies out of it. Inlined, a rule asking which rows of another table the
+//!   caller may read (`Rows<teams, id>`) was answered by Studio's read-everything policy. An older
+//!   `supatype_mask` refused a whole-row reference to a masked table, which is why the rule was
+//!   once inlined; a tier 2 table carries no mask label, and the current extension masks such a
+//!   reference instead of refusing it, so both tiers still coexist in one database, as the
+//!   contract test requires.
 //!
 //! * **`IS NOT TRUE`, never `NOT`.** A write predicate returning NULL (an unset `current_setting`,
 //!   a null column) makes `NOT predicate` NULL, and `IF NULL THEN RAISE` does not raise. Measured on
 //!   a prototype: an unauthorised write succeeded silently.
 
-use crate::generator::sql::auth_functions::CLAIMS_SCHEMA;
+use crate::generator::sql::auth_functions::{API_ROLES, CLAIMS_SCHEMA};
 use crate::generator::sql::graphql_names::model_relation_names;
 use crate::generator::sql::rls::AUTH_ROLE;
+use crate::generator::sql::rls::IN_RULE_SETTING;
 use crate::parser::accessors::{db_table_name, platform_access};
 use crate::parser::ast::{JunctionTableAst, ModelAst, SchemaAst};
 use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
@@ -160,7 +164,8 @@ fn owner_block(schema: &str, owner_name: &str) -> String {
          \x20 END IF;\n\
          \x20 GRANT USAGE, CREATE ON SCHEMA {api} TO {owner};\n\
          \x20 GRANT USAGE ON SCHEMA {project} TO {owner};\n\
-         \x20 GRANT USAGE ON SCHEMA {claims} TO {owner};\n\
+         \x20 -- CREATE so a pushing role that is not a superuser may give it the rule helpers.\n\
+         \x20 GRANT USAGE, CREATE ON SCHEMA {claims} TO {owner};\n\
          \x20 GRANT EXECUTE ON FUNCTION {readers} TO {owner};\n\
          \x20 IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN\n\
          \x20   GRANT USAGE ON SCHEMA \"auth\" TO {owner};\n\
@@ -434,7 +439,15 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
             }
             continue;
         };
-        out.push_str(&render_view(ast, model, entry, plan, schema));
+        let helpers = RuleHelpers {
+            names: &names,
+            ast,
+            model,
+            schema,
+            entry,
+        };
+        out.push_str(&helpers.render());
+        out.push_str(&render_view(&helpers, plan));
         if platform_access(model).fields.is_empty() {
             // Nothing masked: the view is a plain projection, which Postgres updates by itself.
             continue;
@@ -466,17 +479,18 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
 
 /// One model's view: the masked projection, owned by [`API_OWNER`], with the base table's
 /// defaults, its GraphQL identity and relations, and its privileges.
-fn render_view(
-    ast: &SchemaAst,
-    model: &ModelAst,
-    entry: &FieldViewTable,
-    plan: &[FieldViewTable],
-    schema: &str,
-) -> String {
+fn render_view(helpers: &RuleHelpers<'_>, plan: &[FieldViewTable]) -> String {
+    let RuleHelpers {
+        ast,
+        model,
+        schema,
+        entry,
+        ..
+    } = *helpers;
     let projections: Vec<String> = entry
         .columns
         .iter()
-        .map(|column| projection(ast, model, schema, &entry.table, column))
+        .map(|column| projection(helpers, column))
         .collect();
     let mut out = view_head(entry, &projections, schema, &masked_columns(model, entry));
     out.push_str(&graphql_comment_sql(
@@ -568,24 +582,98 @@ fn view_tail(entry: &FieldViewTable, schema: &str) -> String {
 }
 
 /// One column of the view: the base column, or NULL for a caller its read rule refuses.
-/// `service_role` reads everything, as tier 1 lets it.
-fn projection(
-    ast: &SchemaAst,
-    model: &ModelAst,
-    schema: &str,
-    table: &str,
-    column: &str,
-) -> String {
-    let qualified = format!("{}.{}", quote_ident(table), quote_ident(column));
-    match read_predicate(ast, model, schema, column) {
+/// `service_role` reads everything, as tier 1 lets it. The rule is asked of the column's helper
+/// over the whole base row, which the view reads under the table's own name.
+fn projection(helpers: &RuleHelpers<'_>, column: &str) -> String {
+    let table = quote_ident(&helpers.entry.table);
+    let qualified = format!("{table}.{}", quote_ident(column));
+    match helpers.call("read", column, &table) {
         // NULL rather than an error, so `SELECT *` (what PostgREST sends by default) keeps working
         // for a caller who may not read one column.
         Some(predicate) => format!(
-            "    CASE WHEN {} OR ({predicate}) THEN {qualified} ELSE NULL END AS {}",
+            "    CASE WHEN {} OR {predicate} THEN {qualified} ELSE NULL END AS {}",
             service_role_exempt(),
             quote_ident(column)
         ),
         None => format!("    {qualified}"),
+    }
+}
+
+/// Where the tier 2 rule helpers live: the helper schema, which the API never serves, so no helper
+/// is ever an RPC.
+const RULE_SCHEMA: &str = crate::generator::sql::versions::HELPER_SCHEMA;
+
+/// One model's tier 2 rule helpers: per masked column, `can_read_<table>__<column>` and, with a
+/// write rule, `can_write_<table>__<column>`, in [`RULE_SCHEMA`], which the view and its write
+/// trigger call rather than holding the rule inline.
+///
+/// A helper is what keeps Studio out of a rule. The rule's subqueries must be answered by the app's
+/// rules, so the helper turns [`IN_RULE_SETTING`] on for as long as it runs, which the Studio
+/// policies stand aside for; an inline rule had no way to. `SECURITY DEFINER` as the view owner,
+/// because the rule reads base tables the API roles hold nothing on under tier 2, exactly as the
+/// inline rule did inside the owner-rights view; row-level security still applies to the owner and
+/// reads the caller's claims. `search_path` is pinned empty: the engine qualifies everything it
+/// writes, and a `Custom` rule naming a table unqualified fails the push when the helper is
+/// created, under the helper's own name, which names its table and column.
+#[derive(Clone, Copy)]
+struct RuleHelpers<'a> {
+    names: &'a crate::managed::ObjectNames,
+    ast: &'a SchemaAst,
+    model: &'a ModelAst,
+    schema: &'a str,
+    entry: &'a FieldViewTable,
+}
+
+impl RuleHelpers<'_> {
+    /// The rule `op` (`read` or `write`) puts on `column`, as SQL over the row, if it has one.
+    fn rule(&self, op: &str, column: &str) -> Option<String> {
+        match op {
+            "read" => read_predicate(self.ast, self.model, self.schema, column),
+            _ => write_predicate(self.ast, self.model, self.schema, column),
+        }
+    }
+
+    /// The helper deciding `op` on `column`.
+    fn function(&self, op: &str, column: &str) -> String {
+        let name = self.names.field_can_function(&self.entry.table, op, column);
+        quote_qualified(RULE_SCHEMA, &name)
+    }
+
+    /// The call deciding `op` on `column` for `row`, a value of the base table's row type; `None`
+    /// where the column has no such rule.
+    fn call(&self, op: &str, column: &str, row: &str) -> Option<String> {
+        self.rule(op, column)?;
+        Some(format!("{}({row})", self.function(op, column)))
+    }
+
+    /// Every helper the model's masked columns need, made before the view that calls them.
+    fn render(&self) -> String {
+        masked_columns(self.model, self.entry)
+            .into_iter()
+            .flat_map(|column| ["read", "write"].map(|op| (op, column)))
+            .filter_map(|(op, column)| Some(self.render_one(op, column, &self.rule(op, column)?)))
+            .collect()
+    }
+
+    /// One helper over `expr`, owned by the view owner, callable by the API roles only.
+    fn render_one(&self, op: &str, column: &str, expr: &str) -> String {
+        let function = self.function(op, column);
+        let row = quote_qualified(self.schema, &self.entry.table);
+        let alias = quote_ident(&self.entry.table);
+        let signature = format!("{function}({row})");
+        format!(
+            "CREATE OR REPLACE FUNCTION {function}({alias} {row})\n\
+             \x20 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER\n\
+             \x20 SET search_path = '' SET {IN_RULE_SETTING} = 'on' AS $rule$\n\
+             \x20   SELECT {expr}\n\
+             \x20     FROM (SELECT ($1).*) AS {alias};\n\
+             \x20 $rule$;\n\
+             ALTER FUNCTION {signature} OWNER TO {owner};\n\
+             REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;\n\
+             GRANT EXECUTE ON FUNCTION {signature} TO {roles};\n\n",
+            owner = quote_ident(&self.entry.owner),
+            roles = API_ROLES.join(", "),
+        )
     }
 }
 
@@ -846,12 +934,23 @@ impl WriteTrigger<'_> {
             .collect()
     }
 
-    /// `rule` evaluated against `row`, aliased to the table's name so the rule's unqualified columns
-    /// resolve, which is the same device the `can_*` functions use.
-    fn against(&self, predicate: &str, row: &str) -> String {
+    /// The view's rule helpers ([`RuleHelpers`]), which decide each masked column here too.
+    fn helpers(&self) -> RuleHelpers<'_> {
+        RuleHelpers {
+            names: self.names,
+            ast: self.ast,
+            model: self.model,
+            schema: self.schema,
+            entry: self.entry,
+        }
+    }
+
+    /// `NEW`, a row of the view, as a row of the base table for a helper to judge: the columns the
+    /// view carries, and NULL for any it does not, which the view's rules cannot read either.
+    fn new_as_base(&self) -> String {
         format!(
-            "(SELECT ({predicate}) FROM (SELECT {row}.*) AS {})",
-            quote_ident(&self.entry.table)
+            "jsonb_populate_record(NULL::{}, to_jsonb(NEW))",
+            self.base()
         )
     }
 
@@ -1056,14 +1155,15 @@ impl WriteTrigger<'_> {
         masked
             .iter()
             .filter_map(|column| {
-                let test = write_predicate(self.ast, self.model, self.schema, column)
-                    .or_else(|| read_predicate(self.ast, self.model, self.schema, column))?;
+                let (helpers, row) = (self.helpers(), self.new_as_base());
+                let judged = helpers
+                    .call("write", column, &row)
+                    .or_else(|| helpers.call("read", column, &row))?;
                 Some(format!(
                     "\x20   IF NOT exempt AND {name} = ANY (wrote) AND {judged} IS NOT TRUE THEN\n\
                      \x20     RAISE EXCEPTION {denied} USING ERRCODE = '42501';\n\
                      \x20   END IF;\n",
                     name = quote_literal(column),
-                    judged = self.against(&test, "NEW"),
                     denied = self.denied(column),
                 ))
             })
@@ -1112,10 +1212,13 @@ impl WriteTrigger<'_> {
         masked_columns(self.model, self.entry)
             .into_iter()
             .map(|column| {
-                let readable = read_predicate(self.ast, self.model, self.schema, column)
-                    .map_or("TRUE".to_string(), |p| self.against(&p, "stored"));
-                let writable = write_predicate(self.ast, self.model, self.schema, column)
-                    .map_or("TRUE".to_string(), |p| self.against(&p, "stored"));
+                let helpers = self.helpers();
+                let judged = |op| {
+                    helpers
+                        .call(op, column, "stored")
+                        .unwrap_or_else(|| "TRUE".to_string())
+                };
+                let (readable, writable) = (judged("read"), judged("write"));
                 let col = quote_ident(column);
                 format!(
                     "\x20   -- {label}\n\

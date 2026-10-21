@@ -501,6 +501,19 @@ FOR SELECT USING (
     EXISTS (SELECT 1 FROM "public"."articles" WHERE "articles"."id" = "article_tags"."article_tag_id")
     AND EXISTS (SELECT 1 FROM "public"."tags" WHERE "tags"."id" = "article_tags"."tag_id")
   );
+CREATE POLICY "article_tags_studio_read" ON "public"."article_tags"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "article_tags_studio_write" ON "public"."article_tags"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "articles_delete" ON "public"."articles"
 FOR DELETE USING (
     (SELECT _supatype.jwt_role()) = 'admin'
@@ -513,11 +526,50 @@ CREATE POLICY "articles_select" ON "public"."articles"
 FOR SELECT USING (
     TRUE
   );
+CREATE POLICY "articles_studio_read" ON "public"."articles"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "articles_studio_write" ON "public"."articles"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "articles_update" ON "public"."articles"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = ANY(ARRAY['editor', 'admin'])
   ) WITH CHECK (
     (SELECT _supatype.jwt_role()) = ANY(ARRAY['editor', 'admin'])
+  );
+CREATE POLICY "authors_studio_read" ON "public"."authors"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "authors_studio_write" ON "public"."authors"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "tags_studio_read" ON "public"."tags"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "tags_studio_write" ON "public"."tags"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 ALTER TABLE "public"."article_tags" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."articles" ENABLE ROW LEVEL SECURITY;

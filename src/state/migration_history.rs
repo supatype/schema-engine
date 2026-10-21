@@ -221,6 +221,94 @@ END $$"#
     )
 }
 
+/// Index for "what was the newest change to this member", which Studio's members list asks of
+/// every member it shows. Partial, so the elevated request rows, which have no target and make up
+/// most of the table, cost it nothing.
+pub fn create_studio_audit_membership_index_sql() -> String {
+    format!(
+        r#"CREATE INDEX IF NOT EXISTS studio_audit_membership_changes_idx
+    ON {SCHEMA}.studio_audit (target_id, id DESC)
+    WHERE action = 'membership_changed_in_db'"#
+    )
+}
+
+/// Records every change to `studio_members` in `studio_audit`, whoever made it.
+///
+/// The membership API is not the only way in: a developer with database access can promote
+/// anyone, themselves included, with one `UPDATE`. That access is theirs to keep, so this does not
+/// prevent the change; it makes it visible. Each row names the operation, the old and new holder and
+/// role, the database role that did it (the `SET ROLE` in force, else the login role), the caller's
+/// JWT `sub` when the change came through the data API, and `via_api`: whether the membership API
+/// flagged the transaction (`supatype.membership_api`, set transaction-locally by the auth server's
+/// store). A change with `via_api` false was made around Studio.
+///
+/// SECURITY DEFINER with a pinned `search_path`, so a role that may write `studio_members` but not
+/// `studio_audit` still leaves a record, and nothing on that role's path can stand in for the
+/// tables or functions it calls. `current_user` inside it is the owner, which is why the acting
+/// role comes from the `role` setting instead. A missing audit table warns rather than blocking
+/// the change, as the API's own audit does: refusing to revoke a compromised admin because the
+/// trail is broken would be the worse failure. The flag and the trigger are detection, not a
+/// control: whoever can drop the trigger or set the flag can hide a change from it.
+pub fn create_studio_membership_audit_function_sql() -> String {
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {SCHEMA}.audit_studio_membership_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, {SCHEMA}
+AS $fn$
+DECLARE
+    claims  jsonb;
+    subject text;
+    db_role text;
+BEGIN
+    IF to_regclass('{SCHEMA}.studio_audit') IS NULL THEN
+        RAISE WARNING 'Studio membership changed with no {SCHEMA}.studio_audit to record it';
+        RETURN NULL;
+    END IF;
+    BEGIN
+        claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb;
+    EXCEPTION WHEN others THEN
+        claims := NULL;
+    END;
+    subject := coalesce(claims ->> 'sub',
+                        nullif(current_setting('request.jwt.claim.sub', true), ''));
+    db_role := coalesce(nullif(current_setting('role', true), 'none'), session_user::text);
+    INSERT INTO {SCHEMA}.studio_audit (actor_id, target_id, action, role, detail)
+    VALUES (
+        NULL,
+        coalesce(NEW.user_id, NEW.platform_user_id, OLD.user_id, OLD.platform_user_id),
+        'membership_changed_in_db',
+        coalesce(NEW.role, OLD.role),
+        jsonb_build_object(
+            'operation',    TG_OP,
+            'old_user_id',  coalesce(OLD.user_id, OLD.platform_user_id),
+            'old_role',     OLD.role,
+            'new_user_id',  coalesce(NEW.user_id, NEW.platform_user_id),
+            'new_role',     NEW.role,
+            'db_role',      db_role,
+            'session_user', session_user::text,
+            'jwt_sub',      subject,
+            'via_api',      coalesce(current_setting('supatype.membership_api', true), '') = 'on'
+        )
+    );
+    RETURN NULL;
+END
+$fn$"#
+    )
+}
+
+/// Attaches [`create_studio_membership_audit_function_sql`] to `studio_members`. Dropped and
+/// created rather than created if missing, so a changed definition replaces the old one.
+pub fn create_studio_membership_audit_trigger_sql() -> String {
+    format!(
+        r#"DROP TRIGGER IF EXISTS studio_members_audit ON {SCHEMA}.studio_members;
+CREATE TRIGGER studio_members_audit
+    AFTER INSERT OR UPDATE OR DELETE ON {SCHEMA}.studio_members
+    FOR EACH ROW EXECUTE FUNCTION {SCHEMA}.audit_studio_membership_change()"#
+    )
+}
+
 /// Migrate a `studio_members` table created before cloud accounts could hold a
 /// membership: `user_id` was the primary key and the only identity.
 ///
@@ -1504,6 +1592,19 @@ fn bootstrap_statements() -> Vec<(&'static str, String)> {
         ),
         ("studio_audit table", create_studio_audit_table_sql()),
         ("studio_audit columns", ensure_studio_audit_columns_sql()),
+        (
+            "studio_audit membership index",
+            create_studio_audit_membership_index_sql(),
+        ),
+        // After both tables are in their current shape, which the function writes and reads.
+        (
+            "studio_members audit function",
+            create_studio_membership_audit_function_sql(),
+        ),
+        (
+            "studio_members audit trigger",
+            create_studio_membership_audit_trigger_sql(),
+        ),
         (
             "studio_identity_links table",
             create_studio_identity_links_table_sql(),

@@ -40,6 +40,12 @@ fn posts(access: Value) -> SchemaAst {
     parser::parse(&doc.to_string()).expect("fixture parses")
 }
 
+/// The two policies every managed table carries for Studio, which no rule declares and these tests
+/// are not about: `studio_editing_tests` covers them.
+fn is_studio_policy(name: &str) -> bool {
+    name.ends_with("_studio_read") || name.ends_with("_studio_write")
+}
+
 fn public_read() -> SchemaAst {
     posts(json!({ "read": { "type": "public" } }))
 }
@@ -51,6 +57,7 @@ async fn recorded(pool: &PgPool) -> Vec<String> {
         .unwrap()
         .into_iter()
         .filter(|r| r.key.kind == ObjectKind::Policy && r.key.parent == "posts")
+        .filter(|r| !is_studio_policy(&r.key.name))
         .map(|r| r.key.name)
         .collect()
 }
@@ -77,6 +84,7 @@ fn policy_actions(plan: &push::Plan<'_>) -> Vec<Action> {
         .actions
         .iter()
         .filter(|a| a.key().kind == ObjectKind::Policy && a.key().parent == "posts")
+        .filter(|a| !is_studio_policy(&a.key().name))
         .cloned()
         .collect()
 }

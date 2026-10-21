@@ -392,6 +392,19 @@ CREATE POLICY "posts_select" ON "public"."posts"
 FOR SELECT USING (
     TRUE
   );
+CREATE POLICY "posts_studio_read" ON "public"."posts"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "posts_studio_write" ON "public"."posts"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "posts_update" ON "public"."posts"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_uid()) = "author_id"
@@ -409,6 +422,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "users_select" ON "public"."users"
 FOR SELECT USING (
     TRUE
+  );
+CREATE POLICY "users_studio_read" ON "public"."users"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "users_studio_write" ON "public"."users"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "users_update" ON "public"."users"
 FOR UPDATE USING (

@@ -2161,6 +2161,19 @@ CREATE POLICY "_global_site_settings_select" ON "public"."_global_site_settings"
 FOR SELECT USING (
     TRUE
   );
+CREATE POLICY "_global_site_settings_studio_read" ON "public"."_global_site_settings"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "_global_site_settings_studio_write" ON "public"."_global_site_settings"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "_global_site_settings_update" ON "public"."_global_site_settings"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
@@ -2178,6 +2191,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "attendee_select" ON "public"."attendee"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) IS NOT NULL
+  );
+CREATE POLICY "attendee_studio_read" ON "public"."attendee"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "attendee_studio_write" ON "public"."attendee"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "attendee_update" ON "public"."attendee"
 FOR UPDATE USING (
@@ -2197,6 +2223,19 @@ CREATE POLICY "chat_message_select" ON "public"."chat_message"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
+CREATE POLICY "chat_message_studio_read" ON "public"."chat_message"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "chat_message_studio_write" ON "public"."chat_message"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "chat_message_update" ON "public"."chat_message"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_uid()) = "auth_user_id"
@@ -2215,11 +2254,37 @@ CREATE POLICY "page_select" ON "public"."page"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
   );
+CREATE POLICY "page_studio_read" ON "public"."page"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "page_studio_write" ON "public"."page"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "page_update" ON "public"."page"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
     (SELECT _supatype.jwt_role()) = 'editor'
+  );
+CREATE POLICY "page_versions_studio_read" ON "public"."page_versions"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "page_versions_studio_write" ON "public"."page_versions"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "room_delete" ON "public"."room"
 FOR DELETE USING (
@@ -2232,6 +2297,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "room_select" ON "public"."room"
 FOR SELECT USING (
     TRUE
+  );
+CREATE POLICY "room_studio_read" ON "public"."room"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "room_studio_write" ON "public"."room"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "room_update" ON "public"."room"
 FOR UPDATE USING (
@@ -2251,11 +2329,37 @@ CREATE POLICY "speaker_select" ON "public"."speaker"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
   );
+CREATE POLICY "speaker_studio_read" ON "public"."speaker"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "speaker_studio_write" ON "public"."speaker"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "speaker_update" ON "public"."speaker"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
     (SELECT _supatype.jwt_role()) = 'editor'
+  );
+CREATE POLICY "speaker_versions_studio_read" ON "public"."speaker_versions"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "speaker_versions_studio_write" ON "public"."speaker_versions"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "sponsor_delete" ON "public"."sponsor"
 FOR DELETE USING (
@@ -2268,6 +2372,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "sponsor_select" ON "public"."sponsor"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
+  );
+CREATE POLICY "sponsor_studio_read" ON "public"."sponsor"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "sponsor_studio_write" ON "public"."sponsor"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "sponsor_update" ON "public"."sponsor"
 FOR UPDATE USING (
@@ -2287,11 +2404,37 @@ CREATE POLICY "talk_select" ON "public"."talk"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
   );
+CREATE POLICY "talk_studio_read" ON "public"."talk"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "talk_studio_write" ON "public"."talk"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "talk_update" ON "public"."talk"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
     (SELECT _supatype.jwt_role()) = 'editor'
+  );
+CREATE POLICY "talk_versions_studio_read" ON "public"."talk_versions"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "talk_versions_studio_write" ON "public"."talk_versions"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "ticket_delete" ON "public"."ticket"
 FOR DELETE USING (
@@ -2304,6 +2447,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "ticket_select" ON "public"."ticket"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) = "auth_user_id"
+  );
+CREATE POLICY "ticket_studio_read" ON "public"."ticket"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "ticket_studio_write" ON "public"."ticket"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "ticket_update" ON "public"."ticket"
 FOR UPDATE USING (

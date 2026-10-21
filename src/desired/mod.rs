@@ -359,11 +359,13 @@ pub fn desired_objects_for(
         b.model_checks(model);
         b.model_indexes(model)?;
         b.model_policies(model)?;
+        b.studio_policies(model.table_name());
         b.rls_enabled(model.table_name());
         b.replica_identity_full(model.table_name());
         b.model_triggers(model);
         if versions_of(model).is_some() {
             b.versions_table(model)?;
+            b.studio_policies(&versions_table_name(model.table_name()));
         }
     }
     b.versions_layer()?;
@@ -372,6 +374,7 @@ pub fn desired_objects_for(
     b.bucket_policies()?;
     for junction in &ast.junction_tables {
         b.junction(junction)?;
+        b.studio_policies(&junction.name);
         b.rls_enabled(&junction.name);
         b.replica_identity_full(&junction.name);
     }
@@ -894,20 +897,36 @@ impl<'a> Builder<'a> {
         let sql = render_field_views(self.ast, self.field_views, self.schema);
         self.attributed_script(&sql);
         for entry in self.field_views {
-            let name = policy_name(&entry.table, rls::SERVICE_ROLE_POLICY);
-            let structure = BTreeMap::from([
-                ("command", "*".to_string()),
-                ("permissive", flag(true)),
-                ("roles", "public".to_string()),
-            ]);
             let create = rls::service_role_policy_sql(self.schema, &entry.table);
-            self.push(
-                self.key(ObjectKind::Policy, &entry.table, &name),
-                structure,
-                create,
-                vec![self.table_key(&entry.table)],
-            );
+            self.engine_policy(&entry.table, rls::SERVICE_ROLE_POLICY, "*", create);
         }
+    }
+
+    /// The policies that admit a Studio user's request to every row of `table`
+    /// (`rls::studio_policy_sql`), on each table the engine manages: models, their versions tables
+    /// and junctions. Without them a Studio editor saving a draft was refused by the versions
+    /// table's own rules, which are the app's rules, not Studio's.
+    fn studio_policies(&mut self, table: &str) {
+        for (suffix, command) in rls::STUDIO_POLICIES {
+            let create = rls::studio_policy_sql(self.schema, table, suffix);
+            self.engine_policy(table, suffix, command, create);
+        }
+    }
+
+    /// One permissive policy on `table` that no access rule declares, named by `suffix`.
+    fn engine_policy(&mut self, table: &str, suffix: &str, command: &str, create: String) {
+        let name = policy_name(table, suffix);
+        let structure = BTreeMap::from([
+            ("command", command.to_string()),
+            ("permissive", flag(true)),
+            ("roles", "public".to_string()),
+        ]);
+        self.push(
+            self.key(ObjectKind::Policy, table, &name),
+            structure,
+            create,
+            vec![self.table_key(table)],
+        );
     }
 
     /// Row-level security on for a model or junction table (Phase 4.8, D9): enablement only, never
