@@ -230,6 +230,72 @@ async fn a_membership_change_outside_the_api_is_audited() {
     .await;
 }
 
+/// The membership tables, the audit trigger, and an `auth.users` holding one admin claim.
+async fn audited_members_with_an_admin_claim(pool: &sqlx::PgPool) {
+    let setup = [
+        migration_history::create_internal_schema_sql().to_string(),
+        migration_history::create_studio_members_table_sql(),
+        migration_history::create_studio_audit_table_sql(),
+        migration_history::create_studio_membership_audit_function_sql(),
+        migration_history::create_studio_membership_audit_trigger_sql(),
+        r#"CREATE SCHEMA IF NOT EXISTS auth;
+           DROP TABLE IF EXISTS auth.users CASCADE;
+           CREATE TABLE auth.users (
+             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+             email TEXT UNIQUE,
+             raw_app_meta_data JSONB DEFAULT '{}'
+           );
+           INSERT INTO auth.users (email, raw_app_meta_data)
+           VALUES ('admin@example.com', '{"role":"admin"}');"#
+            .to_string(),
+    ];
+    for sql in setup {
+        sqlx::raw_sql(&sql).execute(pool).await.expect("setup");
+    }
+}
+
+/// `(operation, source)` of every membership change the trigger recorded, oldest first.
+async fn audited_sources(pool: &sqlx::PgPool) -> Vec<(String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT detail ->> 'operation', detail ->> 'source'
+           FROM _supatype.studio_audit
+          WHERE action = 'membership_changed_in_db'
+          ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read the trail")
+}
+
+// The first push's seed is the engine carrying forward admins the project already had: Studio
+// must not flag it as a change made around it. It marks its own insert, and only that: a raw
+// change later in the same transaction is recorded with no source, as any other direct write is.
+#[tokio::test]
+async fn the_first_push_seed_is_audited_as_the_seed_and_nothing_after_it_is() {
+    common::with_integration_pool(|pool| async move {
+        audited_members_with_an_admin_claim(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(&migration_history::seed_studio_members_from_claims_sql())
+            .execute(&mut *tx)
+            .await
+            .expect("seed runs");
+        sqlx::raw_sql("UPDATE _supatype.studio_members SET role = 'viewer' WHERE true")
+            .execute(&mut *tx)
+            .await
+            .expect("a raw change");
+        tx.commit().await.unwrap();
+        assert_eq!(
+            audited_sources(&pool).await,
+            [
+                ("INSERT".to_string(), Some("seed".to_string())),
+                ("UPDATE".to_string(), None),
+            ],
+            "the seed's insert is the seed's; the raw update after it is nobody's"
+        );
+    })
+    .await;
+}
+
 // ── Against a live Postgres ──────────────────────────────────────────────────
 
 async fn seed_and_list(pool: &sqlx::PgPool) -> Vec<(String, String)> {
