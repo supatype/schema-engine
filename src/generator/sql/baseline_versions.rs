@@ -25,7 +25,7 @@
 
 use crate::parser::accessors::{db_table_name, versions_of, versions_table_name};
 use crate::parser::ast::{ModelAst, SchemaAst};
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{dollar_quote, quote_ident, quote_literal, quote_qualified};
 
 use super::versions::{localized_columns, model_primary_key, HELPER_SCHEMA, PUBLISHED_AT_COLUMN};
 
@@ -189,11 +189,21 @@ impl BaselineModel {
 
     /// The function behind [`BaselineModel::trigger_sql`].
     fn trigger_function_sql(&self, schema: &str, name: &str) -> String {
+        format!(
+            "CREATE OR REPLACE FUNCTION {helper}.{name_q}() RETURNS trigger\n  \
+             LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS {body};\n\n",
+            helper = HELPER_SCHEMA,
+            name_q = quote_ident(name),
+            body = dollar_quote(&self.trigger_function_body(schema), "fn"),
+        )
+    }
+
+    /// The body of [`BaselineModel::trigger_function_sql`], which names the model's tables.
+    fn trigger_function_body(&self, schema: &str) -> String {
         let (_, versions) = self.relations(schema);
         let (published, scheduled) = self.publication("live", "live_at");
         format!(
-            r#"CREATE OR REPLACE FUNCTION {helper}.{name_q}() RETURNS trigger
-  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+            r#"
   DECLARE
     live jsonb := to_jsonb(NEW);
     live_at timestamptz := {at};
@@ -214,11 +224,7 @@ impl BaselineModel {
      WHERE v."record_id" = NEW.{pk};
     RETURN NULL;
   END;
-  $fn$;
-
-"#,
-            helper = HELPER_SCHEMA,
-            name_q = quote_ident(name),
+  "#,
             at = self.live_at("live"),
             setting = quote_literal(CREATING_RECORD_SETTING),
             pk = quote_ident(&self.primary_key),

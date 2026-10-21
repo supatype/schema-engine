@@ -20,7 +20,7 @@ use crate::parser::accessors::{
     column_names_for, db_foreign_key, db_table_name, default_foreign_key_column,
 };
 use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst};
-use crate::sql_quote::{quote_literal, quote_qualified};
+use crate::sql_quote::{do_block, quote_literal, quote_qualified};
 
 /// Both names of one single-column key, as the schema declared them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,14 +192,17 @@ pub fn graphql_names_sql(ast: &SchemaAst, schema: &str) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    format!("{DO_HEAD}{}{DO_TAIL}", rows.join(",\n      "))
+    do_block(
+        TAG,
+        &format!("{DO_HEAD}{}{DO_TAIL}", rows.join(",\n      ")),
+    )
 }
 
 /// The block's dollar tag, by which a statement's attribution knows it.
 pub const TAG: &str = "graphql_names";
 
 /// Up to the `VALUES` rows: each key's table, column and directive line.
-const DO_HEAD: &str = "DO $graphql_names$
+const DO_HEAD: &str = "
 DECLARE
   k record;
   wanted text;
@@ -226,7 +229,7 @@ const DO_TAIL: &str = r"
     END IF;
   END LOOP;
 END
-$graphql_names$;";
+";
 
 #[cfg(test)]
 mod tests {

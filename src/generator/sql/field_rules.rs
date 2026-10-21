@@ -25,7 +25,7 @@ use crate::generator::sql::rls::{
 };
 use crate::parser::accessors::db_table_name;
 use crate::parser::ast::{AccessRule, MembershipSource, ModelAst, SchemaAst};
-use crate::sql_quote::{quote_ident, quote_qualified};
+use crate::sql_quote::{dollar_quote, quote_ident, quote_qualified};
 
 /// Where the set helpers live: the helper schema, which the API never serves, so no helper is
 /// ever an RPC.
@@ -59,17 +59,15 @@ impl RuleSet {
     /// The helper, owned by `owner`, with execute for the API roles only.
     pub fn create_sql(&self, owner: &str) -> String {
         let signature = self.call();
+        let body = dollar_quote(&format!("\n    {};\n  ", self.body), "rule");
         format!(
             "CREATE OR REPLACE FUNCTION {signature} RETURNS {returns}\n\
              \x20 LANGUAGE sql STABLE SECURITY DEFINER\n\
-             \x20 SET search_path = '' SET {IN_RULE_SETTING} = 'on' AS $rule$\n\
-             \x20   {body};\n\
-             \x20 $rule$;\n\
+             \x20 SET search_path = '' SET {IN_RULE_SETTING} = 'on' AS {body};\n\
              ALTER FUNCTION {signature} OWNER TO {owner};\n\
              REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;\n\
              GRANT EXECUTE ON FUNCTION {signature} TO {roles};\n\n",
             returns = self.returns,
-            body = self.body,
             owner = quote_ident(owner),
             roles = API_ROLES.join(", "),
         )

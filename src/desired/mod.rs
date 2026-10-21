@@ -60,7 +60,7 @@ use crate::parser::accessors::{
 };
 use crate::parser::ast::{AccessAst, FieldAst, IndexAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{do_block, quote_ident, quote_literal, quote_qualified};
 
 /// A check constraint the schema declares on a model: a field's bounds or a model-level rule.
 pub(crate) struct ExpectedCheck {
@@ -153,10 +153,13 @@ impl ObjectKey {
             // Guarded as the schedule is: a database without `pg_cron` has no job to unschedule.
             // Only this database's job, found as introspection finds them
             // ([`crate::generator::sql::versions::cron_job_database`]): `cron.job` is the cluster's.
-            ObjectKind::CronJob => format!(
-                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = {} AND database = {};\n  END IF;\nEND;\n$cron$;",
-                quote_literal(name),
-                crate::generator::sql::versions::cron_job_database()
+            ObjectKind::CronJob => do_block(
+                "cron",
+                &format!(
+                    "\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = {} AND database = {};\n  END IF;\nEND;\n",
+                    quote_literal(name),
+                    crate::generator::sql::versions::cron_job_database()
+                ),
             ),
             // The parent is `table.column`, or the table for a label on the table itself; only our
             // own provider's labels are ever desired or dropped.

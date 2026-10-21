@@ -5,12 +5,14 @@
 //! rather than silently omitted.
 
 use super::migration::{
-    dollar_quoted, identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
+    identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
 };
 use crate::differ::{DiffOutput, Operation};
 use crate::managed::make_object_name;
 use crate::parser::ast::SchemaAst;
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
+use crate::sql_quote::{
+    comment_text, dollar_quote, quote_ident, quote_literal, quote_qualified, raise_message,
+};
 use anyhow::Result;
 use serde_json::json;
 
@@ -79,7 +81,7 @@ pub fn data_not_restorable(subject: &str, lost: &[String]) -> String {
 /// A statement that stops a script with `said` as its error.
 fn raise_refusal(said: &str) -> String {
     let body = format!("BEGIN RAISE EXCEPTION {}; END", raise_message(said));
-    format!("DO {};", dollar_quoted(&body, "refused"))
+    format!("DO {};", dollar_quote(&body, "refused"))
 }
 
 /// The sequence a serial column owns renamed back to Postgres's name for it under `table`, as the

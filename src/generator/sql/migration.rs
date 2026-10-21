@@ -14,7 +14,10 @@ use crate::parser::ast::{
     scalar_of, DefaultValueAst, FieldAst, IndexAst, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
 };
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
+use crate::sql_quote::{
+    comment_text, do_block, dollar_quote, quote_ident, quote_literal, quote_qualified,
+    raise_message,
+};
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 
@@ -1967,14 +1970,17 @@ pub(crate) fn nullability_sql(
         "Cannot {verb} NOT NULL on {table}.{column}: NULL values exist."
     ));
     vec![
-        format!(
-            "DO $$ BEGIN\n  \
-             IF EXISTS (SELECT 1 FROM {} WHERE {} IS NULL) THEN\n    \
-             RAISE EXCEPTION {refused};\n  \
-             END IF;\n\
-             END $$;",
-            quote_qualified(schema, table),
-            quote_ident(column)
+        do_block(
+            "",
+            &format!(
+                " BEGIN\n  \
+                 IF EXISTS (SELECT 1 FROM {} WHERE {} IS NULL) THEN\n    \
+                 RAISE EXCEPTION {refused};\n  \
+                 END IF;\n\
+                 END ",
+                quote_qualified(schema, table),
+                quote_ident(column)
+            ),
         ),
         format!("{alter} SET NOT NULL;"),
     ]
@@ -2024,8 +2030,11 @@ pub(crate) fn identity_change_sql(
             // A serial's own sequence goes with its default, found by its ownership (the default's
             // text names it relative to whatever search path it was read under).
             if identity.get("serial").is_some() {
-                stmts.push(format!(
-                    "DO $$ BEGIN EXECUTE format('DROP SEQUENCE IF EXISTS %s', {sequence}); END $$;"
+                stmts.push(do_block(
+                    "",
+                    &format!(
+                        " BEGIN EXECUTE format('DROP SEQUENCE IF EXISTS %s', {sequence}); END "
+                    ),
                 ));
             }
             stmts.push(format!(
@@ -2084,21 +2093,13 @@ fn generated_column_sql(
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .map(|l| format!("    EXECUTE {};\n", dollar_quoted(l, "recreate")))
+        .map(|l| format!("    EXECUTE {};\n", dollar_quote(l, "recreate")))
         .collect();
-    format!(
-        "DO $generated$\nBEGIN\n  IF current_setting('server_version_num')::int >= 170000 THEN\n    EXECUTE {};\n  ELSE\n{again}  END IF;\nEND\n$generated$;",
-        dollar_quoted(&in_place, "expr"),
-    )
-}
-
-/// `sql` as a dollar-quoted literal whose tag does not occur in it.
-pub(super) fn dollar_quoted(sql: &str, tag: &str) -> String {
-    let mut tag = format!("${tag}$");
-    while sql.contains(&tag) {
-        tag.insert(tag.len() - 1, '_');
-    }
-    format!("{tag}{sql}{tag}")
+    let body = format!(
+        "\nBEGIN\n  IF current_setting('server_version_num')::int >= 170000 THEN\n    EXECUTE {};\n  ELSE\n{again}  END IF;\nEND\n",
+        dollar_quote(&in_place, "expr"),
+    );
+    do_block("generated", &body)
 }
 
 /// `"a", "b"`: each name quoted, comma-separated, for a column list.
@@ -2240,16 +2241,17 @@ pub(crate) fn rename_serial_sequence_sql(
     let relation = quote_literal(&quote_qualified(schema, table));
     let column = quote_literal(column);
     let name = quote_literal(name);
-    format!(
-        "DO $seq$\nDECLARE\n  seq regclass;\nBEGIN\n  \
+    let body = format!(
+        "\nDECLARE\n  seq regclass;\nBEGIN\n  \
          IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = {relation}::regclass AND attname = {column} AND NOT attisdropped) THEN\n    \
          seq := pg_get_serial_sequence({relation}, {column})::regclass;\n    \
          IF seq IS NOT NULL AND (SELECT relname FROM pg_class WHERE oid = seq) <> {name} THEN\n      \
          EXECUTE format('ALTER SEQUENCE %s RENAME TO %I', seq, {name});\n    \
          END IF;\n  \
          END IF;\n\
-         END;\n$seq$;"
-    )
+         END;\n"
+    );
+    do_block("seq", &body)
 }
 
 /// FK column SQL type for a target model PK (SERIAL → INTEGER, UUID → UUID, …).

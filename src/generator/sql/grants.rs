@@ -24,7 +24,10 @@ use crate::parser::accessors::{column_names_for, db_table_name, platform_access}
 use crate::parser::ast::{
     AccessAst, AccessRule, JunctionTableAst, MembershipSource, ModelAst, Operand, SchemaAst,
 };
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{do_block, quote_ident, quote_literal, quote_qualified};
+
+/// The dollar tag of every block that grants or revokes privileges on a table.
+pub const GRANTS_TAG: &str = "grants";
 
 /// Whether an unauthenticated caller could ever satisfy a rule.
 ///
@@ -155,10 +158,11 @@ impl TableGrant {
         } else {
             "DECLARE\n  granted text;\n"
         };
-        format!(
-            "DO $grants$\n{declare}BEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {}) THEN\n{body}  END IF;\nEND\n$grants$;",
+        let block = format!(
+            "\n{declare}BEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {}) THEN\n{body}  END IF;\nEND\n",
             quote_literal(role)
-        )
+        );
+        do_block(GRANTS_TAG, &block)
     }
 
     /// The declared columns a narrowed privilege is granted on: every one but `excluded`.
@@ -219,11 +223,12 @@ pub fn revoke_all_sql(schema: &str, table: &str, role: &str) -> String {
             quote_ident(role),
         )
     };
-    format!(
-        "DO $grants$\nBEGIN\n  IF {guard}to_regclass({}) IS NOT NULL THEN\n{}  END IF;\nEND\n$grants$;",
+    let body = format!(
+        "\nBEGIN\n  IF {guard}to_regclass({}) IS NOT NULL THEN\n{}  END IF;\nEND\n",
         quote_literal(&target),
         execute(&format!("REVOKE ALL PRIVILEGES ON {target} FROM {grantee}"))
-    )
+    );
+    do_block(GRANTS_TAG, &body)
 }
 
 /// One `EXECUTE` line of a `DO` block: `sql` as a literal.
@@ -549,16 +554,16 @@ pub fn api_owner_grant(table: &str, owner: &str) -> TableGrant {
 /// The privileges for one role, applied only if the role exists.
 fn guarded_block(role: &str, statements: &[String]) -> String {
     let body = statements.iter().map(|s| execute(s)).collect::<String>();
-    format!(
-        "DO $grants$
+    let block = format!(
+        "
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {}) THEN
 {body}  END IF;
 END
-$grants$;
 ",
         quote_literal(role)
-    )
+    );
+    format!("{}\n", do_block(GRANTS_TAG, &block))
 }
 
 /// Whether any caller connecting as `role` could ever satisfy this write rule, on INSERT or
