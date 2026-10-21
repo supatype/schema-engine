@@ -159,12 +159,18 @@ async fn install_tier_two(pool: &sqlx::PgPool) {
     // The generator grants to the real API roles (anon / authenticated / service_role). This suite
     // uses a role of its own so that identity is explicit in every assertion, so it grants that role
     // what the generator grants an API role on the view: usage on `api`, and on `_supatype`, whose
-    // `jwt_claim_text` the view's predicate calls as the caller. And it takes the base table away,
-    // as tier 2 takes it from the API roles: the view reads it as its owner, with the privileges the
-    // generator gave that owner.
+    // rule helpers the view calls as the caller, with execute on those helpers. And it takes the
+    // base table away, as tier 2 takes it from the API roles: the view reads it as its owner, with
+    // the privileges the generator gave that owner.
     sqlx::raw_sql(
         "GRANT USAGE ON SCHEMA api TO contract_app; \
          GRANT USAGE ON SCHEMA _supatype TO contract_app; \
+         DO $helpers$ DECLARE f regprocedure; BEGIN \
+           FOR f IN SELECT p.oid::regprocedure FROM pg_proc p \
+                     WHERE p.pronamespace = '_supatype'::regnamespace \
+                       AND p.proname LIKE 'can\\_%\\_contract\\_%' LOOP \
+             EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO contract_app', f); \
+           END LOOP; END $helpers$; \
          GRANT SELECT, INSERT, UPDATE, DELETE ON api.contract_posts, api.contract_vault \
            TO contract_app; \
          REVOKE ALL ON public.contract_posts, public.contract_vault FROM contract_app; \

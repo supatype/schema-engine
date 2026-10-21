@@ -2259,6 +2259,24 @@
       },
       {
         "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "_global_site_settings",
         "name": "_global_site_settings_update",
         "command": "w",
         "permissive": true,
@@ -2295,6 +2313,24 @@
       },
       {
         "table": "attendee",
+        "name": "attendee_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "attendee",
+        "name": "attendee_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "attendee",
         "name": "attendee_update",
         "command": "w",
         "permissive": true,
@@ -2327,6 +2363,24 @@
         "permissive": true,
         "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2376,6 +2430,24 @@
       },
       {
         "table": "page",
+        "name": "page_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "page",
+        "name": "page_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "page",
         "name": "page_update",
         "command": "w",
         "permissive": true,
@@ -2399,6 +2471,24 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "page_versions",
+        "name": "page_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "page_versions",
+        "name": "page_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2435,6 +2525,24 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "room",
+        "name": "room_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "room",
+        "name": "room_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2484,6 +2592,24 @@
       },
       {
         "table": "speaker",
+        "name": "speaker_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "speaker",
+        "name": "speaker_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "speaker",
         "name": "speaker_update",
         "command": "w",
         "permissive": true,
@@ -2507,6 +2633,24 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2543,6 +2687,24 @@
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "sponsor",
+        "name": "sponsor_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "sponsor",
+        "name": "sponsor_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2592,6 +2754,24 @@
       },
       {
         "table": "talk",
+        "name": "talk_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "talk",
+        "name": "talk_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "talk",
         "name": "talk_update",
         "command": "w",
         "permissive": true,
@@ -2615,6 +2795,24 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "talk_versions",
+        "name": "talk_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "talk_versions",
+        "name": "talk_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2651,6 +2849,24 @@
         "permissive": true,
         "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = auth_user_id)",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "ticket",
+        "name": "ticket_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "ticket",
+        "name": "ticket_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -6606,6 +6822,32 @@
       {
         "schema": "public",
         "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "_global_site_settings",
         "name": "_global_site_settings_update",
         "command": "w",
         "permissive": true,
@@ -6658,6 +6900,32 @@
       {
         "schema": "public",
         "table": "attendee",
+        "name": "attendee_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "attendee",
+        "name": "attendee_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "attendee",
         "name": "attendee_update",
         "command": "w",
         "permissive": true,
@@ -6705,6 +6973,32 @@
         ],
         "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "chat_message",
+        "name": "chat_message_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "chat_message",
+        "name": "chat_message_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -6775,6 +7069,32 @@
       {
         "schema": "public",
         "table": "page",
+        "name": "page_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page",
+        "name": "page_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page",
         "name": "page_update",
         "command": "w",
         "permissive": true,
@@ -6809,6 +7129,32 @@
         ],
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page_versions",
+        "name": "page_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page_versions",
+        "name": "page_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -6861,6 +7207,32 @@
         ],
         "usingExpr": "true",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "room",
+        "name": "room_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "room",
+        "name": "room_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -6931,6 +7303,32 @@
       {
         "schema": "public",
         "table": "speaker",
+        "name": "speaker_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker",
+        "name": "speaker_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker",
         "name": "speaker_update",
         "command": "w",
         "permissive": true,
@@ -6965,6 +7363,32 @@
         ],
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -7017,6 +7441,32 @@
         ],
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "sponsor",
+        "name": "sponsor_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "sponsor",
+        "name": "sponsor_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -7087,6 +7537,32 @@
       {
         "schema": "public",
         "table": "talk",
+        "name": "talk_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk",
+        "name": "talk_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk",
         "name": "talk_update",
         "command": "w",
         "permissive": true,
@@ -7121,6 +7597,32 @@
         ],
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk_versions",
+        "name": "talk_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk_versions",
+        "name": "talk_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -7173,6 +7675,32 @@
         ],
         "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = auth_user_id)",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "ticket",
+        "name": "ticket_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "ticket",
+        "name": "ticket_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {

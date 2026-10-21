@@ -226,6 +226,24 @@
       },
       {
         "table": "locations",
+        "name": "locations_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "locations",
+        "name": "locations_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "locations",
         "name": "locations_update",
         "command": "w",
         "permissive": true,
@@ -981,6 +999,32 @@
         ],
         "usingExpr": "true",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "locations",
+        "name": "locations_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "locations",
+        "name": "locations_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {

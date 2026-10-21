@@ -358,6 +358,19 @@ CREATE OR REPLACE TRIGGER "kitchen_sink_updated_at_trigger"
 BEFORE UPDATE ON "public"."kitchen_sink"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "kitchen_sink_studio_read" ON "public"."kitchen_sink"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "kitchen_sink_studio_write" ON "public"."kitchen_sink"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 ALTER TABLE "public"."kitchen_sink" ENABLE ROW LEVEL SECURITY;
 REVOKE ALL PRIVILEGES ON "public"."kitchen_sink" FROM PUBLIC;
 DO $grants$

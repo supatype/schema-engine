@@ -250,6 +250,60 @@ pub fn service_role_policy_sql(schema: &str, table: &str) -> String {
     )
 }
 
+/// The claim Studio's gateway sets on the token it forwards for a Studio editor or viewer: `read`
+/// or `write`. Only the gateway signs it, from the caller's own verified token, so it names a real
+/// user whose own claims still decide every field rule.
+pub const STUDIO_CLAIM: &str = "supatype_studio";
+
+/// The suffix of the policy admitting a Studio reader to every row.
+pub const STUDIO_READ_POLICY: &str = "studio_read";
+
+/// The suffix of the policy admitting a Studio editor to every row, to read and to change.
+pub const STUDIO_WRITE_POLICY: &str = "studio_write";
+
+/// The setting a field rule's predicate turns on for as long as it runs, with a function-level
+/// `SET`, which Postgres restores when the function returns, nested calls included. The Studio
+/// policies admit nothing while it is on, so a rule answers by the app's rules alone.
+pub const IN_RULE_SETTING: &str = "supatype.in_rule";
+
+/// The Studio policies every managed table carries: `(suffix, polcmd)`.
+pub const STUDIO_POLICIES: [(&str, &str); 2] =
+    [(STUDIO_READ_POLICY, "r"), (STUDIO_WRITE_POLICY, "*")];
+
+/// The `CREATE POLICY` for one of [`STUDIO_POLICIES`] on `table`.
+///
+/// Studio's roles, not the app's rules, decide what a Studio user may do with rows, so the
+/// gateway marks their request with [`STUDIO_CLAIM`] and these permissive policies admit it.
+/// They stand aside while a field rule is evaluated ([`IN_RULE_SETTING`]): a rule asking which
+/// rows of another table the caller may read (`Rows<teams, id>`) must be answered by the app's
+/// rules, or a Studio user would be a member of every team and read every masked value. Tier 1
+/// turns it on in the field rule functions below, tier 2 in its rule helpers (`field_views`).
+/// Unlike the service role they keep the caller's own identity: the request still runs as
+/// `authenticated` with the caller's `sub` and app role, which `supatype_mask` does not exempt and
+/// the tier 2 views do not exempt, so every field rule applies to a Studio user as it applies to
+/// them in the app. Read admits `read` and `write`; write admits only `write`, and is `FOR ALL`
+/// so a delete, which has no `WITH CHECK`, is admitted by it and never by the read policy.
+pub fn studio_policy_sql(schema: &str, table: &str, suffix: &str) -> String {
+    let claim = format!(
+        "(SELECT {CLAIMS_SCHEMA}.jwt_claim_text({}))",
+        quote_literal(STUDIO_CLAIM)
+    );
+    let outside_rule = format!(
+        "current_setting({}, true) IS DISTINCT FROM 'on'",
+        quote_literal(IN_RULE_SETTING)
+    );
+    let head = policy_head(schema, table, suffix);
+    if suffix == STUDIO_READ_POLICY {
+        return format!(
+            "{head}\nAS PERMISSIVE FOR SELECT USING (\n    {claim} IN ('read', 'write')\n    AND {outside_rule}\n  );"
+        );
+    }
+    let admitted = format!("{claim} = 'write'\n    AND {outside_rule}");
+    format!(
+        "{head}\nAS PERMISSIVE FOR ALL USING (\n    {admitted}\n  ) WITH CHECK (\n    {admitted}\n  );"
+    )
+}
+
 /// The caller's user id, wrapped so Postgres evaluates it once per query, not once per row.
 ///
 /// A bare function call in a policy is re-evaluated for every row the planner
@@ -905,11 +959,15 @@ fn render_field_can_functions(
 ///
 /// Double underscore between table and column so a table named `posts_salary`
 /// cannot collide with column `salary` of table `posts`.
+///
+/// `SET` [`IN_RULE_SETTING`] keeps the Studio policies out of the rule. It costs no inlining: the
+/// body reads `FROM` a derived table, which Postgres never inlines, so the masking rewrite already
+/// called it once per row.
 fn render_field_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
     let (function, row, alias) = can_function_names(schema, table, name);
     format!(
         "CREATE OR REPLACE FUNCTION {function}({alias} {row})
-           RETURNS boolean LANGUAGE sql STABLE AS $can$
+           RETURNS boolean LANGUAGE sql STABLE SET {IN_RULE_SETTING} = 'on' AS $can$
              SELECT {expr}
                FROM (SELECT ($1).*) AS {alias};
            $can$;

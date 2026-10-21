@@ -329,7 +329,8 @@ fn long_policy_names_are_fitted_and_match_their_keys() {
         .iter()
         .filter(|o| o.key.kind == ObjectKind::Policy && o.key.schema == "public")
         .collect();
-    assert_eq!(policies.len(), 4, "{policies:?}");
+    // One per rule, and the two that admit a Studio user, fitted the same way.
+    assert_eq!(policies.len(), 6, "{policies:?}");
     for policy in policies {
         assert!(
             policy.key.name.len() <= MAX_IDENTIFIER_BYTES,

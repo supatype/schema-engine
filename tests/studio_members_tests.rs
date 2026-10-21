@@ -160,6 +160,76 @@ async fn audit_migration_tolerates_a_missing_table() {
     .await;
 }
 
+// A developer with database access can change Studio membership without the membership API. The
+// trigger cannot stop that, by design, but it has to leave a record naming the database role, even
+// when that role may not write the audit table itself, and it has to install twice over.
+#[tokio::test]
+async fn a_membership_change_outside_the_api_is_audited() {
+    common::with_integration_pool(|pool| async move {
+        let setup = [
+            migration_history::create_internal_schema_sql().to_string(),
+            migration_history::create_studio_members_table_sql(),
+            migration_history::create_studio_audit_table_sql(),
+            migration_history::create_studio_audit_membership_index_sql(),
+        ];
+        for sql in setup {
+            sqlx::raw_sql(&sql).execute(&pool).await.unwrap();
+        }
+        for _ in 0..2 {
+            for sql in [
+                migration_history::create_studio_membership_audit_function_sql(),
+                migration_history::create_studio_membership_audit_trigger_sql(),
+            ] {
+                sqlx::raw_sql(&sql)
+                    .execute(&pool)
+                    .await
+                    .expect("trigger installs idempotently");
+            }
+        }
+        sqlx::raw_sql(
+            r#"DO $$ BEGIN
+                 IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'studio_member_writer') THEN
+                   CREATE ROLE studio_member_writer NOLOGIN;
+                 END IF;
+               END $$;
+               GRANT USAGE ON SCHEMA _supatype TO studio_member_writer;
+               GRANT SELECT, INSERT, UPDATE ON _supatype.studio_members TO studio_member_writer;
+               INSERT INTO _supatype.studio_members (user_id, role)
+               VALUES ('11111111-2222-3333-4444-555555555555', 'viewer');"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(
+            r#"SET LOCAL ROLE studio_member_writer;
+               SELECT set_config('request.jwt.claims', '{"sub":"user-7"}', true);
+               UPDATE _supatype.studio_members SET role = 'admin' WHERE role = 'viewer';"#,
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("a role without audit access can still change membership");
+        tx.commit().await.unwrap();
+
+        let (db_role, sub, via_api, new_role): (String, String, bool, String) = sqlx::query_as(
+            "SELECT detail ->> 'db_role', detail ->> 'jwt_sub', (detail ->> 'via_api')::boolean,
+                    detail ->> 'new_role'
+               FROM _supatype.studio_audit
+              WHERE action = 'membership_changed_in_db'
+              ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the change was audited");
+        assert_eq!(db_role, "studio_member_writer");
+        assert_eq!(sub, "user-7");
+        assert!(!via_api, "a direct UPDATE is not the membership API");
+        assert_eq!(new_role, "admin");
+    })
+    .await;
+}
+
 // ── Against a live Postgres ──────────────────────────────────────────────────
 
 async fn seed_and_list(pool: &sqlx::PgPool) -> Vec<(String, String)> {

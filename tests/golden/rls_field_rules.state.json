@@ -778,6 +778,24 @@
         "managed": false
       },
       {
+        "table": "categories",
+        "name": "categories_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "categories",
+        "name": "categories_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
         "table": "comments",
         "name": "comments_delete",
         "command": "d",
@@ -811,6 +829,24 @@
         "permissive": true,
         "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
         "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
+        "managed": false
+      },
+      {
+        "table": "comments",
+        "name": "comments_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "comments",
+        "name": "comments_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -860,6 +896,24 @@
       },
       {
         "table": "posts",
+        "name": "posts_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "posts",
+        "name": "posts_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "posts",
         "name": "posts_update",
         "command": "w",
         "permissive": true,
@@ -895,6 +949,24 @@
         "managed": false
       },
       {
+        "table": "tags",
+        "name": "tags_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "tags",
+        "name": "tags_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
         "table": "users",
         "name": "users_delete",
         "command": "d",
@@ -919,6 +991,24 @@
         "permissive": true,
         "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
         "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
+        "managed": false
+      },
+      {
+        "table": "users",
+        "name": "users_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "users",
+        "name": "users_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -1283,6 +1373,118 @@
       },
       {
         "schema": "_supatype",
+        "name": "can_read_users__email",
+        "identityArguments": "users public.users",
+        "identityTypes": "public.users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": true,
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [
+          "search_path=\"\"",
+          "supatype.in_rule=on"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_read_users__email(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "can_read_users__name",
+        "identityArguments": "users public.users",
+        "identityTypes": "public.users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": true,
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [
+          "search_path=\"\"",
+          "supatype.in_rule=on"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_read_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "can_write_users__id",
+        "identityArguments": "users public.users",
+        "identityTypes": "public.users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": true,
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [
+          "search_path=\"\"",
+          "supatype.in_rule=on"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_write_users__id(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "can_write_users__name",
+        "identityArguments": "users public.users",
+        "identityTypes": "public.users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": true,
+        "body": "\n    SELECT (TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null,
+        "arguments": "users public.users",
+        "config": [
+          "search_path=\"\"",
+          "supatype.in_rule=on"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_write_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n    SELECT (TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
         "name": "localized_items_max",
         "identityArguments": "v jsonb, n integer",
         "identityTypes": "jsonb, integer",
@@ -1543,7 +1745,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": true,
-        "body": "\nDECLARE\n  stored \"public\".\"users\";\n  touched bigint;\n  written text[];\n  filled record;\n  wrote text[] := '{}';\n  sent jsonb;\n  dflt jsonb;\n  exempt boolean := (SELECT _supatype.jwt_role()) = 'service_role';\nBEGIN\n  IF TG_OP = 'DELETE' THEN\n    DELETE FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n    GET DIAGNOSTICS touched = ROW_COUNT;\n    IF touched = 0 THEN\n      RETURN NULL;\n    END IF;\n    RETURN OLD;\n  END IF;\n\n  IF TG_OP = 'INSERT' THEN\n    FOR filled IN\n      SELECT a.attname::text AS col, format_type(a.atttypid, a.atttypmod) AS typ,\n             pg_get_expr(d.adbin, d.adrelid) AS expr,\n             pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL AS drawn\n        FROM pg_attribute a\n        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attname::text IN ('email', 'name', 'id')\n    LOOP\n      sent := to_jsonb(NEW) -> filled.col;\n      dflt := NULL;\n      IF filled.expr IS NOT NULL AND NOT filled.drawn\n         AND (sent = 'null'::jsonb OR NOT exempt) THEN\n        EXECUTE format('SELECT to_jsonb((%s)::%s)', filled.expr, filled.typ) INTO dflt;\n      END IF;\n      IF sent = 'null'::jsonb THEN\n        IF dflt IS NOT NULL THEN\n          NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, dflt));\n        END IF;\n      ELSIF dflt IS DISTINCT FROM sent THEN\n        wrote := wrote || filled.col;\n      END IF;\n    END LOOP;\n    FOR filled IN\n      SELECT a.attname::text AS col, pg_get_serial_sequence('\"public\".\"users\"', a.attname) AS seq\n        FROM pg_attribute a\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attnum > 0 AND NOT a.attisdropped\n         AND pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL\n    LOOP\n      IF to_jsonb(NEW) ->> filled.col IS NULL THEN\n        NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, nextval(filled.seq)));\n      END IF;\n    END LOOP;\n    written := ARRAY['id', 'email', 'name', 'created_at', 'updated_at']::text[];\n    IF NOT exempt AND 'email' = ANY (wrote) AND (SELECT ((SELECT _supatype.jwt_role()) = 'admin') FROM (SELECT NEW.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'name' = ANY (wrote) AND (SELECT ((TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')) FROM (SELECT NEW.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'id' = ANY (wrote) AND (SELECT ((SELECT _supatype.jwt_uid()) = \"id\") FROM (SELECT NEW.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n    EXECUTE 'INSERT INTO \"public\".\"users\" '\n      || coalesce('(' || (SELECT string_agg(quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ') OVERRIDING SYSTEM VALUE SELECT '\n        || (SELECT string_agg('n.' || quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ' FROM (SELECT ($1).*) AS n', 'DEFAULT VALUES')\n      USING NEW;\n    SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n    IF NOT FOUND THEN\n      RETURN NULL;\n    END IF;\n    RETURN NEW;\n  END IF;\n\n  SELECT * INTO stored FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n  IF NOT exempt THEN\n    -- email\n    IF (SELECT ((SELECT _supatype.jwt_role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF NEW.\"email\" IS NOT DISTINCT FROM stored.\"email\" THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF TRUE IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- name\n    IF (SELECT ((SELECT _supatype.jwt_role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF NEW.\"name\" IS NOT DISTINCT FROM stored.\"name\" THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF (SELECT ((TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')) FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- id\n    IF TRUE IS NOT TRUE THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF NEW.\"id\" IS NOT DISTINCT FROM stored.\"id\" THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF (SELECT ((SELECT _supatype.jwt_uid()) = \"id\") FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n  END IF;\n  UPDATE \"public\".\"users\"\n     SET \"id\" = NEW.\"id\",\n           \"email\" = NEW.\"email\",\n           \"name\" = NEW.\"name\",\n           \"created_at\" = NEW.\"created_at\",\n           \"updated_at\" = NEW.\"updated_at\"\n   WHERE \"id\" = OLD.\"id\";\n  GET DIAGNOSTICS touched = ROW_COUNT;\n  IF touched = 0 THEN\n    RETURN NULL;\n  END IF;\n  SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n  IF NOT FOUND THEN\n    RETURN NULL;\n  END IF;\n  RETURN NEW;\nEND ",
+        "body": "\nDECLARE\n  stored \"public\".\"users\";\n  touched bigint;\n  written text[];\n  filled record;\n  wrote text[] := '{}';\n  sent jsonb;\n  dflt jsonb;\n  exempt boolean := (SELECT _supatype.jwt_role()) = 'service_role';\nBEGIN\n  IF TG_OP = 'DELETE' THEN\n    DELETE FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n    GET DIAGNOSTICS touched = ROW_COUNT;\n    IF touched = 0 THEN\n      RETURN NULL;\n    END IF;\n    RETURN OLD;\n  END IF;\n\n  IF TG_OP = 'INSERT' THEN\n    FOR filled IN\n      SELECT a.attname::text AS col, format_type(a.atttypid, a.atttypmod) AS typ,\n             pg_get_expr(d.adbin, d.adrelid) AS expr,\n             pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL AS drawn\n        FROM pg_attribute a\n        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attname::text IN ('email', 'name', 'id')\n    LOOP\n      sent := to_jsonb(NEW) -> filled.col;\n      dflt := NULL;\n      IF filled.expr IS NOT NULL AND NOT filled.drawn\n         AND (sent = 'null'::jsonb OR NOT exempt) THEN\n        EXECUTE format('SELECT to_jsonb((%s)::%s)', filled.expr, filled.typ) INTO dflt;\n      END IF;\n      IF sent = 'null'::jsonb THEN\n        IF dflt IS NOT NULL THEN\n          NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, dflt));\n        END IF;\n      ELSIF dflt IS DISTINCT FROM sent THEN\n        wrote := wrote || filled.col;\n      END IF;\n    END LOOP;\n    FOR filled IN\n      SELECT a.attname::text AS col, pg_get_serial_sequence('\"public\".\"users\"', a.attname) AS seq\n        FROM pg_attribute a\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attnum > 0 AND NOT a.attisdropped\n         AND pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL\n    LOOP\n      IF to_jsonb(NEW) ->> filled.col IS NULL THEN\n        NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, nextval(filled.seq)));\n      END IF;\n    END LOOP;\n    written := ARRAY['id', 'email', 'name', 'created_at', 'updated_at']::text[];\n    IF NOT exempt AND 'email' = ANY (wrote) AND \"_supatype\".\"can_read_users__email\"(jsonb_populate_record(NULL::\"public\".\"users\", to_jsonb(NEW))) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'name' = ANY (wrote) AND \"_supatype\".\"can_write_users__name\"(jsonb_populate_record(NULL::\"public\".\"users\", to_jsonb(NEW))) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'id' = ANY (wrote) AND \"_supatype\".\"can_write_users__id\"(jsonb_populate_record(NULL::\"public\".\"users\", to_jsonb(NEW))) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n    EXECUTE 'INSERT INTO \"public\".\"users\" '\n      || coalesce('(' || (SELECT string_agg(quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ') OVERRIDING SYSTEM VALUE SELECT '\n        || (SELECT string_agg('n.' || quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ' FROM (SELECT ($1).*) AS n', 'DEFAULT VALUES')\n      USING NEW;\n    SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n    IF NOT FOUND THEN\n      RETURN NULL;\n    END IF;\n    RETURN NEW;\n  END IF;\n\n  SELECT * INTO stored FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n  IF NOT exempt THEN\n    -- email\n    IF \"_supatype\".\"can_read_users__email\"(stored) IS NOT TRUE THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF NEW.\"email\" IS NOT DISTINCT FROM stored.\"email\" THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF TRUE IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- name\n    IF \"_supatype\".\"can_read_users__name\"(stored) IS NOT TRUE THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF NEW.\"name\" IS NOT DISTINCT FROM stored.\"name\" THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF \"_supatype\".\"can_write_users__name\"(stored) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- id\n    IF TRUE IS NOT TRUE THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF NEW.\"id\" IS NOT DISTINCT FROM stored.\"id\" THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF \"_supatype\".\"can_write_users__id\"(stored) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n  END IF;\n  UPDATE \"public\".\"users\"\n     SET \"id\" = NEW.\"id\",\n           \"email\" = NEW.\"email\",\n           \"name\" = NEW.\"name\",\n           \"created_at\" = NEW.\"created_at\",\n           \"updated_at\" = NEW.\"updated_at\"\n   WHERE \"id\" = OLD.\"id\";\n  GET DIAGNOSTICS touched = ROW_COUNT;\n  IF touched = 0 THEN\n    RETURN NULL;\n  END IF;\n  SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n  IF NOT FOUND THEN\n    RETURN NULL;\n  END IF;\n  RETURN NEW;\nEND ",
         "comment": null,
         "arguments": "",
         "config": [
@@ -1554,7 +1756,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION api.users__write()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  stored \"public\".\"users\";\n  touched bigint;\n  written text[];\n  filled record;\n  wrote text[] := '{}';\n  sent jsonb;\n  dflt jsonb;\n  exempt boolean := (SELECT _supatype.jwt_role()) = 'service_role';\nBEGIN\n  IF TG_OP = 'DELETE' THEN\n    DELETE FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n    GET DIAGNOSTICS touched = ROW_COUNT;\n    IF touched = 0 THEN\n      RETURN NULL;\n    END IF;\n    RETURN OLD;\n  END IF;\n\n  IF TG_OP = 'INSERT' THEN\n    FOR filled IN\n      SELECT a.attname::text AS col, format_type(a.atttypid, a.atttypmod) AS typ,\n             pg_get_expr(d.adbin, d.adrelid) AS expr,\n             pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL AS drawn\n        FROM pg_attribute a\n        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attname::text IN ('email', 'name', 'id')\n    LOOP\n      sent := to_jsonb(NEW) -> filled.col;\n      dflt := NULL;\n      IF filled.expr IS NOT NULL AND NOT filled.drawn\n         AND (sent = 'null'::jsonb OR NOT exempt) THEN\n        EXECUTE format('SELECT to_jsonb((%s)::%s)', filled.expr, filled.typ) INTO dflt;\n      END IF;\n      IF sent = 'null'::jsonb THEN\n        IF dflt IS NOT NULL THEN\n          NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, dflt));\n        END IF;\n      ELSIF dflt IS DISTINCT FROM sent THEN\n        wrote := wrote || filled.col;\n      END IF;\n    END LOOP;\n    FOR filled IN\n      SELECT a.attname::text AS col, pg_get_serial_sequence('\"public\".\"users\"', a.attname) AS seq\n        FROM pg_attribute a\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attnum > 0 AND NOT a.attisdropped\n         AND pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL\n    LOOP\n      IF to_jsonb(NEW) ->> filled.col IS NULL THEN\n        NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, nextval(filled.seq)));\n      END IF;\n    END LOOP;\n    written := ARRAY['id', 'email', 'name', 'created_at', 'updated_at']::text[];\n    IF NOT exempt AND 'email' = ANY (wrote) AND (SELECT ((SELECT _supatype.jwt_role()) = 'admin') FROM (SELECT NEW.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'name' = ANY (wrote) AND (SELECT ((TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')) FROM (SELECT NEW.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'id' = ANY (wrote) AND (SELECT ((SELECT _supatype.jwt_uid()) = \"id\") FROM (SELECT NEW.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n    EXECUTE 'INSERT INTO \"public\".\"users\" '\n      || coalesce('(' || (SELECT string_agg(quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ') OVERRIDING SYSTEM VALUE SELECT '\n        || (SELECT string_agg('n.' || quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ' FROM (SELECT ($1).*) AS n', 'DEFAULT VALUES')\n      USING NEW;\n    SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n    IF NOT FOUND THEN\n      RETURN NULL;\n    END IF;\n    RETURN NEW;\n  END IF;\n\n  SELECT * INTO stored FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n  IF NOT exempt THEN\n    -- email\n    IF (SELECT ((SELECT _supatype.jwt_role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF NEW.\"email\" IS NOT DISTINCT FROM stored.\"email\" THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF TRUE IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- name\n    IF (SELECT ((SELECT _supatype.jwt_role()) = 'admin') FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF NEW.\"name\" IS NOT DISTINCT FROM stored.\"name\" THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF (SELECT ((TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')) FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- id\n    IF TRUE IS NOT TRUE THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF NEW.\"id\" IS NOT DISTINCT FROM stored.\"id\" THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF (SELECT ((SELECT _supatype.jwt_uid()) = \"id\") FROM (SELECT stored.*) AS \"users\") IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n  END IF;\n  UPDATE \"public\".\"users\"\n     SET \"id\" = NEW.\"id\",\n           \"email\" = NEW.\"email\",\n           \"name\" = NEW.\"name\",\n           \"created_at\" = NEW.\"created_at\",\n           \"updated_at\" = NEW.\"updated_at\"\n   WHERE \"id\" = OLD.\"id\";\n  GET DIAGNOSTICS touched = ROW_COUNT;\n  IF touched = 0 THEN\n    RETURN NULL;\n  END IF;\n  SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n  IF NOT FOUND THEN\n    RETURN NULL;\n  END IF;\n  RETURN NEW;\nEND $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION api.users__write()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  stored \"public\".\"users\";\n  touched bigint;\n  written text[];\n  filled record;\n  wrote text[] := '{}';\n  sent jsonb;\n  dflt jsonb;\n  exempt boolean := (SELECT _supatype.jwt_role()) = 'service_role';\nBEGIN\n  IF TG_OP = 'DELETE' THEN\n    DELETE FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n    GET DIAGNOSTICS touched = ROW_COUNT;\n    IF touched = 0 THEN\n      RETURN NULL;\n    END IF;\n    RETURN OLD;\n  END IF;\n\n  IF TG_OP = 'INSERT' THEN\n    FOR filled IN\n      SELECT a.attname::text AS col, format_type(a.atttypid, a.atttypmod) AS typ,\n             pg_get_expr(d.adbin, d.adrelid) AS expr,\n             pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL AS drawn\n        FROM pg_attribute a\n        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attname::text IN ('email', 'name', 'id')\n    LOOP\n      sent := to_jsonb(NEW) -> filled.col;\n      dflt := NULL;\n      IF filled.expr IS NOT NULL AND NOT filled.drawn\n         AND (sent = 'null'::jsonb OR NOT exempt) THEN\n        EXECUTE format('SELECT to_jsonb((%s)::%s)', filled.expr, filled.typ) INTO dflt;\n      END IF;\n      IF sent = 'null'::jsonb THEN\n        IF dflt IS NOT NULL THEN\n          NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, dflt));\n        END IF;\n      ELSIF dflt IS DISTINCT FROM sent THEN\n        wrote := wrote || filled.col;\n      END IF;\n    END LOOP;\n    FOR filled IN\n      SELECT a.attname::text AS col, pg_get_serial_sequence('\"public\".\"users\"', a.attname) AS seq\n        FROM pg_attribute a\n       WHERE a.attrelid = '\"public\".\"users\"'::regclass AND a.attnum > 0 AND NOT a.attisdropped\n         AND pg_get_serial_sequence('\"public\".\"users\"', a.attname) IS NOT NULL\n    LOOP\n      IF to_jsonb(NEW) ->> filled.col IS NULL THEN\n        NEW := jsonb_populate_record(NEW, jsonb_build_object(filled.col, nextval(filled.seq)));\n      END IF;\n    END LOOP;\n    written := ARRAY['id', 'email', 'name', 'created_at', 'updated_at']::text[];\n    IF NOT exempt AND 'email' = ANY (wrote) AND \"_supatype\".\"can_read_users__email\"(jsonb_populate_record(NULL::\"public\".\"users\", to_jsonb(NEW))) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'name' = ANY (wrote) AND \"_supatype\".\"can_write_users__name\"(jsonb_populate_record(NULL::\"public\".\"users\", to_jsonb(NEW))) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    IF NOT exempt AND 'id' = ANY (wrote) AND \"_supatype\".\"can_write_users__id\"(jsonb_populate_record(NULL::\"public\".\"users\", to_jsonb(NEW))) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n    EXECUTE 'INSERT INTO \"public\".\"users\" '\n      || coalesce('(' || (SELECT string_agg(quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ') OVERRIDING SYSTEM VALUE SELECT '\n        || (SELECT string_agg('n.' || quote_ident(c), ', ') FROM unnest(written) AS c)\n        || ' FROM (SELECT ($1).*) AS n', 'DEFAULT VALUES')\n      USING NEW;\n    SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n    IF NOT FOUND THEN\n      RETURN NULL;\n    END IF;\n    RETURN NEW;\n  END IF;\n\n  SELECT * INTO stored FROM \"public\".\"users\" WHERE \"id\" = OLD.\"id\";\n  IF NOT exempt THEN\n    -- email\n    IF \"_supatype\".\"can_read_users__email\"(stored) IS NOT TRUE THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF NEW.\"email\" IS NOT DISTINCT FROM stored.\"email\" THEN\n      NEW.\"email\" := stored.\"email\";\n    ELSIF TRUE IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column email of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- name\n    IF \"_supatype\".\"can_read_users__name\"(stored) IS NOT TRUE THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF NEW.\"name\" IS NOT DISTINCT FROM stored.\"name\" THEN\n      NEW.\"name\" := stored.\"name\";\n    ELSIF \"_supatype\".\"can_write_users__name\"(stored) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column name of relation users' USING ERRCODE = '42501';\n    END IF;\n    -- id\n    IF TRUE IS NOT TRUE THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF NEW.\"id\" IS NOT DISTINCT FROM stored.\"id\" THEN\n      NEW.\"id\" := stored.\"id\";\n    ELSIF \"_supatype\".\"can_write_users__id\"(stored) IS NOT TRUE THEN\n      RAISE EXCEPTION 'permission denied for column id of relation users' USING ERRCODE = '42501';\n    END IF;\n  END IF;\n  UPDATE \"public\".\"users\"\n     SET \"id\" = NEW.\"id\",\n           \"email\" = NEW.\"email\",\n           \"name\" = NEW.\"name\",\n           \"created_at\" = NEW.\"created_at\",\n           \"updated_at\" = NEW.\"updated_at\"\n   WHERE \"id\" = OLD.\"id\";\n  GET DIAGNOSTICS touched = ROW_COUNT;\n  IF touched = 0 THEN\n    RETURN NULL;\n  END IF;\n  SELECT v.* INTO NEW FROM \"api\".\"users\" AS v WHERE v.\"id\" = NEW.\"id\";\n  IF NOT FOUND THEN\n    RETURN NULL;\n  END IF;\n  RETURN NEW;\nEND $function$\n",
         "acl": []
       },
       {
@@ -2120,13 +2322,15 @@
         "body": "\n             SELECT (SELECT _supatype.jwt_role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
         "comment": null,
         "arguments": "users public.users",
-        "config": [],
+        "config": [
+          "supatype.in_rule=on"
+        ],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__email(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (SELECT _supatype.jwt_role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__email(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n             SELECT (SELECT _supatype.jwt_role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
@@ -2146,13 +2350,15 @@
         "body": "\n             SELECT TRUE\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
         "comment": null,
         "arguments": "users public.users",
-        "config": [],
+        "config": [
+          "supatype.in_rule=on"
+        ],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__id(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT TRUE\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__id(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n             SELECT TRUE\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
@@ -2172,13 +2378,15 @@
         "body": "\n             SELECT (SELECT _supatype.jwt_role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
         "comment": null,
         "arguments": "users public.users",
-        "config": [],
+        "config": [
+          "supatype.in_rule=on"
+        ],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (SELECT _supatype.jwt_role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n             SELECT (SELECT _supatype.jwt_role()) = 'admin'\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
@@ -2328,13 +2536,15 @@
         "body": "\n             SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
         "comment": null,
         "arguments": "users public.users",
-        "config": [],
+        "config": [
+          "supatype.in_rule=on"
+        ],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_write_users__id(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_write_users__id(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n             SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
@@ -2354,13 +2564,15 @@
         "body": "\n             SELECT (TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')\n               FROM (SELECT ($1).*) AS \"users\";\n           ",
         "comment": null,
         "arguments": "users public.users",
-        "config": [],
+        "config": [
+          "supatype.in_rule=on"
+        ],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_write_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n             SELECT (TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_write_users__name(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET \"supatype.in_rule\" TO 'on'\nAS $function$\n             SELECT (TRUE) AND ((SELECT _supatype.jwt_role()) = 'admin')\n               FROM (SELECT ($1).*) AS \"users\";\n           $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
@@ -2418,7 +2630,7 @@
         "schema": "api",
         "name": "users",
         "materialized": false,
-        "definition": " SELECT id,\n        CASE\n            WHEN (( SELECT _supatype.jwt_role() AS jwt_role)) = 'service_role'::text OR (( SELECT _supatype.jwt_role() AS jwt_role)) = 'admin'::text THEN email\n            ELSE NULL::text\n        END AS email,\n        CASE\n            WHEN (( SELECT _supatype.jwt_role() AS jwt_role)) = 'service_role'::text OR (( SELECT _supatype.jwt_role() AS jwt_role)) = 'admin'::text THEN name\n            ELSE NULL::text\n        END AS name,\n    created_at,\n    updated_at\n   FROM public.users;",
+        "definition": " SELECT id,\n        CASE\n            WHEN (( SELECT _supatype.jwt_role() AS jwt_role)) = 'service_role'::text OR _supatype.can_read_users__email(users.*) THEN email\n            ELSE NULL::text\n        END AS email,\n        CASE\n            WHEN (( SELECT _supatype.jwt_role() AS jwt_role)) = 'service_role'::text OR _supatype.can_read_users__name(users.*) THEN name\n            ELSE NULL::text\n        END AS name,\n    created_at,\n    updated_at\n   FROM public.users;",
         "comment": "@graphql({\"primary_key_columns\":[\"id\"]})",
         "options": [
           "security_barrier=true"
@@ -2984,6 +3196,32 @@
       },
       {
         "schema": "public",
+        "table": "categories",
+        "name": "categories_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "name": "categories_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
         "table": "comments",
         "name": "comments_delete",
         "command": "d",
@@ -3032,6 +3270,32 @@
         ],
         "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
         "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "comments",
+        "name": "comments_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "comments",
+        "name": "comments_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -3102,6 +3366,32 @@
       {
         "schema": "public",
         "table": "posts",
+        "name": "posts_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "posts",
+        "name": "posts_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "posts",
         "name": "posts_update",
         "command": "w",
         "permissive": true,
@@ -3153,6 +3443,32 @@
       },
       {
         "schema": "public",
+        "table": "tags",
+        "name": "tags_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "tags",
+        "name": "tags_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
         "table": "users",
         "name": "users_delete",
         "command": "d",
@@ -3188,6 +3504,32 @@
         ],
         "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
         "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'service_role'::text)",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "users",
+        "name": "users_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "users",
+        "name": "users_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
