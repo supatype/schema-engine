@@ -289,7 +289,8 @@ pub fn never_removed(kind: ObjectKind) -> bool {
 /// drafts layer's (E19); and the functions access is decided by: the `can_*` predicates, which the
 /// field masking labels, the tier 2 views and every caller asking "may I" run, and the claim
 /// readers in the engine's helper schema that every generated rule reads the caller through
-/// (F15 (f)). A hand edit to `can_read_note__secret` is as much a change to who may read a column
+/// (F15 (f)), and the tier 2 set helpers (`rule_set_*`) a field rule reads another table
+/// through. A hand edit to `can_read_note__secret` is as much a change to who may read a column
 /// as an edit to its label. Any other function's callers are security relevant too when they
 /// change (`ledger::reconcile`, F14), though its body is not. A table's replica identity is not:
 /// it decides what the WAL carries, not who may read it.
@@ -304,6 +305,8 @@ pub fn security_relevant(key: &ObjectKey) -> bool {
             key.name.starts_with("can_")
                 || (key.schema == crate::generator::sql::auth_functions::CLAIMS_SCHEMA
                     && key.name.starts_with("jwt_"))
+                || (key.schema == crate::generator::sql::field_rules::RULE_SCHEMA
+                    && key.name.starts_with("rule_set_"))
         }
         _ => false,
     }
