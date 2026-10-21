@@ -1,4 +1,5 @@
 use crate::generator::sql::auth_functions::{API_ROLES, AUTH_SCHEMA, CLAIMS_SCHEMA};
+use crate::generator::sql::field_rules::reads_table;
 use crate::parser::accessors::{
     db_table_name, is_user_identity_model, owner_field_on_model, platform_access,
     resolve_owner_column,
@@ -412,15 +413,8 @@ fn set_exists_expr(
         MembershipSource::Rows { table, filter, .. } => {
             let mut sql = format!("EXISTS (SELECT 1 FROM {}", quote_qualified(schema, table));
             if let Some(rule) = filter {
-                let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
-                let inner_expr = match inner_model {
-                    Some(m) => access_rule_to_expr(ast, m, rule, schema),
-                    None => access_rule_to_expr(ast, model, rule, schema),
-                };
-                sql.push_str(&format!(
-                    " WHERE ({})",
-                    qualify_bare_columns(&inner_expr, table)
-                ));
+                let filter = rows_filter_sql(ast, model, table, rule, schema);
+                sql.push_str(&format!(" WHERE ({filter})"));
             }
             sql.push(')');
             sql
@@ -487,23 +481,30 @@ fn membership_to_expr(
                 quote_ident(source_column)
             );
             if let Some(rule) = filter {
-                // The filter is evaluated against the *source* table, so resolve
-                // its columns there rather than against the model the policy is
-                // attached to.
-                let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
-                let inner_expr = match inner_model {
-                    Some(m) => access_rule_to_expr(ast, m, rule, schema),
-                    None => access_rule_to_expr(ast, model, rule, schema),
-                };
-                sql.push_str(&format!(
-                    " AND ({})",
-                    qualify_bare_columns(&inner_expr, table)
-                ));
+                let filter = rows_filter_sql(ast, model, table, rule, schema);
+                sql.push_str(&format!(" AND ({filter})"));
             }
             sql.push(')');
             sql
         }
     }
+}
+
+/// A `Rows` source's filter as SQL over the source `table`, its columns qualified with it.
+///
+/// The filter is evaluated against the *source* table, so its columns resolve there rather than
+/// against the model the rule is attached to; a source that is no model (a junction) resolves
+/// against `model`, as it always has.
+pub(crate) fn rows_filter_sql(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    table: &str,
+    rule: &AccessRule,
+    schema: &str,
+) -> String {
+    let inner_model = ast.models.iter().find(|m| db_table_name(m) == table);
+    let inner_expr = access_rule_to_expr(ast, inner_model.unwrap_or(model), rule, schema);
+    qualify_bare_columns(&inner_expr, table)
 }
 
 /// Qualifies unqualified quoted columns in a subquery predicate with its table.
@@ -802,28 +803,50 @@ fn interval(text: &str) -> String {
 /// so no policy is recreated for it.
 fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
     let column = resolve_owner_column(model, kernel_field);
-    let direct = format!("{AUTH_UID} = {}", quote_ident(&column));
+    match owner_join(ast, model, kernel_field) {
+        Some(join) => {
+            let table = quote_ident(&join.table);
+            format!(
+                "EXISTS (SELECT 1 FROM {table} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
+                fk_q = quote_ident(&column),
+                owner_q = quote_ident(&join.owner_column)
+            )
+        }
+        None => format!("{AUTH_UID} = {}", quote_ident(&column)),
+    }
+}
+
+/// The related model an `Owner` rule on a relation field is owned through: its table and the
+/// column on it naming the owner. `None` where the field is owned directly, which reads no table.
+pub(crate) struct OwnerJoin {
+    pub table: String,
+    pub owner_column: String,
+}
+
+/// [`OwnerJoin`] for `Owner<kernel_field>` on `model`, if it joins.
+pub(crate) fn owner_join(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    kernel_field: &str,
+) -> Option<OwnerJoin> {
     let Some(FieldAst::Relation(rel)) = model.fields.get(kernel_field) else {
-        return direct;
+        return None;
     };
-    let joined = ast
-        .models
+    ast.models
         .iter()
         .find(|m| m.name == rel.target)
         .filter(|target| !is_user_identity_model(target))
         .and_then(|target| Some((target, owner_column_on_model(target)?)))
-        .filter(|(_, owner_col)| owner_col != "id");
-    match joined {
-        Some((target, owner_col)) => {
-            let table = quote_ident(db_table_name(target));
-            format!(
-                "EXISTS (SELECT 1 FROM {table} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
-                fk_q = quote_ident(&column),
-                owner_q = quote_ident(&owner_col)
-            )
-        }
-        None => direct,
-    }
+        .filter(|(_, owner_col)| owner_col != "id")
+        .map(|(target, owner_column)| OwnerJoin {
+            table: db_table_name(target).to_string(),
+            owner_column,
+        })
+}
+
+/// The column holding the owner on `model` for `Owner<kernel_field>`.
+pub(crate) fn owner_column(model: &ModelAst, kernel_field: &str) -> String {
+    resolve_owner_column(model, kernel_field)
 }
 
 /// The column a related model is owned through, from the first `Owner` among its rules (O3).
@@ -930,10 +953,15 @@ fn render_field_can_functions(
         // No `read` rule means the column is as readable as the table, so the
         // affordance is unconditionally true rather than absent -- a UI should never
         // have to distinguish "allowed" from "no function".
+        let reads = |rule: Option<&AccessRule>| rule.is_some_and(|r| reads_table(ast, model, r));
+        let read_reads = reads(rules.read.as_ref());
         out.push_str(&render_field_can_function(
-            schema,
-            table,
-            &names.field_can_function(table, "read", column),
+            &FieldCan {
+                schema,
+                table,
+                name: &names.field_can_function(table, "read", column),
+                in_rule: read_reads,
+            },
             read_expr.as_deref().unwrap_or("TRUE"),
         ));
 
@@ -944,9 +972,12 @@ fn render_field_can_functions(
                 None => write_expr,
             };
             out.push_str(&render_field_can_function(
-                schema,
-                table,
-                &names.field_can_function(table, "write", column),
+                &FieldCan {
+                    schema,
+                    table,
+                    name: &names.field_can_function(table, "write", column),
+                    in_rule: read_reads || reads(Some(rule)),
+                },
                 &conjoined,
             ));
         }
@@ -960,21 +991,35 @@ fn render_field_can_functions(
 /// Double underscore between table and column so a table named `posts_salary`
 /// cannot collide with column `salary` of table `posts`.
 ///
-/// `SET` [`IN_RULE_SETTING`] keeps the Studio policies out of the rule. It costs no inlining: the
-/// body reads `FROM` a derived table, which Postgres never inlines, so the masking rewrite already
-/// called it once per row.
-fn render_field_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
-    let (function, row, alias) = can_function_names(schema, table, name);
+/// `SET` [`IN_RULE_SETTING`] keeps the Studio policies out of a rule that reads another table
+/// (`field_rules::reads_table`), the only kind they could widen; a rule on roles, claims or the
+/// row's own columns goes without it. It costs no inlining: the body reads `FROM` a derived table,
+/// which Postgres never inlines, so the masking rewrite calls it once per row either way.
+fn render_field_can_function(can: &FieldCan<'_>, expr: &str) -> String {
+    let (function, row, alias) = can_function_names(can.schema, can.table, can.name);
+    let set = if can.in_rule {
+        format!(" SET {IN_RULE_SETTING} = 'on'")
+    } else {
+        String::new()
+    };
     format!(
         "CREATE OR REPLACE FUNCTION {function}({alias} {row})
-           RETURNS boolean LANGUAGE sql STABLE SET {IN_RULE_SETTING} = 'on' AS $can$
+           RETURNS boolean LANGUAGE sql STABLE{set} AS $can$
              SELECT {expr}
                FROM (SELECT ($1).*) AS {alias};
            $can$;
 {}
 ",
-        can_function_grants(schema, table, name)
+        can_function_grants(can.schema, can.table, can.name)
     )
+}
+
+/// What names one `can_<op>_<table>__<column>`, and whether its rule reads another table.
+struct FieldCan<'a> {
+    schema: &'a str,
+    table: &'a str,
+    name: &'a str,
+    in_rule: bool,
 }
 
 // ─── Field-level enforcement: security labels ────────────────────────────────

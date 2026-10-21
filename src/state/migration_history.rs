@@ -240,7 +240,10 @@ pub fn create_studio_audit_membership_index_sql() -> String {
 /// role, the database role that did it (the `SET ROLE` in force, else the login role), the caller's
 /// JWT `sub` when the change came through the data API, and `via_api`: whether the membership API
 /// flagged the transaction (`supatype.membership_api`, set transaction-locally by the auth server's
-/// store). A change with `via_api` false was made around Studio.
+/// store). `source` is that setting as it was: `on` for the membership API, `cli` for the CLI's
+/// `admin create-user` and `admin set-role`, `seed` for the first push carrying forward admins the
+/// project already had ([`SEED_MEMBERSHIP_SOURCE`]), and absent for a change made around all of
+/// them, which is the one Studio flags.
 ///
 /// SECURITY DEFINER with a pinned `search_path`, so a role that may write `studio_members` but not
 /// `studio_audit` still leaves a record, and nothing on that role's path can stand in for the
@@ -289,7 +292,8 @@ BEGIN
             'db_role',      db_role,
             'session_user', session_user::text,
             'jwt_sub',      subject,
-            'via_api',      coalesce(current_setting('supatype.membership_api', true), '') = 'on'
+            'via_api',      coalesce(current_setting('supatype.membership_api', true), '') = 'on',
+            'source',       nullif(current_setting('supatype.membership_api', true), '')
         )
     );
     RETURN NULL;
@@ -420,25 +424,40 @@ END $$"#
 /// A deployment that customised `STUDIO_ADMIN_ROLES` seeds nobody and falls
 /// through to the CLI's first-admin prompt, which is the right recovery, better
 /// than guessing which app roles were meant to be administrators.
+///
+/// The insert is marked [`SEED_MEMBERSHIP_SOURCE`], so the audit trail records it
+/// as the seed and Studio does not flag it as a change made around Studio.
 pub fn seed_studio_members_from_claims_sql() -> String {
     format!(
         r#"DO $$
+DECLARE
+    prior text := coalesce(current_setting('{MEMBERSHIP_SOURCE_SETTING}', true), '');
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM {SCHEMA}.studio_members) THEN
         IF EXISTS (
             SELECT 1 FROM information_schema.tables
             WHERE table_schema = 'auth' AND table_name = 'users'
         ) THEN
+            PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', '{SEED_MEMBERSHIP_SOURCE}', true);
             INSERT INTO {SCHEMA}.studio_members (user_id, platform_user_id, role)
             SELECT id, NULL, 'admin'
               FROM auth.users
              WHERE raw_app_meta_data->>'role' IN ('admin', 'supatype_admin')
             ON CONFLICT (user_id) DO NOTHING;
+            PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', prior, true);
         END IF;
     END IF;
 END $$"#
     )
 }
+
+/// The transaction-local setting naming who changed Studio membership, which the membership audit
+/// trigger records as `source` ([`create_studio_membership_audit_function_sql`]).
+pub const MEMBERSHIP_SOURCE_SETTING: &str = "supatype.membership_api";
+
+/// The `source` the first push's seed gives the memberships it carries forward. Set for its own
+/// insert only, and put back after it, so nothing later in the push's transaction is taken for it.
+pub const SEED_MEMBERSHIP_SOURCE: &str = "seed";
 
 pub fn ensure_migrations_admin_config_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS admin_config JSONB")

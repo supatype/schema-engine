@@ -378,7 +378,7 @@ fn team_fixture() -> SchemaAst {
 
 /// A team readable by its owner only, and staff whose `salary` is readable and writable where the
 /// staff member's team is one the caller may read: `In<team_id, Rows<st_team, id>>`. With `bonus`,
-/// the staff's `bonus` is the app admin's to read.
+/// the staff's `bonus` is readable by a caller who may read any team: `Exists<Rows<st_team>>`.
 fn team_fixture_with(bonus: bool) -> SchemaAst {
     let owner = json!({ "type": "owner", "field": "owner_id" });
     let in_my_teams = json!({ "type": "in", "column": "team_id",
@@ -400,7 +400,8 @@ fn team_fixture_with(bonus: bool) -> SchemaAst {
     );
     let mut fields = json!({ "salary": { "read": in_my_teams, "write": in_my_teams } });
     if bonus {
-        fields["bonus"] = json!({ "read": { "type": "role", "roles": ["admin"] } });
+        fields["bonus"] = json!({ "read": { "type": "exists", "source": {
+            "kind": "rows", "table": "st_team", "column": "id" } } });
     }
     let staff = model(
         "StStaff",
@@ -425,8 +426,9 @@ async fn teams_pushed(pool: &sqlx::PgPool) {
     sqlx::raw_sql(&format!(
         "INSERT INTO public.st_team (id, name, owner_id) VALUES
            ('{TEAM_A}', 'Red', '{A}'), ('{TEAM_B}', 'Blue', '{B}');
-         INSERT INTO public.st_staff (id, name, team_id, salary) VALUES
-           (gen_random_uuid(), 'Ann', '{TEAM_A}', 100), (gen_random_uuid(), 'Ben', '{TEAM_B}', 200);"
+         INSERT INTO public.st_staff (id, name, team_id, salary, bonus) VALUES
+           (gen_random_uuid(), 'Ann', '{TEAM_A}', 100, 10),
+           (gen_random_uuid(), 'Ben', '{TEAM_B}', 200, 20);"
     ))
     .execute(pool)
     .await
@@ -524,7 +526,54 @@ async fn a_rows_write_rule_is_not_widened_by_studio_tier_two() {
     rows_write_rule_ignores_studio(Tier::Views).await;
 }
 
-/// The tier 2 rule helpers of `st_staff`, by name, and whether `PUBLIC` may call any of them.
+/// An `Exists` rule over another table is not widened either: the editor owns no team, so they
+/// read no bonus however many teams Studio shows them, while Alice, who owns one, reads every bonus.
+async fn exists_rule_ignores_studio(tier: Tier) {
+    common::with_integration_pool(|pool| async move {
+        if matches!(tier, Tier::Extension) {
+            assert!(
+                common::mask_extension_available(&pool).await,
+                "tier 1 needs supatype_mask"
+            );
+        }
+        teams_pushed(&pool).await;
+        let read = format!("SELECT name, bonus FROM {} ORDER BY name", staff(tier));
+        let bonuses = |pairs: [(&str, Value); 2]| -> Vec<Value> {
+            pairs
+                .map(|(name, bonus)| json!({ "name": name, "bonus": bonus }))
+                .to_vec()
+        };
+        let none = bonuses([("Ann", Value::Null), ("Ben", Value::Null)]);
+        let all = bonuses([("Ann", json!(10)), ("Ben", json!(20))]);
+        for (caller, expected, who) in [
+            (
+                claims(EDITOR, Some("read")),
+                &none,
+                "a Studio reader who owns no team",
+            ),
+            (claims(EDITOR, None), &none, "an app user who owns no team"),
+            (claims(A, None), &all, "Alice in the app, who owns a team"),
+            (claims(A, Some("read")), &all, "Alice in Studio"),
+        ] {
+            let (rows, _) = as_caller(&pool, &caller, &read).await;
+            let rows = rows.unwrap_or_else(|e| panic!("refused: {e}"));
+            assert_eq!(&rows, expected, "{tier:?}: {who}");
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_exists_field_rule_is_not_widened_by_studio_tier_one() {
+    exists_rule_ignores_studio(Tier::Extension).await;
+}
+
+#[tokio::test]
+async fn an_exists_field_rule_is_not_widened_by_studio_tier_two() {
+    exists_rule_ignores_studio(Tier::Views).await;
+}
+
+/// The tier 2 set helpers, by name, and whether `PUBLIC` may call any of them.
 async fn staff_helpers(pool: &sqlx::PgPool) -> (Vec<String>, bool) {
     sqlx::query_as(
         r"SELECT coalesce(array_agg(p.proname::text ORDER BY p.proname), '{}'),
@@ -533,7 +582,7 @@ async fn staff_helpers(pool: &sqlx::PgPool) -> (Vec<String>, bool) {
                     WHERE a.grantee = 0)), false)
             FROM pg_proc p
            WHERE p.pronamespace = '_supatype'::regnamespace
-             AND p.proname LIKE 'can\_%\_st\_staff\_\_%'",
+             AND p.proname LIKE 'rule\_set\_%'",
     )
     .fetch_one(pool)
     .await
@@ -555,17 +604,20 @@ async fn churn(pool: &sqlx::PgPool, ast: &SchemaAst) -> Vec<String> {
         .collect()
 }
 
-/// Tier 2 evaluates each masked column's rules in a helper the views call: made with the rule,
-/// callable only by the roles that read through the views, left alone by a push that changes
-/// nothing, and dropped with its rule while the view that called it is remade.
+/// Tier 2 reads another table for a rule through a set helper the views call: one per question
+/// (salary's read and write rules ask the same one), callable only by the roles that read through
+/// the views, left alone by a push that changes nothing, and dropped with the last rule asking it
+/// while the view that called it is remade.
 #[tokio::test]
 async fn tier_two_rule_helpers_follow_their_rules() {
     common::with_integration_pool(|pool| async move {
-        let all = ["can_read_st_staff__bonus", "can_read_st_staff__salary"];
-        let written = "can_write_st_staff__salary";
         common::push(&pool, &team_fixture()).await.expect("push");
-        let (names, public) = staff_helpers(&pool).await;
-        assert_eq!(names, [all[0], all[1], written], "one helper per rule");
+        let (with_bonus, public) = staff_helpers(&pool).await;
+        assert_eq!(
+            with_bonus.len(),
+            2,
+            "salary's question and bonus's: {with_bonus:?}"
+        );
         assert!(!public, "PUBLIC may not call a rule helper");
         assert_eq!(churn(&pool, &team_fixture()).await, Vec::<String>::new());
 
@@ -575,10 +627,11 @@ async fn tier_two_rule_helpers_follow_their_rules() {
             .expect("the push dropping bonus's rule applies");
         let (names, _) = staff_helpers(&pool).await;
         assert_eq!(
-            names,
-            [all[1], written],
-            "bonus's helper went with its rule"
+            names.len(),
+            1,
+            "bonus's helper went with its rule: {names:?}"
         );
+        assert!(with_bonus.contains(&names[0]), "salary's helper was kept");
         assert_eq!(churn(&pool, &without).await, Vec::<String>::new());
     })
     .await;

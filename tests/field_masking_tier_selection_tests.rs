@@ -140,7 +140,7 @@ async fn a_database_without_the_extension_gets_views_instead_of_a_refusal() {
                 .await
                 .expect("read the view definition");
         assert!(
-            def.contains("CASE") && def.contains("_supatype.can_read_tier_employee__"),
+            def.contains("CASE") && def.contains("claim_text"),
             "the masked column is not masked in the view: {def}"
         );
     })
