@@ -257,7 +257,7 @@ fn owner_through_a_relation_to_a_model_owned_by_a_uuid_field_looks_ownership_up(
     let rule = post.access().read.as_ref().unwrap();
     let expr = rls::access_rule_to_expr(&ast, post, rule, "public");
     assert!(
-        expr.contains("EXISTS (SELECT 1 FROM \"author\"")
+        expr.contains("EXISTS (SELECT 1 FROM \"public\".\"author\"")
             && expr.contains("\"author\".\"user_id\""),
         "ownership is looked up through the author row: {expr}"
     );

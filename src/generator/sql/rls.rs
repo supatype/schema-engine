@@ -368,7 +368,7 @@ pub fn access_rule_to_expr(
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
-        AccessRule::Owner { field } => owner_access_expr(ast, model, field),
+        AccessRule::Owner { field } => owner_access_expr(ast, model, field, schema),
         AccessRule::Role { roles } => role_matches(AUTH_ROLE, roles),
         AccessRule::Any { rules } => join_rules(ast, model, rules, "OR", schema),
         AccessRule::All { rules } => join_rules(ast, model, rules, "AND", schema),
@@ -802,14 +802,22 @@ fn interval(text: &str) -> String {
 /// Columns are always quoted, which is also what lets `qualify_bare_columns` find these references
 /// when the same expression is reused inside a `can_*` function, where a bare column has no `FROM`
 /// clause to resolve against. Quoting changes no meaning and the differ's normaliser strips quotes,
-/// so no policy is recreated for it.
-fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
+/// so no policy is recreated for it. The related table is schema-qualified, as a `Rows` source is:
+/// a tier 2 set helper reads it with an empty `search_path`, and a caller's path could otherwise
+/// resolve the name to another schema's table.
+fn owner_access_expr(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    kernel_field: &str,
+    schema: &str,
+) -> String {
     let column = resolve_owner_column(model, kernel_field);
     match owner_join(ast, model, kernel_field) {
         Some(join) => {
             let table = quote_ident(&join.table);
             format!(
-                "EXISTS (SELECT 1 FROM {table} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
+                "EXISTS (SELECT 1 FROM {source} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
+                source = quote_qualified(schema, &join.table),
                 fk_q = quote_ident(&column),
                 owner_q = quote_ident(&join.owner_column)
             )
