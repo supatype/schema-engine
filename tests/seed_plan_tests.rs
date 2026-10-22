@@ -690,3 +690,64 @@ fn a_connect_that_wins_keeps_its_lookup() {
         other => panic!("expected a write, got {other:?}"),
     }
 }
+
+/// Which writes look for a matching row before they insert (C5).
+fn write_matches(steps: &[PlannedStep]) -> Vec<bool> {
+    steps
+        .iter()
+        .filter_map(|step| match step {
+            PlannedStep::Write(w) => Some(w.match_existing),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A row nested under an upsert, and every row nested under one of those, is matched before
+/// it is written, because its parent may already exist with it. The upsert's own row is not:
+/// its conflict key already makes it idempotent.
+#[test]
+fn rows_nested_under_an_upsert_are_matched_at_every_level() {
+    let document = ir(r#"[
+        {"op":"upsert","model":"Organiser","where":{"slug":"n"},"data":{
+            "events":{"create":[
+                {"title":"Conf","ticket_types":{"createMany":[{"name":"Early"}]}}
+            ]}
+        }}
+    ]"#);
+    let steps = flat(&document);
+    assert_eq!(
+        write_models(&steps),
+        vec!["Organiser", "Event", "TicketType"]
+    );
+    assert_eq!(write_matches(&steps), vec![false, true, true]);
+}
+
+/// Under a plain `create` the parent is new, so nothing can hang off it yet.
+#[test]
+fn rows_nested_under_a_create_are_not_matched() {
+    let document = ir(r#"[
+        {"op":"create","model":"Organiser","data":{
+            "events":{"create":[
+                {"title":"Conf","ticket_types":{"createMany":[{"name":"Early"}]}}
+            ]}
+        }}
+    ]"#);
+    assert_eq!(write_matches(&flat(&document)), vec![false, false, false]);
+}
+
+/// A matched row and an unmatched one are different statements, so they never share a batch.
+#[test]
+fn a_matched_row_does_not_batch_with_an_unmatched_one() {
+    let document = ir(r#"[
+        {"op":"upsert","model":"Organiser","where":{"slug":"n"},"data":{
+            "events":{"create":[{"title":"A"}]}}},
+        {"op":"create","model":"Event","data":{"title":"B","organiser_id":null}}
+    ]"#);
+    let event_batches: Vec<bool> = planned(&document)
+        .batches
+        .iter()
+        .filter(|batch| batch.model == "Event")
+        .map(|batch| batch.match_existing)
+        .collect();
+    assert_eq!(event_batches, vec![true, false]);
+}

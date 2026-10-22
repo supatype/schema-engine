@@ -72,6 +72,14 @@ pub enum Operation {
     /// The primary operation for seeds. Seeds get re-run, and idempotency is the thing
     /// every hand-written seed gets wrong. It is also what removes hardcoded ids: a
     /// natural key means the row identifies itself.
+    ///
+    /// Rows nested in an upsert with `create` or `createMany` are re-runnable too. Each is
+    /// written only when no row already holds every value the seed gives it, its link to
+    /// the parent included; a child of one of those follows the same rule. So a second run
+    /// adds nothing, and a child whose values changed is added beside the old one rather
+    /// than replacing it. A column the seed leaves out or sets to `$default`, and a time the
+    /// database computes such as `now()`, is not compared. Two identical children in one
+    /// seed are one child: the second matches the first.
     Upsert {
         model: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,6 +174,10 @@ pub enum Value {
     Connect { connect: IndexMap<String, Value> },
 
     /// `{"create": [...]}` on the inverse side of a relation.
+    ///
+    /// Under an `upsert` each row is matched before it is written, so a re-run does not
+    /// add it again; see [`Operation::Upsert`]. Under a `create` the parent is new and
+    /// every row is written.
     NestedCreate { create: Vec<DataMap> },
 
     /// `{"createMany": [...]}` on the inverse side of a relation.

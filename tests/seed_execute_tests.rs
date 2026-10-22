@@ -679,3 +679,34 @@ async fn a_connect_that_matches_nothing_leaves_the_key_null() {
         assert_eq!(orphans, 1);
     });
 }
+
+/// `{"$default": true}` writes the column's default, on an insert and on the update half of an
+/// upsert. `DEFAULT` is not allowed in a `SELECT` list, so it was refused with "DEFAULT is not
+/// allowed in this context" on every write that used it.
+#[tokio::test]
+async fn a_default_value_writes_the_column_default() {
+    with_seeded_schema!(|pool, ast| {
+        run(
+            &pool,
+            &ast,
+            r#"[{"op":"create","model":"Organiser","data":{"id":{"$default":true},
+                "slug":"d","name":"D","seats":5}}]"#,
+        )
+        .await
+        .expect("an insert with a default runs");
+        run(
+            &pool,
+            &ast,
+            r#"[{"op":"upsert","model":"Organiser","where":{"slug":"d"},
+                "data":{"name":"D","seats":{"$default":true}}}]"#,
+        )
+        .await
+        .expect("an upsert with a default runs");
+
+        let seats: Option<i32> = sqlx::query_scalar("SELECT seats FROM organiser WHERE slug = 'd'")
+            .fetch_one(&pool)
+            .await
+            .expect("reads back");
+        assert_eq!(seats, None, "the update reset seats to its default");
+    });
+}
