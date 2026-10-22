@@ -1113,6 +1113,9 @@ CREATE OR REPLACE FUNCTION "supatype".publish(
         col, col, col, col);
     END LOOP;
 
+    -- The live row is the publishing functions' to write: the table's `drafts_only` trigger
+    -- admits these two updates and nothing after them.
+    PERFORM set_config('supatype.publishing', 'on', true);
     EXECUTE format(
       'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src
         WHERE %I = $1::%s',
@@ -1135,6 +1138,7 @@ CREATE OR REPLACE FUNCTION "supatype".publish(
         entry."primary_key", entry."primary_key_type")
         USING record_id, stamp;
     END IF;
+    PERFORM set_config('supatype.publishing', '', true);
 
     -- Exactly one version claims a locale, so publishing takes it off every other version. Without
     -- this, "which version is live for fr" would have several answers after a restore.
@@ -1189,6 +1193,8 @@ CREATE OR REPLACE FUNCTION "supatype".unpublish(
       assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);
     END LOOP;
 
+    -- As in `publish`: the live row is this function's to write, until it returns.
+    PERFORM set_config('supatype.publishing', 'on', true);
     IF cardinality(assignments) > 0 THEN
       EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',
         entry."schema_name", entry."table_name", array_to_string(assignments, ', '),
@@ -1227,6 +1233,7 @@ CREATE OR REPLACE FUNCTION "supatype".unpublish(
           USING ERRCODE = '42501';
       END IF;
     END IF;
+    PERFORM set_config('supatype.publishing', '', true);
 
     RETURN jsonb_build_object(
       'record_id', record_id, 'status',
@@ -1561,6 +1568,52 @@ CREATE OR REPLACE FUNCTION "supatype".create_records(model_table text, data json
 
 GRANT EXECUTE ON FUNCTION "supatype".create_records(text, jsonb) TO authenticated, service_role;
 
+CREATE OR REPLACE FUNCTION "supatype".save_drafts(
+  model_table text, record_ids jsonb, data jsonb, publish boolean DEFAULT false)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    id text;
+    saved jsonb;
+    published jsonb;
+    answers jsonb := '[]'::jsonb;
+  BEGIN
+    IF jsonb_typeof(record_ids) IS DISTINCT FROM 'array' THEN
+      RAISE EXCEPTION 'save_drafts takes a JSON array of record keys, not %', COALESCE(jsonb_typeof(record_ids), 'null')
+        USING ERRCODE = '22023',
+              HINT = 'Send the keys of the records to save a draft of, or call create_draft for one.';
+    END IF;
+
+    FOR id IN SELECT value FROM jsonb_array_elements_text(record_ids) WITH ORDINALITY ORDER BY ordinality LOOP
+      saved := "supatype".create_draft(model_table, id, data);
+      IF publish THEN
+        published := "supatype".publish(model_table, id, (saved->>'version')::integer);
+        saved := saved || jsonb_build_object('status', 'published', 'locales', published->'locales');
+      END IF;
+      answers := answers || jsonb_build_array(saved);
+    END LOOP;
+    RETURN answers;
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION "supatype".save_drafts(text, jsonb, jsonb, boolean) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION _supatype.refuse_live_edit() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  BEGIN
+    IF current_user::text NOT IN ('anon', 'authenticated')
+       OR current_setting('supatype.publishing', true) = 'on'
+       OR _supatype.jwt_claim_text('supatype_studio') = 'write' THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION USING
+      MESSAGE = TG_TABLE_NAME || ' has drafts: save a draft with supatype.create_draft or the client''s update, then publish',
+      ERRCODE = '42501',
+      HINT = 'Publish with supatype.publish, or pass { publish: true } to the client''s update to save and publish in one call.';
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION _supatype.refuse_live_edit() FROM PUBLIC;
+
 REVOKE ALL ON SCHEMA "draft" FROM anon;
 GRANT USAGE ON SCHEMA "draft" TO authenticated, service_role;
 
@@ -1616,6 +1669,10 @@ CREATE POLICY "page_draft_select" ON "public"."page"
 DROP TRIGGER IF EXISTS "page_created_note" ON "public"."page";
 CREATE TRIGGER "page_created_note" AFTER INSERT ON "public"."page"
   FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
+
+DROP TRIGGER IF EXISTS "page_drafts_only" ON "public"."page";
+CREATE TRIGGER "page_drafts_only" BEFORE UPDATE ON "public"."page"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit();
 
 DROP POLICY IF EXISTS "page_versions_insert" ON "public"."page_versions";
 CREATE POLICY "page_versions_insert" ON "public"."page_versions"
@@ -1753,6 +1810,10 @@ DROP TRIGGER IF EXISTS "speaker_created_note" ON "public"."speaker";
 CREATE TRIGGER "speaker_created_note" AFTER INSERT ON "public"."speaker"
   FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
 
+DROP TRIGGER IF EXISTS "speaker_drafts_only" ON "public"."speaker";
+CREATE TRIGGER "speaker_drafts_only" BEFORE UPDATE ON "public"."speaker"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit();
+
 DROP POLICY IF EXISTS "speaker_versions_insert" ON "public"."speaker_versions";
 CREATE POLICY "speaker_versions_insert" ON "public"."speaker_versions"
   FOR INSERT WITH CHECK (_supatype."can_edit_speaker"("record_id"));
@@ -1888,6 +1949,10 @@ CREATE POLICY "talk_draft_select" ON "public"."talk"
 DROP TRIGGER IF EXISTS "talk_created_note" ON "public"."talk";
 CREATE TRIGGER "talk_created_note" AFTER INSERT ON "public"."talk"
   FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
+
+DROP TRIGGER IF EXISTS "talk_drafts_only" ON "public"."talk";
+CREATE TRIGGER "talk_drafts_only" BEFORE UPDATE ON "public"."talk"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit();
 
 DROP POLICY IF EXISTS "talk_versions_insert" ON "public"."talk_versions";
 CREATE POLICY "talk_versions_insert" ON "public"."talk_versions"

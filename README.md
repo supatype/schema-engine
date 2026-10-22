@@ -244,6 +244,13 @@ Draft visibility is not the model's `read` rule and not its `update` rule. It is
 creator, plus the Studio roles the project nominates, plus the bearer of a signed preview link. See
 `src/generator/sql/versions.rs`.
 
+On a model with drafts the live row changes only by publishing. An edit is saved as a draft with
+`supatype.create_draft`, or `supatype.save_drafts` for several records (optionally publishing them
+in the same call), and goes live through `supatype.publish`. A direct `UPDATE` of the table by
+`anon` or `authenticated`, such as a raw PostgREST `PATCH` or a GraphQL update mutation, is refused
+by the table's `<table>_drafts_only` trigger with `42501`. The publishing functions, the service
+role, the table's owner and a Studio editor still write it.
+
 ## Server binary
 
 `supatype-engine-server` exposes the same operations over HTTP.

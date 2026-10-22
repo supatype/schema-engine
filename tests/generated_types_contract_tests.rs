@@ -144,3 +144,28 @@ fn the_ast_reports_the_type_the_column_is_given() {
     assert_eq!(default_pg_type("email"), "TEXT");
     assert_eq!(default_pg_type("enum"), "TEXT");
 }
+
+/// The block of `table` in generated output, up to its relationships.
+fn table_block(src: &str, table: &str) -> String {
+    let start = src
+        .find(&format!("{table}: {{"))
+        .unwrap_or_else(|| panic!("no {table} in {src}"));
+    let end = start + src[start..].find("Relationships").expect("relationships");
+    src[start..end].to_string()
+}
+
+/// A drafts model is marked `Drafts: true`, which is where `@supatype/client`'s `update` saves a
+/// draft and takes `{ publish: true }`; a history-only model and a plain one are not. Both
+/// generated files say the same.
+#[test]
+fn a_drafts_model_is_marked_in_both_generated_files() {
+    let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).expect("fixture");
+    let database = types::generate(&ast).expect("types generate");
+    let augmentation = supatype_engine::generator::typescript::augmentation::generate(&ast)
+        .expect("augmentation generates");
+    for src in [&database, &augmentation] {
+        assert!(table_block(src, "posts").contains("Drafts: true"), "{src}");
+        assert!(!table_block(src, "ledger").contains("Drafts"), "{src}");
+        assert!(!table_block(src, "tags").contains("Drafts"), "{src}");
+    }
+}
