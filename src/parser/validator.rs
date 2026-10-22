@@ -34,6 +34,7 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
 
         validate_operands(model)?;
         validate_vector_indexes(model)?;
+        validate_auth_user_links(model)?;
     }
 
     // Over the whole schema at once: an `Owner` inside a membership filter is checked against
@@ -41,6 +42,37 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
     super::owner_rules::validate(&mut ast)?;
 
     Ok(ast)
+}
+
+/// `onDelete` links a `SupatypeAuthUserId` field to `auth.users`, so no other field takes it, and
+/// `setNull` empties the field when its user goes, so a required field cannot take that one.
+fn validate_auth_user_links(model: &super::ast::ModelAst) -> Result<()> {
+    use super::accessors::field_annotations;
+    use super::annotations::AuthUserOnDelete;
+    for (field_name, field) in &model.fields {
+        let db = &field_annotations(field).db;
+        let Some(on_delete) = db.auth_user_on_delete else {
+            continue;
+        };
+        let required = match field {
+            FieldAst::Uuid(scalar) if db.auth_user_id => scalar.required,
+            _ => bail!(
+                "Model '{}': field '{field_name}' sets onDelete, which only a SupatypeAuthUserId \
+                 field takes: it links the field to the user in auth.users.",
+                model.name
+            ),
+        };
+        if on_delete == AuthUserOnDelete::SetNull && required {
+            bail!(
+                "Model '{}': field '{field_name}' is required, so deleting its user cannot set it \
+                 to NULL (onDelete: \"setNull\"). Declare it \
+                 Optional<SupatypeAuthUserId<{{ onDelete: \"setNull\" }}>>, or choose \"cascade\" \
+                 or \"restrict\".",
+                model.name
+            );
+        }
+    }
+    Ok(())
 }
 
 /// A `distance` belongs to an `hnsw` index, and an `hnsw` index to vector fields: pgvector's

@@ -1,4 +1,4 @@
-use super::annotations::FieldAnnotations;
+use super::annotations::{AuthUserOnDelete, FieldAnnotations};
 use super::ast::{
     AccessAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality, SchemaAst,
     VersionsAst,
@@ -201,6 +201,17 @@ pub fn is_user_identity_model(model: &ModelAst) -> bool {
         model.fields.get("id"),
         Some(field @ FieldAst::Uuid(_)) if field_annotations(field).db.auth_user_id
     )
+}
+
+/// What deleting the user does to a row, when `field` is a `SupatypeAuthUserId` linked to
+/// `auth.users` (`SupatypeAuthUserId<{ onDelete }>`). `None` for every other field, an auth user id
+/// without the option included: it has no foreign key.
+pub fn auth_user_link(field: &FieldAst) -> Option<AuthUserOnDelete> {
+    let db = &field_annotations(field).db;
+    match field {
+        FieldAst::Uuid(_) if db.auth_user_id => db.auth_user_on_delete,
+        _ => None,
+    }
 }
 
 /// The field a model is owned through: the first `Owner` among its read, update, delete and create
