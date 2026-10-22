@@ -523,3 +523,64 @@ async fn an_owned_column_is_altered_in_place_and_keeps_its_data() {
     })
     .await;
 }
+
+/// 64 bytes: one past what Postgres keeps of a name.
+const LONG_KEY: &str = "conference_attendee_registration_preferences_and_requirements_id";
+
+/// `prefs`, and `diets` belonging to it through `key`, with a scalar field `extra` of its own.
+fn diets_with_key(key: &str, extra: &str) -> SchemaAst {
+    let pk = json!({ "kind": "uuid", "primaryKey": true, "required": true,
+                     "default": { "kind": "genRandomUuid" } });
+    let public = json!({ "access": { "read": { "type": "public" } } });
+    let doc = json!({
+        "astVersion": 2,
+        "models": [{
+            "name": "Prefs",
+            "fields": { "id": pk.clone(), "label": text() },
+            "options": { "timestamps": false, "softDelete": false },
+            "annotations": { "db": { "tableName": "prefs", "indexes": [] }, "platform": public }
+        }, {
+            "name": "Diet",
+            "fields": {
+                "id": pk,
+                "prefs": { "kind": "relation", "cardinality": "belongsTo", "target": "Prefs",
+                           "onDelete": "cascade",
+                           "annotations": { "db": { "foreignKey": key } } },
+                extra: text()
+            },
+            "options": { "timestamps": false, "softDelete": false },
+            "annotations": { "db": { "tableName": "diets", "indexes": [] }, "platform": public }
+        }]
+    });
+    parser::parse(&doc.to_string()).expect("fixture parses")
+}
+
+/// A column name past 63 bytes is the name Postgres keeps, its first 63 bytes: the push records the
+/// column under that name, and the next push finds it there and has nothing to do.
+#[tokio::test]
+async fn a_column_name_past_the_identifier_limit_is_recorded_as_postgres_keeps_it() {
+    common::with_integration_pool(|pool| async move {
+        let long_note = "dietary_notes_".repeat(5);
+        let ast = diets_with_key(LONG_KEY, &long_note);
+        let outcome = push(&pool, &ast).await.expect("the push applies");
+        assert!(
+            matches!(outcome, push::Outcome::Applied { .. }),
+            "{outcome:?}"
+        );
+        assert!(up_to_date(&push(&pool, &ast).await.unwrap()));
+
+        let mut conn = pool.acquire().await.unwrap();
+        let mut recorded: Vec<String> = ledger::load(&mut conn)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.key.kind == ObjectKind::Column && r.key.parent == "diets")
+            .map(|r| r.key.name)
+            .collect();
+        recorded.sort();
+        let mut expected = vec![&LONG_KEY[..63], &long_note[..63], "id"];
+        expected.sort();
+        assert_eq!(recorded, expected);
+    })
+    .await;
+}

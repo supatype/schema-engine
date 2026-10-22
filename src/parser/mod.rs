@@ -1,6 +1,7 @@
 pub mod accessors;
 pub mod annotations;
 pub mod ast;
+pub mod column_names;
 pub mod normaliser;
 pub mod owner_rules;
 pub mod resolver;

@@ -35,6 +35,7 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
         validate_operands(model)?;
         validate_vector_indexes(model)?;
         validate_auth_user_links(model)?;
+        super::column_names::refuse_clashes(model)?;
     }
 
     // Over the whole schema at once: an `Owner` inside a membership filter is checked against

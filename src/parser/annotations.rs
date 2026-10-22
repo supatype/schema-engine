@@ -142,10 +142,17 @@ impl<'de> Deserialize<'de> for RenamedFrom {
             One(String),
             Many(Vec<String>),
         }
-        Ok(RenamedFrom(match OneOrMany::deserialize(deserializer)? {
+        let names = match OneOrMany::deserialize(deserializer)? {
             OneOrMany::One(name) => vec![name],
             OneOrMany::Many(names) => names,
-        }))
+        };
+        // An old name is looked up in the catalog, which holds it as Postgres kept it.
+        Ok(RenamedFrom(
+            names
+                .iter()
+                .map(|name| crate::managed::clip_identifier(name))
+                .collect(),
+        ))
     }
 }
 
