@@ -1842,7 +1842,7 @@ fn unique_clause(names: &ObjectNames, table: &str, column: &str, unique: bool) -
     }
 }
 
-fn render_default(d: &DefaultValueAst) -> String {
+pub(crate) fn render_default(d: &DefaultValueAst) -> String {
     match d {
         DefaultValueAst::Value { value } => match value {
             serde_json::Value::String(s) => quote_literal(s),
@@ -1951,7 +1951,26 @@ fn alter_column_sql(
         stmts.push(format!("{alter} DROP EXPRESSION IF EXISTS;"));
     }
 
+    // Last, once the column has its new type: a default is checked against the type it is set on.
+    if let Some(default) = changes.get("default") {
+        stmts.push(default_sql(schema, table, column, default.get("to")));
+    }
+
     Ok(stmts.join("\n"))
+}
+
+/// `SET DEFAULT` to `to`, or `DROP DEFAULT` when it is null or absent.
+pub(crate) fn default_sql(
+    schema: &str,
+    table: &str,
+    column: &str,
+    to: Option<&serde_json::Value>,
+) -> String {
+    let alter = alter_column_prefix(schema, table, column);
+    match to.and_then(|v| v.as_str()) {
+        Some(expr) => format!("{alter} SET DEFAULT {expr};"),
+        None => format!("{alter} DROP DEFAULT;"),
+    }
 }
 
 /// `SET NOT NULL` when `set_verb` is given, refused while rows hold NULL with a message saying it

@@ -5,7 +5,7 @@
 //! rather than silently omitted.
 
 use super::migration::{
-    identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
+    default_sql, identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
 };
 use crate::differ::{DiffOutput, Operation};
 use crate::managed::make_object_name;
@@ -333,6 +333,11 @@ fn rollback_alter_column(
             column,
             (original_state == "not_null").then_some("restore"),
         ));
+    }
+
+    // Reverse a default change: back to the default the column had, or none.
+    if let Some(default) = changes.get("default") {
+        stmts.push(default_sql(schema, table, column, default.get("from")));
     }
 
     if stmts.is_empty() {
