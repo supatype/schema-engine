@@ -6,10 +6,15 @@
 //! 65535 parameter ceiling. The naive shape, one `VALUES` tuple per row, hits that ceiling
 //! at a few thousand rows of a wide table and issues a statement whose text grows with the
 //! data.
+//!
+//! The exception is a row nested under an `upsert`, which is written only when no row
+//! already holds its values. That is one statement per row, so each row's match sees the
+//! rows written before it; such rows are few, because they are what a fixture spells out.
 
 use super::errors::{database_failure_from, map_failure, ConstraintIndex, SeedError, SeedFailure};
 use super::plan::{Batch, ConnectLookup, Plan, PlannedStep, PlannedWrite, WriteKind};
 use super::{Condition, Value};
+use crate::generator::sql::column_conversion::lexical_normalise_expr;
 use crate::generator::sql::rls::{access_rule_to_expr, operand_to_expr};
 use crate::parser::ast::{ModelAst, Operand, SchemaAst};
 use crate::sql_quote::quote_ident;
@@ -69,7 +74,25 @@ fn render(value: &Value) -> Rendered {
     }
 }
 
-/// Build the statement for one batch.
+/// One column of an insert: its name, and the SQL its value comes from.
+struct Column {
+    name: String,
+    expression: String,
+    /// The value travels as a parameter, rather than as SQL written inline.
+    bound: bool,
+}
+
+/// The pieces every statement for a batch is built from.
+struct Parts {
+    /// Bound columns first, then inline ones, in the batch's column order within each.
+    columns: Vec<Column>,
+    /// What the `SELECT` reads its rows from.
+    source: String,
+    /// One per bound column, holding every row's value for it.
+    parameters: Vec<Option<String>>,
+}
+
+/// Split a batch's columns into bound and inline, and render the expression for each.
 ///
 /// Columns whose value is inline rather than bound are lifted out of the `UNNEST` array
 /// set and into the `SELECT` list, because every row in a batch shares the same expression
@@ -80,107 +103,242 @@ fn render(value: &Value) -> Rendered {
 /// cast text to `uuid` or `integer` in an `INSERT ... SELECT`: it refuses with 42804,
 /// `column "organiser_id" is of type uuid but expression is of type text`. Without the
 /// cast this shape only ever worked for text columns.
+fn statement_parts(
+    batch: &Batch,
+    column_types: &HashMap<String, String>,
+    lookups: &HashMap<String, String>,
+) -> Parts {
+    let (bound, inline) = split_columns(batch);
+    let bound_columns = bound.iter().map(|column| Column {
+        name: (*column).clone(),
+        expression: bound_expression(column, column_types, lookups),
+        bound: true,
+    });
+    Parts {
+        parameters: bound.iter().map(|c| Some(column_array(batch, c))).collect(),
+        source: source_sql(&bound, batch.rows.len()),
+        columns: bound_columns.chain(inline).collect(),
+    }
+}
+
+/// A batch's columns, as the names of those bound as parameters and the inline ones.
+fn split_columns(batch: &Batch) -> (Vec<&String>, Vec<Column>) {
+    let first = &batch.rows[0];
+    let mut bound: Vec<&String> = Vec::new();
+    let mut inline: Vec<Column> = Vec::new();
+    for column in &batch.columns {
+        match first.data.get(column) {
+            // `DEFAULT` is not allowed in a `SELECT` list, so the column is left out of the
+            // insert, which writes its default. The update half of an upsert still names it,
+            // and `EXCLUDED` holds that default, so an update resets it as `$default` means.
+            Some(Value::Default { .. }) => {}
+            Some(value) => match render(value) {
+                Rendered::Inline(expression) => inline.push(Column {
+                    name: column.clone(),
+                    expression,
+                    bound: false,
+                }),
+                Rendered::Bound(_) => bound.push(column),
+            },
+            None => bound.push(column),
+        }
+    }
+    (bound, inline)
+}
+
+/// Every row's value for one bound column, as one Postgres array literal.
+fn column_array(batch: &Batch, column: &str) -> String {
+    let values: Vec<Option<String>> = batch
+        .rows
+        .iter()
+        .map(|row| match row.data.get(column).map(render) {
+            Some(Rendered::Bound(v)) => v,
+            _ => None,
+        })
+        .collect();
+    encode_text_array(&values)
+}
+
+/// The value a bound column is written with: its parameter cast to the column's type, or
+/// the lookup a `connect` by natural key became.
+fn bound_expression(
+    column: &str,
+    column_types: &HashMap<String, String>,
+    lookups: &HashMap<String, String>,
+) -> String {
+    match lookups.get(column) {
+        // The bound value is a unique key, not the id, so the column is the id that key
+        // names. Still one statement: the subquery reads `src`, so it is evaluated once per
+        // row of the same `UNNEST` rather than once per round trip.
+        Some(expression) => expression.clone(),
+        None => {
+            let target = column_types
+                .get(column)
+                .map(String::as_str)
+                .unwrap_or("text");
+            format!("src.{}::{}", quote_ident(column), target)
+        }
+    }
+}
+
+/// The rows a batch's `SELECT` reads: its bound columns unnested, or a row count when
+/// every column is an expression and there is nothing to unnest.
+fn source_sql(bound: &[&String], rows: usize) -> String {
+    if bound.is_empty() {
+        return format!("generate_series(1, {rows})");
+    }
+    let arguments: Vec<String> = (1..=bound.len()).map(|n| format!("${n}::text[]")).collect();
+    let names: Vec<String> = bound.iter().map(|c| quote_ident(c)).collect();
+    format!(
+        "UNNEST({}) AS src({})",
+        arguments.join(", "),
+        names.join(", ")
+    )
+}
+
+/// `INSERT INTO table (columns) SELECT expressions FROM source`.
+///
+/// With no columns at all, the column list is left out rather than written empty, which
+/// Postgres refuses: a `SELECT` of no columns then fills every column with its default.
+fn insert_sql(table: &str, parts: &Parts) -> String {
+    let names: Vec<String> = parts.columns.iter().map(|c| quote_ident(&c.name)).collect();
+    let expressions: Vec<&str> = parts
+        .columns
+        .iter()
+        .map(|c| c.expression.as_str())
+        .collect();
+    let target = if names.is_empty() {
+        quote_ident(table)
+    } else {
+        format!("{} ({})", quote_ident(table), names.join(", "))
+    };
+    format!(
+        "INSERT INTO {target} SELECT {} FROM {}",
+        expressions.join(", "),
+        parts.source
+    )
+}
+
+/// Build the statement for one batch.
 fn batch_sql(
     batch: &Batch,
     table: &str,
     column_types: &HashMap<String, String>,
     lookups: &HashMap<String, String>,
 ) -> (String, Vec<Option<String>>) {
-    let mut bound_columns: Vec<&str> = Vec::new();
-    let mut inline: Vec<(&str, String)> = Vec::new();
-
-    let first = &batch.rows[0];
-    for column in &batch.columns {
-        match first.data.get(column).map(render) {
-            Some(Rendered::Inline(expression)) => inline.push((column, expression)),
-            _ => bound_columns.push(column),
-        }
+    let parts = statement_parts(batch, column_types, lookups);
+    let mut sql = insert_sql(table, &parts);
+    if batch.kind == WriteKind::Upsert && !batch.conflict.is_empty() {
+        sql.push_str(&conflict_clause(batch));
     }
+    (sql, parts.parameters)
+}
 
-    let mut parameters: Vec<Option<String>> = Vec::new();
-    let mut unnest_args: Vec<String> = Vec::new();
-    for (position, column) in bound_columns.iter().enumerate() {
-        unnest_args.push(format!("${}::text[]", position + 1));
-        let values: Vec<Option<String>> = batch
-            .rows
-            .iter()
-            .map(|row| match row.data.get(*column).map(render) {
-                Some(Rendered::Bound(v)) => v,
-                _ => None,
-            })
-            .collect();
-        // One parameter per column, holding every row's value for it.
-        parameters.push(Some(encode_text_array(&values)));
-    }
-
-    let all_columns: Vec<String> = bound_columns
+/// `ON CONFLICT (key) DO UPDATE SET ...`, or `DO NOTHING` when there is nothing to update.
+fn conflict_clause(batch: &Batch) -> String {
+    let conflict: Vec<String> = batch.conflict.iter().map(|c| quote_ident(c)).collect();
+    let updates: Vec<String> = batch
+        .columns
         .iter()
-        .map(|c| quote_ident(c))
-        .chain(inline.iter().map(|(c, _)| quote_ident(c)))
+        .filter(|column| !batch.conflict.contains(*column))
+        .map(|column| format!("{c} = EXCLUDED.{c}", c = quote_ident(column)))
         .collect();
-
-    let select_list: Vec<String> = bound_columns
-        .iter()
-        .map(|c| match lookups.get(*c) {
-            // The bound value is a unique key, not the id, so the column is the id that
-            // key names. Still one statement: the subquery reads `src`, so it is evaluated
-            // once per row of the same `UNNEST` rather than once per round trip.
-            Some(expression) => expression.clone(),
-            None => {
-                let target = column_types.get(*c).map(String::as_str).unwrap_or("text");
-                format!("src.{}::{}", quote_ident(c), target)
-            }
-        })
-        .chain(inline.iter().map(|(_, expression)| expression.clone()))
-        .collect();
-
-    let source = if unnest_args.is_empty() {
-        // Every column is an expression, so there is nothing to unnest. One row per
-        // planned row, produced by generate_series.
-        format!("generate_series(1, {})", batch.rows.len())
+    if updates.is_empty() {
+        format!(" ON CONFLICT ({}) DO NOTHING", conflict.join(", "))
     } else {
         format!(
-            "UNNEST({}) AS src({})",
-            unnest_args.join(", "),
-            bound_columns
-                .iter()
-                .map(|c| quote_ident(c))
-                .collect::<Vec<_>>()
-                .join(", ")
+            " ON CONFLICT ({}) DO UPDATE SET {}",
+            conflict.join(", "),
+            updates.join(", ")
         )
-    };
-
-    let mut sql = format!(
-        "INSERT INTO {} ({}) SELECT {} FROM {}",
-        quote_ident(table),
-        all_columns.join(", "),
-        select_list.join(", "),
-        source
-    );
-
-    if batch.kind == WriteKind::Upsert && !batch.conflict.is_empty() {
-        let conflict: Vec<String> = batch.conflict.iter().map(|c| quote_ident(c)).collect();
-        let updates: Vec<String> = batch
-            .columns
-            .iter()
-            .filter(|column| !batch.conflict.contains(*column))
-            .map(|column| format!("{c} = EXCLUDED.{c}", c = quote_ident(column)))
-            .collect();
-        if updates.is_empty() {
-            sql.push_str(&format!(
-                " ON CONFLICT ({}) DO NOTHING",
-                conflict.join(", ")
-            ));
-        } else {
-            sql.push_str(&format!(
-                " ON CONFLICT ({}) DO UPDATE SET {}",
-                conflict.join(", "),
-                updates.join(", ")
-            ));
-        }
     }
+}
 
-    (sql, parameters)
+/// How a model's columns are typed, for writing a row and for matching one.
+struct Typing {
+    types: HashMap<String, String>,
+    /// Rich text columns, and whether each holds one document per locale.
+    rich_text: HashMap<String, bool>,
+}
+
+/// The alias an existing row is read under when a planned row is matched against it.
+const EXISTING: &str = "__existing";
+
+/// Whether an existing row already holds the value one column of a planned row would write.
+///
+/// `IS NOT DISTINCT FROM`, so a NULL the seed gives matches a NULL column. The planned value
+/// is the expression the insert would write, cast the same way, so the two sides are the
+/// same type. Rich text is compared after the normalising expression its trigger applies,
+/// so prose matches the document the trigger stored it as; `json` has no equality operator
+/// and is compared as `jsonb`, by value.
+fn column_matches(column: &Column, typing: &Typing) -> String {
+    let existing = format!("{}.{}", quote_ident(EXISTING), quote_ident(&column.name));
+    let planned = format!("({})", column.expression);
+    if let Some(localised) = typing.rich_text.get(&column.name) {
+        let normalised = lexical_normalise_expr(&planned, *localised);
+        return format!("{existing} IS NOT DISTINCT FROM ({normalised})");
+    }
+    let pg_type = typing
+        .types
+        .get(&column.name)
+        .map(String::as_str)
+        .unwrap_or("text");
+    match pg_type.to_ascii_lowercase().as_str() {
+        "json" => format!("{existing}::jsonb IS NOT DISTINCT FROM {planned}::jsonb"),
+        "xml" => format!("{existing}::text IS NOT DISTINCT FROM {planned}::text"),
+        _ => format!("{existing} IS NOT DISTINCT FROM {planned}"),
+    }
+}
+
+/// The predicate an existing row meets when it is the row a planned one would write.
+///
+/// Only bound columns are compared. An inline value is a time the database computes, such
+/// as `now()`, which is a different value on every run: compared, it would make a child
+/// carrying one look new every time, which is the duplication this match exists to stop.
+/// Columns the seed leaves out, or sets to `$default`, are not compared either, so a column
+/// filled by its default, or edited since, does not make the row look new.
+fn match_predicate(parts: &Parts, typing: &Typing) -> String {
+    let conditions: Vec<String> = parts
+        .columns
+        .iter()
+        .filter(|column| column.bound)
+        .map(|column| column_matches(column, typing))
+        .collect();
+    if conditions.is_empty() {
+        "TRUE".to_string()
+    } else {
+        conditions.join(" AND ")
+    }
+}
+
+/// The statement for one row that is written only when no matching row exists.
+///
+/// With `returning_id`, the row's id comes back whether it was written or matched, with a
+/// flag saying which, so a child of a matched row is linked to the row that was already
+/// there. The two CTEs read one snapshot, so `found` does not see `made`.
+fn matched_sql(table: &str, parts: &Parts, typing: &Typing, returning_id: bool) -> String {
+    let id = quote_ident("id");
+    let selected = if returning_id {
+        format!("{}.{id}", quote_ident(EXISTING))
+    } else {
+        "1".to_string()
+    };
+    let found = format!(
+        "SELECT {selected} FROM {} AS {}, {} WHERE {} LIMIT 1",
+        quote_ident(table),
+        quote_ident(EXISTING),
+        parts.source,
+        match_predicate(parts, typing)
+    );
+    let insert = insert_sql(table, parts);
+    if !returning_id {
+        return format!("{insert} WHERE NOT EXISTS ({found})");
+    }
+    format!(
+        "WITH found AS ({found}), made AS ({insert} WHERE NOT EXISTS (SELECT 1 FROM found) \
+         RETURNING {id}) SELECT {id}::text AS id, TRUE AS inserted FROM made \
+         UNION ALL SELECT {id}::text, FALSE FROM found"
+    )
 }
 
 /// The scalar subquery a `connect` by natural key becomes, per column.
@@ -283,18 +441,19 @@ fn resolve_refs(write: &mut PlannedWrite, resolved: &HashMap<String, HashMap<Str
     }
 }
 
-/// The rich text columns of `model` that hold one document rather than a map of locales.
-fn prose_columns(ast: &SchemaAst, model: &str) -> Vec<String> {
+/// The rich text columns of `model`, and whether each holds a map of locales rather than
+/// one document.
+fn rich_text_columns(ast: &SchemaAst, model: &str) -> HashMap<String, bool> {
     let Some(model_ast) = ast.models.iter().find(|m| m.name == model) else {
-        return Vec::new();
+        return HashMap::new();
     };
     model_ast
         .fields
         .iter()
-        .filter(
-            |(_, field)| matches!(field, crate::parser::ast::FieldAst::RichText(r) if !r.localized),
-        )
-        .map(|(name, _)| name.clone())
+        .filter_map(|(name, field)| match field {
+            crate::parser::ast::FieldAst::RichText(r) => Some((name.clone(), r.localized)),
+            _ => None,
+        })
         .collect()
 }
 
@@ -302,9 +461,13 @@ fn prose_columns(ast: &SchemaAst, model: &str) -> Vec<String> {
 ///
 /// A bound value is cast to the column's type, and prose is not JSON: `'Hello'::jsonb` fails
 /// where `'"Hello"'::jsonb` is a JSON string, which the column's normalising trigger wraps into a
-/// document. A document is an object and already travels as JSON text, so it is left alone.
-fn encode_prose(write: &mut PlannedWrite, columns: &[String]) {
-    for column in columns {
+/// document. A document is an object and already travels as JSON text, so it is left alone, and
+/// so is a localized column, which holds a map of locales rather than one document.
+fn encode_prose(write: &mut PlannedWrite, rich_text: &HashMap<String, bool>) {
+    for (column, localised) in rich_text {
+        if *localised {
+            continue;
+        }
         if let Some(Value::Scalar(serde_json::Value::String(text))) = write.data.get_mut(column) {
             *text = serde_json::Value::String(text.clone()).to_string();
         }
@@ -463,6 +626,11 @@ async fn run_steps(
     }
 
     // Writes run as batches, in plan order.
+    let env = RunEnv {
+        ast,
+        constraints,
+        tables: &tables,
+    };
     for batch in &plan.batches {
         if batch
             .guards
@@ -471,75 +639,183 @@ async fn run_steps(
         {
             continue;
         }
-
-        let table = tables
-            .get(&batch.model)
-            .cloned()
-            .unwrap_or_else(|| batch.model.clone());
-
-        let mut prepared = batch.clone();
-        let prose = prose_columns(ast, &batch.model);
-        for row in &mut prepared.rows {
-            resolve_refs(row, &resolved);
-            encode_prose(row, &prose);
-        }
-
-        let column_types = column_types_for(ast, &batch.model);
-        let lookups = lookup_expressions(&batch.lookups, ast, &tables);
-        let (sql, parameters) = batch_sql(&prepared, &table, &column_types, &lookups);
-        let needs_ids: Vec<(usize, String)> = prepared
-            .rows
-            .iter()
-            .enumerate()
-            .filter_map(|(position, row)| row.op_id.clone().map(|id| (position, id)))
-            .collect();
-
-        let statement = if needs_ids.is_empty() {
-            sql
-        } else {
-            format!("{sql} RETURNING \"id\"::text AS id")
-        };
-
-        let mut query = sqlx::query(&statement);
-        for parameter in &parameters {
-            query = query.bind(parameter.clone());
-        }
-
-        let path = prepared
-            .rows
-            .first()
-            .map(|row| row.path.clone())
-            .unwrap_or_default();
-        let op_id = prepared.rows.first().and_then(|row| row.op_id.clone());
-
-        if needs_ids.is_empty() {
-            query
-                .execute(&mut **tx)
-                .await
-                .map_err(|e| to_seed_error(&e, constraints, &path, op_id.clone()))?;
-        } else {
-            let rows = query
-                .fetch_all(&mut **tx)
-                .await
-                .map_err(|e| to_seed_error(&e, constraints, &path, op_id.clone()))?;
-            for (position, id) in needs_ids {
-                if let Some(row) = rows.get(position) {
-                    // Cast to text in the statement, so this reads one type whatever the
-                    // key's column type is, and the engine needs no uuid dependency.
-                    if let Ok(value) = row.try_get::<String, _>("id") {
-                        resolved
-                            .entry(id)
-                            .or_default()
-                            .insert("id".to_string(), value);
-                    }
-                }
-            }
-        }
-
-        count_written(&mut report, &batch.model, prepared.rows.len());
+        let written = run_batch(tx, batch, &env, &mut resolved).await?;
+        count_written(&mut report, &batch.model, written);
     }
 
     Ok(report)
+}
+
+/// Ids earlier statements returned, by the label of the write that returned them.
+type Resolved = HashMap<String, HashMap<String, String>>;
+
+/// What every batch in a run reads, beside the batch itself.
+struct RunEnv<'a> {
+    ast: &'a SchemaAst,
+    constraints: &'a ConstraintIndex,
+    tables: &'a HashMap<String, String>,
+}
+
+/// One batch, ready to render: its table, how its columns are typed, and its lookups.
+struct Target {
+    table: String,
+    typing: Typing,
+    lookups: HashMap<String, String>,
+}
+
+impl Target {
+    fn of(batch: &Batch, env: &RunEnv<'_>) -> Self {
+        Target {
+            table: env
+                .tables
+                .get(&batch.model)
+                .cloned()
+                .unwrap_or_else(|| batch.model.clone()),
+            typing: Typing {
+                types: column_types_for(env.ast, &batch.model),
+                rich_text: rich_text_columns(env.ast, &batch.model),
+            },
+            lookups: lookup_expressions(&batch.lookups, env.ast, env.tables),
+        }
+    }
+
+    /// A row's `$ref`s resolved and its prose encoded, as the statement binds it.
+    fn prepare(&self, row: &PlannedWrite, resolved: &Resolved) -> PlannedWrite {
+        let mut row = row.clone();
+        resolve_refs(&mut row, resolved);
+        encode_prose(&mut row, &self.typing.rich_text);
+        row
+    }
+
+    /// A batch with every row prepared, and the one statement that writes all of them.
+    fn insert(&self, batch: &Batch, resolved: &Resolved) -> (Batch, String, Vec<Option<String>>) {
+        let mut prepared = batch.clone();
+        prepared.rows = batch
+            .rows
+            .iter()
+            .map(|row| self.prepare(row, resolved))
+            .collect();
+        let (sql, parameters) =
+            batch_sql(&prepared, &self.table, &self.typing.types, &self.lookups);
+        (prepared, sql, parameters)
+    }
+}
+
+/// Bind every parameter, in order.
+fn bound_query<'q>(
+    sql: &'q str,
+    parameters: &'q [Option<String>],
+) -> sqlx::query::Query<'q, Postgres, sqlx::postgres::PgArguments> {
+    parameters
+        .iter()
+        .fold(sqlx::query(sql), |query, parameter| {
+            query.bind(parameter.clone())
+        })
+}
+
+/// Run one batch, returning how many rows it wrote.
+async fn run_batch(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &Batch,
+    env: &RunEnv<'_>,
+    resolved: &mut Resolved,
+) -> Result<usize, SeedError> {
+    let target = Target::of(batch, env);
+    if !batch.match_existing {
+        return run_insert(tx, batch, &target, env, resolved).await;
+    }
+    // One statement per row, so each row's match sees the rows written before it in the
+    // same seed: two identical children collapse to one, on the first run as on every run.
+    let mut written = 0;
+    for row in &batch.rows {
+        written += run_matched(tx, batch, row, &target, env, resolved).await?;
+    }
+    Ok(written)
+}
+
+/// Run a batch as one `INSERT`, or one upsert, for all its rows.
+async fn run_insert(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &Batch,
+    target: &Target,
+    env: &RunEnv<'_>,
+    resolved: &mut Resolved,
+) -> Result<usize, SeedError> {
+    let (prepared, mut sql, parameters) = target.insert(batch, resolved);
+    let labels = labels_of(&prepared.rows);
+    if !labels.is_empty() {
+        // Cast to text in the statement, so this reads one type whatever the key's column
+        // type is, and the engine needs no uuid dependency.
+        sql.push_str(" RETURNING \"id\"::text AS id");
+    }
+    let rows = bound_query(&sql, &parameters)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|e| failure_at(&e, env.constraints, prepared.rows.first()))?;
+    for (position, label) in labels {
+        if let Some(id) = rows.get(position).and_then(|r| r.try_get("id").ok()) {
+            remember(resolved, label, id);
+        }
+    }
+    Ok(prepared.rows.len())
+}
+
+/// The position and label of every row a later `$ref` may point at.
+fn labels_of(rows: &[PlannedWrite]) -> Vec<(usize, String)> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(position, row)| row.op_id.clone().map(|id| (position, id)))
+        .collect()
+}
+
+/// Write one row only when no row already holds every value it gives, returning 1 when it
+/// was written and 0 when it was matched.
+async fn run_matched(
+    tx: &mut Transaction<'_, Postgres>,
+    batch: &Batch,
+    row: &PlannedWrite,
+    target: &Target,
+    env: &RunEnv<'_>,
+    resolved: &mut Resolved,
+) -> Result<usize, SeedError> {
+    let single = Batch {
+        rows: vec![target.prepare(row, resolved)],
+        ..batch.clone()
+    };
+    let parts = statement_parts(&single, &target.typing.types, &target.lookups);
+    let sql = matched_sql(&target.table, &parts, &target.typing, row.op_id.is_some());
+    let query = bound_query(&sql, &parts.parameters);
+    let fail = |e: sqlx::Error| failure_at(&e, env.constraints, Some(row));
+
+    let Some(label) = row.op_id.clone() else {
+        let done = query.execute(&mut **tx).await.map_err(fail)?;
+        return Ok(done.rows_affected() as usize);
+    };
+    let found = query.fetch_one(&mut **tx).await.map_err(fail)?;
+    if let Ok(id) = found.try_get::<String, _>("id") {
+        remember(resolved, label, id);
+    }
+    Ok(usize::from(
+        found.try_get::<bool, _>("inserted").unwrap_or(false),
+    ))
+}
+
+/// Record the id a labelled write produced or matched, for a later `$ref`.
+fn remember(resolved: &mut Resolved, label: String, id: String) {
+    resolved
+        .entry(label)
+        .or_default()
+        .insert("id".to_string(), id);
+}
+
+/// A failed statement, named by the row it was writing.
+fn failure_at(
+    error: &sqlx::Error,
+    constraints: &ConstraintIndex,
+    row: Option<&PlannedWrite>,
+) -> SeedError {
+    let path = row.map(|r| r.path.clone()).unwrap_or_default();
+    to_seed_error(error, constraints, &path, row.and_then(|r| r.op_id.clone()))
 }
 
 #[allow(clippy::too_many_arguments)]
