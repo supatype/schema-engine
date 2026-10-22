@@ -283,6 +283,34 @@ fn resolve_refs(write: &mut PlannedWrite, resolved: &HashMap<String, HashMap<Str
     }
 }
 
+/// The rich text columns of `model` that hold one document rather than a map of locales.
+fn prose_columns(ast: &SchemaAst, model: &str) -> Vec<String> {
+    let Some(model_ast) = ast.models.iter().find(|m| m.name == model) else {
+        return Vec::new();
+    };
+    model_ast
+        .fields
+        .iter()
+        .filter(
+            |(_, field)| matches!(field, crate::parser::ast::FieldAst::RichText(r) if !r.localized),
+        )
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Prose for a rich text column, bound as the JSON string it is.
+///
+/// A bound value is cast to the column's type, and prose is not JSON: `'Hello'::jsonb` fails
+/// where `'"Hello"'::jsonb` is a JSON string, which the column's normalising trigger wraps into a
+/// document. A document is an object and already travels as JSON text, so it is left alone.
+fn encode_prose(write: &mut PlannedWrite, columns: &[String]) {
+    for column in columns {
+        if let Some(Value::Scalar(serde_json::Value::String(text))) = write.data.get_mut(column) {
+            *text = serde_json::Value::String(text.clone()).to_string();
+        }
+    }
+}
+
 /// Compile a condition into the `SELECT EXISTS (...)` that answers it.
 ///
 /// The filter is compiled by `access_rule_to_expr`, the same function that turns an access
@@ -450,8 +478,10 @@ async fn run_steps(
             .unwrap_or_else(|| batch.model.clone());
 
         let mut prepared = batch.clone();
+        let prose = prose_columns(ast, &batch.model);
         for row in &mut prepared.rows {
             resolve_refs(row, &resolved);
+            encode_prose(row, &prose);
         }
 
         let column_types = column_types_for(ast, &batch.model);
