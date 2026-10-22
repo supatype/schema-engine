@@ -55,12 +55,15 @@ use crate::managed::{
     membership_index_name, policy_name, ObjectNames,
 };
 use crate::parser::accessors::{
-    column_names_for, db_foreign_key, default_foreign_key_column, primary_key_columns, versions_of,
-    versions_table_name,
+    auth_user_link, column_names_for, db_foreign_key, default_foreign_key_column,
+    primary_key_columns, versions_of, versions_table_name,
 };
 use crate::parser::ast::{AccessAst, FieldAst, IndexAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
 use crate::sql_quote::{do_block, quote_ident, quote_literal, quote_qualified};
+
+/// Where a `SupatypeAuthUserId<{ onDelete }>` field's key points: Supatype's own users.
+pub(crate) const AUTH_USERS: (&str, &str) = ("auth", "users");
 
 /// A check constraint the schema declares on a model: a field's bounds or a model-level rule.
 pub(crate) struct ExpectedCheck {
@@ -362,6 +365,7 @@ pub fn desired_objects_for(
         b.model_primary_key(model);
         b.model_uniques(model)?;
         b.model_foreign_keys(model)?;
+        b.model_auth_user_keys(model);
         b.model_checks(model);
         b.model_indexes(model)?;
         b.model_policies(model)?;
@@ -665,6 +669,35 @@ impl<'a> Builder<'a> {
             );
         }
         Ok(())
+    }
+
+    /// The key each `SupatypeAuthUserId<{ onDelete }>` field opts in to. A plain auth user id has
+    /// none: the user it names lives in `auth.users`, which a project need not have.
+    fn model_auth_user_keys(&mut self, model: &ModelAst) {
+        let table = model.table_name();
+        for (column, field) in &model.fields {
+            let Some(on_delete) = auth_user_link(field) else {
+                continue;
+            };
+            let name = self.names.foreign_key(table, column);
+            let create = format!(
+                "{} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE {};",
+                self.alter(table),
+                quote_ident(&name),
+                quote_ident(column),
+                quote_qualified(AUTH_USERS.0, AUTH_USERS.1),
+                quote_ident("id"),
+                on_delete.sql()
+            );
+            let target = ForeignKeyRef {
+                column,
+                ref_schema: AUTH_USERS.0,
+                ref_table: AUTH_USERS.1,
+                ref_column: "id",
+                on_delete: on_delete.sql(),
+            };
+            self.foreign_key(table, &name, target, create);
+        }
     }
 
     fn check(&mut self, table: &str, name: &str, create: String) {

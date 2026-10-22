@@ -2,6 +2,7 @@ use super::{column_diff, renames};
 use super::{Operation, Risk};
 use crate::introspector::constraints::DbConstraintType;
 use crate::parser::ast::{JunctionTableAst, SchemaAst};
+use crate::sql_quote::quote_ident;
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
 
@@ -220,15 +221,15 @@ fn old_junctions_present<'a>(
 
 /// Why a push with both old junctions of one relation stops, and the SQL that merges them.
 fn two_junctions_message(jt: &JunctionTableAst, found: &[&str]) -> String {
-    let (to, keep, merge) = (&jt.name, found[0], found[1]);
-    let columns = format!("\"{}\", \"{}\"", jt.fk_a, jt.fk_b);
+    let to = quote_ident(&jt.name);
+    let (keep, merge) = (quote_ident(found[0]), quote_ident(found[1]));
+    let columns = format!("{}, {}", quote_ident(&jt.fk_a), quote_ident(&jt.fk_b));
     format!(
-        "The many-to-many relation stored in \"{to}\" is split across two tables an older engine \
-         created, \"{keep}\" and \"{merge}\", one per side that declares it. Each holds the links \
-         made from its side, so neither can simply be renamed. Merge them, then push again:\n  \
-         INSERT INTO \"{keep}\" ({columns}) SELECT {columns} FROM \"{merge}\" \r
-         ON CONFLICT DO NOTHING;\n  \
-         DROP TABLE \"{merge}\";"
+        "The many-to-many relation stored in {to} is split across two tables an older engine \
+         created, {keep} and {merge}, one per side that declares it. Each holds the links made \
+         from its side, so neither can simply be renamed. Merge them, then push again:\n  \
+         INSERT INTO {keep} ({columns}) SELECT {columns} FROM {merge} ON CONFLICT DO NOTHING;\n  \
+         DROP TABLE {merge};"
     )
 }
 

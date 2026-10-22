@@ -718,20 +718,25 @@ impl ObjectNames {
     /// A model's foreign keys, type checks, declared bounds and model rules.
     fn model_constraints(&mut self, model: &ModelAst, ch: &mut Choosers) {
         use crate::parser::accessors::{
-            column_names_for, db_foreign_key, default_foreign_key_column,
+            auth_user_link, column_names_for, db_foreign_key, default_foreign_key_column,
         };
         use crate::parser::ast::RelationCardinality;
         let table = model.table_name();
         for (field_name, field) in sorted_fields(model) {
-            if let FieldAst::Relation(rel) = field {
-                if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                    let column = db_foreign_key(field, field_name)
-                        .unwrap_or_else(|| default_foreign_key_column(field_name));
-                    self.pick(table, "fkey", &column, || {
-                        ch.constraint(table, "fkey", Some(&column), "fkey")
-                    });
+            let column = match field {
+                FieldAst::Relation(rel)
+                    if matches!(rel.cardinality, RelationCardinality::BelongsTo) =>
+                {
+                    db_foreign_key(field, field_name)
+                        .unwrap_or_else(|| default_foreign_key_column(field_name))
                 }
-            }
+                // A `SupatypeAuthUserId` linked to `auth.users`, named as a relation's key is.
+                _ if auth_user_link(field).is_some() => field_name.to_string(),
+                _ => continue,
+            };
+            self.pick(table, "fkey", &column, || {
+                ch.constraint(table, "fkey", Some(&column), "fkey")
+            });
         }
         for (field_name, field) in sorted_fields(model) {
             let type_check = matches!(

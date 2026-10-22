@@ -1965,8 +1965,8 @@ async fn record_objects(
 }
 
 /// Re-reads what the reconcile was decided from, refuses if it moved, and runs the migration's
-/// statements: first making sure no row already breaks a key or check it adds `NOT VALID`, which
-/// is then validated after commit.
+/// statements: first making sure a key to `auth.users` has an `auth.users` to point at, and that no
+/// row already breaks a key or check it adds `NOT VALID`, which is then validated after commit.
 async fn apply_statements(
     tx: &mut PgConnection,
     plan: &Plan<'_>,
@@ -1979,6 +1979,7 @@ async fn apply_statements(
         .context("Failed to re-read the database before applying")?;
     plan.inputs.assert_current(&now)?;
     reassert_auth_helpers(tx).await?;
+    crate::online::refuse_missing_auth_users(tx, &plan.reconcile.actions).await?;
     crate::online::refuse_broken_rows(
         tx,
         &plan.reconcile.actions,

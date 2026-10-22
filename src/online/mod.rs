@@ -19,7 +19,7 @@ mod not_null;
 mod sizes;
 
 pub use after_commit::{finished, run_after_commit, AfterCommitFailed, Unfinished};
-pub use broken_rows::refuse_broken_rows;
+pub use broken_rows::{refuse_broken_rows, refuse_missing_auth_users};
 pub use index_drops::{concurrent_drops, drop_concurrently};
 pub use sizes::{online_tables, table_sizes, TableSize};
 

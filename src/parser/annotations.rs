@@ -79,6 +79,34 @@ pub struct DbFieldAnnotations {
     /// owner relation may point at (O1); an owner field without the mark is warned about (O2).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auth_user_id: bool,
+    /// `SupatypeAuthUserId<{ onDelete }>`: the field opts in to a foreign key to `auth.users`, and
+    /// this is what deleting the user does to the row. Absent, an auth user id has no key at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_user_on_delete: Option<AuthUserOnDelete>,
+}
+
+/// What deleting a user does to a row whose `SupatypeAuthUserId` field names them, spelled as the
+/// schema spells it (`onDelete: "cascade"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AuthUserOnDelete {
+    /// The row is deleted with its user.
+    Cascade,
+    /// The user cannot be deleted while they still own a row.
+    Restrict,
+    /// The row stays and the field becomes NULL, so only an optional field can take it.
+    SetNull,
+}
+
+impl AuthUserOnDelete {
+    /// The `ON DELETE` action of the key.
+    pub fn sql(self) -> &'static str {
+        match self {
+            AuthUserOnDelete::Cascade => "CASCADE",
+            AuthUserOnDelete::Restrict => "RESTRICT",
+            AuthUserOnDelete::SetNull => "SET NULL",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
