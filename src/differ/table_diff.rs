@@ -1,9 +1,9 @@
 use super::{column_diff, renames};
 use super::{Operation, Risk};
 use crate::introspector::constraints::DbConstraintType;
-use crate::parser::ast::SchemaAst;
+use crate::parser::ast::{JunctionTableAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
-use anyhow::Result;
+use anyhow::{bail, Result};
 
 const EXTENSION_MANAGED_TABLES: &[&str] = &["spatial_ref_sys"];
 
@@ -66,6 +66,7 @@ pub fn diff(
             renamed_from.insert(model.table_name().to_string(), from);
         }
     }
+    rename_legacy_junctions(ast, db, ops, &mut renamed_from)?;
 
     for model in &ast.models {
         if !db_table_names.contains(model.table_name()) {
@@ -132,7 +133,7 @@ pub fn diff(
     }
 
     for jt in &ast.junction_tables {
-        if !db_table_names.contains(jt.name.as_str()) {
+        if !db_table_names.contains(jt.name.as_str()) && !renamed_from.contains_key(&jt.name) {
             ops.push(Operation::CreateJunctionTable {
                 table: jt.name.clone(),
                 fk_a: jt.fk_a.clone(),
@@ -166,6 +167,69 @@ pub fn diff(
     }
 
     Ok(())
+}
+
+/// A junction an older engine created under its old name, renamed to the one it has now (B6).
+///
+/// Engines before B6 named a derived junction after the declaring side, mixed case, so a relation
+/// declared on one model sits in one old table: it is renamed, links and all, rather than dropped
+/// beside an empty new one. Declared on both models it sits in two, each holding the links made
+/// from its side, and no rename keeps both: the push refuses and says how to merge them.
+fn rename_legacy_junctions(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    ops: &mut Vec<Operation>,
+    renamed_from: &mut std::collections::HashMap<String, String>,
+) -> Result<()> {
+    let legacy = crate::parser::resolver::legacy_junction_names(ast);
+    for jt in &ast.junction_tables {
+        if db.tables.iter().any(|t| t.name == jt.name) {
+            continue;
+        }
+        let found = old_junctions_present(&legacy, &jt.name, db);
+        match found[..] {
+            [] => {}
+            [from] => {
+                ops.push(Operation::RenameTable {
+                    from: from.to_string(),
+                    to: jt.name.clone(),
+                    risk: Risk::Safe,
+                });
+                renamed_from.insert(jt.name.clone(), from.to_string());
+            }
+            _ => bail!(two_junctions_message(jt, &found)),
+        }
+    }
+    Ok(())
+}
+
+/// The old names of the junction `current` that the database holds as Supatype's tables.
+fn old_junctions_present<'a>(
+    legacy: &[(String, String)],
+    current: &str,
+    db: &'a DatabaseState,
+) -> Vec<&'a str> {
+    legacy
+        .iter()
+        .filter(|(name, _)| name == current)
+        .filter_map(|(_, old)| db.tables.iter().find(|t| &t.name == old))
+        .filter(|t| db.owns_table(t))
+        .map(|t| t.name.as_str())
+        .collect()
+}
+
+/// Why a push with both old junctions of one relation stops, and the SQL that merges them.
+fn two_junctions_message(jt: &JunctionTableAst, found: &[&str]) -> String {
+    let (to, keep, merge) = (&jt.name, found[0], found[1]);
+    let columns = format!("\"{}\", \"{}\"", jt.fk_a, jt.fk_b);
+    format!(
+        "The many-to-many relation stored in \"{to}\" is split across two tables an older engine \
+         created, \"{keep}\" and \"{merge}\", one per side that declares it. Each holds the links \
+         made from its side, so neither can simply be renamed. Merge them, then push again:\n  \
+         INSERT INTO \"{keep}\" ({columns}) SELECT {columns} FROM \"{merge}\" \r
+         ON CONFLICT DO NOTHING;\n  \
+         DROP TABLE \"{merge}\";"
+    )
 }
 
 /// The column and type `record_id` has to match, from the model's declared primary key.
