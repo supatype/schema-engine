@@ -871,6 +871,10 @@ impl ObjectNames {
                 self.pick(table, "created_note", "", || {
                     triggers.choose(table, None, "created_note")
                 });
+                // A drafts model's table refuses a direct edit by the API roles.
+                self.pick(table, "drafts_only", "", || {
+                    triggers.choose(table, None, "drafts_only")
+                });
                 // A drafts model's table gives each row inserted outside `create_record` its
                 // version 1; the trigger shares its function's name, as the audit one does.
                 self.pick(table, "versions_baseline", "", || {
@@ -983,6 +987,13 @@ impl ObjectNames {
     pub fn created_note_trigger(&self, table: &str) -> String {
         self.named(table, "created_note", "", || {
             make_object_name(table, None, "created_note")
+        })
+    }
+
+    /// `{table}_drafts_only`, the trigger on a drafts model's table that refuses a direct edit.
+    pub fn drafts_only_trigger(&self, table: &str) -> String {
+        self.named(table, "drafts_only", "", || {
+            make_object_name(table, None, "drafts_only")
         })
     }
 

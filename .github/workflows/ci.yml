@@ -233,6 +233,7 @@ jobs:
             --test studio_editing_tests \
             --test field_bounds_enforcement_tests \
             --test versions_runtime_tests \
+            --test drafts_edit_tests \
             --test versions_doctor_tests \
             --test junction_access_tests \
             --test ownership_evidence_tests \
