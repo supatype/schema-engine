@@ -1,5 +1,6 @@
 pub mod column_diff;
 pub mod constraint_diff;
+pub(crate) mod default_diff;
 pub mod doctor;
 pub mod extension_diff;
 pub mod field_access_diff;

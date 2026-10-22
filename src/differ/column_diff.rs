@@ -1122,6 +1122,14 @@ pub fn diff(
                     map.extend(generation.alter.clone());
                 }
             }
+            if let Some(default) = super::default_diff::default_change(field, db_col) {
+                if changes.is_null() {
+                    changes = json!({});
+                }
+                if let Some(map) = changes.as_object_mut() {
+                    map.insert("default".into(), default);
+                }
+            }
 
             // A generated column whose expression changes, or a plain one that becomes generated,
             // is made again by its own operation (a type change on it would be moot).
