@@ -275,6 +275,7 @@ jobs:
             --test key_schema_sequence_ledger_tests \
             --test doctor_ledger_tests \
             --test identity_generated_db_tests \
+            --test column_type_change_dependents_tests \
             --test table_ledger_tests \
             --test rebaseline_tests \
             --test rebaseline_preview_tests \
