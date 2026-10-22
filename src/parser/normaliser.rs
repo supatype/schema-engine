@@ -53,6 +53,7 @@ pub fn normalise(mut ast: SchemaAst) -> SchemaAst {
                 }),
             );
         }
+        super::column_names::keep_as_postgres_does(model);
         default_owner_to_caller(model);
     }
     ast

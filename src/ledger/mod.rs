@@ -205,16 +205,15 @@ type Row = (
 
 /// [`load`], or no rows when the table does not exist yet: a `diff` or `doctor` against a
 /// database no push has bootstrapped.
+///
+/// Asks the catalog first rather than reading and catching the error: a failed read aborts the
+/// transaction it runs in, and `migrate` plans in one, so every read after it failed too.
 pub async fn load_if_present(conn: &mut PgConnection) -> Result<Vec<LedgerRow>> {
-    match load_rows(conn).await {
-        // `undefined_table`: nothing has bootstrapped the ledger yet, so it holds nothing.
-        Err(e) if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42P01") => {
-            Ok(Vec::new())
-        }
-        other => other
-            .context("load the managed-object ledger")
-            .and_then(decode_rows),
+    let ledger = format!("{SCHEMA}.managed_objects");
+    if !crate::db::relation_exists(conn, &ledger).await? {
+        return Ok(Vec::new());
     }
+    load(conn).await
 }
 
 /// Every row, in key order. A kind or status the running engine does not know (a row written by
