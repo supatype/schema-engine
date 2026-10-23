@@ -7,7 +7,10 @@
 //! and every later step (the push, its rules and grants, the draft view, generated types, Studio's
 //! config) names that one; names derived from a table, such as its versions table and its
 //! constraints, are fitted from it. Two tables Postgres would cut to one name refuse the schema
-//! instead of one silently taking the other's place.
+//! instead of one silently taking the other's place, as do two sources naming one table outright
+//! (a model's table named like another model's versions table, or like a junction).
+
+use std::collections::HashMap;
 
 use anyhow::{bail, Result};
 
@@ -32,33 +35,76 @@ pub fn keep_as_postgres_does(mut ast: SchemaAst) -> Result<SchemaAst> {
     Ok(ast)
 }
 
+/// A table the schema makes, as stated, and what makes it, for naming in a refusal.
+struct Table {
+    name: String,
+    source: String,
+}
+
 /// Every table `ast` makes in its schema, as stated: each model's, each versioned model's
 /// snapshot table and each junction.
-fn tables(ast: &SchemaAst) -> Vec<String> {
-    let models = ast.models.iter().map(|m| m.table_name().to_string());
+fn tables(ast: &SchemaAst) -> Vec<Table> {
+    let models = ast.models.iter().map(|m| Table {
+        name: m.table_name().to_string(),
+        source: format!("model '{}'", m.name),
+    });
     let versions = ast
         .models
         .iter()
         .filter(|m| versions_of(m).is_some())
-        .map(|m| versions_table_name(&clip_identifier(m.table_name())));
-    let junctions = ast.junction_tables.iter().map(|j| j.name.clone());
+        .map(|m| Table {
+            name: versions_table_name(&clip_identifier(m.table_name())),
+            source: format!("the versions table of model '{}'", m.name),
+        });
+    let junctions = ast.junction_tables.iter().map(|j| Table {
+        name: j.name.clone(),
+        source: format!(
+            "the many-to-many between '{}' and '{}'",
+            j.model_a, j.model_b
+        ),
+    });
     models.chain(versions).chain(junctions).collect()
 }
 
+/// Refuses two tables named alike, or named apart but kept by Postgres as one: either way the
+/// push would make one table for both, and one source would read and write the other's rows.
 fn refuse_clashes(ast: &SchemaAst) -> Result<()> {
-    let mut kept = KeptNames::default();
+    let mut kept: HashMap<String, Table> = HashMap::new();
     for table in tables(ast) {
-        if let Some(other) = kept.claim(&table) {
-            bail!(
-                "The schema names tables \"{other}\" and \"{table}\", which Postgres would both \
-                 keep as \"{}\": it keeps only the first {MAX_IDENTIFIER_BYTES} bytes of a name. \
-                 Rename one (a model's table name, or a many-to-many's `through`) so the two \
-                 differ within their first {MAX_IDENTIFIER_BYTES} bytes.",
-                clip_identifier(&table),
-            );
+        let key = clip_identifier(&table.name);
+        match kept.get(&key) {
+            Some(other) if other.name == table.name => refuse_same_name(other, &table)?,
+            Some(other) => refuse_same_kept_name(other, &table)?,
+            None => {
+                kept.insert(key, table);
+            }
         }
     }
     Ok(())
+}
+
+fn refuse_same_name(first: &Table, second: &Table) -> Result<()> {
+    bail!(
+        "Two sources name the table \"{}\": {} and {}. The schema can hold only one table by \
+         that name. Rename one (a model's table name, or a many-to-many's `through`).",
+        second.name,
+        first.source,
+        second.source,
+    );
+}
+
+fn refuse_same_kept_name(first: &Table, second: &Table) -> Result<()> {
+    bail!(
+        "The schema names tables \"{}\" ({}) and \"{}\" ({}), which Postgres would both keep as \
+         \"{}\": it keeps only the first {MAX_IDENTIFIER_BYTES} bytes of a name. Rename one (a \
+         model's table name, or a many-to-many's `through`) so the two differ within their first \
+         {MAX_IDENTIFIER_BYTES} bytes.",
+        first.name,
+        first.source,
+        second.name,
+        second.source,
+        clip_identifier(&second.name),
+    );
 }
 
 /// Refuses a junction whose two key columns, each named from its model, would be kept as one.

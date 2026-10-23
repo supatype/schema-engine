@@ -279,7 +279,7 @@
       },
       "annotations": {
         "db": {
-          "tableName": "articles",
+          "tableName": "article_tag",
           "indexes": []
         },
         "platform": {
