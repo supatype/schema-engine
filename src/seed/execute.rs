@@ -12,6 +12,7 @@
 //! rows written before it; such rows are few, because they are what a fixture spells out.
 
 use super::errors::{database_failure_from, map_failure, ConstraintIndex, SeedError, SeedFailure};
+use super::params::{bind_all, Resolved};
 use super::plan::{Batch, ConnectLookup, Plan, PlannedStep, PlannedWrite, WriteKind};
 use super::{Condition, Value};
 use crate::generator::sql::column_conversion::lexical_normalise_expr;
@@ -573,87 +574,163 @@ async fn run_steps(
     tx: &mut Transaction<'_, Postgres>,
     cx: Context<'_>,
 ) -> Result<Report, SeedError> {
-    let Context {
-        ast,
-        constraints,
-        schema,
-        environment,
-    } = cx;
-    let tables: HashMap<String, String> = ast
-        .models
-        .iter()
-        .map(|m| (m.name.clone(), m.annotations.db.table_name.clone()))
-        .collect();
-    let mut report = Report::default();
-    let mut resolved: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut skipped_guards: Vec<usize> = Vec::new();
-
-    for step in &plan.steps {
-        // A step inside a group whose condition was false does not run.
-        if step
-            .guards()
-            .iter()
-            .any(|guard| skipped_guards.contains(guard))
-        {
-            continue;
-        }
-
-        match step {
-            PlannedStep::Condition {
-                guard,
-                condition,
-                path,
-                ..
-            } => {
-                let holds =
-                    evaluate(condition, tx, ast, &tables, schema, environment, path).await?;
-                let wanted = matches!(condition, Condition::NotExists { .. });
-                let run = if wanted { !holds } else { holds };
-                if !run {
-                    skipped_guards.push(*guard);
-                    report.skipped.push(path.clone());
-                }
-            }
-
-            PlannedStep::Sql { text, path, .. } => {
-                tx.execute(sqlx::query(text))
-                    .await
-                    .map_err(|e| to_seed_error(&e, constraints, path, None))?;
-            }
-
-            PlannedStep::Write(_) => {}
-        }
-    }
-
-    // Writes run as batches, in plan order.
+    let tables = tables_of(cx.ast);
     let env = RunEnv {
-        ast,
-        constraints,
+        cx,
         tables: &tables,
     };
-    for batch in &plan.batches {
-        if batch
-            .guards
-            .iter()
-            .any(|guard| skipped_guards.contains(guard))
-        {
+    let mut state = RunState::default();
+
+    for stage in schedule(plan) {
+        // A step inside a group whose condition was false does not run.
+        if state.skips(stage.guards()) {
             continue;
         }
-        let written = run_batch(tx, batch, &env, &mut resolved).await?;
-        count_written(&mut report, &batch.model, written);
+        match stage {
+            Stage::Batch(batch) => {
+                let written = run_batch(tx, batch, &env, &mut state.resolved).await?;
+                count_written(&mut state.report, &batch.model, written);
+            }
+            Stage::Step(step) => run_step(tx, step, &env, &mut state).await?,
+        }
     }
 
-    Ok(report)
+    Ok(state.report)
 }
 
-/// Ids earlier statements returned, by the label of the write that returned them.
-type Resolved = HashMap<String, HashMap<String, String>>;
+/// Each model's table, by model name.
+fn tables_of(ast: &SchemaAst) -> HashMap<String, String> {
+    ast.models
+        .iter()
+        .map(|m| (m.name.clone(), m.annotations.db.table_name.clone()))
+        .collect()
+}
 
-/// What every batch in a run reads, beside the batch itself.
+/// One thing to run, in the order the plan put it.
+enum Stage<'a> {
+    /// A condition or a raw statement.
+    Step(&'a PlannedStep),
+    /// One statement's worth of writes.
+    Batch(&'a Batch),
+}
+
+impl Stage<'_> {
+    fn guards(&self) -> &[usize] {
+        match self {
+            Stage::Step(step) => step.guards(),
+            Stage::Batch(batch) => &batch.guards,
+        }
+    }
+}
+
+/// The plan in the order it runs: each condition and raw statement where the ordering put
+/// it, and each batch where its first row was.
+///
+/// Running every condition and raw statement first, then every batch, is what this
+/// replaces. A raw statement reading rows the seed wrote above it then found none: the
+/// docs' many-to-many example linked nothing on a fresh database and reported success.
+///
+/// A batch holds adjacent writes from the ordered steps, so the writes are walked in order
+/// and each batch is placed where its first row sits.
+fn schedule(plan: &Plan) -> Vec<Stage<'_>> {
+    let mut batches = plan.batches.iter();
+    let mut rows_left = 0usize;
+    let mut stages = Vec::with_capacity(plan.steps.len());
+    for step in &plan.steps {
+        if !matches!(step, PlannedStep::Write(_)) {
+            stages.push(Stage::Step(step));
+            continue;
+        }
+        if rows_left == 0 {
+            if let Some(batch) = batches.next() {
+                rows_left = batch.rows.len();
+                stages.push(Stage::Batch(batch));
+            }
+        }
+        rows_left = rows_left.saturating_sub(1);
+    }
+    // None are left unless a batch stopped matching the writes it was built from; running
+    // them last is still better than dropping a write.
+    stages.extend(batches.map(Stage::Batch));
+    stages
+}
+
+/// What a run accumulates as it goes.
+#[derive(Default)]
+struct RunState {
+    report: Report,
+    resolved: Resolved,
+    skipped_guards: Vec<usize>,
+}
+
+impl RunState {
+    /// Whether any of `guards` belongs to a group whose condition was false.
+    fn skips(&self, guards: &[usize]) -> bool {
+        guards
+            .iter()
+            .any(|guard| self.skipped_guards.contains(guard))
+    }
+}
+
+/// Run one condition or raw statement.
+async fn run_step(
+    tx: &mut Transaction<'_, Postgres>,
+    step: &PlannedStep,
+    env: &RunEnv<'_>,
+    state: &mut RunState,
+) -> Result<(), SeedError> {
+    match step {
+        PlannedStep::Condition {
+            guard,
+            condition,
+            path,
+            ..
+        } => {
+            let holds = evaluate(condition, tx, env, path).await?;
+            if holds == matches!(condition, Condition::NotExists { .. }) {
+                state.skipped_guards.push(*guard);
+                state.report.skipped.push(path.clone());
+            }
+            Ok(())
+        }
+        PlannedStep::Sql {
+            text, params, path, ..
+        } => run_sql(tx, text, params, path, env, &state.resolved).await,
+        PlannedStep::Write(_) => Ok(()),
+    }
+}
+
+/// Run a raw statement with its params bound, named by its path when it fails.
+async fn run_sql(
+    tx: &mut Transaction<'_, Postgres>,
+    text: &str,
+    params: &[Value],
+    path: &str,
+    env: &RunEnv<'_>,
+    resolved: &Resolved,
+) -> Result<(), SeedError> {
+    let query = bind_all(text, params, resolved)
+        .map_err(|message| SeedError::at(path, SeedFailure::Other { message }))?;
+    tx.execute(query)
+        .await
+        .map_err(|e| to_seed_error(&e, env.cx.constraints, path, None))?;
+    Ok(())
+}
+
+/// What every stage in a run reads, beside the stage itself.
 struct RunEnv<'a> {
-    ast: &'a SchemaAst,
-    constraints: &'a ConstraintIndex,
+    cx: Context<'a>,
     tables: &'a HashMap<String, String>,
+}
+
+impl RunEnv<'_> {
+    /// The table `model` lives in, or the model's own name when the schema does not say.
+    fn table(&self, model: &str) -> String {
+        self.tables
+            .get(model)
+            .cloned()
+            .unwrap_or_else(|| model.to_string())
+    }
 }
 
 /// One batch, ready to render: its table, how its columns are typed, and its lookups.
@@ -666,16 +743,12 @@ struct Target {
 impl Target {
     fn of(batch: &Batch, env: &RunEnv<'_>) -> Self {
         Target {
-            table: env
-                .tables
-                .get(&batch.model)
-                .cloned()
-                .unwrap_or_else(|| batch.model.clone()),
+            table: env.table(&batch.model),
             typing: Typing {
-                types: column_types_for(env.ast, &batch.model),
-                rich_text: rich_text_columns(env.ast, &batch.model),
+                types: column_types_for(env.cx.ast, &batch.model),
+                rich_text: rich_text_columns(env.cx.ast, &batch.model),
             },
-            lookups: lookup_expressions(&batch.lookups, env.ast, env.tables),
+            lookups: lookup_expressions(&batch.lookups, env.cx.ast, env.tables),
         }
     }
 
@@ -751,7 +824,7 @@ async fn run_insert(
     let rows = bound_query(&sql, &parameters)
         .fetch_all(&mut **tx)
         .await
-        .map_err(|e| failure_at(&e, env.constraints, prepared.rows.first()))?;
+        .map_err(|e| failure_at(&e, env.cx.constraints, prepared.rows.first()))?;
     for (position, label) in labels {
         if let Some(id) = rows.get(position).and_then(|r| r.try_get("id").ok()) {
             remember(resolved, label, id);
@@ -785,7 +858,7 @@ async fn run_matched(
     let parts = statement_parts(&single, &target.typing.types, &target.lookups);
     let sql = matched_sql(&target.table, &parts, &target.typing, row.op_id.is_some());
     let query = bound_query(&sql, &parts.parameters);
-    let fail = |e: sqlx::Error| failure_at(&e, env.constraints, Some(row));
+    let fail = |e: sqlx::Error| failure_at(&e, env.cx.constraints, Some(row));
 
     let Some(label) = row.op_id.clone() else {
         let done = query.execute(&mut **tx).await.map_err(fail)?;
@@ -818,30 +891,22 @@ fn failure_at(
     to_seed_error(error, constraints, &path, row.and_then(|r| r.op_id.clone()))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn evaluate(
     condition: &Condition,
     tx: &mut Transaction<'_, Postgres>,
-    ast: &SchemaAst,
-    tables: &HashMap<String, String>,
-    schema: &str,
-    environment: Option<&str>,
+    env: &RunEnv<'_>,
     path: &str,
 ) -> Result<bool, SeedError> {
-    if let Condition::Environment { name } = condition {
-        return Ok(environment == Some(name.as_str()));
-    }
-
+    let ast = env.cx.ast;
     let model = match condition {
         Condition::Exists { model, .. } | Condition::NotExists { model, .. } => model,
-        Condition::Environment { .. } => unreachable!("handled above"),
+        Condition::Environment { name } => return Ok(env.cx.environment == Some(name.as_str())),
     };
-    let table = tables.get(model).cloned().unwrap_or_else(|| model.clone());
-
     let Some(model_ast) = ast.models.iter().find(|m| &m.name == model) else {
         return Ok(true);
     };
-    let Some(sql) = condition_sql(condition, ast, model_ast, &table, schema) else {
+    let table = env.table(model);
+    let Some(sql) = condition_sql(condition, ast, model_ast, &table, env.cx.schema) else {
         return Ok(true);
     };
 
