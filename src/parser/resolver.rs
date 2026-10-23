@@ -2,6 +2,7 @@ use super::ast::{
     FieldAst, JunctionTableAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst,
     StorageAccessMode, StorageBucketAst,
 };
+use crate::managed::clip_identifier;
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
@@ -152,15 +153,16 @@ fn effective_table(ast: &SchemaAst, model: &str) -> String {
 /// They joined the declaring model's table and the target's *model* name, sorted, so
 /// `Post.tags: ManyToMany<Tag>` made `Tag_post` and `Tag.posts: ManyToMany<Post>` made `Post_tag`.
 /// The differ renames one such table to the new name, and refuses when both exist, rather than
-/// dropping the links a project already holds.
+/// dropping the links a project already holds. Both names are as Postgres keeps them, which is how
+/// the junction is named now and how the old table was stored.
 pub fn legacy_junction_names(ast: &SchemaAst) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for model in &ast.models {
         for rel in many_to_many(model).filter(|rel| rel.through.is_none()) {
-            let current = derived_junction(ast, &model.name, &rel.target).name;
+            let current = clip_identifier(&derived_junction(ast, &model.name, &rel.target).name);
             let mut old = [effective_table(ast, &model.name), rel.target.clone()];
             old.sort();
-            let legacy = old.join("_");
+            let legacy = clip_identifier(&old.join("_"));
             if legacy != current && !out.contains(&(current.clone(), legacy.clone())) {
                 out.push((current, legacy));
             }

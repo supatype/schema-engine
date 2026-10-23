@@ -8,31 +8,26 @@
 //! constraints and indexes already are. Two columns Postgres would cut to one name refuse the
 //! schema instead of one silently taking the other's place.
 
-use std::collections::BTreeMap;
-
 use anyhow::{bail, Result};
 
 use super::accessors::{column_names_for, default_foreign_key_column};
 use super::ast::{AccessAst, AccessRule, FieldAst, MembershipSource, ModelAst, Operand};
-use crate::managed::{clip_identifier, MAX_IDENTIFIER_BYTES};
+use crate::managed::{clip_identifier, KeptNames, MAX_IDENTIFIER_BYTES};
 
 /// Refuses `model` when two of its columns have names Postgres would keep as one.
 pub fn refuse_clashes(model: &ModelAst) -> Result<()> {
-    let mut kept: BTreeMap<String, String> = BTreeMap::new();
+    let mut kept = KeptNames::default();
     for (name, field) in &model.fields {
         for column in column_names_for(name, field) {
-            let stored = clip_identifier(&column);
-            match kept.get(&stored) {
-                Some(other) if *other != column => bail!(
+            if let Some(other) = kept.claim(&column) {
+                bail!(
                     "Model '{}' declares columns \"{other}\" and \"{column}\", which Postgres would \
-                     both keep as \"{stored}\": it keeps only the first {MAX_IDENTIFIER_BYTES} \
-                     bytes of a name. Rename one so the two differ within their first \
+                     both keep as \"{}\": it keeps only the first {MAX_IDENTIFIER_BYTES} bytes of \
+                     a name. Rename one so the two differ within their first \
                      {MAX_IDENTIFIER_BYTES} bytes.",
                     model.name,
-                ),
-                _ => {
-                    kept.insert(stored, column);
-                }
+                    clip_identifier(&column),
+                );
             }
         }
     }

@@ -270,6 +270,7 @@ jobs:
             --test grant_ledger_tests \
             --test rls_ledger_tests \
             --test column_ledger_tests \
+            --test long_table_names_tests \
             --test declared_rename_tests \
             --test push_audit_tests \
             --test key_schema_sequence_ledger_tests \
