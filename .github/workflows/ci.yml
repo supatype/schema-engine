@@ -191,8 +191,22 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+    # Each `--test` below is its own binary linked against the whole crate, and with full debug
+    # info the set outgrew the runner's disk: the job died with "No space left on device" partway
+    # through the build. Line tables keep file and line numbers in a panic's backtrace at a
+    # fraction of the size, and incremental artefacts are never reused on a fresh runner.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
+      # The runner image ships SDKs this job never uses. Removing them gives the build the room
+      # it needs; each path is optional, so a later image without one of them still passes.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # SUPATYPE_FORCE_INTEGRATION_TESTS turns a skip into a failure. Without it, a suite that
