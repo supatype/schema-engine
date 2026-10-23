@@ -555,30 +555,26 @@ fn lower_connect(
     })
 }
 
-/// Every `$ref` label a write's data points at.
-fn referenced_labels(data: &DataMap) -> HashSet<String> {
+/// Every `$ref` label a step points at: a write's data, or a raw statement's params.
+fn referenced_labels(step: &PlannedStep) -> HashSet<String> {
     let mut labels = HashSet::new();
-    collect_labels(data, &mut labels);
+    match step {
+        PlannedStep::Write(write) => collect_labels(write.data.values(), &mut labels),
+        PlannedStep::Sql { params, .. } => collect_labels(params, &mut labels),
+        PlannedStep::Condition { .. } => {}
+    }
     labels
 }
 
-fn collect_labels(data: &DataMap, labels: &mut HashSet<String>) {
-    for value in data.values() {
+fn collect_labels<'a>(values: impl IntoIterator<Item = &'a Value>, labels: &mut HashSet<String>) {
+    for value in values {
         match value {
             Value::Ref { reference } => {
                 if let Some((op_id, _)) = reference.split_once('.') {
                     labels.insert(op_id.to_string());
                 }
             }
-            Value::Connect { connect } => {
-                for inner in connect.values() {
-                    if let Value::Ref { reference } = inner {
-                        if let Some((op_id, _)) = reference.split_once('.') {
-                            labels.insert(op_id.to_string());
-                        }
-                    }
-                }
-            }
+            Value::Connect { connect } => collect_labels(connect.values(), labels),
             _ => {}
         }
     }
@@ -588,7 +584,8 @@ fn collect_labels(data: &DataMap, labels: &mut HashSet<String>) {
 ///
 /// Three kinds of edge, and the third is the one that is easy to leave out:
 ///
-/// 1. A `$ref` edge: a write using a label must follow the write that defines it.
+/// 1. A `$ref` edge: a write or raw statement using a label must follow the write that
+///    defines it.
 /// 2. A guard edge: a step inside a conditional group must follow its condition.
 /// 3. **A read edge**: a condition reads a model, so it must not be moved across a write
 ///    to that model. Without it the sort is free to float a group past such a write and
@@ -623,11 +620,9 @@ pub fn order(
 
     for (position, step) in steps.iter().enumerate() {
         // 1. references
-        if let PlannedStep::Write(write) = step {
-            for label in referenced_labels(&write.data) {
-                if let Some(&source) = defined_at.get(&label) {
-                    add_edge(source, position, &mut edges, &mut indegree);
-                }
+        for label in referenced_labels(step) {
+            if let Some(&source) = defined_at.get(&label) {
+                add_edge(source, position, &mut edges, &mut indegree);
             }
         }
 

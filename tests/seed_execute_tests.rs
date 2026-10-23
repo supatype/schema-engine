@@ -325,6 +325,31 @@ async fn a_true_condition_runs_its_group() {
     });
 }
 
+/// A condition runs where the author put it, so it sees a write above it in the same seed.
+///
+/// The planner keeps it there and reports the read-after-write; the executor used to
+/// evaluate every condition before any write, so the group ran against the empty table.
+#[tokio::test]
+async fn a_condition_sees_a_write_above_it_in_the_same_seed() {
+    with_seeded_schema!(|pool, ast| {
+        let report = run(
+            &pool,
+            &ast,
+            r#"[
+                {"op":"create","model":"Organiser","data":{"slug":"x","name":"X"}},
+                {"op":"group","if":{"kind":"notExists","model":"Organiser"},"operations":[
+                    {"op":"create","model":"Organiser","data":{"slug":"y","name":"Y"}}
+                ]}
+            ]"#,
+        )
+        .await
+        .expect("applies");
+
+        assert_eq!(count(&pool, "organiser").await, 1, "the group did not run");
+        assert_eq!(report.skipped.len(), 1, "and it is reported as skipped");
+    });
+}
+
 /// A filtered condition compiles through the same code path as a policy predicate.
 #[tokio::test]
 async fn a_filtered_condition_is_evaluated_by_the_database() {

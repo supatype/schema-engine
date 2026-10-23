@@ -184,6 +184,28 @@ fn it_orders_a_reference_after_its_definition() {
     );
 }
 
+/// A raw statement's `$ref` param is a dependency too: the statement binds the id, so it
+/// must follow the write that produces it, however far the sort moved that write.
+#[test]
+fn a_raw_statement_is_ordered_after_the_write_its_params_reference() {
+    let document = ir(r#"[
+        {"op":"create","model":"Event","id":"conf","data":{"organiser_id":{"$ref":"northern.id"}}},
+        {"op":"sql","text":"SELECT $1","params":[{"$ref":"conf.id"}]},
+        {"op":"create","model":"Organiser","id":"northern","data":{"name":"N"}}
+    ]"#);
+
+    let (ordered, _) = order(flat(&document)).expect("orderable");
+    let kinds: Vec<&str> = ordered
+        .iter()
+        .map(|step| match step {
+            PlannedStep::Write(w) => w.model.as_str(),
+            PlannedStep::Sql { .. } => "sql",
+            PlannedStep::Condition { .. } => "condition",
+        })
+        .collect();
+    assert_eq!(kinds, vec!["Organiser", "Event", "sql"]);
+}
+
 /// A dependency crossing a group boundary still holds.
 ///
 /// This is why a group is not sorted in isolation: the parent is outside it and the child

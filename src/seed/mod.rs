@@ -14,6 +14,9 @@ pub mod execute;
 pub mod fingerprint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ledger;
+#[cfg(not(target_arch = "wasm32"))]
+mod params;
+pub mod placeholders;
 pub mod plan;
 pub mod validate;
 

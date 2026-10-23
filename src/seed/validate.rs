@@ -10,6 +10,7 @@
 //! Those are check constraints in the database, and duplicating them here would put two
 //! validators in the product that can disagree after a partial push.
 
+use super::placeholders::placeholder_count;
 use super::{Condition, DataMap, Operation, SeedIr, Value, IR_VERSION};
 use crate::generator::seed_model::{describe, RelationKind, SeedRelation, SeedSchema};
 use crate::parser::accessors::db_foreign_key;
@@ -401,20 +402,7 @@ fn validate_operation(
             remember(scope, id, model);
         }
 
-        Operation::Sql { text, params } => {
-            if text.trim().is_empty() {
-                return Err(err(path, "`sql` was given an empty statement."));
-            }
-            for (position, value) in params.iter().enumerate() {
-                validate_value(
-                    value,
-                    None,
-                    index,
-                    scope,
-                    &format!("{path}.params[{position}]"),
-                )?;
-            }
-        }
+        Operation::Sql { text, params } => validate_sql(text, params, index, scope, path)?,
 
         Operation::Group { if_, operations } => {
             if let Some(condition) = if_ {
@@ -644,6 +632,90 @@ fn validate_value(
         }
 
         Value::Operand(operand) => validate_operand(operand, column, path),
+    }
+}
+
+/// A raw statement: some text, one param for each placeholder it uses, and only values a
+/// placeholder can carry.
+fn validate_sql(
+    text: &str,
+    params: &[Value],
+    index: &SchemaIndex,
+    scope: &mut RefScope,
+    path: &str,
+) -> Result<()> {
+    if text.trim().is_empty() {
+        return Err(err(path, "`sql` was given an empty statement."));
+    }
+    check_param_count(text, params.len(), path)?;
+    for (position, value) in params.iter().enumerate() {
+        let at = format!("{path}.params[{position}]");
+        validate_value(value, None, index, scope, &at)?;
+        check_bindable(value, &at)?;
+    }
+    Ok(())
+}
+
+/// Exactly one param for each placeholder the statement uses.
+fn check_param_count(text: &str, given: usize, path: &str) -> Result<()> {
+    let used = placeholder_count(text);
+    if used == given {
+        return Ok(());
+    }
+    let message = format!(
+        "`sql` takes {} but was given {given}: {}",
+        parameters(used),
+        excerpt(text)
+    );
+    Err(with_remedy(
+        err(path, message),
+        "Pass one value in `params` for each of `$1` to `$n` in the statement, in order.",
+    ))
+}
+
+fn parameters(count: usize) -> String {
+    match count {
+        0 => "no parameters".to_string(),
+        1 => "1 parameter".to_string(),
+        n => format!("{n} parameters"),
+    }
+}
+
+/// The start of a statement, on one line, so an error can name it without quoting a page.
+fn excerpt(text: &str) -> String {
+    const LIMIT: usize = 60;
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(LIMIT) {
+        Some((cut, _)) => format!("`{}...`", &line[..cut]),
+        None => format!("`{line}`"),
+    }
+}
+
+/// A placeholder carries a value. A time operand is SQL rather than a value, and the
+/// executor can only give a `$ref` the id an earlier write returned.
+fn check_bindable(value: &Value, path: &str) -> Result<()> {
+    match value {
+        Value::Operand(
+            Operand::Now
+            | Operand::StartOf { .. }
+            | Operand::Ago { .. }
+            | Operand::FromNow { .. }
+            | Operand::After { .. }
+            | Operand::Before { .. },
+        ) => Err(with_remedy(
+            err(
+                path,
+                "a `sql` parameter must be a value, and this is an expression.",
+            ),
+            "Write the expression in the statement instead, such as `now()`.",
+        )),
+        Value::Ref { reference } if reference.split_once('.').is_some_and(|(_, f)| f != "id") => {
+            Err(err(
+                path,
+                format!("`{reference}`: a `sql` parameter can only reference an operation's `id`."),
+            ))
+        }
+        _ => Ok(()),
     }
 }
 

@@ -228,6 +228,7 @@ jobs:
             --test seed_execute_tests \
             --test seed_ledger_tests \
             --test seed_command_tests \
+            --test seed_sql_params_tests \
             --test richtext_trigger_tests \
             --test slug_trigger_tests \
             --test schema_isolation_tests \
