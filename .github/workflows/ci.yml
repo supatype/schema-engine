@@ -103,6 +103,7 @@ jobs:
             --test seed_plan_tests \
             --test conformance_tests \
             --test identity_generated_tests \
+            --test table_name_collision_tests \
             --test sql_quote_lint
 
   sdk-exec:
