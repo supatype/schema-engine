@@ -55,6 +55,29 @@ pub fn clip_identifier(name: &str) -> String {
     clip(name, MAX_IDENTIFIER_BYTES).to_string()
 }
 
+/// Names claimed in one namespace, by the name Postgres keeps of each: the columns of one table,
+/// or the tables of one schema. Two different names Postgres would keep as one are one object to
+/// it, so the second to claim it is told which name holds it already.
+#[derive(Debug, Default)]
+pub struct KeptNames {
+    kept: HashMap<String, String>,
+}
+
+impl KeptNames {
+    /// Claims `name`. `Some` is a different name that Postgres keeps the same way, which holds it.
+    pub fn claim(&mut self, name: &str) -> Option<String> {
+        let kept = clip_identifier(name);
+        match self.kept.get(&kept) {
+            Some(other) if other != name => Some(other.clone()),
+            Some(_) => None,
+            None => {
+                self.kept.insert(kept, name.to_string());
+                None
+            }
+        }
+    }
+}
+
 /// Postgres's `makeObjectName`: `name1_name2_label`, fitted to the identifier limit the way
 /// Postgres fits the names it chooses itself.
 ///
