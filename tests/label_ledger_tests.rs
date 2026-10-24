@@ -22,12 +22,12 @@ use supatype_engine::{
 
 use common::{exec, push};
 
-/// `salary` readable only by its owner, also writable only by its owner, or with no field rule.
+/// `salary` readable only by its owner, writable only by its owner, or with no field rule.
 #[derive(Clone, Copy)]
 enum SalaryRule {
     None,
     Read,
-    ReadWrite,
+    Write,
 }
 
 fn owner_only() -> Value {
@@ -42,9 +42,7 @@ fn employees(rule: SalaryRule) -> SchemaAst {
     match rule {
         SalaryRule::None => {}
         SalaryRule::Read => access["fields"] = json!({ "salary": { "read": owner_only() } }),
-        SalaryRule::ReadWrite => {
-            access["fields"] = json!({ "salary": { "read": owner_only(), "write": owner_only() } })
-        }
+        SalaryRule::Write => access["fields"] = json!({ "salary": { "write": owner_only() } }),
     }
     let doc = json!({
         "astVersion": 2,
@@ -111,7 +109,9 @@ fn is_label(action: &Action) -> bool {
     action.key().kind == ObjectKind::SecurityLabel
 }
 
-const READ_LABEL: &str = "MASK READ public.\"can_read_employees__salary\"";
+/// A read rule names its write predicate too, which judges a Studio editor's create.
+const READ_LABEL: &str =
+    "MASK READ public.\"can_read_employees__salary\" WRITE public.\"can_write_employees__salary\"";
 
 #[tokio::test]
 async fn a_label_is_recorded_replaced_when_its_rule_changes_and_taken_off_when_it_goes() {
@@ -129,13 +129,11 @@ async fn a_label_is_recorded_replaced_when_its_rule_changes_and_taken_off_when_i
         let again = push(&pool, &read).await.unwrap();
         assert!(up_to_date(&again), "{again:?}");
 
-        let outcome = push(&pool, &employees(SalaryRule::ReadWrite))
-            .await
-            .unwrap();
+        let outcome = push(&pool, &employees(SalaryRule::Write)).await.unwrap();
         assert!(applied(&outcome), "{outcome:?}");
         let label = live_label(&pool, "salary").await.unwrap_or_default();
         assert!(
-            label.contains("WRITE public.\"can_write_employees__salary\""),
+            label == "MASK WRITE public.\"can_write_employees__salary\"",
             "the label kept its old rule: {label}"
         );
 
