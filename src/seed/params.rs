@@ -6,7 +6,7 @@
 //! placeholder, as in `$1::uuid`. A `null` declares no type at all, so Postgres takes the
 //! one the statement implies and a null fits any column.
 
-use super::Value;
+use super::{reference_parts, Value};
 use crate::parser::ast::Operand;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
@@ -17,8 +17,9 @@ use std::collections::HashMap;
 /// A statement with its parameters bound, ready to run.
 pub type BoundQuery<'q> = sqlx::query::Query<'q, Postgres, PgArguments>;
 
-/// Ids earlier statements returned, by the label of the write that returned them.
-pub type Resolved = HashMap<String, HashMap<String, String>>;
+/// Columns earlier statements read back, by the label of the write that read them, then by
+/// the column's name as Postgres keeps it. `None` is a column that holds NULL.
+pub type Resolved = HashMap<String, HashMap<String, Option<String>>>;
 
 /// One parameter, in the type it binds as.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,7 +92,9 @@ fn param_for(value: &Value, resolved: &Resolved) -> Result<Param, String> {
         Value::Operand(Operand::Literal { value }) => serde_json::to_value(value)
             .map(|json| from_json(&json))
             .map_err(|e| format!("could not be read: {e}")),
-        Value::Ref { reference } => resolve(reference, resolved).map(Param::Text),
+        Value::Ref { reference } => {
+            resolve(reference, resolved).map(|column| column.map_or(Param::Null, Param::Text))
+        }
         _ => Err("is not a value a placeholder can carry".to_string()),
     }
 }
@@ -110,11 +113,10 @@ fn from_json(json: &serde_json::Value) -> Param {
     }
 }
 
-/// The id a `$ref` names, which an earlier write in the same run returned.
-fn resolve(reference: &str, resolved: &Resolved) -> Result<String, String> {
-    reference
-        .split_once('.')
-        .and_then(|(op_id, field)| resolved.get(op_id)?.get(field))
+/// The column a `$ref` names, which an earlier write in the same run read back.
+pub fn resolve(reference: &str, resolved: &Resolved) -> Result<Option<String>, String> {
+    reference_parts(reference)
+        .and_then(|(label, column)| resolved.get(label)?.get(&column))
         .cloned()
         .ok_or_else(|| format!("references `{reference}`, which no earlier write produced"))
 }
@@ -168,9 +170,25 @@ mod tests {
     #[test]
     fn a_ref_binds_the_id_an_earlier_write_returned() {
         let mut resolved = Resolved::new();
-        resolved.insert("post".into(), HashMap::from([("id".into(), "abc".into())]));
+        resolved.insert(
+            "post".into(),
+            HashMap::from([("id".into(), Some("abc".into()))]),
+        );
         let bound = param_for(&value(r#"{"$ref": "post.id"}"#), &resolved);
         assert_eq!(bound, Ok(Param::Text("abc".into())));
+    }
+
+    #[test]
+    fn a_ref_to_any_column_binds_what_was_read_back() {
+        let mut resolved = Resolved::new();
+        resolved.insert(
+            "alex".into(),
+            HashMap::from([("slug".into(), Some("alex".into())), ("bio".into(), None)]),
+        );
+        let slug = param_for(&value(r#"{"$ref": "alex.slug"}"#), &resolved);
+        assert_eq!(slug, Ok(Param::Text("alex".into())));
+        let bio = param_for(&value(r#"{"$ref": "alex.bio"}"#), &resolved);
+        assert_eq!(bio, Ok(Param::Null), "a column holding NULL binds NULL");
     }
 
     #[test]

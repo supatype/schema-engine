@@ -12,7 +12,7 @@
 //! rows written before it; such rows are few, because they are what a fixture spells out.
 
 use super::errors::{database_failure_from, map_failure, ConstraintIndex, SeedError, SeedFailure};
-use super::params::{bind_all, Resolved};
+use super::params::{bind_all, resolve, Resolved};
 use super::plan::{Batch, ConnectLookup, Plan, PlannedStep, PlannedWrite, WriteKind};
 use super::{Condition, Value};
 use crate::generator::sql::column_conversion::lexical_normalise_expr;
@@ -20,8 +20,9 @@ use crate::generator::sql::rls::{access_rule_to_expr, operand_to_expr};
 use crate::parser::ast::{ModelAst, Operand, SchemaAst};
 use crate::sql_quote::quote_ident;
 use indexmap::IndexMap;
+use sqlx::postgres::PgRow;
 use sqlx::{Executor, PgPool, Postgres, Row, Transaction};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// What a run did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -235,6 +236,16 @@ fn batch_sql(
     (sql, parts.parameters)
 }
 
+/// Whether a batch is an upsert whose conflict leaves the existing row alone.
+fn updates_nothing(batch: &Batch) -> bool {
+    batch.kind == WriteKind::Upsert
+        && !batch.conflict.is_empty()
+        && batch
+            .columns
+            .iter()
+            .all(|column| batch.conflict.contains(column))
+}
+
 /// `ON CONFLICT (key) DO UPDATE SET ...`, or `DO NOTHING` when there is nothing to update.
 fn conflict_clause(batch: &Batch) -> String {
     let conflict: Vec<String> = batch.conflict.iter().map(|c| quote_ident(c)).collect();
@@ -244,7 +255,7 @@ fn conflict_clause(batch: &Batch) -> String {
         .filter(|column| !batch.conflict.contains(*column))
         .map(|column| format!("{c} = EXCLUDED.{c}", c = quote_ident(column)))
         .collect();
-    if updates.is_empty() {
+    if updates_nothing(batch) {
         format!(" ON CONFLICT ({}) DO NOTHING", conflict.join(", "))
     } else {
         format!(
@@ -314,15 +325,14 @@ fn match_predicate(parts: &Parts, typing: &Typing) -> String {
 
 /// The statement for one row that is written only when no matching row exists.
 ///
-/// With `returning_id`, the row's id comes back whether it was written or matched, with a
-/// flag saying which, so a child of a matched row is linked to the row that was already
-/// there. The two CTEs read one snapshot, so `found` does not see `made`.
-fn matched_sql(table: &str, parts: &Parts, typing: &Typing, returning_id: bool) -> String {
-    let id = quote_ident("id");
-    let selected = if returning_id {
-        format!("{}.{id}", quote_ident(EXISTING))
-    } else {
+/// With `returns`, those columns come back whether the row was written or matched, after a
+/// first column saying which, so a child of a matched row is linked to the row that was
+/// already there. The two CTEs read one snapshot, so `found` does not see `made`.
+fn matched_sql(table: &str, parts: &Parts, typing: &Typing, returns: &[String]) -> String {
+    let selected = if returns.is_empty() {
         "1".to_string()
+    } else {
+        returning_list(returns, Some(EXISTING))
     };
     let found = format!(
         "SELECT {selected} FROM {} AS {}, {} WHERE {} LIMIT 1",
@@ -332,14 +342,76 @@ fn matched_sql(table: &str, parts: &Parts, typing: &Typing, returning_id: bool) 
         match_predicate(parts, typing)
     );
     let insert = insert_sql(table, parts);
-    if !returning_id {
+    if returns.is_empty() {
         return format!("{insert} WHERE NOT EXISTS ({found})");
     }
     format!(
         "WITH found AS ({found}), made AS ({insert} WHERE NOT EXISTS (SELECT 1 FROM found) \
-         RETURNING {id}) SELECT {id}::text AS id, TRUE AS inserted FROM made \
-         UNION ALL SELECT {id}::text, FALSE FROM found"
+         RETURNING {}) SELECT TRUE AS inserted, * FROM made \
+         UNION ALL SELECT FALSE, * FROM found",
+        returning_list(returns, None)
     )
+}
+
+/// The statement that reads back a row an upsert left alone, found by its conflict key.
+///
+/// An upsert with nothing to update does nothing on a conflict, and `RETURNING` returns no
+/// row for it: on a re-run the row was never read back and every reference to it was NULL.
+/// The key is matched with the same expressions the insert writes, so a key given by a
+/// `connect` lookup finds the row as the insert would have.
+fn refetch_sql(
+    table: &str,
+    parts: &Parts,
+    conflict: &BTreeSet<String>,
+    returns: &[String],
+) -> String {
+    let existing = quote_ident(EXISTING);
+    let keys: Vec<String> = parts
+        .columns
+        .iter()
+        .filter(|column| conflict.contains(&column.name))
+        .map(|column| {
+            format!(
+                "{existing}.{} = ({})",
+                quote_ident(&column.name),
+                column.expression
+            )
+        })
+        .collect();
+    format!(
+        "SELECT {} FROM {} AS {existing}, {} WHERE {} LIMIT 1",
+        returning_list(returns, Some(EXISTING)),
+        quote_ident(table),
+        parts.source,
+        keys.join(" AND ")
+    )
+}
+
+/// Columns to read back, each as text and in the order given, optionally qualified.
+///
+/// Read by position rather than by name: an alias past 63 bytes would be cut by Postgres, so
+/// a name is not a reliable way back to the column it came from.
+fn returning_list(columns: &[String], qualifier: Option<&str>) -> String {
+    let prefix = qualifier
+        .map(|q| format!("{}.", quote_ident(q)))
+        .unwrap_or_default();
+    columns
+        .iter()
+        .map(|column| format!("{prefix}{}::text", quote_ident(column)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The columns read back from `row`, starting at position `offset`.
+fn read_columns(row: &PgRow, columns: &[String], offset: usize) -> HashMap<String, Option<String>> {
+    columns
+        .iter()
+        .enumerate()
+        .map(|(position, column)| {
+            let value = row.try_get::<Option<String>, _>(offset + position);
+            (column.clone(), value.unwrap_or(None))
+        })
+        .collect()
 }
 
 /// The scalar subquery a `connect` by natural key becomes, per column.
@@ -427,17 +499,18 @@ fn count_written(report: &mut Report, model: &str, rows: usize) {
     *report.written.entry(model.to_string()).or_insert(0) += rows;
 }
 
-/// Resolve `$ref` values against what earlier statements returned.
-fn resolve_refs(write: &mut PlannedWrite, resolved: &HashMap<String, HashMap<String, String>>) {
+/// Resolve `$ref` values against the columns earlier statements read back.
+///
+/// The value is the column as stored, as text, so the write casts it to its own column's
+/// type like any other bound value. A column holding NULL resolves to NULL.
+fn resolve_refs(write: &mut PlannedWrite, resolved: &Resolved) {
     for value in write.data.values_mut() {
         let Value::Ref { reference } = value else {
             continue;
         };
-        let Some((op_id, field)) = reference.split_once('.') else {
-            continue;
-        };
-        if let Some(actual) = resolved.get(op_id).and_then(|fields| fields.get(field)) {
-            *value = Value::Scalar(serde_json::Value::String(actual.clone()));
+        if let Ok(column) = resolve(reference, resolved) {
+            *value =
+                Value::Scalar(column.map_or(serde_json::Value::Null, serde_json::Value::String));
         }
     }
 }
@@ -752,11 +825,14 @@ impl Target {
         }
     }
 
-    /// A row's `$ref`s resolved and its prose encoded, as the statement binds it.
+    /// A row's prose encoded and its `$ref`s resolved, as the statement binds it.
+    ///
+    /// Prose first: a reference resolves to a column as stored, which for rich text is
+    /// already a document, and encoding it as prose would wrap it a second time.
     fn prepare(&self, row: &PlannedWrite, resolved: &Resolved) -> PlannedWrite {
         let mut row = row.clone();
-        resolve_refs(&mut row, resolved);
         encode_prose(&mut row, &self.typing.rich_text);
+        resolve_refs(&mut row, resolved);
         row
     }
 
@@ -815,30 +891,72 @@ async fn run_insert(
     resolved: &mut Resolved,
 ) -> Result<usize, SeedError> {
     let (prepared, mut sql, parameters) = target.insert(batch, resolved);
-    let labels = labels_of(&prepared.rows);
-    if !labels.is_empty() {
-        // Cast to text in the statement, so this reads one type whatever the key's column
-        // type is, and the engine needs no uuid dependency.
-        sql.push_str(" RETURNING \"id\"::text AS id");
+    let returns = returned_columns(&prepared.rows);
+    // An upsert that updates nothing returns no row on a conflict, so its rows are read back
+    // by key afterwards instead.
+    let read_back = !returns.is_empty() && !updates_nothing(&prepared);
+    if read_back {
+        // Cast to text in the statement, so this reads one type whatever each column's type
+        // is, and the engine needs no dependency per type.
+        sql.push_str(&format!(" RETURNING {}", returning_list(&returns, None)));
     }
     let rows = bound_query(&sql, &parameters)
         .fetch_all(&mut **tx)
         .await
         .map_err(|e| failure_at(&e, env.cx.constraints, prepared.rows.first()))?;
-    for (position, label) in labels {
-        if let Some(id) = rows.get(position).and_then(|r| r.try_get("id").ok()) {
-            remember(resolved, label, id);
-        }
+    if read_back {
+        remember_returned(resolved, &prepared.rows, &rows, &returns);
+    } else {
+        refetch_all(tx, &prepared, target, env, resolved).await?;
     }
     Ok(prepared.rows.len())
 }
 
-/// The position and label of every row a later `$ref` may point at.
-fn labels_of(rows: &[PlannedWrite]) -> Vec<(usize, String)> {
-    rows.iter()
-        .enumerate()
-        .filter_map(|(position, row)| row.op_id.clone().map(|id| (position, id)))
-        .collect()
+/// Record what `RETURNING` gave back for each labelled row, matched by position.
+fn remember_returned(
+    resolved: &mut Resolved,
+    written: &[PlannedWrite],
+    returned: &[PgRow],
+    columns: &[String],
+) {
+    for (row, back) in written.iter().zip(returned) {
+        if let Some(label) = &row.op_id {
+            remember(resolved, label, read_columns(back, columns, 0));
+        }
+    }
+}
+
+/// Every column any row of a batch is read back for, in a stable order.
+fn returned_columns(rows: &[PlannedWrite]) -> Vec<String> {
+    let columns: BTreeSet<&String> = rows.iter().flat_map(|row| &row.returns).collect();
+    columns.into_iter().cloned().collect()
+}
+
+/// Read back, by conflict key, each row of an upsert batch that a later step references.
+async fn refetch_all(
+    tx: &mut Transaction<'_, Postgres>,
+    prepared: &Batch,
+    target: &Target,
+    env: &RunEnv<'_>,
+    resolved: &mut Resolved,
+) -> Result<(), SeedError> {
+    for row in prepared.rows.iter().filter(|row| !row.returns.is_empty()) {
+        let Some(label) = &row.op_id else { continue };
+        let single = Batch {
+            rows: vec![row.clone()],
+            ..prepared.clone()
+        };
+        let parts = statement_parts(&single, &target.typing.types, &target.lookups);
+        let sql = refetch_sql(&target.table, &parts, &prepared.conflict, &row.returns);
+        let found = bound_query(&sql, &parts.parameters)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|e| failure_at(&e, env.cx.constraints, Some(row)))?;
+        if let Some(found) = found {
+            remember(resolved, label, read_columns(&found, &row.returns, 0));
+        }
+    }
+    Ok(())
 }
 
 /// Write one row only when no row already holds every value it gives, returning 1 when it
@@ -856,29 +974,26 @@ async fn run_matched(
         ..batch.clone()
     };
     let parts = statement_parts(&single, &target.typing.types, &target.lookups);
-    let sql = matched_sql(&target.table, &parts, &target.typing, row.op_id.is_some());
+    let sql = matched_sql(&target.table, &parts, &target.typing, &row.returns);
     let query = bound_query(&sql, &parts.parameters);
     let fail = |e: sqlx::Error| failure_at(&e, env.cx.constraints, Some(row));
 
-    let Some(label) = row.op_id.clone() else {
+    let Some(label) = row.op_id.as_ref().filter(|_| !row.returns.is_empty()) else {
         let done = query.execute(&mut **tx).await.map_err(fail)?;
         return Ok(done.rows_affected() as usize);
     };
     let found = query.fetch_one(&mut **tx).await.map_err(fail)?;
-    if let Ok(id) = found.try_get::<String, _>("id") {
-        remember(resolved, label, id);
-    }
-    Ok(usize::from(
-        found.try_get::<bool, _>("inserted").unwrap_or(false),
-    ))
+    // The first column says whether the row was written; the referenced columns follow it.
+    remember(resolved, label, read_columns(&found, &row.returns, 1));
+    Ok(usize::from(found.try_get::<bool, _>(0).unwrap_or(false)))
 }
 
-/// Record the id a labelled write produced or matched, for a later `$ref`.
-fn remember(resolved: &mut Resolved, label: String, id: String) {
+/// Record the columns a labelled write produced or matched, for a later `$ref`.
+fn remember(resolved: &mut Resolved, label: &str, columns: HashMap<String, Option<String>>) {
     resolved
-        .entry(label)
+        .entry(label.to_string())
         .or_default()
-        .insert("id".to_string(), id);
+        .extend(columns);
 }
 
 /// A failed statement, named by the row it was writing.

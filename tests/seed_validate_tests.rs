@@ -464,19 +464,19 @@ fn it_refuses_an_expression_as_a_sql_param() {
 }
 
 #[test]
-fn a_sql_param_can_reference_only_an_id() {
-    rejects(
-        r#"[
-        {"op":"create","model":"Organiser","id":"o","data":{"slug":"a","name":"A"}},
-        {"op":"sql","text":"SELECT $1","params":[{"$ref":"o.slug"}]}
-    ]"#,
-        &["operations[1].params[0]", "`o.slug`", "`id`"],
-    );
+fn a_sql_param_can_reference_any_column_the_model_has() {
     accepts(
         r#"[
         {"op":"create","model":"Organiser","id":"o","data":{"slug":"a","name":"A"}},
-        {"op":"sql","text":"SELECT $1::uuid","params":[{"$ref":"o.id"}]}
+        {"op":"sql","text":"SELECT $1::uuid, $2","params":[{"$ref":"o.id"},{"$ref":"o.slug"}]}
     ]"#,
+    );
+    rejects(
+        r#"[
+        {"op":"create","model":"Organiser","id":"o","data":{"slug":"a","name":"A"}},
+        {"op":"sql","text":"SELECT $1","params":[{"$ref":"o.nickname"}]}
+    ]"#,
+        &["operations[1].params[0]", "`Organiser`", "`nickname`"],
     );
 }
 
