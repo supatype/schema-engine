@@ -206,6 +206,39 @@ fn a_raw_statement_is_ordered_after_the_write_its_params_reference() {
     assert_eq!(kinds, vec!["Organiser", "Event", "sql"]);
 }
 
+/// A write is read back for every column a later step names, from a typed write, a nested
+/// row or a raw statement, and a reference to a column other than `id` still orders.
+#[test]
+fn a_write_returns_every_column_later_steps_reference() {
+    let document = ir(r#"[
+        {"op":"sql","text":"SELECT $1","params":[{"$ref":"northern.slug"}]},
+        {"op":"create","model":"Organiser","id":"northern","data":{"name":"N","slug":"n"}},
+        {"op":"create","model":"Event","data":{"title":{"$ref":"northern.name"}}},
+        {"op":"create","model":"Organiser","id":"unused","data":{"name":"U"}}
+    ]"#);
+
+    let (ordered, _) = order(flat(&document)).expect("orderable");
+    let returns: Vec<(String, Vec<String>)> = ordered
+        .iter()
+        .filter_map(|step| match step {
+            PlannedStep::Write(w) => Some((w.model.clone(), w.returns.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        returns,
+        vec![
+            ("Organiser".into(), vec!["name".into(), "slug".into()]),
+            ("Event".into(), vec![]),
+            ("Organiser".into(), vec![]),
+        ]
+    );
+    assert!(
+        matches!(ordered[1], PlannedStep::Sql { .. }),
+        "the statement follows the write whose slug it binds"
+    );
+}
+
 /// A dependency crossing a group boundary still holds.
 ///
 /// This is why a group is not sorted in isolation: the parent is outside it and the child

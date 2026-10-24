@@ -13,7 +13,8 @@
 use super::placeholders::placeholder_count;
 use super::{Condition, DataMap, Operation, SeedIr, Value, IR_VERSION};
 use crate::generator::seed_model::{describe, RelationKind, SeedRelation, SeedSchema};
-use crate::parser::accessors::db_foreign_key;
+use crate::managed::clip_identifier;
+use crate::parser::accessors::{column_names_for, db_foreign_key};
 use crate::parser::ast::{AccessRule, FieldAst, ModelAst, Operand, SchemaAst};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -82,6 +83,11 @@ struct ModelIndex {
     /// Field names, plus the foreign-key column each relation generates. Both are writable
     /// and an author may reasonably use either.
     writable: HashSet<String>,
+    /// The table's columns, as Postgres keeps their names: what a `$ref` may read back.
+    ///
+    /// Not `writable`, which also holds relation names. A `hasMany` relation is no column of
+    /// this row, so a reference to it had nothing to read and resolved to NULL.
+    columns: HashSet<String>,
     /// Single columns that can be an `ON CONFLICT` target.
     unique_columns: HashSet<String>,
     /// Unique composites, as sets, so a multi-column `where` matches whole.
@@ -139,6 +145,7 @@ impl ModelIndex {
         let mut index = ModelIndex {
             name: model.name.clone(),
             writable: HashSet::new(),
+            columns: HashSet::new(),
             unique_columns: HashSet::new(),
             unique_composites: Vec::new(),
             required_without_default: BTreeSet::new(),
@@ -146,49 +153,9 @@ impl ModelIndex {
             relation_targets: HashMap::new(),
             time_columns: HashSet::new(),
         };
-
         for (name, field) in &model.fields {
-            let json = field_json(field);
-            let kind = json_text(&json, "kind");
-
-            index.writable.insert(name.clone());
-
-            if let FieldAst::Relation(relation) = field {
-                if let Some(fk) = db_foreign_key(field, name) {
-                    index.writable.insert(fk.clone());
-                    index
-                        .relation_targets
-                        .insert(fk.clone(), relation.target.clone());
-                    if relation.unique_fk {
-                        index.unique_columns.insert(fk);
-                    }
-                }
-                index
-                    .relation_targets
-                    .insert(name.clone(), relation.target.clone());
-                // A relation is satisfied by `connect` or by writing its FK column, so it
-                // is never counted as a missing required field in its own right.
-                continue;
-            }
-
-            if json_flag_either(&json, "unique") || json_flag_either(&json, "primaryKey") {
-                index.unique_columns.insert(name.clone());
-            }
-
-            let has_default = json.get("default").is_some_and(|d| !d.is_null());
-            let server_generated =
-                json_flag_either(&json, "serverGenerated") || json_flag_either(&json, "readOnly");
-            if has_default || server_generated {
-                index.has_default.insert(name.clone());
-            } else if json_flag(&json, "required") {
-                index.required_without_default.insert(name.clone());
-            }
-
-            if TIME_KINDS.contains(&kind.as_str()) {
-                index.time_columns.insert(name.clone());
-            }
+            index.add_field(name, field);
         }
-
         for declared in &model.annotations.db.indexes {
             if !declared.unique {
                 continue;
@@ -201,8 +168,51 @@ impl ModelIndex {
                     .push(declared.fields.iter().cloned().collect());
             }
         }
-
         index
+    }
+
+    /// One field: its name, the columns it occupies, and what a write to it must respect.
+    fn add_field(&mut self, name: &str, field: &FieldAst) {
+        self.writable.insert(name.to_string());
+        self.columns.extend(
+            column_names_for(name, field)
+                .iter()
+                .map(|column| clip_identifier(column)),
+        );
+        if let FieldAst::Relation(relation) = field {
+            // A relation is satisfied by `connect` or by writing its FK column, so it is
+            // never counted as a missing required field in its own right.
+            self.add_relation(name, field, &relation.target, relation.unique_fk);
+            return;
+        }
+        let json = field_json(field);
+        if json_flag_either(&json, "unique") || json_flag_either(&json, "primaryKey") {
+            self.unique_columns.insert(name.to_string());
+        }
+        let has_default = json.get("default").is_some_and(|d| !d.is_null());
+        let server_generated =
+            json_flag_either(&json, "serverGenerated") || json_flag_either(&json, "readOnly");
+        if has_default || server_generated {
+            self.has_default.insert(name.to_string());
+        } else if json_flag(&json, "required") {
+            self.required_without_default.insert(name.to_string());
+        }
+        if TIME_KINDS.contains(&json_text(&json, "kind").as_str()) {
+            self.time_columns.insert(name.to_string());
+        }
+    }
+
+    /// A relation, writable by its own name and by its foreign-key column.
+    fn add_relation(&mut self, name: &str, field: &FieldAst, target: &str, unique_fk: bool) {
+        if let Some(fk) = db_foreign_key(field, name) {
+            self.writable.insert(fk.clone());
+            self.relation_targets.insert(fk.clone(), target.to_string());
+            if unique_fk {
+                self.unique_columns.insert(fk);
+            }
+        }
+        self.relation_targets
+            .insert(name.to_string(), target.to_string());
     }
 
     /// True when `columns` is a usable `ON CONFLICT` target.
@@ -691,8 +701,7 @@ fn excerpt(text: &str) -> String {
     }
 }
 
-/// A placeholder carries a value. A time operand is SQL rather than a value, and the
-/// executor can only give a `$ref` the id an earlier write returned.
+/// A placeholder carries a value, and a time operand is SQL rather than a value.
 fn check_bindable(value: &Value, path: &str) -> Result<()> {
     match value {
         Value::Operand(
@@ -709,12 +718,6 @@ fn check_bindable(value: &Value, path: &str) -> Result<()> {
             ),
             "Write the expression in the statement instead, such as `now()`.",
         )),
-        Value::Ref { reference } if reference.split_once('.').is_some_and(|(_, f)| f != "id") => {
-            Err(err(
-                path,
-                format!("`{reference}`: a `sql` parameter can only reference an operation's `id`."),
-            ))
-        }
         _ => Ok(()),
     }
 }
@@ -918,14 +921,25 @@ fn validate_ref(reference: &str, index: &SchemaIndex, scope: &RefScope, path: &s
         ));
     };
 
-    let produced = index.get(target_model, path)?;
-    if !produced.writable.contains(field) {
-        return Err(err(
-            path,
-            format!("`{target_model}` has no field `{field}` to reference."),
-        ));
+    check_referable(index.get(target_model, path)?, field, path)
+}
+
+/// A reference reads back a column of the row, so it must name one the table has.
+fn check_referable(produced: &ModelIndex, field: &str, path: &str) -> Result<()> {
+    if produced.columns.contains(&clip_identifier(field)) {
+        return Ok(());
     }
-    Ok(())
+    let model = &produced.name;
+    Err(with_remedy(
+        err(
+            path,
+            format!("`{model}` has no field `{field}` to reference."),
+        ),
+        format!(
+            "A reference reads a column of the row that was written. Columns of `{model}`: {}.",
+            ModelIndex::sorted(&produced.columns).join(", ")
+        ),
+    ))
 }
 
 /// A seed has no caller, so the operands describing one are refused outright.

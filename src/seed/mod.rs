@@ -20,6 +20,7 @@ pub mod placeholders;
 pub mod plan;
 pub mod validate;
 
+use crate::managed::clip_identifier;
 use crate::parser::ast::{AccessRule, Operand};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -206,6 +207,15 @@ pub enum Value {
     /// Last, so every tagged shape above is tried first. An untagged enum takes the first
     /// variant that deserialises, and this one accepts almost anything.
     Scalar(serde_json::Value),
+}
+
+/// A `$ref`'s label and the column it names, as Postgres keeps that column's name.
+///
+/// The column is cut to 63 bytes the way Postgres cuts it, so a reference written with a
+/// column's full long name and one written with the name Postgres keeps both find it.
+pub fn reference_parts(reference: &str) -> Option<(&str, String)> {
+    let (label, field) = reference.split_once('.')?;
+    Some((label, clip_identifier(field)))
 }
 
 impl Value {

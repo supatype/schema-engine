@@ -9,7 +9,7 @@
 //! conditional group's membership is fixed: an operation inside one may not run at all, so
 //! moving anything across that boundary would change the outcome rather than the schedule.
 
-use super::{Condition, DataMap, Operation, SeedIr, Value};
+use super::{reference_parts, Condition, DataMap, Operation, SeedIr, Value};
 use crate::generator::seed_model::{describe, RelationKind, SeedModel, SeedRelation, SeedSchema};
 use crate::parser::ast::SchemaAst;
 use indexmap::IndexMap;
@@ -45,6 +45,12 @@ pub struct PlannedWrite {
     pub kind: WriteKind,
     /// The author's label, when they gave one. What a later `$ref` points at.
     pub op_id: Option<String>,
+    /// The columns later steps reference, as Postgres keeps their names, in a stable order.
+    ///
+    /// What the statement reads back with `RETURNING`. Every column a reference names, not
+    /// only `id`: reading back only the id left `alex.slug` with nothing to resolve to, and
+    /// the column it filled was written as NULL. Empty when nothing refers to this row.
+    pub returns: Vec<String>,
     /// Where this row came from in the document, for an error to name.
     pub path: String,
     pub data: DataMap,
@@ -188,7 +194,28 @@ pub struct Plan {
 pub fn flatten(ir: &SeedIr, schema: &SeedSchema) -> Vec<PlannedStep> {
     let mut flattener = Flattener::new(schema);
     flattener.operations(&ir.operations, &[], "operations");
-    flattener.steps
+    let mut steps = flattener.steps;
+    attach_returns(&mut steps);
+    steps
+}
+
+/// Give each labelled write the columns later steps read from it.
+///
+/// Done once every step exists, because a reference can come from anywhere after the write:
+/// a typed write, a nested row, a `connect`, or a raw statement's params.
+fn attach_returns(steps: &mut [PlannedStep]) {
+    let mut wanted: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for (label, column) in steps.iter().flat_map(references) {
+        wanted.entry(label).or_default().insert(column);
+    }
+    for step in steps.iter_mut() {
+        if let PlannedStep::Write(write) = step {
+            let columns = write.op_id.as_ref().and_then(|label| wanted.get(label));
+            write.returns = columns
+                .map(|c| c.iter().cloned().collect())
+                .unwrap_or_default();
+        }
+    }
 }
 
 /// One row on its way into the plan, before its nesting has been taken apart.
@@ -369,6 +396,7 @@ impl<'a> Flattener<'a> {
             model: pending.model,
             kind: pending.kind,
             op_id: op_id.clone(),
+            returns: Vec::new(),
             path: path.to_string(),
             data: split.own,
             conflict: pending.conflict,
@@ -557,24 +585,37 @@ fn lower_connect(
 
 /// Every `$ref` label a step points at: a write's data, or a raw statement's params.
 fn referenced_labels(step: &PlannedStep) -> HashSet<String> {
-    let mut labels = HashSet::new();
-    match step {
-        PlannedStep::Write(write) => collect_labels(write.data.values(), &mut labels),
-        PlannedStep::Sql { params, .. } => collect_labels(params, &mut labels),
-        PlannedStep::Condition { .. } => {}
-    }
-    labels
+    references(step)
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect()
 }
 
-fn collect_labels<'a>(values: impl IntoIterator<Item = &'a Value>, labels: &mut HashSet<String>) {
+/// Every `$ref` a step makes, as the label and the column it reads.
+///
+/// A condition makes none: its filter is the schema's rule tree, which has no reference.
+fn references(step: &PlannedStep) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    match step {
+        PlannedStep::Write(write) => collect_refs(write.data.values(), &mut found),
+        PlannedStep::Sql { params, .. } => collect_refs(params, &mut found),
+        PlannedStep::Condition { .. } => {}
+    }
+    found
+}
+
+fn collect_refs<'a>(
+    values: impl IntoIterator<Item = &'a Value>,
+    found: &mut Vec<(String, String)>,
+) {
     for value in values {
         match value {
             Value::Ref { reference } => {
-                if let Some((op_id, _)) = reference.split_once('.') {
-                    labels.insert(op_id.to_string());
+                if let Some((label, column)) = reference_parts(reference) {
+                    found.push((label.to_string(), column));
                 }
             }
-            Value::Connect { connect } => collect_labels(connect.values(), labels),
+            Value::Connect { connect } => collect_refs(connect.values(), found),
             _ => {}
         }
     }
