@@ -991,12 +991,12 @@ impl WriteTrigger<'_> {
              \x20 sent jsonb;\n\
              \x20 dflt jsonb;\n\
              \x20 exempt boolean := {exempt};\n\
-             \x20 creates boolean := {creates};\n\
+             \x20 creates boolean := COALESCE({creates}, false);\n\
              BEGIN\n\
              {delete}{insert}{update}END ",
             base = self.base(),
             exempt = service_role_exempt(),
-            creates = format!("COALESCE({}, false)", studio_writer_sql()),
+            creates = studio_writer_sql(),
             delete = self.delete_branch(),
             insert = self.insert_branch(),
             update = self.update_branch(),

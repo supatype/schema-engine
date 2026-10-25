@@ -1184,9 +1184,24 @@ async fn a_request_with_no_preview_claim_is_entitled_to_nothing() {
 
 // ─── Studio members and drafts ────────────────────────────────────────────────
 
-/// Whether the caller with `subject` is shown every draft, as the draft policies ask it.
+/// Become `subject`, through Studio when `studio` names its claim's level (`read` or `write`), or
+/// through their own app sign-in when it is `None`.
+async fn become_member(db: &mut PgConnection, subject: &str, studio: Option<&str>) {
+    let mut claims = serde_json::json!({ "sub": subject, "role": "authenticated" });
+    if let Some(level) = studio {
+        claims["supatype_studio"] = serde_json::json!(level);
+    }
+    sqlx::query("SELECT set_config('request.jwt.claims', $1, false)")
+        .bind(claims.to_string())
+        .execute(db)
+        .await
+        .expect("set claims");
+}
+
+/// Whether the caller with `subject`, coming through Studio, is shown every draft, as the draft
+/// policies ask it.
 async fn sees_all_drafts_as(db: &mut PgConnection, subject: &str) -> bool {
-    become_caller(db, Some(subject)).await;
+    become_member(db, subject, Some("read")).await;
     sqlx::query_scalar("SELECT _supatype.sees_all_drafts()")
         .fetch_one(db)
         .await
@@ -1244,6 +1259,92 @@ async fn a_studio_member_under_either_identity_sees_all_drafts() {
                 db,
                 &["UPDATE _supatype.publishing_settings SET override_visibility = NULL WHERE singleton"
                     .to_string()],
+            )
+            .await;
+        })
+    })
+    .await;
+}
+
+/// What the caller is shown of the seeded post's drafts: the versions they may read, and whether
+/// the model's draft clause admits the record.
+async fn drafts_seen(db: &mut PgConnection) -> (i64, bool) {
+    let versions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM public.posts_versions WHERE record_id = $1::uuid")
+            .bind(POST)
+            .fetch_one(&mut *db)
+            .await
+            .expect("count the caller's versions");
+    let admitted: bool = sqlx::query_scalar("SELECT _supatype.sees_draft_posts($1)")
+        .bind(POST)
+        .fetch_one(&mut *db)
+        .await
+        .expect("evaluate the draft clause");
+    (versions, admitted)
+}
+
+/// Other people's drafts are shown in Studio, not in the app. A member whose role may see drafts
+/// is shown them only when the request carries Studio's claim; the same person signed in to the
+/// app with their own token is bound by the app's rules and sees only their own drafts.
+#[tokio::test]
+async fn only_a_studio_request_shows_a_member_other_peoples_drafts() {
+    const MEMBER: &str = "77777777-7777-7777-7777-777777777777";
+    const STRANGER: &str = "88888888-8888-8888-8888-888888888888";
+    with_seeded(|db| {
+        Box::pin(async move {
+            run_each(
+                db,
+                &[
+                    format!("DELETE FROM _supatype.studio_members WHERE user_id = '{MEMBER}'"),
+                    format!(
+                        "INSERT INTO _supatype.studio_members (user_id, role)
+                              VALUES ('{MEMBER}', 'editor')"
+                    ),
+                    "SET ROLE authenticated".to_string(),
+                ],
+            )
+            .await;
+
+            become_member(db, MEMBER, None).await;
+            assert_eq!(
+                drafts_seen(db).await,
+                (0, false),
+                "a member's own app token is shown no one else's draft"
+            );
+
+            for level in ["read", "write"] {
+                become_member(db, MEMBER, Some(level)).await;
+                let (versions, admitted) = drafts_seen(db).await;
+                assert!(
+                    versions > 0 && admitted,
+                    "a member coming through Studio ({level}) is shown the draft"
+                );
+            }
+
+            // Only the draft clause is asked here. The versions table also carries Studio's own
+            // read policy, which admits any request bearing the claim because the gateway signs it
+            // only for a member, so a count of versions would measure that policy instead.
+            become_member(db, STRANGER, Some("write")).await;
+            let (_, admitted) = drafts_seen(db).await;
+            assert!(
+                !admitted,
+                "Studio's claim alone, without a membership, does not admit someone else's draft"
+            );
+
+            become_member(db, EDITOR, None).await;
+            let (versions, admitted) = drafts_seen(db).await;
+            assert!(
+                versions > 0 && admitted,
+                "the creator is shown their own draft"
+            );
+
+            // Under testcontainers the next test shares this database.
+            run_each(
+                db,
+                &[
+                    "RESET ROLE".to_string(),
+                    format!("DELETE FROM _supatype.studio_members WHERE user_id = '{MEMBER}'"),
+                ],
             )
             .await;
         })
