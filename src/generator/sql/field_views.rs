@@ -996,7 +996,7 @@ impl WriteTrigger<'_> {
              {delete}{insert}{update}END ",
             base = self.base(),
             exempt = service_role_exempt(),
-            creates = studio_writer_sql(),
+            creates = format!("COALESCE({}, false)", studio_writer_sql()),
             delete = self.delete_branch(),
             insert = self.insert_branch(),
             update = self.update_branch(),
