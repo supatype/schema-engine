@@ -267,6 +267,48 @@ async fn labels_under_our_provider_with_no_row_are_ours_only_where_a_push_set_th
     .await;
 }
 
+/// Whether a `_supatype.studio_creates` helper exists: the fixture has one model, so it is that
+/// model's.
+async fn studio_creates_exists(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                         WHERE n.nspname = '_supatype' AND p.proname = 'studio_creates')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The helper a field's write predicate calls is the model's while it has a field rule: a push
+/// that takes the last rule off drops it, and so does one that takes the model away.
+#[tokio::test]
+async fn the_studio_creates_helper_goes_with_the_field_rules_and_the_model() {
+    common::with_integration_pool(|pool| async move {
+        let read = employees(SalaryRule::Read);
+        push(&pool, &read).await.unwrap();
+        assert!(studio_creates_exists(&pool).await, "a field rule's helper");
+
+        push(&pool, &employees(SalaryRule::None)).await.unwrap();
+        assert!(
+            !studio_creates_exists(&pool).await,
+            "the helper outlived the model's field rules"
+        );
+
+        push(&pool, &read).await.unwrap();
+        let empty = parser::parse(r#"{ "astVersion": 2, "models": [] }"#).unwrap();
+        let force = push::ApplyOptions {
+            force: true,
+            ..Default::default()
+        };
+        common::push_with(&pool, &empty, force).await.unwrap();
+        assert!(
+            !studio_creates_exists(&pool).await,
+            "the helper outlived its model"
+        );
+    })
+    .await;
+}
+
 /// A label under our provider on a table rather than a column, which the ledger records, is
 /// dropped when nothing declares it. Its key has no `table.column` parent, and rendering the drop
 /// panicked ("is on the reconcile with no drop statement") instead of taking the label off. With
