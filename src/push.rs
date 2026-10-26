@@ -21,11 +21,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
-use crate::desired::{desired_objects, statements, ObjectKey};
+use crate::desired::{desired_objects_for, statements, ObjectKey};
 use crate::differ::{self, DiffOutput, Operation};
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
-use crate::generator::sql::{rls, storage, versions};
+use crate::generator::sql::{constraint_helpers, field_views, rls, storage, versions};
 use crate::generator::typescript::admin;
 use crate::introspector::fingerprint::{fingerprints, ObjectFingerprint, ObjectKind};
 use crate::introspector::{self, catalog, catalog::CatalogState};
@@ -36,7 +36,8 @@ use crate::state::{migration_history, studio_state};
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
-/// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4.
+/// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
+/// views since 4.6.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -44,6 +45,7 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Trigger,
     ObjectKind::Index,
     ObjectKind::CronJob,
+    ObjectKind::View,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
@@ -213,7 +215,7 @@ fn reconcile_with(
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<reconcile::Plan> {
-    let mut desired = desired_objects(ast, schema)?;
+    let mut desired = desired_objects_for(ast, schema, &diff.field_view_plan)?;
     if !cron_available {
         desired.retain(|d| d.key.kind != ObjectKind::CronJob);
     }
@@ -258,6 +260,12 @@ fn created_by_parent(
     }
     rendered.push(versions::render_versions_layer(ast, schema)?);
     rendered.push(rls::generate_can_functions(ast, schema));
+    rendered.push(field_views::render_field_views(
+        ast,
+        &diff.field_view_plan,
+        schema,
+    ));
+    rendered.push(constraint_helpers::generate());
 
     let mut keys = BTreeSet::new();
     for sql in rendered {

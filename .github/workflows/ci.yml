@@ -194,4 +194,5 @@ jobs:
             --test foreign_key_ledger_tests \
             --test trigger_ledger_tests \
             --test index_ledger_tests \
-            --test versions_ledger_tests
+            --test versions_ledger_tests \
+            --test view_ledger_tests

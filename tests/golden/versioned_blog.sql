@@ -1270,6 +1270,10 @@ REVOKE ALL PRIVILEGES ON "public"."ledger_versions" FROM authenticated;
 GRANT SELECT ON "public"."ledger_versions" TO authenticated;
 GRANT ALL ON "public"."ledger_versions" TO service_role;
 
+DROP POLICY IF EXISTS "ledger_versions_insert" ON "public"."ledger_versions";
+DROP POLICY IF EXISTS "ledger_versions_update" ON "public"."ledger_versions";
+REVOKE INSERT, UPDATE ON "public"."ledger_versions" FROM authenticated;
+
 CREATE OR REPLACE FUNCTION _supatype."ledger_versions_audit"() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
   DECLARE

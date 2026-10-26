@@ -32,7 +32,9 @@ use crate::differ::{
 };
 use crate::generator::sql::triggers::{self, PLATFORM_SCHEMA};
 use crate::generator::sql::{
+    constraint_helpers,
     constraints::constraint_to_expr,
+    field_views::{render_field_views, FieldViewTable},
     migration::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, render_operation,
     },
@@ -204,13 +206,28 @@ pub struct DesiredObject {
     pub security_relevant: bool,
 }
 
-/// Every object a push of `ast` creates in `schema`, sorted by key.
+/// Every object a push of `ast` creates in `schema` that the schema alone decides, sorted by key.
+/// A push knows one thing more, the `api` field views the database's masking tier asks for:
+/// [`desired_objects_for`].
 pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObject>> {
+    desired_objects_for(ast, schema, &[])
+}
+
+/// Every object a push of `ast` creates in `schema`, with the `api` field views and write triggers
+/// for `field_views` (the plan a push computed for a database without the masking extension; empty
+/// otherwise), sorted by key.
+pub fn desired_objects_for(
+    ast: &SchemaAst,
+    schema: &str,
+    field_views: &[FieldViewTable],
+) -> Result<Vec<DesiredObject>> {
     let mut b = Builder {
         ast,
         schema,
+        field_views,
         out: Vec::new(),
     };
+    b.constraint_helpers();
     b.platform_functions();
     for model in &ast.models {
         b.model_table(model)?;
@@ -228,6 +245,7 @@ pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObjec
     }
     b.versions_layer()?;
     b.affordance_functions();
+    b.api_views();
     for junction in &ast.junction_tables {
         b.junction(junction)?;
     }
@@ -239,6 +257,7 @@ pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObjec
 struct Builder<'a> {
     ast: &'a SchemaAst,
     schema: &'a str,
+    field_views: &'a [FieldViewTable],
     out: Vec<DesiredObject>,
 }
 
@@ -662,29 +681,44 @@ impl<'a> Builder<'a> {
         Ok(())
     }
 
-    /// The drafts, history and publishing layer (Phase 4.4): its functions, triggers, policies,
-    /// views, tables and cron jobs, read off the rendered layer statement by statement
-    /// (`attributed`), since the layer is one script and every object in it is the engine's.
-    fn versions_layer(&mut self) -> Result<()> {
-        let sql = crate::generator::sql::versions::render_versions_layer(self.ast, self.schema)?;
-        for object in attributed::objects(&sql, self.schema) {
+    /// Every object a rendered script creates, read off it statement by statement (`attributed`),
+    /// for the scripts the push re-asserts whole: each object in them is the engine's.
+    fn attributed_script(&mut self, sql: &str) {
+        for object in attributed::objects(sql, self.schema) {
             if !self.out.iter().any(|o| o.key == object.key) {
                 self.out.push(object);
             }
         }
+    }
+
+    /// The drafts, history and publishing layer (Phase 4.4): its functions, triggers, policies,
+    /// views, tables and cron jobs.
+    fn versions_layer(&mut self) -> Result<()> {
+        let sql = crate::generator::sql::versions::render_versions_layer(self.ast, self.schema)?;
+        self.attributed_script(&sql);
         Ok(())
     }
 
     /// The `can_*` affordance functions (Phase 4.4), one per model and verb, each taking its
-    /// table's row type: read off the rendered script like the versions layer. Owned so a model's
-    /// removal drops them before its table, which they depend on.
+    /// table's row type. Owned so a model's removal drops them before its table, which they depend
+    /// on.
     fn affordance_functions(&mut self) {
         let sql = crate::generator::sql::rls::generate_can_functions(self.ast, self.schema);
-        for object in attributed::objects(&sql, self.schema) {
-            if !self.out.iter().any(|o| o.key == object.key) {
-                self.out.push(object);
-            }
-        }
+        self.attributed_script(&sql);
+    }
+
+    /// The `api` field views and their write triggers (Phase 4.6), for the tables the push's plan
+    /// names: the tier a database without the masking extension gets. Owned so the last field
+    /// rule's removal drops them.
+    fn api_views(&mut self) {
+        let sql = render_field_views(self.ast, self.field_views, self.schema);
+        self.attributed_script(&sql);
+    }
+
+    /// The `_supatype` constraint helper functions (Phase 4.6), which the migration asserts before
+    /// any table because a `CHECK` that calls one is validated at `CREATE TABLE`.
+    fn constraint_helpers(&mut self) {
+        self.attributed_script(&constraint_helpers::generate());
     }
 
     /// The `_platform` functions every push has (Phase 4.2).

@@ -163,8 +163,11 @@ fn the_desired_set_and_the_statements_name_the_same_objects() {
             .map(|o| o.key)
             .filter(|k| kinds_in_set().contains(&k.kind) && k.schema == "public")
             .collect();
+        // Creating statements only: the layer also drops what a model no longer asks for (the
+        // write policies of a history-only table), and those name nothing the set wants.
         let in_statements: BTreeSet<ObjectKey> = attributed(&ast)
             .iter()
+            .filter(|s| creates(s))
             .flat_map(keys_of)
             .filter(|k| kinds_in_set().contains(&k.kind) && k.schema == "public")
             .cloned()

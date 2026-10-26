@@ -43,12 +43,11 @@ pub struct Inputs<'a> {
 }
 
 /// The kinds Postgres replaces with `CREATE OR REPLACE`, so a new definition needs no drop first.
-/// Dropping first would fail anyway: a trigger depends on its function.
+/// Dropping first would fail anyway: a trigger depends on its function. Not views: `CREATE OR
+/// REPLACE VIEW` refuses anything but appending columns, so a changed view is dropped and made
+/// again.
 fn replaced_in_place(kind: ObjectKind) -> bool {
-    matches!(
-        kind,
-        ObjectKind::Function | ObjectKind::Trigger | ObjectKind::View
-    )
+    matches!(kind, ObjectKind::Function | ObjectKind::Trigger)
 }
 
 /// The order kinds are created in, dependencies first; drops run in reverse. A trigger needs its
@@ -122,27 +121,33 @@ pub enum Action {
         create_sql: String,
         live_def: String,
     },
-    /// Owned, desired, absent: someone dropped it. Recreated and reported.
+    /// Owned, desired, absent: someone dropped it. Recreated and reported. `inline` as for
+    /// `Create`: the parent statement (a re-asserted script) makes it, so no SQL of its own runs.
     Recreate {
         key: ObjectKey,
         create_sql: String,
+        inline: bool,
         status: Status,
     },
-    /// Owned, desired, present, and this push's `CREATE` differs from the one recorded.
+    /// Owned, desired, present, and this push's `CREATE` differs from the one recorded. `inline`
+    /// when the parent statement replaces it itself.
     Replace {
         key: ObjectKey,
         create_sql: String,
         previous_sql: String,
+        inline: bool,
         status: Status,
     },
     /// Owned, desired, present, and the catalog no longer matches what was recorded after the last
     /// apply: changed outside Supatype. Shown as a diff, then re-asserted (O1, subject to 3.5).
+    /// `inline` when the parent statement re-asserts it itself.
     Drift {
         key: ObjectKey,
         recorded_def: String,
         live_def: String,
         create_sql: String,
         security_relevant: bool,
+        inline: bool,
         status: Status,
     },
     /// Owned, desired, present, unchanged. The row is refreshed after apply, nothing is executed.
@@ -209,6 +214,7 @@ impl Action {
     /// own operations, so a drop they depend on has happened (plan 3.3: nothing cascades).
     pub fn removal_sql(&self) -> Option<String> {
         match self {
+            Action::Replace { inline: true, .. } | Action::Drift { inline: true, .. } => None,
             Action::Replace { key, .. } | Action::Drift { key, .. }
                 if replaced_in_place(key.kind) =>
             {
@@ -236,9 +242,21 @@ impl Action {
                 inline: false,
                 ..
             }
-            | Action::Recreate { create_sql, .. }
-            | Action::Replace { create_sql, .. }
-            | Action::Drift { create_sql, .. } => vec![create_sql.clone()],
+            | Action::Recreate {
+                create_sql,
+                inline: false,
+                ..
+            }
+            | Action::Replace {
+                create_sql,
+                inline: false,
+                ..
+            }
+            | Action::Drift {
+                create_sql,
+                inline: false,
+                ..
+            } => vec![create_sql.clone()],
             Action::Adopt {
                 key,
                 reason: AdoptReason::Stamped,
@@ -249,6 +267,9 @@ impl Action {
                 .into_iter()
                 .collect(),
             Action::Create { inline: true, .. }
+            | Action::Recreate { inline: true, .. }
+            | Action::Replace { inline: true, .. }
+            | Action::Drift { inline: true, .. }
             | Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Drop { .. }
@@ -468,10 +489,12 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
             continue;
         }
         let status = row.status;
+        let inline = inputs.created_by_parent.contains(&key);
         match (desired.get(&key), live.get(&key)) {
             (Some(d), None) => changes.push(Action::Recreate {
                 key,
                 create_sql: d.create_sql.clone(),
+                inline,
                 status,
             }),
             (Some(d), Some(l)) => {
@@ -480,6 +503,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         key,
                         create_sql: d.create_sql.clone(),
                         previous_sql: row.desired_sql.clone(),
+                        inline,
                         status,
                     });
                 } else if l.fingerprint != row.live_fp {
@@ -489,6 +513,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         live_def: l.definition.clone(),
                         create_sql: d.create_sql.clone(),
                         security_relevant: d.security_relevant,
+                        inline,
                         status,
                     });
                 } else {
@@ -546,6 +571,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         status,
                     }),
                     (None, Some(previous_sql)) => changes.push(Action::Replace {
+                        inline: inputs.created_by_parent.contains(&key),
                         key,
                         create_sql: d.create_sql.clone(),
                         previous_sql: previous_sql.clone(),

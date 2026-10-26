@@ -590,6 +590,20 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
             // History without withholding writes. The table is written directly and each write
             // leaves a snapshot, so there is no pending version to read, no draft view, and nothing
             // for a caller to compose by hand: the snapshot table stays read-only to the API.
+            //
+            // A model that drafted before has the write policies still, and they call the
+            // `can_edit` function the reconcile is about to drop (Phase 4.6); they go first. The
+            // write privilege goes with them. Policies are not on the ledger yet, so this is the
+            // layer's own tidying, as the draft view sweep is.
+            out.push_str(&format!(
+                "DROP POLICY IF EXISTS {insert_q} ON {schema_q}.{versions_q};\n\
+                 DROP POLICY IF EXISTS {update_q} ON {schema_q}.{versions_q};\n\
+                 REVOKE INSERT, UPDATE ON {schema_q}.{versions_q} FROM authenticated;\n\n",
+                insert_q = quoted(&format!("{versions_table}_insert")),
+                update_q = quoted(&format!("{versions_table}_update")),
+                schema_q = quoted(schema),
+                versions_q = quoted(&versions_table),
+            ));
             out.push_str(&audit_trigger_sql(
                 schema,
                 table,
