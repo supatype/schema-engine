@@ -51,6 +51,10 @@ pub struct Request<'a> {
 }
 
 /// Reads, decides, and with `request.apply` writes the rows, in one transaction.
+///
+/// Bootstraps first and checks the project schema after, as a push does: adopt is the first
+/// command a project on an existing database runs, so the engine's tables may not exist yet, and
+/// checking before they did failed with `relation "_supatype.schema_state" does not exist`.
 pub async fn run(
     pool: &PgPool,
     ast: &SchemaAst,
@@ -60,6 +64,7 @@ pub async fn run(
     migration_history::bootstrap_internal_state(pool)
         .await
         .context("Failed to bootstrap _supatype internal state")?;
+    migration_history::assert_project_schema(pool, schema).await?;
     let mut tx = pool.begin().await?;
     let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
     let (outcome, changes) = choose(ast, &state, &decision, request)?;
