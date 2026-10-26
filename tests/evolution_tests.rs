@@ -5500,8 +5500,10 @@ fn unique_drops(ast: &supatype_engine::parser::ast::SchemaAst, db: &DatabaseStat
     use supatype_engine::introspector::fingerprint::ObjectKind;
     use supatype_engine::ledger::reconcile::Action;
     let catalog = supatype_engine::introspector::catalog::CatalogState::default();
-    supatype_engine::push::reconcile_for_report(ast, db, &catalog, &[])
+    let state = supatype_engine::push::State::of(db.clone(), catalog, Vec::new());
+    supatype_engine::push::reconcile_for_report(ast, &state)
         .unwrap()
+        .0
         .actions
         .iter()
         .filter_map(|a| match a {

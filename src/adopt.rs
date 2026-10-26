@@ -9,19 +9,18 @@
 //! `--release` marks a row `released`, adding one for an object that has none, and every push
 //! leaves it alone whatever the schema says (section 3.3). It is how a hand edit is kept (3.5).
 
+use std::collections::BTreeMap;
+
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 use sqlx::PgPool;
 
 use crate::differ::doctor::{self, DoctorItem, DoctorReport};
-use crate::introspector::{
-    self,
-    catalog::{self, CatalogState},
-    fingerprint::{fingerprints, ObjectFingerprint, ObjectKey, ObjectKind},
-};
+use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKey, ObjectKind};
 use crate::ledger::{self, desired_fingerprint, reconcile, LedgerRow, Status};
 use crate::parser::ast::SchemaAst;
-use crate::state::{database_state::DatabaseState, migration_history};
+use crate::push::{self, State};
+use crate::state::migration_history;
 
 /// What `adopt` would do, or did.
 #[derive(Debug, Serialize)]
@@ -50,10 +49,8 @@ pub async fn run(
         .await
         .context("Failed to bootstrap _supatype internal state")?;
     let mut tx = pool.begin().await?;
-    let db = introspector::introspect_connection(&mut tx, schema).await?;
-    let catalog = catalog::read(&mut tx, schema).await?;
-    let rows = ledger::load(&mut tx).await?;
-    let (outcome, changes) = decide(ast, &db, &catalog, &rows, release, apply)?;
+    let state = push::read_state(&mut tx, schema).await?;
+    let (outcome, changes) = decide(ast, &state, release, apply)?;
     if apply {
         ledger::upsert(&mut tx, &changes).await?;
         tx.commit().await?;
@@ -65,17 +62,16 @@ pub async fn run(
 /// both a conflict and named in `release` is released, and one named twice is released once.
 fn decide(
     ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-    rows: &[LedgerRow],
+    state: &State,
     release: &[String],
     apply: bool,
 ) -> Result<(Outcome, Vec<LedgerRow>)> {
-    let (plan, report) = doctor::plan_and_report(ast, db, catalog, rows)?;
-    let live = fingerprints(db, catalog);
+    let (plan, report) = doctor::inspect(ast, state)?;
+    let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
+        state.fingerprints.iter().map(|f| (f.key(), f)).collect();
     let mut released: Vec<LedgerRow> = Vec::new();
     for spec in release {
-        let row = released_row(spec, rows, &live, &plan)?;
+        let row = released_row(spec, &state.ledger, &live, &plan)?;
         if !released.iter().any(|r| r.key == row.key) {
             released.push(row);
         }
@@ -107,22 +103,21 @@ fn status(apply: bool, changes: usize) -> &'static str {
 
 fn items(rows: &[LedgerRow], consequence: &str) -> Vec<DoctorItem> {
     rows.iter()
-        .map(|r| {
-            let message = format!("{} {consequence}", doctor::label(&r.key));
-            DoctorItem::for_key(&r.key, message)
-        })
+        .map(|r| DoctorItem::about(&r.key, consequence))
         .collect()
 }
 
 /// A row for each conflict: the object under a name the schema needs, recorded as it is.
-fn adopted_rows(plan: &reconcile::Plan, live: &[ObjectFingerprint]) -> Vec<LedgerRow> {
+fn adopted_rows(
+    plan: &reconcile::Plan,
+    live: &BTreeMap<ObjectKey, &ObjectFingerprint>,
+) -> Vec<LedgerRow> {
     plan.actions
         .iter()
         .filter_map(|action| match action {
-            reconcile::Action::Conflict { key, .. } => live
-                .iter()
-                .find(|l| &l.key() == key)
-                .map(|l| as_found(l, Status::Adopted)),
+            reconcile::Action::Conflict { key, .. } => {
+                live.get(key).map(|l| as_found(l, Status::Adopted))
+            }
             _ => None,
         })
         .collect()
@@ -148,15 +143,15 @@ fn as_found(live: &ObjectFingerprint, status: Status) -> LedgerRow {
 fn released_row(
     spec: &str,
     rows: &[LedgerRow],
-    live: &[ObjectFingerprint],
+    live: &BTreeMap<ObjectKey, &ObjectFingerprint>,
     plan: &reconcile::Plan,
 ) -> Result<LedgerRow> {
     let wanted = parse_object(spec)?;
     let known = rows
         .iter()
-        .map(|r| r.key.clone())
-        .chain(live.iter().map(ObjectFingerprint::key))
-        .chain(plan.actions.iter().map(|a| a.key().clone()));
+        .map(|r| &r.key)
+        .chain(live.keys())
+        .chain(plan.actions.iter().map(reconcile::Action::key));
     let key = resolve(spec, &wanted, known)?;
     if let Some(row) = rows.iter().find(|r| r.key == key) {
         return Ok(LedgerRow {
@@ -164,7 +159,7 @@ fn released_row(
             ..row.clone()
         });
     }
-    if let Some(l) = live.iter().find(|l| l.key() == key) {
+    if let Some(l) = live.get(&key) {
         return Ok(as_found(l, Status::Released));
     }
     Ok(LedgerRow {
@@ -179,18 +174,18 @@ fn released_row(
 }
 
 /// The one known object with `wanted`'s kind, parent and name, in whatever schema it lives.
-fn resolve(
+fn resolve<'k>(
     spec: &str,
     wanted: &ObjectKey,
-    known: impl Iterator<Item = ObjectKey>,
+    known: impl Iterator<Item = &'k ObjectKey>,
 ) -> Result<ObjectKey> {
-    let mut matches: Vec<ObjectKey> = known
+    let mut matches: Vec<&ObjectKey> = known
         .filter(|k| k.kind == wanted.kind && k.parent == wanted.parent && k.name == wanted.name)
         .collect();
     matches.sort_by(|a, b| a.schema.cmp(&b.schema));
     matches.dedup();
     match matches.as_slice() {
-        [one] => Ok(one.clone()),
+        [one] => Ok((*one).clone()),
         [] => bail!("nothing to release is named {spec:?}: run `supatype doctor` for the names"),
         many => bail!(
             "{spec:?} names {} objects, one per schema ({}); release is not yet able to tell them apart",
@@ -198,20 +193,6 @@ fn resolve(
             many.iter().map(|k| k.schema.as_str()).collect::<Vec<_>>().join(", ")
         ),
     }
-}
-
-/// The kinds named by themselves rather than by their table.
-fn table_level(kind: ObjectKind) -> bool {
-    matches!(
-        kind,
-        ObjectKind::Schema
-            | ObjectKind::Table
-            | ObjectKind::Function
-            | ObjectKind::View
-            | ObjectKind::EnumType
-            | ObjectKind::Sequence
-            | ObjectKind::CronJob
-    )
 }
 
 /// `kind:name` or `kind:table.name`, as doctor prints an object. The schema is found, not given.
@@ -223,7 +204,7 @@ pub fn parse_object(spec: &str) -> Result<ObjectKey> {
         let kinds: Vec<&str> = ObjectKind::ALL.iter().map(|k| k.as_str()).collect();
         bail!("{kind_text:?} is not a kind; one of: {}", kinds.join(", "));
     };
-    let (parent, name) = if table_level(kind) {
+    let (parent, name) = if kind.table_level() {
         ("", path)
     } else {
         match path.rsplit_once('.') {

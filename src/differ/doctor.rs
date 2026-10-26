@@ -10,13 +10,14 @@
 
 use anyhow::Result;
 
-use crate::desired::{desired_objects, ObjectKey};
+use crate::desired::ObjectKey;
 use crate::introspector::catalog::CatalogState;
 use crate::introspector::constraints::DbConstraintType;
-use crate::introspector::fingerprint::{fingerprints, ObjectKind};
+use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKind};
 use crate::ledger::reconcile::{Action, Plan};
 use crate::ledger::LedgerRow;
 use crate::parser::ast::SchemaAst;
+use crate::push::State;
 use crate::state::database_state::DatabaseState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
@@ -40,6 +41,9 @@ pub struct DoctorReport {
     /// Taken back with `adopt --release`: left alone whatever the schema says.
     #[serde(default)]
     pub released: Vec<DoctorItem>,
+    /// Drifted objects whose live definition `doctor --rebaseline` just recorded as the baseline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rebaselined: Vec<DoctorItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +84,11 @@ impl DoctorItem {
         };
         DoctorItem::new(key.kind.as_str(), table, &key.name, message)
     }
+
+    /// An item whose message is the object's label and then `rest`: "Index posts.x {rest}".
+    pub(crate) fn about(key: &ObjectKey, rest: &str) -> DoctorItem {
+        DoctorItem::for_key(key, format!("{} {rest}", label(key)))
+    }
 }
 
 /// The kind, then `table.name` or the name alone for a table-level object. Every message opens
@@ -98,47 +107,37 @@ pub(crate) fn label(key: &ObjectKey) -> String {
     }
 }
 
-/// Every table a push of `ast` owns in the project schema (models, junction tables and versions
-/// tables), read off the desired set. The project schema only: doctor reads `DatabaseState`, which
-/// stops there, and the engine's own tables are the ledger's to account for.
-fn declared_tables(ast: &SchemaAst, schema: &str) -> Result<HashSet<String>> {
-    Ok(desired_objects(ast, schema)?
-        .into_iter()
-        .filter(|o| o.key.kind == ObjectKind::Table && o.key.schema == schema)
-        .map(|o| o.key.name)
-        .collect())
-}
-
-/// `ledger` is what the push ledger owns (`_supatype.managed_objects`). Empty for a database no
-/// push has bootstrapped.
+/// The report for states read separately, for a caller with no connection to read them through
+/// `push::read_state` (a test). `ledger` is what the push ledger owns (`_supatype.managed_objects`),
+/// empty for a database no push has bootstrapped.
 pub fn report(
     ast: &SchemaAst,
     db: &DatabaseState,
     catalog: &CatalogState,
     ledger: &[LedgerRow],
 ) -> Result<DoctorReport> {
-    Ok(plan_and_report(ast, db, catalog, ledger)?.1)
+    let state = State::of(db.clone(), catalog.clone(), ledger.to_vec());
+    Ok(inspect(ast, &state)?.1)
 }
 
-/// The reconcile a push would run, and the report made from it, for a caller that acts on the
-/// plan's actions (`supatype adopt`).
-pub fn plan_and_report(
-    ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-    ledger: &[LedgerRow],
-) -> Result<(Plan, DoctorReport)> {
-    // The push reads table ownership from the ledger before it diffs (Phase 4.11), so doctor does.
-    let mut db = db.clone();
-    db.set_table_ownership(ledger);
-    let plan = crate::push::reconcile_for_report(ast, &db, catalog, ledger)?;
+/// The reconcile a push would run against `state`, and the report made from it, for a caller that
+/// acts on the plan's actions too (`supatype adopt`, `--rebaseline`).
+pub fn inspect(ast: &SchemaAst, state: &State) -> Result<(Plan, DoctorReport)> {
+    let (plan, desired) = crate::push::reconcile_for_report(ast, state)?;
     let mut out = DoctorReport::default();
     for action in &plan.actions {
         classify(action, &mut out);
     }
     out.unmanaged_drift
-        .extend(unmanaged_objects(ast, &db, catalog, ledger, &plan));
-    undeclared_tables(&db, &declared_tables(ast, &db.schema)?, &mut out);
+        .extend(unmanaged_objects(ast, state, &plan));
+    // Every table a push owns in the project schema (models, junction and versions tables). The
+    // engine's own tables are the ledger's to account for.
+    let declared: HashSet<String> = desired
+        .into_iter()
+        .filter(|o| o.key.kind == ObjectKind::Table && o.key.schema == state.db.schema)
+        .map(|o| o.key.name)
+        .collect();
+    undeclared_tables(&state.db, &declared, &mut out);
     Ok((plan, out))
 }
 
@@ -146,19 +145,13 @@ pub fn plan_and_report(
 /// kept, forgotten, adopted or replaced object.
 fn classify(action: &Action, out: &mut DoctorReport) {
     match action {
-        Action::Create { key, .. } => out.missing.push(DoctorItem::for_key(
+        Action::Create { key, .. } => out.missing.push(DoctorItem::about(
             key,
-            format!(
-                "{} is declared and does not exist: `supatype push` creates it",
-                label(key)
-            ),
+            "is declared and does not exist: `supatype push` creates it",
         )),
-        Action::Recreate { key, .. } => out.missing.push(DoctorItem::for_key(
+        Action::Recreate { key, .. } => out.missing.push(DoctorItem::about(
             key,
-            format!(
-                "{} is Supatype's and was removed outside Supatype: `supatype push` recreates it",
-                label(key)
-            ),
+            "is Supatype's and was removed outside Supatype: `supatype push` recreates it",
         )),
         Action::Drift {
             key,
@@ -167,47 +160,35 @@ fn classify(action: &Action, out: &mut DoctorReport) {
             security_relevant,
             ..
         } => {
-            let consent = if *security_relevant {
-                ", after asking, since it decides who may read or write"
-            } else {
-                ""
-            };
-            let mut item = DoctorItem::for_key(
+            let mut item = DoctorItem::about(
                 key,
-                format!(
-                    "{} was changed outside Supatype: `supatype push` puts it back{consent}",
-                    label(key)
-                ),
+                if *security_relevant {
+                    "was changed outside Supatype: `supatype push` puts it back, after asking, \
+                     since it decides who may read or write"
+                } else {
+                    "was changed outside Supatype: `supatype push` puts it back"
+                },
             );
             item.recorded = Some(recorded_def.clone());
             item.live = Some(live_def.clone());
             out.drifted.push(item);
         }
-        Action::Drop { key, .. } => out.stale_managed.push(DoctorItem::for_key(
+        Action::Drop { key, .. } => out.stale_managed.push(DoctorItem::about(
             key,
-            format!(
-                "{} is Supatype's and no longer declared: `supatype push` drops it",
-                label(key)
-            ),
+            "is Supatype's and no longer declared: `supatype push` drops it",
         )),
         Action::Conflict { key, live_def, .. } => {
-            let mut item = DoctorItem::for_key(
+            let mut item = DoctorItem::about(
                 key,
-                format!(
-                    "{} exists under a name the schema needs and was not created by Supatype: \
-                     `supatype push` refuses until it is adopted with `supatype adopt` or renamed",
-                    label(key)
-                ),
+                "exists under a name the schema needs and was not created by Supatype: \
+                 `supatype push` refuses until it is adopted with `supatype adopt` or renamed",
             );
             item.live = Some(live_def.clone());
             out.conflicting.push(item);
         }
-        Action::Released { key } => out.released.push(DoctorItem::for_key(
+        Action::Released { key } => out.released.push(DoctorItem::about(
             key,
-            format!(
-                "{} was released with `supatype adopt --release`: Supatype leaves it alone",
-                label(key)
-            ),
+            "was released with `supatype adopt --release`: Supatype leaves it alone",
         )),
         Action::Adopt { .. }
         | Action::Keep { .. }
@@ -230,64 +211,82 @@ const USER_KINDS: [ObjectKind; 7] = [
 /// Objects on a model table that Supatype did not create and does not record: someone else's,
 /// so a push leaves them in place. Not reported: the index behind a primary key or unique
 /// constraint, which is the constraint's, and a `NOT NULL` check, which no one declared.
-fn unmanaged_objects(
-    ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-    ledger: &[LedgerRow],
-    plan: &Plan,
-) -> Vec<DoctorItem> {
-    let model_tables: HashSet<&str> = ast.models.iter().map(|m| m.table_name()).collect();
-    let known: BTreeSet<&ObjectKey> = ledger
+fn unmanaged_objects(ast: &SchemaAst, state: &State, plan: &Plan) -> Vec<DoctorItem> {
+    let filter = UserObjects {
+        schema: &state.db.schema,
+        model_tables: ast.models.iter().map(|m| m.table_name()).collect(),
+        known: state
+            .ledger
+            .iter()
+            .map(|r| &r.key)
+            .chain(plan.actions.iter().map(Action::key))
+            .collect(),
+        constraint_names: state
+            .db
+            .constraints
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.constraint_type,
+                    DbConstraintType::PrimaryKey | DbConstraintType::Unique
+                )
+            })
+            .map(|c| (c.table.as_str(), c.name.as_str()))
+            .collect(),
+    };
+    state
+        .fingerprints
         .iter()
-        .map(|r| &r.key)
-        .chain(plan.actions.iter().map(Action::key))
-        .collect();
-    let constraint_names: HashSet<(&str, &str)> = db
-        .constraints
-        .iter()
-        .filter(|c| {
-            matches!(
-                c.constraint_type,
-                DbConstraintType::PrimaryKey | DbConstraintType::Unique
-            )
-        })
-        .map(|c| (c.table.as_str(), c.name.as_str()))
-        .collect();
-
-    fingerprints(db, catalog)
-        .into_iter()
-        .filter(|f| USER_KINDS.contains(&f.kind) && f.schema == db.schema)
-        .filter(|f| model_tables.contains(f.parent.as_str()))
-        .filter(|f| !f.stamped() && !known.contains(&f.key()))
-        .filter(|f| match f.kind {
-            ObjectKind::Index => {
-                !f.definition.contains("primary=t")
-                    && !constraint_names.contains(&(f.parent.as_str(), f.name.as_str()))
-            }
-            ObjectKind::Check => !f.definition.contains("IS NOT NULL"),
-            _ => true,
-        })
-        .map(|f| {
-            let key = f.key();
-            let declare = if key.kind == ObjectKind::Column {
-                "Declare the column in the schema to manage it."
-            } else {
-                "Declare it in the schema to manage it, or drop it by hand."
-            };
-            let mut item = DoctorItem::for_key(
-                &key,
-                format!(
-                    "{} was not created by Supatype: `supatype push` leaves it in place. {declare}",
-                    label(&key)
-                ),
-            );
-            // Its definition, since its name rarely says what it does: a check's expression,
-            // say, which the operator compares with the one the schema declares.
-            item.live = Some(f.definition);
-            item
-        })
+        .filter(|f| filter.reportable(f))
+        .map(unmanaged_item)
         .collect()
+}
+
+/// What decides whether a live object on a model table is someone else's to report.
+struct UserObjects<'a> {
+    schema: &'a str,
+    model_tables: HashSet<&'a str>,
+    known: BTreeSet<&'a ObjectKey>,
+    /// Primary key and unique constraints, whose indexes are theirs, not separate objects.
+    constraint_names: HashSet<(&'a str, &'a str)>,
+}
+
+impl UserObjects<'_> {
+    fn reportable(&self, f: &ObjectFingerprint) -> bool {
+        USER_KINDS.contains(&f.kind)
+            && f.schema == self.schema
+            && self.model_tables.contains(f.parent.as_str())
+            && !f.stamped()
+            && !self.known.contains(&f.key())
+            && match f.kind {
+                ObjectKind::Index => {
+                    !f.definition.contains("primary=t")
+                        && !self
+                            .constraint_names
+                            .contains(&(f.parent.as_str(), f.name.as_str()))
+                }
+                ObjectKind::Check => !f.definition.contains("IS NOT NULL"),
+                _ => true,
+            }
+    }
+}
+
+fn unmanaged_item(f: &ObjectFingerprint) -> DoctorItem {
+    let key = f.key();
+    let mut item = DoctorItem::about(
+        &key,
+        if key.kind == ObjectKind::Column {
+            "was not created by Supatype: `supatype push` leaves it in place. Declare the column \
+             in the schema to manage it."
+        } else {
+            "was not created by Supatype: `supatype push` leaves it in place. Declare it in the \
+             schema to manage it, or drop it by hand."
+        },
+    );
+    // Its definition, since its name rarely says what it does: a check's expression, say, which
+    // the operator compares with the one the schema declares.
+    item.live = Some(f.definition.clone());
+    item
 }
 
 /// Tables the schema does not declare, which the reconcile records but leaves to the table differ

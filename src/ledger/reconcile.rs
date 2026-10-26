@@ -213,6 +213,8 @@ pub enum Action {
         key: ObjectKey,
         recorded_def: String,
         live_def: String,
+        /// The live fingerprint, which `doctor --rebaseline` records as the new baseline.
+        live_fp: String,
         create_sql: String,
         security_relevant: bool,
         inline: bool,
@@ -644,6 +646,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         key,
                         recorded_def: row.live_def.clone(),
                         live_def: l.definition.clone(),
+                        live_fp: l.fingerprint.clone(),
                         create_sql: d.create_sql.clone(),
                         security_relevant: d.security_relevant,
                         inline,

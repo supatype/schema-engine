@@ -20,6 +20,8 @@ pub mod desired;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod differ;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod inspect;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod introspector;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ledger;
