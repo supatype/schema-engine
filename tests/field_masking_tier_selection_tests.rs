@@ -1,8 +1,9 @@
 //! Which mechanism a push chooses to enforce field rules, and whether the choice is a real boundary.
 //!
 //! Before tier 2 existed, a schema declaring `access.fields` against a database without
-//! `supatype_mask` **refused to apply** — correct at the time (never silently unmask) and the reason
-//! field rules could not follow anyone to their own Postgres. Now the same push generates `api` views.
+//! `supatype_mask` **refused to apply**. That was correct at the time, since a push must never
+//! silently unmask, and it was the reason field rules could not follow anyone to their own
+//! Postgres. Now the same push generates `api` views.
 //!
 //! These tests run on the ordinary test image, which has no masking extension. That is the point:
 //! they exercise the tier the published image cannot, and they are the ones that would catch tier
@@ -12,12 +13,11 @@ mod common;
 
 use supatype_engine::{
     differ::{self, FieldMaskingTier},
-    generator::sql::{migration, storage},
-    introspector, parser,
+    parser,
 };
 
-/// One masked column with a row-dependent read rule, and one ordinary table with no field rules —
-/// which must still get a view, or it would vanish from an API that only exposes `api`.
+/// One masked column with a row-dependent read rule, and one ordinary table with no field rules.
+/// The second must still get a view, or it would vanish from an API that only exposes `api`.
 const SCHEMA: &str = r#"{
   "astVersion": 2,
   "models": [
@@ -85,21 +85,23 @@ async fn prepare(pool: &sqlx::PgPool) {
         .expect("auth helpers");
 }
 
-/// Apply the schema the way a push does, returning the diff that produced it.
+/// Apply the schema with the push a user runs, returning the diff that produced it.
 async fn push(pool: &sqlx::PgPool) -> differ::DiffOutput {
     let ast = parser::parse(SCHEMA).expect("schema parses");
-    let db = introspector::introspect(pool, "public")
+    let plan = supatype_engine::push::prepare(pool, &ast, "public")
         .await
-        .expect("introspect");
-    let diff = differ::diff(&ast, &db).expect("diff");
-    let storage_sql = storage::generate(&ast).expect("storage sql");
-    let sql =
-        migration::push_storage_and_model_batch_sql(&storage_sql, &diff, true, "public", &ast)
-            .expect("migration renders");
-    sqlx::raw_sql(&sql)
-        .execute(pool)
-        .await
-        .unwrap_or_else(|e| panic!("push does not apply: {e}\n\n{sql}"));
+        .expect("the push plans");
+    let diff = plan.diff.clone();
+    supatype_engine::push::apply(
+        pool,
+        plan,
+        supatype_engine::push::ApplyOptions {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_or_else(|e| panic!("push does not apply: {e}"));
     diff
 }
 
@@ -173,7 +175,7 @@ async fn tier_two_takes_the_api_roles_off_the_base_tables() {
             .expect("read base privilege");
             assert!(
                 !base,
-                "{role} can still read the unmasked table behind the view — the mask is only as \
+                "{role} can still read the unmasked table behind the view, so the mask is only as \
                  strong as PGRST_DB_SCHEMA"
             );
 
@@ -189,7 +191,7 @@ async fn tier_two_takes_the_api_roles_off_the_base_tables() {
             );
         }
 
-        // `service_role` keeps its base access by standing policy — it is the escape hatch. Asserted
+        // `service_role` keeps its base access by standing policy: it is the escape hatch. Asserted
         // so that the difference from tier 1, where the extension masks it like anyone else, is a
         // decision on record rather than an accident.
         let escape: bool = sqlx::query_scalar(

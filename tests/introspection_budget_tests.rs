@@ -11,8 +11,6 @@ mod common;
 use std::time::{Duration, Instant};
 
 use supatype_engine::{
-    differ,
-    generator::sql::{migration, triggers},
     introspector::{self, fingerprint::fingerprints},
     parser,
 };
@@ -38,12 +36,9 @@ async fn a_full_read_of_the_kitchen_sink_fits_the_budget() {
         .execute(&pool)
         .await
         .expect("auth.users fixture applies");
-        let empty = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &empty).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("kitchen sink applies");
-        let trigger_sql = triggers::generate(&ast, "public").unwrap();
-        sqlx::raw_sql(&trigger_sql).execute(&pool).await.expect("triggers apply");
+        common::push(&pool, &ast)
+            .await
+            .expect("kitchen sink applies");
 
         // Warm once so connection setup and plan caching are not what gets measured.
         let _ = introspector::introspect(&pool, "public").await.unwrap();

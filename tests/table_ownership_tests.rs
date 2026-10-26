@@ -12,9 +12,16 @@
 mod common;
 
 use sqlx::Row;
-use supatype_engine::{
-    differ, generator::sql::migration, introspector, parser, state::database_state::DatabaseState,
-};
+use supatype_engine::{differ, generator::sql::migration, introspector, parser, push};
+
+/// Forced, because these pushes make destructive changes on purpose: the point is what even a
+/// forced push leaves alone.
+fn forced() -> push::ApplyOptions {
+    push::ApplyOptions {
+        force: true,
+        ..Default::default()
+    }
+}
 
 /// One model, so a diff has something to converge towards.
 const ONE_MODEL: &str = r#"{
@@ -81,8 +88,9 @@ async fn an_unmanaged_table_survives_a_push_that_would_drop_it() {
         // Applying the migration must leave their data alone: the assertion the rest is for.
         // Forced, because dropping `ours` is a genuine destructive operation and the point is that
         // even a forced push does not reach `theirs`.
-        let sql = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies");
+        common::push_with(&pool, &ast, forced())
+            .await
+            .expect("migration applies");
 
         let row = sqlx::query("SELECT precious FROM public.theirs WHERE id = 1")
             .fetch_one(&pool)
@@ -167,12 +175,7 @@ async fn a_table_the_engine_creates_is_stamped() {
         // The gate is only safe if the engine marks what it makes. Otherwise every table becomes
         // permanently undroppable and the differ can never converge.
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
-            .await
-            .expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         let comment: Option<String> =
             sqlx::query_scalar("SELECT obj_description('public.widget'::regclass, 'pg_class')")
@@ -386,8 +389,16 @@ async fn access_rules_are_not_applied_to_an_unowned_table() {
             adopted.unmanaged_model_tables.is_empty(),
             "the table is still reported as unowned after adoption"
         );
-        let sql = migration::forward_sql(&adopted, true, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("migration applies after adoption");
+        common::push_with(&pool, &ast, forced())
+            .await
+            .expect("migration applies after adoption");
+        let policies: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'widget'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count policies");
+        assert!(policies > 0, "adoption did not make the access rules apply");
 
         let rls: bool = sqlx::query_scalar(
             "SELECT relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace              WHERE n.nspname = 'public' AND c.relname = 'widget'",

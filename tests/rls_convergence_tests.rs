@@ -11,7 +11,7 @@
 
 mod common;
 
-use supatype_engine::{differ, generator::sql::migration, introspector, parser};
+use supatype_engine::{differ, parser};
 
 // Five models with access rules covering owner, role and multi-role shapes, and
 // the same fixture the main integration suite applies cleanly.
@@ -642,15 +642,7 @@ async fn a_push_that_cannot_grant_auth_usage_is_refused() {
             return;
         }
         let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
-        let db = introspector::introspect(&pool, "public")
-            .await
-            .expect("introspect");
-        let diff = differ::diff(&ast, &db).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
-            .await
-            .expect("migration applies");
+        common::push(&pool, &ast).await.expect("migration applies");
 
         // Put the database into the state the push cannot fix: the privilege gone, and the
         // pushing role not the owner of the schema, so it cannot put it back.

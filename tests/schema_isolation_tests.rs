@@ -19,10 +19,8 @@ mod common;
 
 use sqlx::Row;
 use supatype_engine::{
-    differ,
     generator::sql::{grants, migration, rls, triggers},
     parser,
-    state::database_state::DatabaseState,
 };
 
 const MANAGED: &str = "app";
@@ -194,14 +192,14 @@ fn a_full_migration_script_never_mentions_public() {
     // The assembled script is what actually runs, and it stitches together six generators. Checking
     // the pieces individually would miss one that was wired up with the wrong argument.
     let ast = ast();
-    let diff = differ::diff(&ast, &DatabaseState::default()).expect("diff against empty db");
-    // The batch path, because it is the one a push runs: `forward_sql` emits only a comment where
-    // the trigger SQL goes, so a trigger qualified with `public` would slip past this check.
+    // What a push runs: the storage layer, then the migration with the reconcile's creations (the
+    // triggers, policies and grants among them), so an object qualified with `public` anywhere a
+    // push writes would fail this check.
     let storage_sql =
         supatype_engine::generator::sql::storage::generate(&ast).expect("storage sql renders");
-    let sql =
-        migration::push_storage_and_model_batch_sql(&storage_sql, &diff, false, MANAGED, &ast)
-            .expect("script renders");
+    let sql = supatype_engine::push::fresh_migration(&ast, MANAGED, false)
+        .expect("script renders")
+        .apply_body(&storage_sql);
 
     // `public` legitimately appears in `GRANT USAGE ... TO PUBLIC` (the role) and in the realtime
     // drop's legacy-name cleanup, so match the qualified-identifier form only.

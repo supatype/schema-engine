@@ -10,7 +10,6 @@ mod common;
 
 use supatype_engine::{
     differ,
-    generator::sql::migration,
     introspector::{self, constraints::DbConstraintType},
     parser,
 };
@@ -220,10 +219,7 @@ async fn delete_rules_are_spelled_as_information_schema_spells_them() {
 async fn a_fresh_push_is_still_up_to_date_with_primary_keys_in_the_state() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(include_str!("fixtures/five_model_blog.json")).unwrap();
-        let empty = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &empty).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        exec(&pool, &sql).await;
+        common::push(&pool, &ast).await.expect("the push applies");
 
         let after = introspector::introspect(&pool, "public").await.unwrap();
         let pks = after
