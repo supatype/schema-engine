@@ -36,12 +36,13 @@ use crate::state::{migration_history, studio_state};
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
-/// triggers and their `_platform` functions since 4.2.
+/// triggers and their `_platform` functions since 4.2, indexes since 4.3.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
     ObjectKind::Function,
     ObjectKind::Trigger,
+    ObjectKind::Index,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,

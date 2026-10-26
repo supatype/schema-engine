@@ -175,17 +175,11 @@ CREATE TABLE IF NOT EXISTS "public"."articles" (
 
 COMMENT ON CONSTRAINT "articles_slug_key" ON "public"."articles" IS 'supatype:managed;kind=unique_constraint;table=articles;fields=slug;v=1';
 
-DROP INDEX IF EXISTS "public"."articles_search_vector_idx";
 CREATE INDEX IF NOT EXISTS "articles_search_vector_idx" ON "public"."articles" USING gin ("search_vector");
-COMMENT ON INDEX "public"."articles_search_vector_idx" IS 'supatype:managed;kind=index;table=articles;fields=search_vector;v=1';
 
-DROP INDEX IF EXISTS "public"."articles_author_id_idx";
 CREATE INDEX IF NOT EXISTS "articles_author_id_idx" ON "public"."articles" USING btree ("author_id");
-COMMENT ON INDEX "public"."articles_author_id_idx" IS 'supatype:managed;kind=index;table=articles;fields=author_id;v=1';
 
-DROP INDEX IF EXISTS "public"."articles_deleted_at_idx";
 CREATE INDEX IF NOT EXISTS "articles_deleted_at_idx" ON "public"."articles" USING btree ("deleted_at");
-COMMENT ON INDEX "public"."articles_deleted_at_idx" IS 'supatype:managed;kind=index;table=articles;fields=deleted_at;v=1';
 
 COMMENT ON TABLE "public"."articles" IS 'supatype:managed;kind=table;table=articles;fields=;v=1';
 
@@ -217,16 +211,6 @@ CREATE TABLE IF NOT EXISTS "public"."article_tags" (
 );
 
 COMMENT ON TABLE "public"."article_tags" IS 'supatype:managed;kind=table;table=article_tags;fields=;v=1';
-
--- [safe] Add index on: articles(search_vector)
-DROP INDEX IF EXISTS "public"."articles_search_vector_idx";
-CREATE INDEX IF NOT EXISTS "articles_search_vector_idx" ON "public"."articles" USING gin ("search_vector");
-COMMENT ON INDEX "public"."articles_search_vector_idx" IS 'supatype:managed;kind=index;table=articles;fields=search_vector;v=1';
-
--- [safe] Add index on: articles(author_id)
-DROP INDEX IF EXISTS "public"."articles_author_id_idx";
-CREATE INDEX IF NOT EXISTS "articles_author_id_idx" ON "public"."articles" USING btree ("author_id");
-COMMENT ON INDEX "public"."articles_author_id_idx" IS 'supatype:managed;kind=index;table=articles;fields=author_id;v=1';
 
 -- [safe] Enable RLS: authors
 ALTER TABLE "public"."authors" ENABLE ROW LEVEL SECURITY;

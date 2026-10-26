@@ -110,7 +110,7 @@
         "unique": false,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=locations;fields=category;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX locations_category_idx ON public.locations USING btree (category)"
@@ -138,7 +138,7 @@
         "unique": false,
         "method": "gist",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=locations;fields=point;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX locations_point_idx ON public.locations USING gist (point)"
@@ -152,7 +152,7 @@
         "unique": false,
         "method": "gist",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=locations;fields=region;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX locations_region_idx ON public.locations USING gist (region)"

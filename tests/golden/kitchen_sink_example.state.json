@@ -1169,7 +1169,7 @@
         "unique": false,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=chat_message;fields=room;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX chat_message_room_idx ON public.chat_message USING btree (room)"
@@ -1183,7 +1183,7 @@
         "unique": false,
         "method": "gin",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=page;fields=body;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX page_body_gin_idx ON public.page USING gin (body)"
@@ -1398,7 +1398,7 @@
         "unique": false,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=talk;fields=day,starts_at;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX talk_day_starts_at_idx ON public.talk USING btree (day, starts_at)"
@@ -1440,7 +1440,7 @@
         "unique": false,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=index;table=talk;fields=starts_at;v=1",
+        "comment": null,
         "expressions": null,
         "predicate": null,
         "definition": "CREATE INDEX talk_starts_at_idx ON public.talk USING btree (starts_at)"
@@ -2761,7 +2761,7 @@
         "unique": true,
         "method": "btree",
         "isPrimary": false,
-        "comment": "supatype:managed;kind=unique_index;table=_global_site_settings;fields=;v=1",
+        "comment": null,
         "expressions": "true",
         "predicate": null,
         "definition": "CREATE UNIQUE INDEX _global_site_settings_singleton_idx ON public._global_site_settings USING btree ((true))"

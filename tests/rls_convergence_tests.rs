@@ -1,7 +1,7 @@
 //! RLS policies must converge: applying a schema, then diffing the same schema
 //! against the database it just produced, has to yield no policy work.
 //!
-//! Non-convergence is the failure mode this differ has been bitten by repeatedly —
+//! Non-convergence is the failure mode this differ has been bitten by repeatedly:
 //! Postgres rewrites an expression when it stores it (parentheses, casts, lowercase
 //! booleans, column qualification, subquery aliases), so any generated shape the
 //! normaliser does not account for makes every policy look changed on every push.
@@ -114,7 +114,7 @@ async fn or_composition_reaches_the_database() {
             "FromNow interval missing: {expr}"
         );
 
-        // `now()`, never `clock_timestamp()` — the latter is VOLATILE and would make
+        // `now()`, never `clock_timestamp()`: the latter is VOLATILE and would make
         // the affordance functions' STABLE declaration a lie.
         assert!(
             !expr.contains("clock_timestamp"),
@@ -151,7 +151,7 @@ async fn or_composition_reaches_the_database() {
 }
 
 // AND-composition, negation, comparisons and claim lookups, checked where it
-// counts — in the expression Postgres accepted and stored.
+// counts, in the expression Postgres accepted and stored.
 #[tokio::test]
 async fn composition_and_comparisons_reach_the_database() {
     common::with_integration_pool(|pool| async move {
@@ -270,15 +270,18 @@ async fn membership_compiles_to_a_correlated_semi_join() {
     .await;
 }
 
-// The DSL names the join column, so the classic RLS trap — a membership subquery
-// scanning an unindexed join table once per row tested — becomes generated
+// The DSL names the join column, so the classic RLS trap (a membership subquery
+// scanning an unindexed join table once per row tested) becomes generated
 // infrastructure rather than something the developer has to know about.
 #[tokio::test]
 async fn membership_sources_get_their_index() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(FIXTURE).expect("fixture parses");
-        let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+        // The migration a push applies: the membership index is the reconcile's since Phase 4.3,
+        // no longer a line the policy renderer emits.
+        let sql = supatype_engine::push::fresh_migration(&ast, "public", false)
+            .unwrap()
+            .up_script();
         sqlx::raw_sql(&sql)
             .execute(&pool)
             .await
@@ -298,8 +301,8 @@ async fn membership_sources_get_their_index() {
     .await;
 }
 
-// Regression: the auth helpers had two definitions — one installed by a
-// migration, one reinstalled at bootstrap — and they had already diverged. A
+// Regression: the auth helpers had two definitions, one installed by a
+// migration, one reinstalled at bootstrap, and they had already diverged. A
 // fresh push installed a `role()` that ignored `app_metadata.role`, and helpers
 // added on one side were missing on the other.
 #[tokio::test]
@@ -463,7 +466,7 @@ async fn can_functions_answer_per_row_from_the_same_rules() {
 
         // `posts.read` is the scheduled-publishing rule. The seeded row was created
         // just now, so it is inside the window and visible. Every rule answers
-        // definitively — there is no "unknown" state here, which is the entire point
+        // definitively; there is no "unknown" state here, which is the entire point
         // of these functions.
         assert_eq!(can_read, Some(true), "a row created now must be visible");
 
@@ -564,7 +567,7 @@ async fn field_rules_mask_a_column_end_to_end() {
         }
         let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
         // Introspected, not `DatabaseState::default()`: the field-masking tier is chosen from the
-        // database's extension list, and a default state claims there are none — which selects
+        // database's extension list, and a default state claims there are none, which selects
         // tier 2 and emits views instead of the labels this test is about.
         let db = introspector::introspect(&pool, "public").await.expect("introspect");
         let diff = differ::diff(&ast, &db).unwrap();
@@ -624,7 +627,7 @@ async fn removing_a_field_rule_clears_its_label() {
         }
         let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
         // Introspected, not `DatabaseState::default()`: the field-masking tier is chosen from the
-        // database's extension list, and a default state claims there are none — which selects
+        // database's extension list, and a default state claims there are none, which selects
         // tier 2 and emits views instead of the labels this test is about.
         let db = introspector::introspect(&pool, "public").await.expect("introspect");
         let diff = differ::diff(&ast, &db).unwrap();

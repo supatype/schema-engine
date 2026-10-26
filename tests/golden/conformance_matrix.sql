@@ -191,9 +191,7 @@ CREATE TABLE IF NOT EXISTS "public"."every" (
 
 COMMENT ON CONSTRAINT "every_slug_plain_key" ON "public"."every" IS 'supatype:managed;kind=unique_constraint;table=every;fields=slug_plain;v=1';
 
-DROP INDEX IF EXISTS "public"."every_blocks_plain_gin_idx";
 CREATE INDEX IF NOT EXISTS "every_blocks_plain_gin_idx" ON "public"."every" USING gin ("blocks_plain");
-COMMENT ON INDEX "public"."every_blocks_plain_gin_idx" IS 'supatype:managed;kind=index;table=every;fields=blocks_plain;v=1';
 
 COMMENT ON TABLE "public"."every" IS 'supatype:managed;kind=table;table=every;fields=;v=1';
 
@@ -236,9 +234,7 @@ CREATE TABLE IF NOT EXISTS "public"."every_localised" (
 
 COMMENT ON CONSTRAINT "every_localised_slug_loc_key" ON "public"."every_localised" IS 'supatype:managed;kind=unique_constraint;table=every_localised;fields=slug_loc;v=1';
 
-DROP INDEX IF EXISTS "public"."every_localised_blocks_loc_gin_idx";
 CREATE INDEX IF NOT EXISTS "every_localised_blocks_loc_gin_idx" ON "public"."every_localised" USING gin ("blocks_loc");
-COMMENT ON INDEX "public"."every_localised_blocks_loc_gin_idx" IS 'supatype:managed;kind=index;table=every_localised;fields=blocks_loc;v=1';
 
 COMMENT ON TABLE "public"."every_localised" IS 'supatype:managed;kind=table;table=every_localised;fields=;v=1';
 
@@ -286,9 +282,7 @@ CREATE TABLE IF NOT EXISTS "public"."every_required" (
 
 COMMENT ON CONSTRAINT "every_required_slug_req_key" ON "public"."every_required" IS 'supatype:managed;kind=unique_constraint;table=every_required;fields=slug_req;v=1';
 
-DROP INDEX IF EXISTS "public"."every_required_blocks_req_gin_idx";
 CREATE INDEX IF NOT EXISTS "every_required_blocks_req_gin_idx" ON "public"."every_required" USING gin ("blocks_req");
-COMMENT ON INDEX "public"."every_required_blocks_req_gin_idx" IS 'supatype:managed;kind=index;table=every_required;fields=blocks_req;v=1';
 
 COMMENT ON TABLE "public"."every_required" IS 'supatype:managed;kind=table;table=every_required;fields=;v=1';
 
@@ -336,9 +330,7 @@ CREATE TABLE IF NOT EXISTS "public"."every_defaulted" (
 
 COMMENT ON CONSTRAINT "every_defaulted_slug_def_key" ON "public"."every_defaulted" IS 'supatype:managed;kind=unique_constraint;table=every_defaulted;fields=slug_def;v=1';
 
-DROP INDEX IF EXISTS "public"."every_defaulted_blocks_def_gin_idx";
 CREATE INDEX IF NOT EXISTS "every_defaulted_blocks_def_gin_idx" ON "public"."every_defaulted" USING gin ("blocks_def");
-COMMENT ON INDEX "public"."every_defaulted_blocks_def_gin_idx" IS 'supatype:managed;kind=index;table=every_defaulted;fields=blocks_def;v=1';
 
 COMMENT ON TABLE "public"."every_defaulted" IS 'supatype:managed;kind=table;table=every_defaulted;fields=;v=1';
 
@@ -386,9 +378,7 @@ CREATE TABLE IF NOT EXISTS "public"."every_read_only" (
 
 COMMENT ON CONSTRAINT "every_read_only_slug_ro_key" ON "public"."every_read_only" IS 'supatype:managed;kind=unique_constraint;table=every_read_only;fields=slug_ro;v=1';
 
-DROP INDEX IF EXISTS "public"."every_read_only_blocks_ro_gin_idx";
 CREATE INDEX IF NOT EXISTS "every_read_only_blocks_ro_gin_idx" ON "public"."every_read_only" USING gin ("blocks_ro");
-COMMENT ON INDEX "public"."every_read_only_blocks_ro_gin_idx" IS 'supatype:managed;kind=index;table=every_read_only;fields=blocks_ro;v=1';
 
 COMMENT ON TABLE "public"."every_read_only" IS 'supatype:managed;kind=table;table=every_read_only;fields=;v=1';
 
@@ -411,9 +401,7 @@ CREATE TABLE IF NOT EXISTS "public"."composites" (
     "deleted_at" TIMESTAMPTZ
 );
 
-DROP INDEX IF EXISTS "public"."composites_deleted_at_idx";
 CREATE INDEX IF NOT EXISTS "composites_deleted_at_idx" ON "public"."composites" USING btree ("deleted_at");
-COMMENT ON INDEX "public"."composites_deleted_at_idx" IS 'supatype:managed;kind=index;table=composites;fields=deleted_at;v=1';
 
 COMMENT ON TABLE "public"."composites" IS 'supatype:managed;kind=table;table=composites;fields=;v=1';
 

@@ -6,45 +6,13 @@ use crate::generator::sql::column_conversion::{
 use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::tables::{DbColumn, DbTable};
 use crate::parser::accessors::{column_names_for, is_localized};
-use crate::parser::ast::{FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality};
+use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality};
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
 use serde_json::json;
 use strsim::jaro_winkler;
 
 const RENAME_THRESHOLD: f64 = 0.7;
-
-fn has_index_flag(field: &FieldAst) -> bool {
-    match field {
-        FieldAst::Text(f)
-        | FieldAst::Email(f)
-        | FieldAst::Uuid(f)
-        | FieldAst::Integer(f)
-        | FieldAst::Float(f)
-        | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f)
-        | FieldAst::BigInt(f)
-        | FieldAst::Bytes(f)
-        | FieldAst::SmallInt(f)
-        | FieldAst::Date(f)
-        | FieldAst::Timestamp(f)
-        | FieldAst::Serial(f)
-        | FieldAst::BigSerial(f)
-        | FieldAst::Money(f)
-        | FieldAst::Url(f)
-        | FieldAst::Ip(f)
-        | FieldAst::Cidr(f)
-        | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f)
-        | FieldAst::TsQuery(f)
-        | FieldAst::TsVector(f)
-        | FieldAst::Xml(f)
-        | FieldAst::RichText(f)
-        | FieldAst::Color(f) => f.index,
-        FieldAst::Custom(f) => f.index,
-        _ => false,
-    }
-}
 
 pub(crate) fn field_is_required(field: &FieldAst) -> Option<bool> {
     match field {
@@ -796,25 +764,13 @@ pub fn diff(
                         col,
                     ));
                 }
+                // An indexed field's index is the reconcile's (Phase 4.3), created after this.
                 ops.push(Operation::AddColumn {
                     table: model.table_name().to_string(),
                     column: col.to_string(),
                     field: Box::new((*field).clone()),
                     risk: Risk::Safe,
                 });
-
-                if has_index_flag(field) {
-                    ops.push(Operation::AddIndex {
-                        table: model.table_name().to_string(),
-                        index: Box::new(IndexAst {
-                            name: None,
-                            fields: vec![col.to_string()],
-                            unique: false,
-                            using: IndexMethod::Btree,
-                        }),
-                        risk: Risk::Safe,
-                    });
-                }
             }
         }
     }
