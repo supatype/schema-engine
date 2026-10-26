@@ -252,6 +252,9 @@ pub struct ApplyOptions {
     /// Put back a policy, grant, label or RLS attribute changed or removed outside Supatype (plan
     /// 3.5). Without it the push refuses with [`drift::SecurityDrift`].
     pub overwrite_drift: bool,
+    /// Who pushed, through what and from where: recorded on the migration row, applied or failed
+    /// (`state::audit`), with the renames the push applies.
+    pub audit: crate::state::audit::PushAudit,
 }
 
 #[derive(Debug)]
@@ -1338,7 +1341,7 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
     }
 
     let outcome = if !plan.has_changes() {
-        up_to_date(pool, plan).await?
+        up_to_date(pool, plan, &opts.audit).await?
     } else {
         apply_migration(pool, plan, opts).await?
     };
@@ -1357,7 +1360,11 @@ pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<
 /// the storage rules are exactly the kind of change that produces no DDL: widening
 /// `draft_visibility` alters no table, so a steady-state push is the only push that will ever
 /// carry it, and skipping it would mean a security setting that reads as applied and is not.
-async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
+async fn up_to_date(
+    pool: &PgPool,
+    plan: Plan<'_>,
+    audit: &crate::state::audit::PushAudit,
+) -> Result<Outcome> {
     // Rendered before anything is applied, so a schema whose versioned models have no stated
     // visibility fails the push rather than half-applying it.
     // Without what is in place as this push wants it: dropping and making again a policy or a
@@ -1378,6 +1385,7 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
         versions_sql,
         admin_cfg,
         schema_snap,
+        audit,
     };
 
     // These are writes too: under the engine's lock like any other, and only to the database the
@@ -1406,6 +1414,7 @@ struct Refresh<'p> {
     versions_sql: String,
     admin_cfg: serde_json::Value,
     schema_snap: serde_json::Value,
+    audit: &'p crate::state::audit::PushAudit,
 }
 
 impl crate::online::Attempt for Refresh<'_> {
@@ -1434,6 +1443,7 @@ impl crate::online::Attempt for Refresh<'_> {
                 tx,
                 &self.admin_cfg,
                 &self.schema_snap,
+                self.audit,
             )
             .await
             .context("Failed to refresh Studio metadata on up-to-date push")?;
@@ -1507,6 +1517,11 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions, online: bool) -> Result<Rendered>
             sql_down: Some(migration.down()),
             schema_sources: opts.schema_sources,
             schema_sources_manifest: opts.schema_sources_manifest,
+            renames: crate::state::audit::applied_renames(
+                &plan.ast.rename_journal,
+                &plan.diff.operations,
+            ),
+            audit: opts.audit,
         },
         migration,
     })
@@ -1589,15 +1604,14 @@ async fn save_studio_metadata(pool: &PgPool, applied: &Applied) {
 /// Records a push that applied nothing as a failed migration, with the statements it would have
 /// run and why it did not.
 async fn record_failure(pool: &PgPool, rendered: &Rendered, e: &anyhow::Error) {
-    if let Err(record_err) = migration_history::record_failed_migration(
-        pool,
-        &rendered.name,
-        &rendered.migration.hash,
-        &rendered.migration.recorded_up(),
-        &e.to_string(),
-    )
-    .await
-    {
+    let failed = migration_history::FailedMigration {
+        name: &rendered.name,
+        hash: &rendered.migration.hash,
+        sql_up: &rendered.migration.recorded_up(),
+        error: &e.to_string(),
+        audit: &rendered.sources.audit,
+    };
+    if let Err(record_err) = migration_history::record_failed_migration(pool, failed).await {
         eprintln!("Warning: could not record failed migration: {record_err}");
     }
 }

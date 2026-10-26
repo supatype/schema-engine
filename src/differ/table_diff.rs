@@ -52,40 +52,31 @@ pub fn diff(
 
     // Renames are declared, never guessed (D1): a model's `renamedFrom` names its old table, which
     // is renamed only when it exists, is Supatype's and is not declared again (`renames`).
-    let mut renamed_from: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // The table each renamed one comes from, keyed by its new name.
+    let mut renamed_from: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for model in &ast.models {
-        if let Some(from) = renames::check_table_rename(model, db, &schema_table_names)? {
+        let journal = &ast.rename_journal;
+        if let Some(from) = renames::check_table_rename(model, db, &schema_table_names, journal)? {
             ops.push(Operation::RenameTable {
-                from: from.to_string(),
+                from: from.clone(),
                 to: model.table_name().to_string(),
                 risk: Risk::Safe,
             });
-            renamed_from.insert(from.to_string());
+            renamed_from.insert(model.table_name().to_string(), from);
         }
     }
 
     for model in &ast.models {
         if !db_table_names.contains(model.table_name()) {
-            let source = model
-                .annotations
-                .db
-                .renamed_from
-                .as_deref()
-                .filter(|from| renamed_from.contains(*from))
-                .and_then(|from| db.tables.iter().find(|t| t.name == from));
+            let source = renamed_from
+                .get(model.table_name())
+                .and_then(|from| db.tables.iter().find(|t| &t.name == from));
             if let Some(db_table) = source {
                 // The target of a declared rename: its columns are diffed against the old table,
                 // and the last push's model is the one under the old name.
                 let prev_model = previous_model(previous, &db_table.name);
-                column_diff::diff(
-                    model,
-                    db_table,
-                    db,
-                    ops,
-                    warnings,
-                    ast.effective_default_locale(),
-                    prev_model,
-                )?;
+                column_diff::diff(model, db_table, db, ops, warnings, ast, prev_model)?;
             } else {
                 // Genuinely new table. Its foreign keys are the reconcile's (Phase 4.1).
                 ops.push(Operation::CreateTable {
@@ -102,15 +93,7 @@ pub fn diff(
                 .find(|t| t.name == model.table_name())
                 .unwrap();
             let prev_model = previous_model(previous, model.table_name());
-            column_diff::diff(
-                model,
-                db_table,
-                db,
-                ops,
-                warnings,
-                ast.effective_default_locale(),
-                prev_model,
-            )?;
+            column_diff::diff(model, db_table, db, ops, warnings, ast, prev_model)?;
         }
     }
 
@@ -118,7 +101,7 @@ pub fn diff(
     for db_table in &db.tables {
         if !schema_table_names.contains(db_table.name.as_str())
             && !is_extension_managed_table(db_table.name.as_str())
-            && !renamed_from.contains(db_table.name.as_str())
+            && !renamed_from.values().any(|from| *from == db_table.name)
         {
             // Never destroy a table Supatype did not create.
             //

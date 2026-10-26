@@ -50,6 +50,8 @@ jobs:
             --test evolution_tests \
             --test normaliser_tests \
             --test owner_validation_tests \
+            --test owner_relation_rules_tests \
+            --test schema_name_boundary_tests \
             --test column_type_match_tests \
             --test standup_regression_tests \
             --test field_access_tests \
@@ -218,6 +220,7 @@ jobs:
             --test rls_ledger_tests \
             --test column_ledger_tests \
             --test declared_rename_tests \
+            --test push_audit_tests \
             --test key_schema_sequence_ledger_tests \
             --test doctor_ledger_tests \
             --test identity_generated_db_tests \

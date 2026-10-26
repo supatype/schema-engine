@@ -39,6 +39,29 @@ pub fn raise_message(text: &str) -> String {
     quote_literal(&text.replace('%', "%%"))
 }
 
+/// Refuses a schema name that is not a plain identifier: `^[a-z_][a-z0-9_]*$`, at most 63 bytes
+/// (Q1, Q3).
+///
+/// The project and auth schemas reach places where they are written unquoted, the masking labels
+/// among them, and a `$` can end a dollar-quoted function body. Refusing such a name where it
+/// enters, the binary's arguments and the HTTP server's requests, is what keeps every one of those
+/// places correct, rather than quoting each and hoping none is missed. The error says why.
+pub fn plain_schema_name(name: &str) -> Result<(), String> {
+    use crate::managed::MAX_IDENTIFIER_BYTES;
+    let mut chars = name.chars();
+    let starts_plain = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c == '_');
+    let rest_plain = chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    if starts_plain && rest_plain && name.len() <= MAX_IDENTIFIER_BYTES {
+        return Ok(());
+    }
+    Err(format!(
+        "schema name \"{name}\" is not a plain identifier: it must match ^[a-z_][a-z0-9_]*$ and be \
+         at most {MAX_IDENTIFIER_BYTES} bytes"
+    ))
+}
+
 /// Text for a `--` comment line: a line break in a name would end the comment and leave the rest of
 /// the name to run as SQL, so each one becomes a space.
 pub fn comment_text(text: &str) -> String {

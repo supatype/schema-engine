@@ -120,6 +120,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         schema_sources,
         schema_sources_manifest: req.schema_sources_manifest.clone(),
         overwrite_drift: req.overwrite_drift,
+        audit: req.audit.clone(),
     };
     let outcome = push::apply(&pool, plan, options)
         .await
@@ -536,43 +537,22 @@ mod tests {
     use axum::http::StatusCode;
     use axum::Json;
 
-    use super::{DbRequest, ErrorResponse};
+    use super::DbRequest;
 
-    fn sanitize_schema_identifier(
-        schema: &str,
-    ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-        if schema.is_empty() {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Schema must not be empty".to_string(),
-                    ..Default::default()
-                }),
-            ));
-        }
-
-        let mut chars = schema.chars();
-        let first = chars.next().unwrap_or('_');
-        let valid_start = first.is_ascii_alphabetic() || first == '_';
-        let valid_rest = chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !valid_start || !valid_rest {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Invalid schema identifier".to_string(),
-                    ..Default::default()
-                }),
-            ));
-        }
-
-        Ok(format!("\"{}\"", schema))
-    }
-
+    /// A request's schema is checked as the binary's is (`sql_quote::plain_schema_name`): a plain
+    /// identifier passes, and anything else is refused before a handler runs.
     #[test]
-    fn accepts_valid_schema_identifier() {
-        let result = sanitize_schema_identifier("public_schema1");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap_or_default(), "\"public_schema1\"");
+    fn a_request_schema_must_be_a_plain_identifier() {
+        let parse = |schema: &str| {
+            serde_json::from_value::<DbRequest>(serde_json::json!({ "schema": schema }))
+        };
+        assert_eq!(
+            parse("public_schema1").expect("plain").schema,
+            "public_schema1"
+        );
+        for refused in ["Public", "a$b", "my-app", "", "public;DROP", "1public"] {
+            assert!(parse(refused).is_err(), "{refused} is refused");
+        }
     }
 
     /// Another writer holding the engine's lock is a 409 a caller can retry on, told apart by its
@@ -650,13 +630,5 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("accept_access_drift")));
-    }
-
-    #[test]
-    fn rejects_invalid_schema_identifier() {
-        assert!(sanitize_schema_identifier("").is_err());
-        assert!(sanitize_schema_identifier("public;DROP").is_err());
-        assert!(sanitize_schema_identifier("1public").is_err());
-        assert!(sanitize_schema_identifier("public-schema").is_err());
     }
 }
