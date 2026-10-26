@@ -1124,6 +1124,75 @@ async fn a_request_with_no_preview_claim_is_entitled_to_nothing() {
     .await;
 }
 
+// ─── Studio members and drafts ────────────────────────────────────────────────
+
+/// Whether the caller with `subject` is shown every draft, as the draft policies ask it.
+async fn sees_all_drafts_as(db: &mut PgConnection, subject: &str) -> bool {
+    become_caller(db, Some(subject)).await;
+    sqlx::query_scalar("SELECT _supatype.sees_all_drafts()")
+        .fetch_one(db)
+        .await
+        .expect("evaluate sees_all_drafts")
+}
+
+/// Run each statement on `db`, one at a time: none of them takes a parameter.
+async fn run_each(db: &mut PgConnection, statements: &[String]) {
+    for sql in statements {
+        sqlx::query(sql.as_str())
+            .execute(&mut *db)
+            .await
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+}
+
+/// A Studio member is admitted by either identity a membership row can hold: a project user by
+/// `user_id`, a Supatype Cloud account by `platform_user_id`. Matching `user_id` alone left a Cloud
+/// member with a role that may see drafts unable to see them.
+#[tokio::test]
+async fn a_studio_member_under_either_identity_sees_all_drafts() {
+    const PROJECT_MEMBER: &str = "44444444-4444-4444-4444-444444444444";
+    const PLATFORM_MEMBER: &str = "55555555-5555-5555-5555-555555555555";
+    const STRANGER: &str = "66666666-6666-6666-6666-666666666666";
+    with_seeded(|db| {
+        Box::pin(async move {
+            run_each(
+                db,
+                &[
+                    format!(
+                        "DELETE FROM _supatype.studio_members
+                          WHERE user_id = '{PROJECT_MEMBER}' OR platform_user_id = '{PLATFORM_MEMBER}'"
+                    ),
+                    format!(
+                        "INSERT INTO _supatype.studio_members (user_id, role)
+                              VALUES ('{PROJECT_MEMBER}', 'developer')"
+                    ),
+                    format!(
+                        "INSERT INTO _supatype.studio_members (platform_user_id, role)
+                              VALUES ('{PLATFORM_MEMBER}', 'developer')"
+                    ),
+                    "UPDATE _supatype.publishing_settings
+                        SET override_visibility = ARRAY['developer'] WHERE singleton"
+                        .to_string(),
+                ],
+            )
+            .await;
+
+            assert!(sees_all_drafts_as(db, PROJECT_MEMBER).await, "project member");
+            assert!(sees_all_drafts_as(db, PLATFORM_MEMBER).await, "Cloud member");
+            assert!(!sees_all_drafts_as(db, STRANGER).await, "non-member");
+
+            // Under testcontainers the next test shares this database.
+            run_each(
+                db,
+                &["UPDATE _supatype.publishing_settings SET override_visibility = NULL WHERE singleton"
+                    .to_string()],
+            )
+            .await;
+        })
+    })
+    .await;
+}
+
 // ─── auth.uid() ───────────────────────────────────────────────────────────────
 
 #[tokio::test]

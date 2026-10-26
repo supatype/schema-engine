@@ -3,8 +3,8 @@
 //! The Studio statistics functions run as their owner, so whatever they read they read past every
 //! grant and policy: `daily_content_creates` used to count the rows of any table it was named, for
 //! anon too. `dashboard_views` was writable by anon with no RLS. These tests take each caller in
-//! turn (anon, a signed-in user who is not a Studio member, a member, `service_role`) through the
-//! same switch PostgREST makes: the claims GUC and `SET LOCAL ROLE`.
+//! turn (anon, a signed-in user who is not a Studio member, a member under either identity,
+//! `service_role`) through the same switch PostgREST makes: the claims GUC and `SET LOCAL ROLE`.
 
 mod common;
 
@@ -14,6 +14,8 @@ const FIXTURE: &str = include_str!("fixtures/rls_access_rules.json");
 
 const MEMBER: &str = "a0000000-0000-0000-0000-00000000000a";
 const STRANGER: &str = "b0000000-0000-0000-0000-00000000000b";
+/// A Supatype Cloud account, admitted by a row keyed on `platform_user_id` rather than `user_id`.
+const PLATFORM_MEMBER: &str = "c0000000-0000-0000-0000-00000000000c";
 
 /// One API caller: the database role PostgREST switches to and the claims it would have verified.
 #[derive(Clone, Copy, Debug)]
@@ -21,6 +23,7 @@ enum Caller {
     Anon,
     NonMember,
     Member,
+    PlatformMember,
     ServiceRole,
 }
 
@@ -28,20 +31,26 @@ impl Caller {
     fn role(self) -> &'static str {
         match self {
             Caller::Anon => "anon",
-            Caller::NonMember | Caller::Member => "authenticated",
+            Caller::NonMember | Caller::Member | Caller::PlatformMember => "authenticated",
             Caller::ServiceRole => "service_role",
         }
     }
 
     fn claims(self) -> String {
+        let signed_in = |sub: &str| format!(r#"{{"role":"authenticated","sub":"{sub}"}}"#);
         match self {
             Caller::Anon => r#"{"role":"anon"}"#.to_string(),
-            Caller::NonMember => format!(r#"{{"role":"authenticated","sub":"{STRANGER}"}}"#),
-            Caller::Member => format!(r#"{{"role":"authenticated","sub":"{MEMBER}"}}"#),
+            Caller::NonMember => signed_in(STRANGER),
+            Caller::Member => signed_in(MEMBER),
+            Caller::PlatformMember => signed_in(PLATFORM_MEMBER),
             Caller::ServiceRole => r#"{"role":"service_role"}"#.to_string(),
         }
     }
 }
+
+/// Every caller the Studio gate must admit: both identities a membership row can hold, and the
+/// service role.
+const ADMITTED: [Caller; 3] = [Caller::Member, Caller::PlatformMember, Caller::ServiceRole];
 
 /// Run `sql` as `caller` and roll back. `Ok` with the number of rows, or the SQLSTATE it failed with.
 async fn run_as(pool: &sqlx::PgPool, caller: Caller, sql: &str) -> Result<usize, String> {
@@ -63,12 +72,15 @@ async fn run_as(pool: &sqlx::PgPool, caller: Caller, sql: &str) -> Result<usize,
     }
 }
 
-/// The fixture pushed, one Studio member, and a private table with rows nobody but its owner reads.
+/// The fixture pushed, a Studio member under each identity, and a private table with rows nobody
+/// but its owner reads.
 async fn set_up(pool: &sqlx::PgPool) {
     let ast = parser::parse(FIXTURE).expect("fixture parses");
     common::push(pool, &ast).await.expect("migration applies");
     sqlx::raw_sql(&format!(
         "INSERT INTO _supatype.studio_members (user_id, role) VALUES ('{MEMBER}', 'developer');
+         INSERT INTO _supatype.studio_members (platform_user_id, role)
+              VALUES ('{PLATFORM_MEMBER}', 'developer');
          CREATE TABLE public.private_log (id serial PRIMARY KEY, created_at timestamptz DEFAULT now());
          ALTER TABLE public.private_log ENABLE ROW LEVEL SECURITY;
          REVOKE ALL ON public.private_log FROM PUBLIC, anon, authenticated;
@@ -101,7 +113,7 @@ async fn studio_statistics_answer_only_service_role_and_members() {
                     "{caller:?} reached {sql}"
                 );
             }
-            for caller in [Caller::Member, Caller::ServiceRole] {
+            for caller in ADMITTED {
                 assert!(
                     run_as(&pool, caller, sql).await.is_ok(),
                     "{caller:?} was refused {sql}"
@@ -192,7 +204,7 @@ async fn dashboard_views_are_for_service_role_and_members_only() {
             Err(PERMISSION_DENIED.to_string()),
             "a non-member saved a dashboard view"
         );
-        for caller in [Caller::Member, Caller::ServiceRole] {
+        for caller in ADMITTED {
             assert_eq!(run_as(&pool, caller, read).await, Ok(1), "{caller:?}");
             assert_eq!(run_as(&pool, caller, write).await, Ok(1), "{caller:?}");
             assert_eq!(run_as(&pool, caller, wipe).await, Ok(1), "{caller:?}");
