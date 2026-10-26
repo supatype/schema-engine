@@ -19,7 +19,7 @@ use crate::differ::doctor::{self, DoctorItem, DoctorReport};
 use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKey, ObjectKind};
 use crate::ledger::{self, desired_fingerprint, reconcile, LedgerRow, Status};
 use crate::parser::ast::SchemaAst;
-use crate::push::{self, State};
+use crate::push::{self, Decision, State};
 use crate::state::migration_history;
 
 /// What `adopt` would do, or did.
@@ -61,8 +61,8 @@ pub async fn run(
         .await
         .context("Failed to bootstrap _supatype internal state")?;
     let mut tx = pool.begin().await?;
-    let state = push::read_state(&mut tx, schema).await?;
-    let (outcome, changes) = decide(ast, &state, request)?;
+    let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
+    let (outcome, changes) = choose(ast, &state, &decision, request)?;
     if request.apply {
         ledger::upsert(&mut tx, &changes).await?;
         tx.commit().await?;
@@ -73,16 +73,18 @@ pub async fn run(
 /// The rows adopting would write, and the outcome that says so. Releasing wins over adopting a
 /// conflict; an object named both to release and to reclaim is refused; one named twice is written
 /// once.
-fn decide(
+fn choose(
     ast: &SchemaAst,
     state: &State,
+    decision: &Decision,
     request: Request<'_>,
 ) -> Result<(Outcome, Vec<LedgerRow>)> {
-    let (plan, report) = doctor::inspect(ast, state)?;
+    let plan = &decision.reconcile;
+    let report = doctor::report_of(ast, state, decision);
     let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
         state.fingerprints.iter().map(|f| (f.key(), f)).collect();
     let released = rows_named(request.release, |spec| {
-        released_row(spec, &state.ledger, &live, &plan)
+        released_row(spec, &state.ledger, &live, plan)
     })?;
     let reclaimed = rows_named(request.reclaim, |spec| reclaimed_row(spec, &state.ledger))?;
     if let Some(both) = released
@@ -94,7 +96,7 @@ fn decide(
             both.key
         );
     }
-    let mut adopted = adopted_rows(&plan, &live);
+    let mut adopted = adopted_rows(plan, &live);
     adopted.retain(|a| !released.iter().any(|r| r.key == a.key));
     let outcome = Outcome {
         status: status(

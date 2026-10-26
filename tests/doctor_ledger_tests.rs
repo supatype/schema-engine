@@ -81,6 +81,7 @@ async fn after_one_push_of_the_kitchen_sink_doctor_reports_nothing() {
         let report = doctor_of(&pool, &ast).await;
         assert!(is_clean(&report), "{report:#?}");
         assert!(!doctor::has_strict_issues(&report));
+        assert!(!report.blocking, "the engine says a push would act");
     })
     .await;
 }
@@ -110,6 +111,7 @@ async fn an_owned_object_removed_by_hand_is_missing_and_access_changed_is_drifte
             drifted[0].message
         );
         assert!(doctor::has_strict_issues(&report));
+        assert!(report.blocking, "the engine does not say a push would act");
     })
     .await;
 }

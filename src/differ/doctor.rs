@@ -17,7 +17,7 @@ use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKind};
 use crate::ledger::reconcile::{Action, Plan};
 use crate::ledger::LedgerRow;
 use crate::parser::ast::SchemaAst;
-use crate::push::State;
+use crate::push::{Decision, State};
 use crate::state::database_state::DatabaseState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
@@ -44,6 +44,10 @@ pub struct DoctorReport {
     /// Drifted objects whose live definition `doctor --rebaseline` just recorded as the baseline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rebaselined: Vec<DoctorItem>,
+    /// Whether a push would change or refuse something: what `doctor --strict` fails on, so a
+    /// caller reads the engine's rule rather than keeping a copy of it.
+    #[serde(default)]
+    pub blocking: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,28 +121,30 @@ pub fn report(
     ledger: &[LedgerRow],
 ) -> Result<DoctorReport> {
     let state = State::of(db.clone(), catalog.clone(), ledger.to_vec());
-    Ok(inspect(ast, &state)?.1)
+    let decision = crate::push::decide(ast, &state, None)?;
+    Ok(report_of(ast, &state, &decision))
 }
 
-/// The reconcile a push would run against `state`, and the report made from it, for a caller that
-/// acts on the plan's actions too (`supatype adopt`, `--rebaseline`).
-pub fn inspect(ast: &SchemaAst, state: &State) -> Result<(Plan, DoctorReport)> {
-    let (plan, desired) = crate::push::reconcile_for_report(ast, state)?;
+/// What a push deciding `decision` against `state` would do, sorted for an operator.
+pub fn report_of(ast: &SchemaAst, state: &State, decision: &Decision) -> DoctorReport {
+    let plan = &decision.reconcile;
     let mut out = DoctorReport::default();
     for action in &plan.actions {
         classify(action, &mut out);
     }
     out.unmanaged_drift
-        .extend(unmanaged_objects(ast, state, &plan));
+        .extend(unmanaged_objects(ast, state, plan));
     // Every table a push owns in the project schema (models, junction and versions tables). The
     // engine's own tables are the ledger's to account for.
-    let declared: HashSet<String> = desired
-        .into_iter()
+    let declared: HashSet<&str> = decision
+        .desired
+        .iter()
         .filter(|o| o.key.kind == ObjectKind::Table && o.key.schema == state.db.schema)
-        .map(|o| o.key.name)
+        .map(|o| o.key.name.as_str())
         .collect();
     undeclared_tables(&state.db, &declared, &mut out);
-    Ok((plan, out))
+    out.blocking = has_strict_issues(&out);
+    out
 }
 
 /// One reconcile action as the report's category, or nothing for what needs no attention: a
@@ -293,9 +299,9 @@ fn unmanaged_item(f: &ObjectFingerprint) -> DoctorItem {
 /// (Phase 4.11). Ours means a push drops it; not ours means it never will, and saying so keeps an
 /// operator from concluding push is broken when it leaves a table behind. A declared table that is
 /// not ours is the reconcile's conflict.
-fn undeclared_tables(db: &DatabaseState, schema_tables: &HashSet<String>, out: &mut DoctorReport) {
+fn undeclared_tables(db: &DatabaseState, schema_tables: &HashSet<&str>, out: &mut DoctorReport) {
     for table in &db.tables {
-        if schema_tables.contains(&table.name) {
+        if schema_tables.contains(table.name.as_str()) {
             continue;
         }
         if db.owns_table(table) {

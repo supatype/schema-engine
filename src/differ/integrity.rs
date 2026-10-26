@@ -1,58 +1,44 @@
-use super::doctor::{report, DoctorReport};
-use crate::introspector::catalog::CatalogState;
+//! The check after a push: what doctor reports on the database just pushed, read with the ledger
+//! rows the push has just written, so it sees exactly what the next push would. Anything a push
+//! would still change or refuse there (missing, stale, drifted or conflicting) is something this
+//! push should have settled and did not.
+
+use super::doctor::{report_of, DoctorItem};
 use crate::parser::ast::SchemaAst;
-use crate::state::database_state::DatabaseState;
+use crate::push::{decide, State};
 
-/// The doctor's view of the database just pushed. A doctor that cannot even build its expectations
-/// is itself a finding, so the failure is reported as one rather than swallowed.
-fn post_push_report(
-    ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-) -> Result<DoctorReport, String> {
-    // No ledger: the checks it classifies only ever reach `unmanaged_drift`, which the post-push
-    // gate does not read.
-    report(ast, db, catalog, &[]).map_err(|e| format!("doctor could not run after the push: {e:#}"))
+/// What the check found: a warning for each object a push would still act on, and whether there
+/// was any (what `--strict` rolls the push back for). A doctor that cannot run is itself a finding.
+pub struct PostPush {
+    pub warnings: Vec<String>,
+    pub settled: bool,
 }
 
-/// Post-push check: AST desired state vs fresh introspection.
-/// Returns warning messages when managed-object drift remains.
-pub fn post_push_warnings(
-    ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-) -> Vec<String> {
-    let doctor = match post_push_report(ast, db, catalog) {
-        Ok(report) => report,
-        Err(message) => return vec![message],
+pub fn post_push(ast: &SchemaAst, state: &State) -> PostPush {
+    let report = match decide(ast, state, None) {
+        Ok(decision) => report_of(ast, state, &decision),
+        Err(e) => {
+            return PostPush {
+                warnings: vec![format!("doctor could not run after the push: {e:#}")],
+                settled: false,
+            }
+        }
     };
-    let mut warnings = Vec::new();
-
-    for item in &doctor.missing {
-        warnings.push(format!("Post-push drift (missing): {}", item.message));
-    }
-    for item in &doctor.stale_managed {
-        warnings.push(format!("Post-push drift (stale managed): {}", item.message));
-    }
-
-    warnings
-}
-
-pub fn post_push_ok(
-    ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-    strict: bool,
-) -> bool {
-    let Ok(doctor) = post_push_report(ast, db, catalog) else {
-        return false;
-    };
-    // Missing and stale only. The report runs with no ledger, before this push records its rows,
-    // so an unstamped check the push just created reads as conflicting and a hand edit cannot have
-    // happened yet: neither means the push failed.
-    if strict {
-        doctor.missing.is_empty() && doctor.stale_managed.is_empty()
-    } else {
-        doctor.missing.is_empty()
+    let sections: [(&str, &[DoctorItem]); 4] = [
+        ("missing", &report.missing),
+        ("stale managed", &report.stale_managed),
+        ("drifted", &report.drifted),
+        ("conflicting", &report.conflicting),
+    ];
+    PostPush {
+        warnings: sections
+            .iter()
+            .flat_map(|(what, items)| {
+                items
+                    .iter()
+                    .map(move |item| format!("Post-push drift ({what}): {}", item.message))
+            })
+            .collect(),
+        settled: !report.blocking,
     }
 }
