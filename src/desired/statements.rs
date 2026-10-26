@@ -23,6 +23,7 @@ use std::collections::HashMap;
 
 use crate::generator::sql::{auth_functions, extensions, field_views, versions};
 use crate::introspector::fingerprint::{ObjectKind, REPLICA_IDENTITY};
+use crate::sql_quote::is_do_block;
 
 use super::ObjectKey;
 
@@ -805,7 +806,7 @@ fn guarded_role(block: &str) -> Option<String> {
 
 /// The `DO` blocks a push contains, told apart by their dollar tag or their contents.
 fn attribute_do_block(schema: &str, h: &str) -> Attribution {
-    if h.starts_with("DO $cron$") {
+    if is_do_block(h, "cron") {
         return one_or_shared(
             h.match_indices("cron.schedule('")
                 .filter_map(|(i, m)| {
@@ -816,7 +817,7 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
                 .collect(),
         );
     }
-    if h.starts_with("DO $mask_label$") {
+    if is_do_block(h, "mask_label") {
         // The guarded removal of one label: the statement it executes names it.
         let Some(at) = h.find("SECURITY LABEL ") else {
             return Attribution::Unknown;
@@ -824,11 +825,16 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
         let executed = h[at..].replace("''", "'");
         return attribute(schema, &executed, &mut Context::default());
     }
-    let tagged = |tag: &str| h.starts_with(&format!("DO ${tag}$"));
+    let tagged = |tag: &str| is_do_block(h, tag);
     // The schema extensions are installed in and the API roles' usage of it: shared with whatever
     // else installed extensions there, so no object of Supatype's.
     if tagged(extensions::SCHEMA_TAG) || tagged(extensions::SCHEMA_USAGE_TAG) {
         return Attribution::Ignored("extensions schema");
+    }
+    // The GraphQL names on each key: a comment, which belongs to whoever writes on the key and is
+    // no part of what the ledger records for it.
+    if tagged(crate::generator::sql::graphql_names::TAG) {
+        return Attribution::Ignored("graphql relation names");
     }
     if tagged(versions::RLS_ON_TAG) {
         // Row-level security turned on where it is off: the statement it executes names the table.
@@ -865,7 +871,7 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
         let helper = auth_functions::CLAIMS_SCHEMA;
         return Attribution::Object(key(ObjectKind::Schema, helper, "", helper));
     }
-    if h.starts_with("DO $grants$") {
+    if is_do_block(h, crate::generator::sql::grants::GRANTS_TAG) {
         // One block per role and table: the privileges a role holds on a model table (a ledger
         // object since Phase 4.7c), or on a tier 2 view (re-asserted with the view).
         let Some(role) = guarded_role(h) else {
@@ -1047,6 +1053,22 @@ mod tests {
                     ["supatype-scheduled-publish", "supatype-prune-versions"]
                 );
             }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // A role holding the block's own tag moves the tag, and the block is still that role's grant.
+    #[test]
+    fn a_grants_block_retagged_around_its_role_is_still_that_grant() {
+        let role = "r$grants$x";
+        let sql = crate::generator::sql::grants::revoke_all_sql("public", "posts", role);
+        assert!(sql.starts_with("DO $grants_$"), "{sql}");
+        assert_eq!(split_statements(&sql).len(), 1);
+        match attribute("public", &sql, &mut Context::default()) {
+            Attribution::Object(key) => assert_eq!(
+                (key.kind, key.parent.as_str(), key.name.as_str()),
+                (ObjectKind::TableGrant, "posts", role)
+            ),
             other => panic!("{other:?}"),
         }
     }

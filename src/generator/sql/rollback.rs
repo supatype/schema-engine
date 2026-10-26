@@ -5,12 +5,15 @@
 //! rather than silently omitted.
 
 use super::migration::{
-    dollar_quoted, identity_change_sql, nullability_sql, rename_serial_sequence_sql, serial_columns,
+    default_sql, identity_action, identity_change_sql, nullability_sql, nullability_with_identity,
+    rename_serial_sequence_sql, serial_columns,
 };
 use crate::differ::{DiffOutput, Operation};
 use crate::managed::make_object_name;
 use crate::parser::ast::SchemaAst;
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
+use crate::sql_quote::{
+    comment_text, dollar_quote, quote_ident, quote_literal, quote_qualified, raise_message,
+};
 use anyhow::Result;
 use serde_json::json;
 
@@ -79,7 +82,7 @@ pub fn data_not_restorable(subject: &str, lost: &[String]) -> String {
 /// A statement that stops a script with `said` as its error.
 fn raise_refusal(said: &str) -> String {
     let body = format!("BEGIN RAISE EXCEPTION {}; END", raise_message(said));
-    format!("DO {};", dollar_quoted(&body, "refused"))
+    format!("DO {};", dollar_quote(&body, "refused"))
 }
 
 /// The sequence a serial column owns renamed back to Postgres's name for it under `table`, as the
@@ -300,47 +303,55 @@ fn rollback_alter_column(
     changes: &serde_json::Value,
     schema: &str,
 ) -> String {
-    let mut stmts: Vec<String> = Vec::new();
-
-    // Reverse type change: restore old type from from_udt
-    if let Some(type_change) = changes.get("type") {
-        stmts.extend(type_back(schema, table, column, changes, type_change));
-    }
-
-    // Reverse an identity change first: it was made after the nullability, and an identity column
-    // cannot drop NOT NULL.
-    if let Some(identity) = changes.get("identity") {
-        stmts.extend(identity_back(schema, table, column, identity));
-    }
+    // The type back first, from `from_udt`; last, the default the column had, or none.
+    let mut stmts: Vec<String> = changes
+        .get("type")
+        .map(|type_change| type_back(schema, table, column, changes, type_change))
+        .unwrap_or_default();
+    stmts.extend(nullability_and_identity_back(
+        schema, table, column, changes,
+    ));
     if changes.get("generated").is_some() {
         stmts.push(warning(&format!(
             "Cannot automatically make {} a generated column again.",
             column_label(table, column)
         )));
     }
-
-    // Reverse nullability change: was NOT NULL, so apply it again, or was nullable, so drop it.
-    if let Some(null_change) = changes.get("nullability") {
-        let original_state = null_change
-            .get("from")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        stmts.extend(nullability_sql(
-            schema,
-            table,
-            column,
-            (original_state == "not_null").then_some("restore"),
-        ));
+    if let Some(default) = changes.get("default") {
+        stmts.push(default_sql(schema, table, column, default.get("from")));
     }
-
     if stmts.is_empty() {
-        warning(&format!(
+        return warning(&format!(
             "Cannot automatically roll back ALTER COLUMN {}.",
             column_label(table, column)
-        ))
-    } else {
-        stmts.join("\n")
+        ));
     }
+    stmts.join("\n")
+}
+
+/// The nullability and identity changes undone, in the order Postgres takes them: an identity
+/// column put back once the column is `NOT NULL` again, one taken away before its `NOT NULL` is.
+fn nullability_and_identity_back(
+    schema: &str,
+    table: &str,
+    column: &str,
+    changes: &serde_json::Value,
+) -> Vec<String> {
+    // Was NOT NULL, so apply it again, or was nullable, so drop it.
+    let nullability = changes.get("nullability").map(|null_change| {
+        let original_state = null_change.get("from").and_then(|v| v.as_str());
+        let restore = (original_state == Some("not_null")).then_some("restore");
+        nullability_sql(schema, table, column, restore)
+    });
+    let identity = changes.get("identity");
+    nullability_with_identity(
+        // Undoing an identity added takes it away.
+        identity_action(identity) == Some("add"),
+        nullability.unwrap_or_default(),
+        identity
+            .map(|identity| identity_back(schema, table, column, identity))
+            .unwrap_or_default(),
+    )
 }
 
 /// The column's type changed back to the one it had, from `from_udt`.
@@ -379,6 +390,16 @@ fn type_back(
     stmts
 }
 
+/// The identity change that undoes `identity`: one added is dropped, one dropped added back, and
+/// one changed set back to how it was.
+fn undone_identity(identity: &serde_json::Value) -> serde_json::Value {
+    match identity.get("action").and_then(|v| v.as_str()) {
+        Some("add") => json!({ "action": "drop" }),
+        Some("drop") => json!({ "action": "add", "to": identity.get("from") }),
+        _ => json!({ "action": "set", "to": identity.get("from") }),
+    }
+}
+
 /// An identity change undone. A serial converted to an identity column is a serial again: its own
 /// sequence, numbering on past the rows there, as its default.
 fn identity_back(
@@ -387,12 +408,7 @@ fn identity_back(
     column: &str,
     identity: &serde_json::Value,
 ) -> Vec<String> {
-    let back = match identity.get("action").and_then(|v| v.as_str()) {
-        Some("add") => json!({ "action": "drop" }),
-        Some("drop") => json!({ "action": "add", "to": identity.get("from") }),
-        _ => json!({ "action": "set", "to": identity.get("from") }),
-    };
-    let mut stmts = identity_change_sql(schema, table, column, &back);
+    let mut stmts = identity_change_sql(schema, table, column, &undone_identity(identity));
     let Some(serial) = identity.get("serial") else {
         return stmts;
     };
@@ -499,6 +515,46 @@ mod tests {
                 "column public.my\"t.a.b",
             ]
         );
+    }
+
+    /// Where `needle` is in `sql`, which must have it.
+    fn at(sql: &str, needle: &str) -> usize {
+        sql.find(needle)
+            .unwrap_or_else(|| panic!("{needle} in {sql}"))
+    }
+
+    /// An identity column made optional loses its identity before its `NOT NULL`, which Postgres
+    /// will not drop from an identity column; undone, it is `NOT NULL` again before it is one.
+    #[test]
+    fn an_identity_goes_before_its_not_null_and_comes_back_after_it() {
+        let made_optional = json!({
+            "identity": { "action": "drop", "from": "always" },
+            "nullability": { "from": "not_null", "to": "nullable" },
+        });
+        let none = crate::generator::sql::recreate::Reconciled::NONE;
+        let site = crate::generator::sql::recreate::ColumnSite {
+            schema: "public",
+            table: "lines",
+            column: "seq",
+            dependencies: &[],
+            reconciled: &none,
+        };
+        let field = crate::parser::ast::FieldAst::Integer(Default::default());
+        let forward =
+            super::super::migration::alter_column_sql(&site, &field, &made_optional).unwrap();
+        assert!(at(&forward, "DROP IDENTITY") < at(&forward, "DROP NOT NULL"));
+        let back = rollback_alter_column("lines", "seq", &made_optional, "public");
+        assert!(at(&back, "SET NOT NULL") < at(&back, "ADD GENERATED ALWAYS"));
+
+        let made_identity = json!({
+            "identity": { "action": "add", "to": "always" },
+            "nullability": { "from": "nullable", "to": "not_null" },
+        });
+        let forward =
+            super::super::migration::alter_column_sql(&site, &field, &made_identity).unwrap();
+        assert!(at(&forward, "SET NOT NULL") < at(&forward, "ADD GENERATED ALWAYS"));
+        let back = rollback_alter_column("lines", "seq", &made_identity, "public");
+        assert!(at(&back, "DROP IDENTITY") < at(&back, "DROP NOT NULL"));
     }
 
     #[test]

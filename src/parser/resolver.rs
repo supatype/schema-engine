@@ -1,6 +1,8 @@
 use super::ast::{
-    FieldAst, JunctionTableAst, RelationCardinality, SchemaAst, StorageAccessMode, StorageBucketAst,
+    FieldAst, JunctionTableAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst,
+    StorageAccessMode, StorageBucketAst,
 };
+use crate::managed::clip_identifier;
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
@@ -82,33 +84,91 @@ fn check_plugin_versions(ast: &mut SchemaAst) {
     }
 }
 
+/// One junction per pair of models, whichever side declares the relation and in whatever order
+/// (B6). `Post.tags: ManyToMany<Tag>` and `Tag.posts: ManyToMany<Post>` are one relation read
+/// from both ends; each side naming its own table split it in two, so a tag added from a post was
+/// not visible from the tag. A `through` name is the schema's and is kept as declared.
 fn resolve_junction_tables(ast: &mut SchemaAst) {
+    let mut found = Vec::new();
     for model in &ast.models {
-        for field in model.fields.values() {
-            if let FieldAst::Relation(rel) = field {
-                if matches!(rel.cardinality, RelationCardinality::ManyToMany) {
-                    let junction_name = rel.through.clone().unwrap_or_else(|| {
-                        let mut names = [model.table_name().to_string(), rel.target.clone()];
-                        names.sort();
-                        names.join("_")
-                    });
+        for rel in many_to_many(model) {
+            let junction = match &rel.through {
+                Some(name) => declared_junction(name, &model.name, &rel.target),
+                None => derived_junction(ast, &model.name, &rel.target),
+            };
+            found.push(junction);
+        }
+    }
+    for junction in found {
+        if !ast.junction_tables.iter().any(|j| j.name == junction.name) {
+            ast.junction_tables.push(junction);
+        }
+    }
+}
 
-                    let already_exists =
-                        ast.junction_tables.iter().any(|j| j.name == junction_name);
+/// `model`'s `manyToMany` relations.
+fn many_to_many(model: &ModelAst) -> impl Iterator<Item = &RelationFieldAst> {
+    model.fields.values().filter_map(|field| match field {
+        FieldAst::Relation(rel) if matches!(rel.cardinality, RelationCardinality::ManyToMany) => {
+            Some(rel)
+        }
+        _ => None,
+    })
+}
 
-                    if !already_exists {
-                        ast.junction_tables.push(JunctionTableAst {
-                            name: junction_name,
-                            model_a: model.name.clone(),
-                            model_b: rel.target.clone(),
-                            fk_a: format!("{}_id", to_snake_case(&model.name)),
-                            fk_b: format!("{}_id", to_snake_case(&rel.target)),
-                        });
-                    }
-                }
+fn declared_junction(name: &str, model_a: &str, model_b: &str) -> JunctionTableAst {
+    JunctionTableAst {
+        name: name.to_string(),
+        model_a: model_a.to_string(),
+        model_b: model_b.to_string(),
+        fk_a: format!("{}_id", to_snake_case(model_a)),
+        fk_b: format!("{}_id", to_snake_case(model_b)),
+    }
+}
+
+/// The junction between two models named by their tables, sorted: `post_tag` from either side.
+fn derived_junction(ast: &SchemaAst, model: &str, target: &str) -> JunctionTableAst {
+    let mut ends = [
+        (effective_table(ast, model), model),
+        (effective_table(ast, target), target),
+    ];
+    ends.sort();
+    let name = format!("{}_{}", ends[0].0, ends[1].0);
+    declared_junction(&name, ends[0].1, ends[1].1)
+}
+
+/// The table a model is stored in: its declared name, else the one the normaliser will give it.
+fn effective_table(ast: &SchemaAst, model: &str) -> String {
+    ast.models
+        .iter()
+        .find(|m| m.name == model)
+        .map(|m| m.table_name())
+        .filter(|table| !table.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| to_snake_case(model))
+}
+
+/// The names engines before B6 gave each derived junction, keyed by the junction's name now.
+///
+/// They joined the declaring model's table and the target's *model* name, sorted, so
+/// `Post.tags: ManyToMany<Tag>` made `Tag_post` and `Tag.posts: ManyToMany<Post>` made `Post_tag`.
+/// The differ renames one such table to the new name, and refuses when both exist, rather than
+/// dropping the links a project already holds. Both names are as Postgres keeps them, which is how
+/// the junction is named now and how the old table was stored.
+pub fn legacy_junction_names(ast: &SchemaAst) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for model in &ast.models {
+        for rel in many_to_many(model).filter(|rel| rel.through.is_none()) {
+            let current = clip_identifier(&derived_junction(ast, &model.name, &rel.target).name);
+            let mut old = [effective_table(ast, &model.name), rel.target.clone()];
+            old.sort();
+            let legacy = clip_identifier(&old.join("_"));
+            if legacy != current && !out.contains(&(current.clone(), legacy.clone())) {
+                out.push((current, legacy));
             }
         }
     }
+    out
 }
 
 /// Merge declarative `storageBuckets` from the CLI input with buckets inferred from image/file fields.

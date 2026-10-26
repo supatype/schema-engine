@@ -27,7 +27,7 @@
 use super::baseline_versions::{BaselineModel, CREATING_RECORD_SETTING};
 use crate::parser::accessors::{db_table_name, versions_of, versions_table_name};
 use crate::parser::ast::{ModelAst, PublishingAst, SchemaAst};
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{do_block, dollar_tag_among, quote_ident, quote_literal, quote_qualified};
 use crate::state::migration_history::studio_member_held_by_sql;
 use anyhow::{bail, Result};
 use std::collections::BTreeSet;
@@ -48,6 +48,10 @@ pub const HELPER_SCHEMA: &str = "_supatype";
 /// The dollar tag of the block that turns on row-level security on a snapshot table where it is
 /// off. Statement attribution recognises the block by it.
 pub const RLS_ON_TAG: &str = "versions_rls";
+
+/// The setting `publish` and `unpublish` turn on around their writes to the live row, which a
+/// drafts model's `drafts_only` trigger admits ([`drafts_only_function_sql`]).
+pub const PUBLISHING_SETTING: &str = "supatype.publishing";
 
 /// Every model that declares `versions`, in declaration order.
 pub fn versioned_models(ast: &SchemaAst) -> Vec<&ModelAst> {
@@ -436,6 +440,11 @@ CREATE OR REPLACE FUNCTION {helper}.draft_visibility_roles() RETURNS text[]
 -- A member is matched under either identity a membership row can hold, a project user or a Cloud
 -- account, as every other Studio check is. A subject-less caller matches no row.
 --
+-- Only a request that comes through Studio, carrying the claim its gateway signs, is shown other
+-- people's drafts. What a membership grants is who sees drafts in Studio. The same member signed
+-- in to the app with their own token is an app user there, bound by the app's rules like anyone
+-- else, and sees only their own drafts.
+--
 -- An absent membership table means no elevated readers rather than an error, so a deployment that
 -- has never bootstrapped Studio still has working drafts, visible to their creators.
 CREATE OR REPLACE FUNCTION {helper}.sees_all_drafts() RETURNS boolean
@@ -443,6 +452,9 @@ CREATE OR REPLACE FUNCTION {helper}.sees_all_drafts() RETURNS boolean
   DECLARE
     caller uuid := {helper}.caller_id();
   BEGIN
+    IF ({through_studio}) IS NOT TRUE THEN
+      RETURN false;
+    END IF;
     RETURN EXISTS (
       SELECT 1 FROM {helper}.studio_members m
        WHERE {held_by_caller}
@@ -482,6 +494,7 @@ CREATE OR REPLACE FUNCTION {helper}.preview_allows(target_model text, target_rec
   $fn$;
 "#,
         held_by_caller = studio_member_held_by_sql("m", "caller"),
+        through_studio = super::rls::studio_reader_sql(),
     )
 }
 
@@ -530,13 +543,14 @@ fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &s
 /// the table's ACCESS EXCLUSIVE lock before it looks, and the layer runs on every push.
 fn rls_on_sql(schema: &str, table: &str) -> String {
     let target = quote_qualified(schema, table);
-    format!(
-        "DO ${RLS_ON_TAG}$\nBEGIN\n  \
+    let body = format!(
+        "\nBEGIN\n  \
          IF NOT (SELECT relrowsecurity FROM pg_class WHERE oid = {}::regclass) THEN\n    \
          ALTER TABLE {target} ENABLE ROW LEVEL SECURITY;\n  \
-         END IF;\nEND\n${RLS_ON_TAG}$;\n",
+         END IF;\nEND\n",
         quote_literal(&target),
-    )
+    );
+    format!("{}\n", do_block(RLS_ON_TAG, &body))
 }
 
 // ─── The draft schema ─────────────────────────────────────────────────────────
@@ -590,16 +604,16 @@ pub fn drop_draft_views_sql(ast: &SchemaAst, changed: &BTreeSet<String>) -> Stri
 /// assuming it: a plain `DROP VIEW IF EXISTS draft.x` still raises when `draft` itself is absent,
 /// which is every first push.
 pub fn drop_views_in_schema_sql(schema: &str, tables: &[&str]) -> String {
-    let mut out = format!(
-        "DO $$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = {}) THEN\n",
+    let mut body = format!(
+        "\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = {}) THEN\n",
         quote_literal(schema)
     );
     for table in tables {
         let drop = format!("DROP VIEW IF EXISTS {}", quote_qualified(schema, table));
-        out.push_str(&format!("    EXECUTE {};\n", quote_literal(&drop)));
+        body.push_str(&format!("    EXECUTE {};\n", quote_literal(&drop)));
     }
-    out.push_str("  END IF;\nEND $$;\n\n");
-    out
+    body.push_str("  END IF;\nEND ");
+    format!("{}\n\n", do_block("", &body))
 }
 
 fn draft_schema_preamble() -> String {
@@ -671,6 +685,8 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
     out.push_str(&rpc_functions_sql(schema));
     out.push_str(&create_record_sql(schema));
     out.push_str(&create_records_sql());
+    out.push_str(&save_drafts_sql());
+    out.push_str(&drafts_only_function_sql());
     out.push_str(&draft_schema_preamble());
     let names = crate::managed::ObjectNames::for_schema(ast);
 
@@ -700,6 +716,7 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
                 &primary_key,
                 &names,
             ));
+            out.push_str(&drafts_only_trigger_sql(schema, table, &names));
             out.push_str(&versions_write_access_sql(
                 schema,
                 table,
@@ -899,21 +916,24 @@ fn can_edit_function_sql(
         None => "FALSE".to_string(),
     };
     let name = names.can_edit_function(table);
+    let (schema_q, table_q, pk_q) = (
+        quote_ident(schema),
+        quote_ident(table),
+        quote_ident(&primary_key),
+    );
+    let tag = dollar_tag_among(&[&schema_q, &table_q, &pk_q, &expr], "fn");
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record {pk_type})\n  \
-         RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$\n    \
+         RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS ${tag}$\n    \
          SELECT EXISTS (\n      \
          SELECT 1 FROM {schema_q}.{table_q}\n       \
          WHERE {pk_q} = p_record AND ({expr})\n    \
          );\n  \
-         $fn$;\n\
+         ${tag}$;\n\
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}({pk_type}) TO authenticated, service_role;\n\n",
         helper = HELPER_SCHEMA,
         fn_q = quote_ident(&name),
         pk_type = primary_key_type,
-        schema_q = quote_ident(schema),
-        table_q = quote_ident(table),
-        pk_q = quote_ident(&primary_key),
     )
 }
 
@@ -935,6 +955,26 @@ fn created_note_trigger_sql(
         schema_q = quote_ident(schema),
         table_q = quote_ident(table),
         pk_lit = quote_literal(primary_key),
+    )
+}
+
+/// The trigger that keeps a drafts model's live row for publishing: see
+/// [`drafts_only_function_sql`]. `BEFORE UPDATE ... FOR EACH ROW`, so it refuses a row the caller
+/// is actually changing, the conflicting arm of an upsert included, and leaves an insert alone.
+fn drafts_only_trigger_sql(
+    schema: &str,
+    table: &str,
+    names: &crate::managed::ObjectNames,
+) -> String {
+    let trigger = names.drafts_only_trigger(table);
+    format!(
+        "DROP TRIGGER IF EXISTS {trigger_q} ON {schema_q}.{table_q};\n\
+         CREATE TRIGGER {trigger_q} BEFORE UPDATE ON {schema_q}.{table_q}\n  \
+         FOR EACH ROW EXECUTE FUNCTION {helper}.refuse_live_edit();\n\n",
+        helper = HELPER_SCHEMA,
+        trigger_q = quote_ident(&trigger),
+        schema_q = quote_ident(schema),
+        table_q = quote_ident(table),
     )
 }
 
@@ -968,9 +1008,15 @@ fn draft_aware_select_policy_sql(
 ) -> String {
     let policy = crate::managed::policy_name(table, "draft_select");
     let helper_fn = names.sees_draft_function(table);
+    let (schema_q, versions_q, table_lit) = (
+        quote_ident(schema),
+        quote_ident(versions_table),
+        quote_literal(table),
+    );
+    let tag = dollar_tag_among(&[&schema_q, &versions_q, &table_lit], "fn");
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record text)\n  \
-         RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$\n    \
+         RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS ${tag}$\n    \
          SELECT EXISTS (\n      \
          SELECT 1 FROM {schema_q}.{versions_q} v\n       \
          WHERE v.\"record_id\"::text = p_record\n         \
@@ -980,7 +1026,7 @@ fn draft_aware_select_policy_sql(
          OR {helper}.preview_allows({table_lit}, v.\"record_id\"::text)\n         \
          )\n    \
          ) OR {helper}.created_in_this_transaction({table_lit}, p_record);\n  \
-         $fn$;\n\
+         ${tag}$;\n\
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}(text) TO anon, authenticated, service_role;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
          CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
@@ -988,11 +1034,8 @@ fn draft_aware_select_policy_sql(
         helper = HELPER_SCHEMA,
         fn_q = quote_ident(&helper_fn),
         policy_q = quote_ident(&policy),
-        schema_q = quote_ident(schema),
         table_q = quote_ident(table),
-        versions_q = quote_ident(versions_table),
         pk_q = quote_ident(primary_key),
-        table_lit = quote_literal(table),
     )
 }
 
@@ -1058,9 +1101,11 @@ fn versions_write_access_sql(
 /// `WITH CHECK`, so the policy still decides whether the write happens; this only fills in fields on
 /// the row being written, and every reference is schema-qualified under an empty `search_path`.
 fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -> String {
+    let (schema_q, versions_q) = (quote_ident(schema), quote_ident(versions_table));
+    let tag = dollar_tag_among(&[&schema_q, &versions_q], "fn");
     format!(
         r#"CREATE OR REPLACE FUNCTION {helper}.{guard_q}() RETURNS trigger
-  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS ${tag}$
   BEGIN
     IF TG_OP = 'INSERT' THEN
       -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other
@@ -1085,7 +1130,7 @@ fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -
     NEW."record_id" := OLD."record_id";
     RETURN NEW;
   END;
-  $fn$;
+  ${tag}$;
 
 DROP TRIGGER IF EXISTS {guard_q} ON {schema_q}.{versions_q};
 CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
@@ -1094,8 +1139,6 @@ CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
 "#,
         helper = HELPER_SCHEMA,
         guard_q = quote_ident(guard),
-        schema_q = quote_ident(schema),
-        versions_q = quote_ident(versions_table),
     )
 }
 
@@ -1119,9 +1162,15 @@ fn audit_trigger_sql(
     names: &crate::managed::ObjectNames,
 ) -> String {
     let audit = names.versions_audit(table, versions_table);
+    let (schema_q, versions_q, pk_q) = (
+        quote_ident(schema),
+        quote_ident(versions_table),
+        quote_ident(primary_key),
+    );
+    let tag = dollar_tag_among(&[&schema_q, &versions_q, &pk_q], "fn");
     format!(
         r#"CREATE OR REPLACE FUNCTION {helper}.{audit_q}() RETURNS trigger
-  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS ${tag}$
   DECLARE
     next_version integer;
   BEGIN
@@ -1132,7 +1181,7 @@ fn audit_trigger_sql(
     VALUES (NEW.{pk_q}, next_version, 'published', to_jsonb(NEW), {helper}.jwt_uid());
     RETURN NULL;
   END;
-  $fn$;
+  ${tag}$;
 
 DROP TRIGGER IF EXISTS {audit_q} ON {schema_q}.{table_q};
 CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
@@ -1141,10 +1190,7 @@ CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
 "#,
         helper = HELPER_SCHEMA,
         audit_q = quote_ident(&audit),
-        schema_q = quote_ident(schema),
         table_q = quote_ident(table),
-        versions_q = quote_ident(versions_table),
-        pk_q = quote_ident(primary_key),
     )
 }
 
@@ -1182,6 +1228,7 @@ fn rpc_functions_sql(schema: &str) -> String {
     let write_path = write_search_path(schema);
     let helper = HELPER_SCHEMA;
     let rpc_q = quote_ident(RPC_SCHEMA);
+    let publishing = quote_literal(PUBLISHING_SETTING);
     format!(
         r#"CREATE SCHEMA IF NOT EXISTS {rpc_q};
 GRANT USAGE ON SCHEMA {rpc_q} TO anon, authenticated, service_role;
@@ -1356,6 +1403,9 @@ CREATE OR REPLACE FUNCTION {rpc_q}.publish(
         col, col, col, col);
     END LOOP;
 
+    -- The live row is the publishing functions' to write: the table's `drafts_only` trigger
+    -- admits these two updates and nothing after them.
+    PERFORM set_config({publishing}, 'on', true);
     EXECUTE format(
       'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src
         WHERE %I = $1::%s',
@@ -1378,6 +1428,7 @@ CREATE OR REPLACE FUNCTION {rpc_q}.publish(
         entry."primary_key", entry."primary_key_type")
         USING record_id, stamp;
     END IF;
+    PERFORM set_config({publishing}, '', true);
 
     -- Exactly one version claims a locale, so publishing takes it off every other version. Without
     -- this, "which version is live for fr" would have several answers after a restore.
@@ -1432,6 +1483,8 @@ CREATE OR REPLACE FUNCTION {rpc_q}.unpublish(
       assignments := assignments || format('%I = COALESCE(%I, ''{{}}''::jsonb) - $2', col, col);
     END LOOP;
 
+    -- As in `publish`: the live row is this function's to write, until it returns.
+    PERFORM set_config({publishing}, 'on', true);
     IF cardinality(assignments) > 0 THEN
       EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',
         entry."schema_name", entry."table_name", array_to_string(assignments, ', '),
@@ -1470,6 +1523,7 @@ CREATE OR REPLACE FUNCTION {rpc_q}.unpublish(
           USING ERRCODE = '42501';
       END IF;
     END IF;
+    PERFORM set_config({publishing}, '', true);
 
     RETURN jsonb_build_object(
       'record_id', record_id, 'status',
@@ -1919,5 +1973,105 @@ fn create_records_sql() -> String {
 GRANT EXECUTE ON FUNCTION {rpc_q}.create_records(text, jsonb) TO authenticated, service_role;
 
 "#
+    )
+}
+
+/// `supatype.save_drafts`: an edit of some records of a drafts model, as a new draft of each, and
+/// optionally published in the same call.
+///
+/// This is what the client's `update` sends on a drafts model. One call is one transaction, so a
+/// record that is refused (its update rule, a key that names no record) takes the others with it,
+/// and `publish` puts each new version live under the caller's own rules, as `publish` always does,
+/// so history records what went live. Each record goes through `create_draft`, which merges `data`
+/// onto the newest version or the live row, as Studio's save does.
+///
+/// `record_ids` is a JSON array of keys, as the client reads them back from the table, so a numeric
+/// key and a UUID one travel the same way. The answer is `create_draft`'s for each record, in the
+/// order given, with `status` `published` and the locales it went live for when it was published.
+fn save_drafts_sql() -> String {
+    let rpc_q = quote_ident(RPC_SCHEMA);
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {rpc_q}.save_drafts(
+  model_table text, record_ids jsonb, data jsonb, publish boolean DEFAULT false)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    id text;
+    saved jsonb;
+    published jsonb;
+    answers jsonb := '[]'::jsonb;
+  BEGIN
+    IF jsonb_typeof(record_ids) IS DISTINCT FROM 'array' THEN
+      RAISE EXCEPTION 'save_drafts takes a JSON array of record keys, not %', COALESCE(jsonb_typeof(record_ids), 'null')
+        USING ERRCODE = '22023',
+              HINT = 'Send the keys of the records to save a draft of, or call create_draft for one.';
+    END IF;
+
+    FOR id IN SELECT value FROM jsonb_array_elements_text(record_ids) WITH ORDINALITY ORDER BY ordinality LOOP
+      saved := {rpc_q}.create_draft(model_table, id, data);
+      IF publish THEN
+        published := {rpc_q}.publish(model_table, id, (saved->>'version')::integer);
+        saved := saved || jsonb_build_object('status', 'published', 'locales', published->'locales');
+      END IF;
+      answers := answers || jsonb_build_array(saved);
+    END LOOP;
+    RETURN answers;
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION {rpc_q}.save_drafts(text, jsonb, jsonb, boolean) TO authenticated, service_role;
+
+"#
+    )
+}
+
+/// `_supatype.refuse_live_edit()`, the function behind every drafts model's `drafts_only` trigger.
+///
+/// **A drafts model's live row changes only by publishing.** The table's UPDATE policy is the
+/// model's own `update` rule, which `publish` needs, so a signed-in editor's `PATCH /posts` or
+/// GraphQL update mutation used to pass it and write the live row at once, recording no version.
+/// The trigger refuses that, naming drafts and publishing, for the two API roles only:
+///
+/// * **`publish` and `unpublish`** turn [`PUBLISHING_SETTING`] on around their own writes and off
+///   again before returning, so a direct update later in the same transaction is still refused.
+/// * **The service role and the table's owner** are not API callers: the scheduler, a push, a
+///   referential cascade (run as the owner) and a server holding the service key keep writing.
+/// * **A Studio editor** (the gateway-signed `write` claim) keeps Studio's data browser, which edits
+///   a cell with a direct update. Studio's content screens save through `create_draft`.
+///
+/// **Why a trigger.** Revoking `UPDATE` would refuse `publish` too, which runs as the caller so the
+/// model's rule governs it; a restrictive policy would refuse silently, as zero rows updated. And
+/// `SECURITY INVOKER`, so `current_user` is the caller's role.
+///
+/// The setting is a workflow guard, not a permission: a caller who could set it could only make
+/// an edit their `update` rule already admits. The API offers no way to set it.
+fn drafts_only_function_sql() -> String {
+    let helper = HELPER_SCHEMA;
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {helper}.refuse_live_edit() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  BEGIN
+    IF current_user::text NOT IN ('anon', 'authenticated')
+       OR current_setting({publishing}, true) = 'on'
+       OR {helper}.jwt_claim_text({studio}) = 'write' THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION USING
+      MESSAGE = TG_TABLE_NAME || {refusal},
+      ERRCODE = '42501',
+      HINT = {hint};
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION {helper}.refuse_live_edit() FROM PUBLIC;
+
+"#,
+        publishing = quote_literal(PUBLISHING_SETTING),
+        studio = quote_literal(super::rls::STUDIO_CLAIM),
+        refusal = quote_literal(&format!(
+            " has drafts: save a draft with {RPC_SCHEMA}.create_draft or the client's update, then publish"
+        )),
+        hint = quote_literal(&format!(
+            "Publish with {RPC_SCHEMA}.publish, or pass {{ publish: true }} to the client's update to save and publish in one call."
+        )),
     )
 }

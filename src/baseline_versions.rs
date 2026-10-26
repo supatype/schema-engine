@@ -64,23 +64,16 @@ pub async fn count(
     model: &BaselineModel,
     schema: &str,
 ) -> Result<Option<i64>> {
-    if !exists(conn, &quote_qualified(schema, &model.table)).await? {
+    if !crate::db::relation_exists(conn, &quote_qualified(schema, &model.table)).await? {
         return Ok(None);
     }
-    let versions_exist = exists(conn, &quote_qualified(schema, &model.versions_table)).await?;
+    let versions_exist =
+        crate::db::relation_exists(conn, &quote_qualified(schema, &model.versions_table)).await?;
     let n: i64 = sqlx::query_scalar(&model.count_sql(schema, versions_exist))
         .fetch_one(&mut *conn)
         .await
         .with_context(|| format!("Failed to count records with no version in {}", model.table))?;
     Ok(Some(n))
-}
-
-async fn exists(conn: &mut PgConnection, relation: &str) -> Result<bool> {
-    sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
-        .bind(relation)
-        .fetch_one(&mut *conn)
-        .await
-        .with_context(|| format!("Failed to look up {relation}"))
 }
 
 /// The drafts models of `ast` with records lacking a version, each said in `diff`'s warnings.

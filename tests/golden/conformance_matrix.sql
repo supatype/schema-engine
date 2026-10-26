@@ -749,10 +749,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_defaulted_slug_def()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_def" IS NULL OR BTRIM(NEW."slug_def"::TEXT) = '' THEN
-      NEW."slug_def" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_def" IS NULL OR BTRIM(NEW."slug_def"::TEXT) = '' THEN
+    NEW."slug_def" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_def" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -767,10 +765,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_localised_slug_loc()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_loc" IS NULL OR BTRIM(NEW."slug_loc"::TEXT) = '' THEN
-      NEW."slug_loc" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_loc" IS NULL OR BTRIM(NEW."slug_loc"::TEXT) = '' THEN
+    NEW."slug_loc" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_loc" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -785,10 +781,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_read_only_slug_ro()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_ro" IS NULL OR BTRIM(NEW."slug_ro"::TEXT) = '' THEN
-      NEW."slug_ro" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_ro" IS NULL OR BTRIM(NEW."slug_ro"::TEXT) = '' THEN
+    NEW."slug_ro" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_ro" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -803,10 +797,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_required_slug_req()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_req" IS NULL OR BTRIM(NEW."slug_req"::TEXT) = '' THEN
-      NEW."slug_req" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_req" IS NULL OR BTRIM(NEW."slug_req"::TEXT) = '' THEN
+    NEW."slug_req" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_req" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -821,10 +813,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_every_slug_plain()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug_plain" IS NULL OR BTRIM(NEW."slug_plain"::TEXT) = '' THEN
-      NEW."slug_plain" = _platform.slugify(NEW."text_plain"::TEXT);
-    END IF;
+  IF NEW."slug_plain" IS NULL OR BTRIM(NEW."slug_plain"::TEXT) = '' THEN
+    NEW."slug_plain" = _platform.slugify(NEW."text_plain"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."text_plain" IS DISTINCT FROM OLD."text_plain" THEN
       IF OLD."slug_plain" IS NOT DISTINCT FROM _platform.slugify(OLD."text_plain"::TEXT) THEN
@@ -899,10 +889,114 @@ CREATE OR REPLACE TRIGGER "every_required_slug_req_trigger"
 BEFORE INSERT OR UPDATE ON "public"."every_required"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_every_required_slug_req();
 
+CREATE POLICY "composites_studio_read" ON "public"."composites"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "composites_studio_write" ON "public"."composites"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_studio_read" ON "public"."every"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_studio_write" ON "public"."every"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_defaulted_studio_read" ON "public"."every_defaulted"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_defaulted_studio_write" ON "public"."every_defaulted"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_localised_studio_read" ON "public"."every_localised"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_localised_studio_write" ON "public"."every_localised"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_read_only_studio_read" ON "public"."every_read_only"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_read_only_studio_write" ON "public"."every_read_only"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_required_studio_read" ON "public"."every_required"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "every_required_studio_write" ON "public"."every_required"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "relations_studio_read" ON "public"."relations"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "relations_studio_write" ON "public"."relations"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "relations_every_select" ON "public"."relations_every"
 FOR SELECT USING (
     EXISTS (SELECT 1 FROM "public"."relations" WHERE "relations"."id" = "relations_every"."relations_id")
     AND EXISTS (SELECT 1 FROM "public"."every" WHERE "every"."id" = "relations_every"."every_id")
+  );
+CREATE POLICY "relations_every_studio_read" ON "public"."relations_every"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "relations_every_studio_write" ON "public"."relations_every"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 ALTER TABLE "public"."composites" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."every" ENABLE ROW LEVEL SECURITY;
@@ -1152,5 +1246,31 @@ ALTER TABLE "public"."every_read_only" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."every_required" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."relations" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."relations_every" REPLICA IDENTITY FULL;
+
+-- GraphQL relation names, as the schema declares them
+DO $graphql_names$
+DECLARE
+  k record;
+  wanted text;
+BEGIN
+  FOR k IN
+    SELECT c.conname, c.conrelid::regclass AS rel,
+           obj_description(c.oid, 'pg_constraint') AS old, d.directive
+    FROM (VALUES
+      ('"public"."relations"', 'owner_id', '@graphql({"foreign_name":"owner"})')
+    ) AS d(rel, col, directive)
+    JOIN pg_constraint c ON c.conrelid = to_regclass(d.rel) AND c.contype = 'f'
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = d.col
+     AND c.conkey = ARRAY[a.attnum]
+  LOOP
+    SELECT concat_ws(E'\n', string_agg(l.line, E'\n' ORDER BY l.n), k.directive) INTO wanted
+      FROM regexp_split_to_table(k.old, E'\n') WITH ORDINALITY AS l(line, n)
+     WHERE l.line NOT LIKE '@graphql(%';
+    IF wanted IS DISTINCT FROM k.old THEN
+      EXECUTE format('COMMENT ON CONSTRAINT %I ON %s IS %L', k.conname, k.rel, wanted);
+    END IF;
+  END LOOP;
+END
+$graphql_names$;
 
 COMMIT;

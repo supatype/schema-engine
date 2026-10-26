@@ -55,6 +55,29 @@ pub fn clip_identifier(name: &str) -> String {
     clip(name, MAX_IDENTIFIER_BYTES).to_string()
 }
 
+/// Names claimed in one namespace, by the name Postgres keeps of each: the columns of one table,
+/// or the tables of one schema. Two different names Postgres would keep as one are one object to
+/// it, so the second to claim it is told which name holds it already.
+#[derive(Debug, Default)]
+pub struct KeptNames {
+    kept: HashMap<String, String>,
+}
+
+impl KeptNames {
+    /// Claims `name`. `Some` is a different name that Postgres keeps the same way, which holds it.
+    pub fn claim(&mut self, name: &str) -> Option<String> {
+        let kept = clip_identifier(name);
+        match self.kept.get(&kept) {
+            Some(other) if other != name => Some(other.clone()),
+            Some(_) => None,
+            None => {
+                self.kept.insert(kept, name.to_string());
+                None
+            }
+        }
+    }
+}
+
 /// Postgres's `makeObjectName`: `name1_name2_label`, fitted to the identifier limit the way
 /// Postgres fits the names it chooses itself.
 ///
@@ -718,20 +741,25 @@ impl ObjectNames {
     /// A model's foreign keys, type checks, declared bounds and model rules.
     fn model_constraints(&mut self, model: &ModelAst, ch: &mut Choosers) {
         use crate::parser::accessors::{
-            column_names_for, db_foreign_key, default_foreign_key_column,
+            auth_user_link, column_names_for, db_foreign_key, default_foreign_key_column,
         };
         use crate::parser::ast::RelationCardinality;
         let table = model.table_name();
         for (field_name, field) in sorted_fields(model) {
-            if let FieldAst::Relation(rel) = field {
-                if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                    let column = db_foreign_key(field, field_name)
-                        .unwrap_or_else(|| default_foreign_key_column(field_name));
-                    self.pick(table, "fkey", &column, || {
-                        ch.constraint(table, "fkey", Some(&column), "fkey")
-                    });
+            let column = match field {
+                FieldAst::Relation(rel)
+                    if matches!(rel.cardinality, RelationCardinality::BelongsTo) =>
+                {
+                    db_foreign_key(field, field_name)
+                        .unwrap_or_else(|| default_foreign_key_column(field_name))
                 }
-            }
+                // A `SupatypeAuthUserId` linked to `auth.users`, named as a relation's key is.
+                _ if auth_user_link(field).is_some() => field_name.to_string(),
+                _ => continue,
+            };
+            self.pick(table, "fkey", &column, || {
+                ch.constraint(table, "fkey", Some(&column), "fkey")
+            });
         }
         for (field_name, field) in sorted_fields(model) {
             let type_check = matches!(
@@ -871,6 +899,10 @@ impl ObjectNames {
                 self.pick(table, "created_note", "", || {
                     triggers.choose(table, None, "created_note")
                 });
+                // A drafts model's table refuses a direct edit by the API roles.
+                self.pick(table, "drafts_only", "", || {
+                    triggers.choose(table, None, "drafts_only")
+                });
                 // A drafts model's table gives each row inserted outside `create_record` its
                 // version 1; the trigger shares its function's name, as the audit one does.
                 self.pick(table, "versions_baseline", "", || {
@@ -983,6 +1015,13 @@ impl ObjectNames {
     pub fn created_note_trigger(&self, table: &str) -> String {
         self.named(table, "created_note", "", || {
             make_object_name(table, None, "created_note")
+        })
+    }
+
+    /// `{table}_drafts_only`, the trigger on a drafts model's table that refuses a direct edit.
+    pub fn drafts_only_trigger(&self, table: &str) -> String {
+        self.named(table, "drafts_only", "", || {
+            make_object_name(table, None, "drafts_only")
         })
     }
 

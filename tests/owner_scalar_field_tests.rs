@@ -194,7 +194,7 @@ fn field_owner_on_a_uuid_field_reaches_predicates_labels_and_views() {
 
     let functions = rls::generate_can_functions(&ast, "public");
     assert!(
-        functions.contains(&format!("SELECT {OWNER_ID_EXPR}")),
+        functions.contains(&format!("SELECT COALESCE(({OWNER_ID_EXPR}), false)")),
         "the read predicate compares with owner_id:\n{functions}"
     );
     assert!(
@@ -257,7 +257,7 @@ fn owner_through_a_relation_to_a_model_owned_by_a_uuid_field_looks_ownership_up(
     let rule = post.access().read.as_ref().unwrap();
     let expr = rls::access_rule_to_expr(&ast, post, rule, "public");
     assert!(
-        expr.contains("EXISTS (SELECT 1 FROM \"author\"")
+        expr.contains("EXISTS (SELECT 1 FROM \"public\".\"author\"")
             && expr.contains("\"author\".\"user_id\""),
         "ownership is looked up through the author row: {expr}"
     );

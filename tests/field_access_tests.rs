@@ -101,9 +101,74 @@ fn a_read_rule_is_named_in_the_label() {
         "no label for a column with a read rule:\n{sql}"
     );
     assert!(
-        sql.contains(r#"IS 'MASK READ public."can_read_users__email"';"#),
-        "label did not point at the generated read predicate:\n{sql}"
+        sql.contains(
+            r#"IS 'MASK READ public."can_read_users__email" WRITE public."can_write_users__email"';"#
+        ),
+        "label did not point at the generated read and write predicates:\n{sql}"
     );
+}
+
+/// The body of the generated function `name`, up to its closing dollar quote `tag`.
+fn body_of<'s>(sql: &'s str, name: &str, tag: &str) -> &'s str {
+    sql.split(name)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no {name} in:\n{sql}"))
+        .split(tag)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no body for {name}"))
+}
+
+// A column with only a read rule gets a write affordance too, so a Studio editor's create is judged
+// by it rather than by the read rule: the read rule, or the editor creating the record.
+#[test]
+fn a_read_only_rule_gets_a_write_affordance_with_the_studio_create_exemption() {
+    let sql = can_functions();
+    let body = body_of(
+        &sql,
+        r#"FUNCTION "public"."can_write_users__email""#,
+        "$can$",
+    );
+    assert!(
+        body.contains(r#""_supatype"."studio_creates"($1)"#) && body.contains("'write'"),
+        "no Studio create exemption:\n{body}"
+    );
+    assert!(body.contains(" OR "), "the read rule was not kept:\n{body}");
+}
+
+// The read affordance answers false, never NULL, so the extension keeps the stored value of a
+// column whose read rule answers NULL, as it did when that column had no write predicate.
+#[test]
+fn a_read_affordance_never_answers_null() {
+    let sql = can_functions();
+    let body = body_of(
+        &sql,
+        r#"FUNCTION "public"."can_read_users__email""#,
+        "$can$",
+    );
+    assert!(
+        body.contains("COALESCE(("),
+        "read affordance may answer NULL:\n{body}"
+    );
+}
+
+// The create test: the caller is a Studio editor and no stored record has the row's key. Read in
+// the latest committed state, past the tier 2 privileges and the field rule setting.
+#[test]
+fn the_studio_create_helper_looks_the_key_up_as_its_owner() {
+    let sql = can_functions();
+    let head = sql
+        .split(r#"CREATE OR REPLACE FUNCTION "_supatype"."studio_creates"(candidate "public"."users")"#)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no helper for users:\n{sql}"));
+    let head = head.split("$creates$;").next().unwrap();
+    for wanted in [
+        "VOLATILE SECURITY DEFINER",
+        "SET search_path = '' SET supatype.in_rule = 'off'",
+        r#"stored."id" = (candidate)."id""#,
+        "IS NOT TRUE THEN",
+    ] {
+        assert!(head.contains(wanted), "{wanted} missing:\n{head}");
+    }
 }
 
 #[test]

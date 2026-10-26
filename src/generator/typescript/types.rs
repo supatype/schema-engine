@@ -125,9 +125,18 @@ fn emit_table(ast: &SchemaAst, model: &ModelAst, out: &mut String) {
     out.push_str("        Update: {\n");
     emit_fields(model, Mode::Update, out, "          ");
     out.push_str("        }\n");
+    emit_drafts_mark(model, out, "        ");
 
     super::relationships::emit(&super::relationships::of_model(ast, model), out, "        ");
     out.push_str("      }\n");
+}
+
+/// `Drafts: true` on a model that keeps drafts, where `@supatype/client`'s `update` saves a draft
+/// of each record and takes `{ publish: true }`. Nothing on any other table.
+pub(crate) fn emit_drafts_mark(model: &ModelAst, out: &mut String, ind: &str) {
+    if crate::parser::accessors::versions_of(model).is_some_and(|v| v.drafts) {
+        out.push_str(&format!("{ind}Drafts: true\n"));
+    }
 }
 
 // ─── Field emission ──────────────────────────────────────────────────────────

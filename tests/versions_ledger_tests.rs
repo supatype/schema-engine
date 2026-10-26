@@ -206,6 +206,39 @@ async fn removing_versions_drops_the_audit_trigger_and_its_function_and_writes_k
     .await;
 }
 
+/// A drafts model's table carries `posts_drafts_only`, recorded like the layer's other objects. A
+/// second push leaves it alone, and a model that stops drafting loses it.
+#[tokio::test]
+async fn the_drafts_only_trigger_is_recorded_and_goes_when_the_model_stops_drafting() {
+    common::with_integration_pool(|pool| async move {
+        let drafting = schema(vec![posts(Some(true))]);
+        assert!(applied(&push(&pool, &drafting).await.unwrap()));
+        assert!(trigger_exists(&pool, "posts", "posts_drafts_only").await);
+        let recorded = rows(&pool).await;
+        let triggers = names(&recorded, ObjectKind::Trigger);
+        assert!(
+            triggers.contains(&"public.posts_drafts_only".to_string()),
+            "{triggers:?}"
+        );
+        let functions = names(&recorded, ObjectKind::Function);
+        assert!(
+            functions.contains(&"_supatype.refuse_live_edit()".to_string()),
+            "{functions:?}"
+        );
+        let again = push(&pool, &drafting).await.unwrap();
+        assert!(up_to_date(&again), "{again:?}");
+        assert_eq!(rows(&pool).await, recorded);
+
+        let history = schema(vec![posts(Some(false))]);
+        let outcome = force_push(&pool, &history).await;
+        assert!(applied(&outcome), "{outcome:?}");
+        assert!(!trigger_exists(&pool, "posts", "posts_drafts_only").await);
+        let settled = push(&pool, &history).await.unwrap();
+        assert!(up_to_date(&settled), "{settled:?}");
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn removing_the_last_versioned_model_retires_the_global_layer() {
     common::with_cron_database(|pool| async move {

@@ -866,6 +866,11 @@ CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles() RETURNS text[]
 -- A member is matched under either identity a membership row can hold, a project user or a Cloud
 -- account, as every other Studio check is. A subject-less caller matches no row.
 --
+-- Only a request that comes through Studio, carrying the claim its gateway signs, is shown other
+-- people's drafts. What a membership grants is who sees drafts in Studio. The same member signed
+-- in to the app with their own token is an app user there, bound by the app's rules like anyone
+-- else, and sees only their own drafts.
+--
 -- An absent membership table means no elevated readers rather than an error, so a deployment that
 -- has never bootstrapped Studio still has working drafts, visible to their creators.
 CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts() RETURNS boolean
@@ -873,6 +878,9 @@ CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts() RETURNS boolean
   DECLARE
     caller uuid := _supatype.caller_id();
   BEGIN
+    IF ((SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')) IS NOT TRUE THEN
+      RETURN false;
+    END IF;
     RETURN EXISTS (
       SELECT 1 FROM _supatype.studio_members m
        WHERE caller IN (m.user_id, m.platform_user_id)
@@ -1113,6 +1121,9 @@ CREATE OR REPLACE FUNCTION "supatype".publish(
         col, col, col, col);
     END LOOP;
 
+    -- The live row is the publishing functions' to write: the table's `drafts_only` trigger
+    -- admits these two updates and nothing after them.
+    PERFORM set_config('supatype.publishing', 'on', true);
     EXECUTE format(
       'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src
         WHERE %I = $1::%s',
@@ -1135,6 +1146,7 @@ CREATE OR REPLACE FUNCTION "supatype".publish(
         entry."primary_key", entry."primary_key_type")
         USING record_id, stamp;
     END IF;
+    PERFORM set_config('supatype.publishing', '', true);
 
     -- Exactly one version claims a locale, so publishing takes it off every other version. Without
     -- this, "which version is live for fr" would have several answers after a restore.
@@ -1189,6 +1201,8 @@ CREATE OR REPLACE FUNCTION "supatype".unpublish(
       assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);
     END LOOP;
 
+    -- As in `publish`: the live row is this function's to write, until it returns.
+    PERFORM set_config('supatype.publishing', 'on', true);
     IF cardinality(assignments) > 0 THEN
       EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',
         entry."schema_name", entry."table_name", array_to_string(assignments, ', '),
@@ -1227,6 +1241,7 @@ CREATE OR REPLACE FUNCTION "supatype".unpublish(
           USING ERRCODE = '42501';
       END IF;
     END IF;
+    PERFORM set_config('supatype.publishing', '', true);
 
     RETURN jsonb_build_object(
       'record_id', record_id, 'status',
@@ -1561,6 +1576,52 @@ CREATE OR REPLACE FUNCTION "supatype".create_records(model_table text, data json
 
 GRANT EXECUTE ON FUNCTION "supatype".create_records(text, jsonb) TO authenticated, service_role;
 
+CREATE OR REPLACE FUNCTION "supatype".save_drafts(
+  model_table text, record_ids jsonb, data jsonb, publish boolean DEFAULT false)
+  RETURNS jsonb LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  DECLARE
+    id text;
+    saved jsonb;
+    published jsonb;
+    answers jsonb := '[]'::jsonb;
+  BEGIN
+    IF jsonb_typeof(record_ids) IS DISTINCT FROM 'array' THEN
+      RAISE EXCEPTION 'save_drafts takes a JSON array of record keys, not %', COALESCE(jsonb_typeof(record_ids), 'null')
+        USING ERRCODE = '22023',
+              HINT = 'Send the keys of the records to save a draft of, or call create_draft for one.';
+    END IF;
+
+    FOR id IN SELECT value FROM jsonb_array_elements_text(record_ids) WITH ORDINALITY ORDER BY ordinality LOOP
+      saved := "supatype".create_draft(model_table, id, data);
+      IF publish THEN
+        published := "supatype".publish(model_table, id, (saved->>'version')::integer);
+        saved := saved || jsonb_build_object('status', 'published', 'locales', published->'locales');
+      END IF;
+      answers := answers || jsonb_build_array(saved);
+    END LOOP;
+    RETURN answers;
+  END;
+  $fn$;
+
+GRANT EXECUTE ON FUNCTION "supatype".save_drafts(text, jsonb, jsonb, boolean) TO authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION _supatype.refuse_live_edit() RETURNS trigger
+  LANGUAGE plpgsql SECURITY INVOKER SET search_path = '' AS $fn$
+  BEGIN
+    IF current_user::text NOT IN ('anon', 'authenticated')
+       OR current_setting('supatype.publishing', true) = 'on'
+       OR _supatype.jwt_claim_text('supatype_studio') = 'write' THEN
+      RETURN NEW;
+    END IF;
+    RAISE EXCEPTION USING
+      MESSAGE = TG_TABLE_NAME || ' has drafts: save a draft with supatype.create_draft or the client''s update, then publish',
+      ERRCODE = '42501',
+      HINT = 'Publish with supatype.publish, or pass { publish: true } to the client''s update to save and publish in one call.';
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION _supatype.refuse_live_edit() FROM PUBLIC;
+
 REVOKE ALL ON SCHEMA "draft" FROM anon;
 GRANT USAGE ON SCHEMA "draft" TO authenticated, service_role;
 
@@ -1616,6 +1677,10 @@ CREATE POLICY "page_draft_select" ON "public"."page"
 DROP TRIGGER IF EXISTS "page_created_note" ON "public"."page";
 CREATE TRIGGER "page_created_note" AFTER INSERT ON "public"."page"
   FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
+
+DROP TRIGGER IF EXISTS "page_drafts_only" ON "public"."page";
+CREATE TRIGGER "page_drafts_only" BEFORE UPDATE ON "public"."page"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit();
 
 DROP POLICY IF EXISTS "page_versions_insert" ON "public"."page_versions";
 CREATE POLICY "page_versions_insert" ON "public"."page_versions"
@@ -1753,6 +1818,10 @@ DROP TRIGGER IF EXISTS "speaker_created_note" ON "public"."speaker";
 CREATE TRIGGER "speaker_created_note" AFTER INSERT ON "public"."speaker"
   FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
 
+DROP TRIGGER IF EXISTS "speaker_drafts_only" ON "public"."speaker";
+CREATE TRIGGER "speaker_drafts_only" BEFORE UPDATE ON "public"."speaker"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit();
+
 DROP POLICY IF EXISTS "speaker_versions_insert" ON "public"."speaker_versions";
 CREATE POLICY "speaker_versions_insert" ON "public"."speaker_versions"
   FOR INSERT WITH CHECK (_supatype."can_edit_speaker"("record_id"));
@@ -1888,6 +1957,10 @@ CREATE POLICY "talk_draft_select" ON "public"."talk"
 DROP TRIGGER IF EXISTS "talk_created_note" ON "public"."talk";
 CREATE TRIGGER "talk_created_note" AFTER INSERT ON "public"."talk"
   FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
+
+DROP TRIGGER IF EXISTS "talk_drafts_only" ON "public"."talk";
+CREATE TRIGGER "talk_drafts_only" BEFORE UPDATE ON "public"."talk"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit();
 
 DROP POLICY IF EXISTS "talk_versions_insert" ON "public"."talk_versions";
 CREATE POLICY "talk_versions_insert" ON "public"."talk_versions"
@@ -2029,10 +2102,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_page_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."title"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."title"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."title" IS DISTINCT FROM OLD."title" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."title"::TEXT) THEN
@@ -2047,10 +2118,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_speaker_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."name"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."name"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."name" IS DISTINCT FROM OLD."name" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."name"::TEXT) THEN
@@ -2065,10 +2134,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_talk_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."title"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."title"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."title" IS DISTINCT FROM OLD."title" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."title"::TEXT) THEN
@@ -2167,6 +2234,19 @@ CREATE POLICY "_global_site_settings_select" ON "public"."_global_site_settings"
 FOR SELECT USING (
     TRUE
   );
+CREATE POLICY "_global_site_settings_studio_read" ON "public"."_global_site_settings"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "_global_site_settings_studio_write" ON "public"."_global_site_settings"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "_global_site_settings_update" ON "public"."_global_site_settings"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
@@ -2184,6 +2264,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "attendee_select" ON "public"."attendee"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) IS NOT NULL
+  );
+CREATE POLICY "attendee_studio_read" ON "public"."attendee"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "attendee_studio_write" ON "public"."attendee"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "attendee_update" ON "public"."attendee"
 FOR UPDATE USING (
@@ -2203,6 +2296,19 @@ CREATE POLICY "chat_message_select" ON "public"."chat_message"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) IS NOT NULL
   );
+CREATE POLICY "chat_message_studio_read" ON "public"."chat_message"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "chat_message_studio_write" ON "public"."chat_message"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "chat_message_update" ON "public"."chat_message"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_uid()) = "auth_user_id"
@@ -2221,11 +2327,37 @@ CREATE POLICY "page_select" ON "public"."page"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
   );
+CREATE POLICY "page_studio_read" ON "public"."page"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "page_studio_write" ON "public"."page"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "page_update" ON "public"."page"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
     (SELECT _supatype.jwt_role()) = 'editor'
+  );
+CREATE POLICY "page_versions_studio_read" ON "public"."page_versions"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "page_versions_studio_write" ON "public"."page_versions"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "room_delete" ON "public"."room"
 FOR DELETE USING (
@@ -2238,6 +2370,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "room_select" ON "public"."room"
 FOR SELECT USING (
     TRUE
+  );
+CREATE POLICY "room_studio_read" ON "public"."room"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "room_studio_write" ON "public"."room"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "room_update" ON "public"."room"
 FOR UPDATE USING (
@@ -2257,11 +2402,37 @@ CREATE POLICY "speaker_select" ON "public"."speaker"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
   );
+CREATE POLICY "speaker_studio_read" ON "public"."speaker"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "speaker_studio_write" ON "public"."speaker"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "speaker_update" ON "public"."speaker"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
     (SELECT _supatype.jwt_role()) = 'editor'
+  );
+CREATE POLICY "speaker_versions_studio_read" ON "public"."speaker_versions"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "speaker_versions_studio_write" ON "public"."speaker_versions"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "sponsor_delete" ON "public"."sponsor"
 FOR DELETE USING (
@@ -2274,6 +2445,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "sponsor_select" ON "public"."sponsor"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
+  );
+CREATE POLICY "sponsor_studio_read" ON "public"."sponsor"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "sponsor_studio_write" ON "public"."sponsor"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "sponsor_update" ON "public"."sponsor"
 FOR UPDATE USING (
@@ -2293,11 +2477,37 @@ CREATE POLICY "talk_select" ON "public"."talk"
 FOR SELECT USING (
     "published_at" <= (SELECT now())
   );
+CREATE POLICY "talk_studio_read" ON "public"."talk"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "talk_studio_write" ON "public"."talk"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "talk_update" ON "public"."talk"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'editor'
   ) WITH CHECK (
     (SELECT _supatype.jwt_role()) = 'editor'
+  );
+CREATE POLICY "talk_versions_studio_read" ON "public"."talk_versions"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "talk_versions_studio_write" ON "public"."talk_versions"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "ticket_delete" ON "public"."ticket"
 FOR DELETE USING (
@@ -2310,6 +2520,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "ticket_select" ON "public"."ticket"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) = "auth_user_id"
+  );
+CREATE POLICY "ticket_studio_read" ON "public"."ticket"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "ticket_studio_write" ON "public"."ticket"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "ticket_update" ON "public"."ticket"
 FOR UPDATE USING (
@@ -2550,5 +2773,33 @@ ALTER TABLE "public"."speaker" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."sponsor" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."talk" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."ticket" REPLICA IDENTITY FULL;
+
+-- GraphQL relation names, as the schema declares them
+DO $graphql_names$
+DECLARE
+  k record;
+  wanted text;
+BEGIN
+  FOR k IN
+    SELECT c.conname, c.conrelid::regclass AS rel,
+           obj_description(c.oid, 'pg_constraint') AS old, d.directive
+    FROM (VALUES
+      ('"public"."talk"', 'speaker_id', '@graphql({"foreign_name":"speaker","local_name":"talks"})'),
+      ('"public"."talk"', 'room_id', '@graphql({"foreign_name":"room"})'),
+      ('"public"."ticket"', 'attendee_id', '@graphql({"foreign_name":"attendee"})')
+    ) AS d(rel, col, directive)
+    JOIN pg_constraint c ON c.conrelid = to_regclass(d.rel) AND c.contype = 'f'
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = d.col
+     AND c.conkey = ARRAY[a.attnum]
+  LOOP
+    SELECT concat_ws(E'\n', string_agg(l.line, E'\n' ORDER BY l.n), k.directive) INTO wanted
+      FROM regexp_split_to_table(k.old, E'\n') WITH ORDINALITY AS l(line, n)
+     WHERE l.line NOT LIKE '@graphql(%';
+    IF wanted IS DISTINCT FROM k.old THEN
+      EXECUTE format('COMMENT ON CONSTRAINT %I ON %s IS %L', k.conname, k.rel, wanted);
+    END IF;
+  END LOOP;
+END
+$graphql_names$;
 
 COMMIT;

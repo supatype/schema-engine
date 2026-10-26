@@ -14,9 +14,13 @@ pub mod execute;
 pub mod fingerprint;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ledger;
+#[cfg(not(target_arch = "wasm32"))]
+mod params;
+pub mod placeholders;
 pub mod plan;
 pub mod validate;
 
+use crate::managed::clip_identifier;
 use crate::parser::ast::{AccessRule, Operand};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -72,6 +76,14 @@ pub enum Operation {
     /// The primary operation for seeds. Seeds get re-run, and idempotency is the thing
     /// every hand-written seed gets wrong. It is also what removes hardcoded ids: a
     /// natural key means the row identifies itself.
+    ///
+    /// Rows nested in an upsert with `create` or `createMany` are re-runnable too. Each is
+    /// written only when no row already holds every value the seed gives it, its link to
+    /// the parent included; a child of one of those follows the same rule. So a second run
+    /// adds nothing, and a child whose values changed is added beside the old one rather
+    /// than replacing it. A column the seed leaves out or sets to `$default`, and a time the
+    /// database computes such as `now()`, is not compared. Two identical children in one
+    /// seed are one child: the second matches the first.
     Upsert {
         model: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,6 +178,10 @@ pub enum Value {
     Connect { connect: IndexMap<String, Value> },
 
     /// `{"create": [...]}` on the inverse side of a relation.
+    ///
+    /// Under an `upsert` each row is matched before it is written, so a re-run does not
+    /// add it again; see [`Operation::Upsert`]. Under a `create` the parent is new and
+    /// every row is written.
     NestedCreate { create: Vec<DataMap> },
 
     /// `{"createMany": [...]}` on the inverse side of a relation.
@@ -191,6 +207,15 @@ pub enum Value {
     /// Last, so every tagged shape above is tried first. An untagged enum takes the first
     /// variant that deserialises, and this one accepts almost anything.
     Scalar(serde_json::Value),
+}
+
+/// A `$ref`'s label and the column it names, as Postgres keeps that column's name.
+///
+/// The column is cut to 63 bytes the way Postgres cuts it, so a reference written with a
+/// column's full long name and one written with the name Postgres keeps both find it.
+pub fn reference_parts(reference: &str) -> Option<(&str, String)> {
+    let (label, field) = reference.split_once('.')?;
+    Some((label, clip_identifier(field)))
 }
 
 impl Value {

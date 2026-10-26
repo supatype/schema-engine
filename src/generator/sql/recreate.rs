@@ -1,14 +1,18 @@
-//! A column dropped and added again (`RecreateColumn`), around everything that depends on it.
+//! A column dropped and added again (`RecreateColumn`), or its type changed in place
+//! (`AlterColumn`), around what depends on it.
 //!
-//! Postgres refuses to drop a column anything else depends on, and the push never cascades, so
-//! each dependent is dropped first and made again after, from the catalog's own definition, so no
-//! clause is lost to the engine not modelling it. Two kinds cannot be made again that way and
-//! refuse the push before it changes anything: a view (it may be anything, and others may depend
-//! on it in turn), and anything in another schema (the push works in its own).
+//! Postgres refuses to drop a column anything else depends on, and to change the type of one a
+//! trigger, a policy or a view reads; the push never cascades, so each dependent in the way is
+//! dropped first and made again after, from the catalog's own definition, so no clause is lost to
+//! the engine not modelling it. Two kinds cannot be made again that way and refuse the push before
+//! it changes anything: a view (it may be anything, and others may depend on it in turn), and
+//! anything in another schema (the push works in its own). Both changes share this one path, so a
+//! dependent is handled the same whichever of them the push makes.
 //!
 //! The engine's own objects among the dependents are the reconcile's: one it keeps as it is is
 //! made again here like the user's, since nothing else would; one it makes, replaces or drops
-//! itself in this push is only dropped here, and left to it.
+//! itself in this push is only dropped here, and left to it. The engine's own views are made
+//! again whenever their table changes, so here they are only dropped.
 //!
 //! Two things are left as they are, on purpose:
 //! - A function body that names the column. A trigger or policy that reads the column only inside
@@ -48,6 +52,12 @@ pub struct Reconciled {
 }
 
 impl Reconciled {
+    /// A reconcile with no action for any object.
+    pub const NONE: Reconciled = Reconciled {
+        kept: BTreeSet::new(),
+        engines: BTreeSet::new(),
+    };
+
     pub fn of(actions: &[Action]) -> Reconciled {
         let leaves_in_place = |a: &&Action| {
             matches!(
@@ -115,6 +125,129 @@ fn dependency_schema<'a>(schema: &'a str, dep: &'a ColumnDependencySnapshot) -> 
     dep.schema.as_deref().unwrap_or(schema)
 }
 
+/// How a column changes under what depends on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnChange {
+    /// Dropped and added again: everything that depends on it would go with it.
+    Recreate,
+    /// Its type changed in place. Postgres rebuilds the indexes and constraints on it itself, and
+    /// refuses while a trigger, a policy or a view reads it.
+    Retype,
+}
+
+impl ColumnChange {
+    /// Whether `dep` is in the way of this change.
+    fn is_in_the_way(self, dep: &ColumnDependencySnapshot) -> bool {
+        match self {
+            ColumnChange::Recreate => true,
+            ColumnChange::Retype => matches!(dep.kind.as_str(), "trigger" | "policy" | "view"),
+        }
+    }
+
+    /// What the change does to the column, as a refusal says it.
+    fn described(self) -> &'static str {
+        match self {
+            ColumnChange::Recreate => "has to be dropped and added again for this change",
+            ColumnChange::Retype => "changes type in this push",
+        }
+    }
+}
+
+/// One column a push changes, what depends on it, and what the push's reconcile does with the
+/// engine's objects among them.
+#[derive(Debug, Clone, Copy)]
+pub struct ColumnSite<'a> {
+    pub schema: &'a str,
+    pub table: &'a str,
+    pub column: &'a str,
+    pub dependencies: &'a [ColumnDependencySnapshot],
+    pub reconciled: &'a Reconciled,
+}
+
+impl ColumnSite<'_> {
+    /// The dependents in the way of `change`, of `kind`.
+    fn in_the_way<'s>(
+        &'s self,
+        change: ColumnChange,
+        kind: &'static str,
+    ) -> impl Iterator<Item = &'s ColumnDependencySnapshot> + 's {
+        self.dependencies
+            .iter()
+            .filter(move |dep| dep.kind == kind && change.is_in_the_way(dep))
+    }
+
+    /// `middle` with what is in the way of `change` dropped before it and made again after it, or
+    /// an error naming what cannot be made again. One the engine's reconcile makes, replaces or
+    /// drops itself is only dropped; one `made_by_middle` says `middle` makes is not made again.
+    fn around(
+        &self,
+        change: ColumnChange,
+        middle: Vec<String>,
+        made_by_middle: impl Fn(&ColumnDependencySnapshot) -> bool,
+    ) -> Result<String> {
+        self.refuse_what_cannot_come_back(change)?;
+        let mut stmts = self.drop_engines_views(change);
+        stmts.extend(
+            DEPENDENCY_DROP_ORDER
+                .into_iter()
+                .flat_map(|kind| self.in_the_way(change, kind))
+                .map(|dep| drop_dependency_sql(self.schema, dep)),
+        );
+        stmts.extend(middle);
+        stmts.extend(
+            DEPENDENCY_DROP_ORDER
+                .into_iter()
+                .rev()
+                .flat_map(|kind| self.in_the_way(change, kind))
+                .filter(|dep| self.reconciled.restores(self.schema, dep))
+                .filter(|dep| !made_by_middle(dep))
+                .map(|dep| restore_dependency_sql(self.schema, self.column, dep)),
+        );
+        Ok(stmts.join("\n"))
+    }
+
+    /// The drop of each of the engine's views on the column: the push makes its views again
+    /// whenever their table changes, after the operations, so here they only go.
+    fn drop_engines_views(&self, change: ColumnChange) -> Vec<String> {
+        self.in_the_way(change, "view")
+            .filter(|dep| self.reconciled.is_engines(self.schema, dep))
+            .map(|dep| drop_dependency_sql(self.schema, dep))
+            .collect()
+    }
+
+    /// An error naming every view, and every dependent in another schema, in the way of `change`
+    /// that is not the engine's: the push cannot drop and make those again, so it stops before it
+    /// changes anything.
+    fn refuse_what_cannot_come_back(&self, change: ColumnChange) -> Result<()> {
+        let schema = self.schema;
+        let blocking: Vec<String> = self
+            .dependencies
+            .iter()
+            .filter(|dep| change.is_in_the_way(dep))
+            .filter(|dep| dep.kind == "view" || dependency_schema(schema, dep) != schema)
+            .filter(|dep| !self.reconciled.is_engines(schema, dep))
+            .map(|dep| describe(schema, dep))
+            .collect();
+        if blocking.is_empty() {
+            return Ok(());
+        }
+        let (depend, them) = if blocking.len() == 1 {
+            ("depends", "it")
+        } else {
+            ("depend", "them")
+        };
+        bail!(
+            "{schema}.{}.{} {}, and {} {depend} on it. Supatype does not drop and make again a \
+             view, or anything in another schema, so nothing was changed. Drop {them}, push \
+             again, then make {them} again.",
+            self.table,
+            self.column,
+            change.described(),
+            blocking.join(", "),
+        )
+    }
+}
+
 /// A column dropped and added again, around what depends on it: each dependent is dropped first
 /// and made again after, by the name and shape it has in the catalog. One the new column's
 /// definition makes itself (a `CONSTRAINT` it names), or the engine's unique or type check for the
@@ -122,71 +255,30 @@ fn dependency_schema<'a>(schema: &'a str, dep: &'a ColumnDependencySnapshot) -> 
 /// dependent in another schema, that is not the engine's refuses the push.
 pub fn recreate_column_sql(
     names: &ObjectNames,
-    table: &str,
-    column: &str,
+    site: &ColumnSite<'_>,
     field: &FieldAst,
-    dependencies: &[ColumnDependencySnapshot],
-    schema: &str,
-    reconciled: &Reconciled,
 ) -> Result<String> {
-    refuse_what_cannot_come_back(table, column, dependencies, schema, reconciled)?;
-    let by_kind = |kind: &'static str| dependencies.iter().filter(move |dep| dep.kind == kind);
-    let mut stmts: Vec<String> = DEPENDENCY_DROP_ORDER
-        .into_iter()
-        .flat_map(by_kind)
-        .map(|dep| drop_dependency_sql(schema, dep))
-        .collect();
-
-    let target = quote_qualified(schema, table);
-    stmts.push(format!(
-        "ALTER TABLE {target} DROP COLUMN IF EXISTS {};",
-        quote_ident(column)
-    ));
+    let (table, column) = (site.table, site.column);
+    let target = quote_qualified(site.schema, table);
     let col_def = field_to_column_def(names, table, column, field)?;
-    stmts.push(format!("ALTER TABLE {target} ADD COLUMN {col_def};"));
-
-    stmts.extend(
-        DEPENDENCY_DROP_ORDER
-            .into_iter()
-            .rev()
-            .flat_map(by_kind)
-            .filter(|dep| reconciled.restores(schema, dep))
-            .filter(|dep| !made_by_column_definition(names, table, column, &col_def, dep))
-            .map(|dep| restore_dependency_sql(schema, column, dep)),
-    );
-    Ok(stmts.join("\n"))
+    let middle = vec![
+        format!(
+            "ALTER TABLE {target} DROP COLUMN IF EXISTS {};",
+            quote_ident(column)
+        ),
+        format!("ALTER TABLE {target} ADD COLUMN {col_def};"),
+    ];
+    site.around(ColumnChange::Recreate, middle, |dep| {
+        made_by_column_definition(names, table, column, &col_def, dep)
+    })
 }
 
-/// An error naming every view, and every dependent in another schema, on `table.column` that is
-/// not the engine's: the recreate cannot drop and make those again, so the push stops before it
-/// changes anything.
-fn refuse_what_cannot_come_back(
-    table: &str,
-    column: &str,
-    dependencies: &[ColumnDependencySnapshot],
-    schema: &str,
-    reconciled: &Reconciled,
-) -> Result<()> {
-    let blocking: Vec<String> = dependencies
-        .iter()
-        .filter(|dep| dep.kind == "view" || dependency_schema(schema, dep) != schema)
-        .filter(|dep| !reconciled.is_engines(schema, dep))
-        .map(|dep| describe(schema, dep))
-        .collect();
-    if blocking.is_empty() {
-        return Ok(());
-    }
-    let (depend, them) = if blocking.len() == 1 {
-        ("depends", "it")
-    } else {
-        ("depend", "them")
-    };
-    bail!(
-        "{schema}.{table}.{column} has to be dropped and added again for this change, and {} \
-         {depend} on it. Supatype does not drop and make again a view, or anything in another \
-         schema, so nothing was changed. Drop {them}, push again, then make {them} again.",
-        blocking.join(", "),
-    )
+/// A column's type changed in place (`retype`), around what Postgres refuses it under: each
+/// trigger and policy that reads the column is dropped first and made again after, as for a column
+/// dropped and added again, and the engine's own views on it go and are made again with their
+/// table. A view, or a dependent in another schema, that is not the engine's refuses the push.
+pub fn retype_column_sql(site: &ColumnSite<'_>, retype: String) -> Result<String> {
+    site.around(ColumnChange::Retype, vec![retype], |_| false)
 }
 
 /// `view public.titles`, or `foreign key other.notes.notes_post_fkey`: a dependent as an error
@@ -226,6 +318,8 @@ fn drop_dependency_sql(schema: &str, dep: &ColumnDependencySnapshot) -> String {
         ),
         "trigger" => format!("DROP TRIGGER IF EXISTS {name} ON {on};"),
         "policy" => format!("DROP POLICY IF EXISTS {name} ON {on};"),
+        // A view dependent is named by the view itself.
+        "view" => format!("DROP VIEW IF EXISTS {on};"),
         _ => format!("ALTER TABLE {on} DROP CONSTRAINT IF EXISTS {name};"),
     }
 }
@@ -439,28 +533,60 @@ mod tests {
         assert!(restored("users_own"));
     }
 
+    /// A view on `posts.title`: `titles` in the project schema, or one in `schema`.
+    fn view(schema: Option<&str>, name: &str) -> ColumnDependencySnapshot {
+        ColumnDependencySnapshot {
+            table: name.into(),
+            schema: schema.map(str::to_string),
+            ..dependency("view", name, Some(""))
+        }
+    }
+
+    /// A key on `posts.title` from a table in another schema.
+    fn key_elsewhere() -> ColumnDependencySnapshot {
+        ColumnDependencySnapshot {
+            table: "notes".into(),
+            schema: Some("other".into()),
+            ..dependency("foreign_key", "notes_post_fkey", None)
+        }
+    }
+
+    /// A reconcile with an action for the view `schema.name`, so the engine's.
+    fn with_engines_view(schema: &str, name: &str) -> Reconciled {
+        let key = ObjectKey {
+            kind: ObjectKind::View,
+            schema: schema.into(),
+            parent: String::new(),
+            name: name.into(),
+        };
+        Reconciled {
+            engines: BTreeSet::from([key]),
+            ..Reconciled::default()
+        }
+    }
+
+    fn site<'a>(
+        deps: &'a [ColumnDependencySnapshot],
+        reconciled: &'a Reconciled,
+    ) -> ColumnSite<'a> {
+        ColumnSite {
+            schema: "public",
+            table: "posts",
+            column: "title",
+            dependencies: deps,
+            reconciled,
+        }
+    }
+
     /// A user's view on the column, and a key in another schema, refuse the push by name; the
     /// engine's own view is its business.
     #[test]
     fn a_users_view_or_other_schemas_dependent_refuses_by_name() {
-        let view = ColumnDependencySnapshot {
-            table: "titles".into(),
-            ..dependency("view", "titles", Some(""))
-        };
-        let elsewhere = ColumnDependencySnapshot {
-            table: "notes".into(),
-            schema: Some("other".into()),
-            ..dependency("foreign_key", "notes_post_fkey", None)
-        };
-        let refused = refuse_what_cannot_come_back(
-            "posts",
-            "title",
-            &[view.clone(), elsewhere],
-            "public",
-            &Reconciled::default(),
-        )
-        .unwrap_err()
-        .to_string();
+        let deps = [view(None, "titles"), key_elsewhere()];
+        let refused = site(&deps, &Reconciled::default())
+            .refuse_what_cannot_come_back(ColumnChange::Recreate)
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             refused,
             "public.posts.title has to be dropped and added again for this change, and view \
@@ -468,17 +594,57 @@ mod tests {
              not drop and make again a view, or anything in another schema, so nothing was \
              changed. Drop them, push again, then make them again."
         );
-        let engines = Reconciled {
-            kept: BTreeSet::new(),
-            engines: BTreeSet::from([ObjectKey {
-                kind: ObjectKind::View,
-                schema: "public".into(),
-                parent: String::new(),
-                name: "titles".into(),
-            }]),
-        };
+        let engines = with_engines_view("public", "titles");
+        assert!(site(&[view(None, "titles")], &engines)
+            .refuse_what_cannot_come_back(ColumnChange::Recreate)
+            .is_ok());
+    }
+
+    /// A type change in place is refused only by what Postgres refuses it under: a user's view
+    /// names the same refusal as a recreate, worded for the type change; a key in another schema,
+    /// which Postgres rebuilds itself, is not in the way.
+    #[test]
+    fn a_type_change_is_refused_only_by_what_reads_the_column() {
+        let deps = [view(None, "titles"), key_elsewhere()];
+        let refused = retype_column_sql(&site(&deps, &Reconciled::default()), "ALTER;".into())
+            .unwrap_err()
+            .to_string();
         assert!(
-            refuse_what_cannot_come_back("posts", "title", &[view], "public", &engines).is_ok()
+            refused.starts_with(
+                "public.posts.title changes type in this push, and view public.titles depends on it."
+            ),
+            "{refused}"
+        );
+        let elsewhere = [key_elsewhere()];
+        let retyped = retype_column_sql(&site(&elsewhere, &Reconciled::default()), "ALTER;".into());
+        assert_eq!(retyped.unwrap(), "ALTER;");
+    }
+
+    /// Around a type change, a policy and a trigger on the column are dropped and made again, the
+    /// engine's own view on it only dropped, and an index left to Postgres.
+    #[test]
+    fn a_type_change_drops_and_restores_what_reads_the_column() {
+        let policy = Some(" AS PERMISSIVE FOR SELECT TO PUBLIC");
+        let trigger = Some("CREATE TRIGGER t BEFORE UPDATE OF title ON posts");
+        let deps = [
+            dependency("policy", "posts_select", policy),
+            dependency("trigger", "t", trigger),
+            dependency("index", "posts_title_idx", None),
+            view(Some("api"), "posts"),
+        ];
+        let engines = with_engines_view("api", "posts");
+        let sql = retype_column_sql(&site(&deps, &engines), "ALTER;".into()).unwrap();
+        assert_eq!(
+            sql.lines().collect::<Vec<_>>(),
+            [
+                "DROP VIEW IF EXISTS \"api\".\"posts\";",
+                "DROP TRIGGER IF EXISTS \"t\" ON \"public\".\"posts\";",
+                "DROP POLICY IF EXISTS \"posts_select\" ON \"public\".\"posts\";",
+                "ALTER;",
+                "CREATE POLICY \"posts_select\" ON \"public\".\"posts\" AS PERMISSIVE FOR SELECT \
+                 TO PUBLIC;",
+                "CREATE TRIGGER t BEFORE UPDATE OF title ON posts;",
+            ]
         );
     }
 }

@@ -1,5 +1,6 @@
 pub mod column_diff;
 pub mod constraint_diff;
+pub(crate) mod default_diff;
 pub mod doctor;
 pub mod extension_diff;
 pub mod field_access_diff;
@@ -112,6 +113,11 @@ pub enum Operation {
         column: String,
         field: Box<FieldAst>,
         changes: serde_json::Value,
+        /// What depends on the column, read when its type changes: Postgres refuses to change the
+        /// type of a column a policy, a trigger or a view reads, so those are dropped around the
+        /// change and made again, or refuse the push, as for a `RecreateColumn`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        dependencies: Vec<ColumnDependencySnapshot>,
         risk: Risk,
         warning: Option<String>,
     },
@@ -284,7 +290,10 @@ pub fn diff_with_previous(
         FieldMaskingTier::Views
     };
     let field_view_plan = match field_masking {
-        FieldMaskingTier::Views => crate::generator::sql::field_views::field_view_plan(ast, db),
+        FieldMaskingTier::Views => {
+            use crate::generator::sql::field_views::{after_operations, field_view_plan};
+            after_operations(field_view_plan(ast, db), &ordered_ops)
+        }
         _ => Vec::new(),
     };
 
