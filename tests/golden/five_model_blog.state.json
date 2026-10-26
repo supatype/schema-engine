@@ -1,0 +1,1490 @@
+{
+  "database": {
+    "schema": "public",
+    "tables": [
+      {
+        "schema": "public",
+        "name": "categories",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "slug",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 5,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=categories;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "comments",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "body",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "post_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": true,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "author_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": true,
+            "default": null,
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 5,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 6,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=comments;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "posts",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "title",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "slug",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "content",
+            "dataType": "jsonb",
+            "udtName": "jsonb",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "author_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": true,
+            "default": null,
+            "ordinalPosition": 5,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "category_id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": true,
+            "default": null,
+            "ordinalPosition": 6,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 7,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 8,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=posts;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "tags",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=tags;fields=;v=1"
+      },
+      {
+        "schema": "public",
+        "name": "users",
+        "columns": [
+          {
+            "name": "id",
+            "dataType": "uuid",
+            "udtName": "uuid",
+            "nullable": false,
+            "default": "gen_random_uuid()",
+            "ordinalPosition": 1,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "email",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 2,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "name",
+            "dataType": "text",
+            "udtName": "text",
+            "nullable": false,
+            "default": null,
+            "ordinalPosition": 3,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "created_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 4,
+            "numericPrecision": null,
+            "numericScale": null
+          },
+          {
+            "name": "updated_at",
+            "dataType": "timestamp with time zone",
+            "udtName": "timestamptz",
+            "nullable": false,
+            "default": "now()",
+            "ordinalPosition": 5,
+            "numericPrecision": null,
+            "numericScale": null
+          }
+        ],
+        "comment": "supatype:managed;kind=table;table=users;fields=;v=1"
+      }
+    ],
+    "indexes": [
+      {
+        "table": "categories",
+        "name": "categories_name_key",
+        "columns": [
+          "name"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX categories_name_key ON public.categories USING btree (name)"
+      },
+      {
+        "table": "categories",
+        "name": "categories_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX categories_pkey ON public.categories USING btree (id)"
+      },
+      {
+        "table": "categories",
+        "name": "categories_slug_key",
+        "columns": [
+          "slug"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX categories_slug_key ON public.categories USING btree (slug)"
+      },
+      {
+        "table": "comments",
+        "name": "comments_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX comments_pkey ON public.comments USING btree (id)"
+      },
+      {
+        "table": "posts",
+        "name": "posts_author_id_idx",
+        "columns": [
+          "author_id"
+        ],
+        "unique": false,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": "supatype:managed;kind=index;table=posts;fields=author_id;v=1",
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE INDEX posts_author_id_idx ON public.posts USING btree (author_id)"
+      },
+      {
+        "table": "posts",
+        "name": "posts_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX posts_pkey ON public.posts USING btree (id)"
+      },
+      {
+        "table": "posts",
+        "name": "posts_slug_key",
+        "columns": [
+          "slug"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX posts_slug_key ON public.posts USING btree (slug)"
+      },
+      {
+        "table": "tags",
+        "name": "tags_name_key",
+        "columns": [
+          "name"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX tags_name_key ON public.tags USING btree (name)"
+      },
+      {
+        "table": "tags",
+        "name": "tags_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX tags_pkey ON public.tags USING btree (id)"
+      },
+      {
+        "table": "users",
+        "name": "users_email_key",
+        "columns": [
+          "email"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": false,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)"
+      },
+      {
+        "table": "users",
+        "name": "users_pkey",
+        "columns": [
+          "id"
+        ],
+        "unique": true,
+        "method": "btree",
+        "isPrimary": true,
+        "comment": null,
+        "expressions": null,
+        "predicate": null,
+        "definition": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)"
+      }
+    ],
+    "constraints": [
+      {
+        "table": "categories",
+        "name": "categories_name_key",
+        "constraintType": "unique",
+        "columns": [
+          "name"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=categories;fields=name;v=1"
+      },
+      {
+        "table": "categories",
+        "name": "categories_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "categories",
+        "name": "categories_slug_key",
+        "constraintType": "unique",
+        "columns": [
+          "slug"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=categories;fields=slug;v=1"
+      },
+      {
+        "table": "comments",
+        "name": "comments_author_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "author_id"
+        ],
+        "foreignTable": "users",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "comments",
+        "name": "comments_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "comments",
+        "name": "comments_post_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "post_id"
+        ],
+        "foreignTable": "posts",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "posts",
+        "name": "posts_author_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "author_id"
+        ],
+        "foreignTable": "users",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "CASCADE",
+        "comment": null
+      },
+      {
+        "table": "posts",
+        "name": "posts_category_id_fkey",
+        "constraintType": "foreignKey",
+        "columns": [
+          "category_id"
+        ],
+        "foreignTable": "categories",
+        "foreignSchema": "public",
+        "foreignColumns": [
+          "id"
+        ],
+        "checkExpression": null,
+        "onDelete": "SET NULL",
+        "comment": null
+      },
+      {
+        "table": "posts",
+        "name": "posts_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "posts",
+        "name": "posts_slug_key",
+        "constraintType": "unique",
+        "columns": [
+          "slug"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1"
+      },
+      {
+        "table": "tags",
+        "name": "tags_name_key",
+        "constraintType": "unique",
+        "columns": [
+          "name"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1"
+      },
+      {
+        "table": "tags",
+        "name": "tags_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "users",
+        "name": "users_email_check",
+        "constraintType": "check",
+        "columns": [],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": "CHECK ((email ~* '^[^@]+@[^@]+\\.[^@]+$'::text))",
+        "onDelete": null,
+        "comment": null
+      },
+      {
+        "table": "users",
+        "name": "users_email_key",
+        "constraintType": "unique",
+        "columns": [
+          "email"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": "supatype:managed;kind=unique_constraint;table=users;fields=email;v=1"
+      },
+      {
+        "table": "users",
+        "name": "users_pkey",
+        "constraintType": "primaryKey",
+        "columns": [
+          "id"
+        ],
+        "foreignTable": null,
+        "foreignSchema": null,
+        "foreignColumns": null,
+        "checkExpression": null,
+        "onDelete": null,
+        "comment": null
+      }
+    ],
+    "rlsPolicies": [],
+    "triggers": [
+      {
+        "table": "categories",
+        "name": "categories_slug_trigger",
+        "event": "INSERT",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
+      },
+      {
+        "table": "categories",
+        "name": "categories_slug_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_categories_slug()"
+      },
+      {
+        "table": "categories",
+        "name": "categories_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "comments",
+        "name": "comments_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "posts",
+        "name": "posts_rich_text_trigger",
+        "event": "INSERT",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.normalise_posts_rich_text()"
+      },
+      {
+        "table": "posts",
+        "name": "posts_rich_text_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.normalise_posts_rich_text()"
+      },
+      {
+        "table": "posts",
+        "name": "posts_slug_trigger",
+        "event": "INSERT",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_posts_slug()"
+      },
+      {
+        "table": "posts",
+        "name": "posts_slug_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_posts_slug()"
+      },
+      {
+        "table": "posts",
+        "name": "posts_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      },
+      {
+        "table": "users",
+        "name": "users_updated_at_trigger",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _platform.set_updated_at()"
+      }
+    ],
+    "extensions": [
+      "pgcrypto",
+      "plpgsql",
+      "unaccent"
+    ],
+    "enums": [],
+    "rlsEnabledTables": [
+      "categories",
+      "comments",
+      "posts",
+      "tags",
+      "users"
+    ]
+  },
+  "catalog": {
+    "expressionIndexes": [],
+    "triggers": [
+      {
+        "schema": "public",
+        "table": "categories",
+        "name": "categories_slug_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "INSERT",
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_categories_slug",
+        "definition": "CREATE TRIGGER categories_slug_trigger BEFORE INSERT OR UPDATE ON public.categories FOR EACH ROW EXECUTE FUNCTION _platform.set_categories_slug()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "name": "categories_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER categories_updated_at_trigger BEFORE UPDATE ON public.categories FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "comments",
+        "name": "comments_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER comments_updated_at_trigger BEFORE UPDATE ON public.comments FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "posts",
+        "name": "posts_rich_text_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "INSERT",
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.normalise_posts_rich_text",
+        "definition": "CREATE TRIGGER posts_rich_text_trigger BEFORE INSERT OR UPDATE ON public.posts FOR EACH ROW EXECUTE FUNCTION _platform.normalise_posts_rich_text()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "posts",
+        "name": "posts_slug_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "INSERT",
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_posts_slug",
+        "definition": "CREATE TRIGGER posts_slug_trigger BEFORE INSERT OR UPDATE ON public.posts FOR EACH ROW EXECUTE FUNCTION _platform.set_posts_slug()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "posts",
+        "name": "posts_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER posts_updated_at_trigger BEFORE UPDATE ON public.posts FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "users",
+        "name": "users_updated_at_trigger",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_platform.set_updated_at",
+        "definition": "CREATE TRIGGER users_updated_at_trigger BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at()",
+        "enabled": true,
+        "comment": null
+      }
+    ],
+    "functions": [
+      {
+        "schema": "_platform",
+        "name": "normalise_posts_rich_text",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  NEW.\"content\" := CASE WHEN NEW.\"content\" IS NULL THEN NULL WHEN NEW.\"content\" ? 'root' THEN NEW.\"content\" WHEN jsonb_typeof(NEW.\"content\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"content\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"content\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"content\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"content\"::text::text)))))) END;\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "set_categories_slug",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "set_posts_slug",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "set_updated_at",
+        "identityArguments": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_platform",
+        "name": "slugify",
+        "identityArguments": "val text",
+        "returnType": "text",
+        "language": "plpgsql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_items_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_max",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_number_min",
+        "identityArguments": "v jsonb, n numeric",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_max",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_richtext_length_min",
+        "identityArguments": "v jsonb, n integer",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_max",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "localized_temporal_min",
+        "identityArguments": "v jsonb, n text",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "richtext_text",
+        "identityArguments": "v jsonb",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "i",
+        "securityDefiner": false,
+        "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim",
+        "identityArguments": "claim_path text",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "claim_text",
+        "identityArguments": "claim_path text",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "email",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "jwt",
+        "identityArguments": "",
+        "returnType": "jsonb",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "role",
+        "identityArguments": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "roles",
+        "identityArguments": "",
+        "returnType": "text[]",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
+        "comment": null
+      },
+      {
+        "schema": "auth",
+        "name": "uid",
+        "identityArguments": "",
+        "returnType": "uuid",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_comments",
+        "identityArguments": "comments comments",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_posts",
+        "identityArguments": "posts posts",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_create_users",
+        "identityArguments": "users users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_comments",
+        "identityArguments": "comments comments",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_posts",
+        "identityArguments": "posts posts",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_delete_users",
+        "identityArguments": "users users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_comments",
+        "identityArguments": "comments comments",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_posts",
+        "identityArguments": "posts posts",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_read_users",
+        "identityArguments": "users users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_categories",
+        "identityArguments": "categories categories",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_comments",
+        "identityArguments": "comments comments",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_posts",
+        "identityArguments": "posts posts",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_tags",
+        "identityArguments": "tags tags",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "name": "can_update_users",
+        "identityArguments": "users users",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
+        "comment": null
+      }
+    ],
+    "views": [],
+    "schemas": [
+      {
+        "name": "_platform",
+        "comment": null
+      },
+      {
+        "name": "_supatype",
+        "comment": null
+      },
+      {
+        "name": "auth",
+        "comment": null
+      },
+      {
+        "name": "public",
+        "comment": "standard public schema"
+      }
+    ],
+    "sequences": [],
+    "enumTypes": [],
+    "tableGrants": [
+      {
+        "schema": "public",
+        "table": "categories",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "comments",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "posts",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "tags",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      },
+      {
+        "schema": "public",
+        "table": "users",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ]
+      }
+    ],
+    "columnGrants": [],
+    "securityLabels": [],
+    "cronJobs": [],
+    "rlsAttributes": [
+      {
+        "schema": "auth",
+        "table": "users",
+        "enabled": false,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "categories",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "comments",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "posts",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "tags",
+        "enabled": true,
+        "forced": false
+      },
+      {
+        "schema": "public",
+        "table": "users",
+        "enabled": true,
+        "forced": false
+      }
+    ],
+    "policyRoles": []
+  }
+}

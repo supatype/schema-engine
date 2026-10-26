@@ -17,13 +17,50 @@ pub fn managed_comment(kind: &str, table: &str, fields: &[&str]) -> String {
     )
 }
 
+/// Postgres's identifier limit: `NAMEDATALEN - 1` bytes.
+pub const MAX_IDENTIFIER_BYTES: usize = 63;
+
+/// `base` followed by `suffix`, trimmed to fit Postgres's identifier limit by shortening `base`.
+///
+/// Every generated name goes through this, for the reason Prisma does the same: Postgres silently
+/// truncates a long identifier to 63 bytes, so a `{table}_{column}_key` built in full here and
+/// truncated there is a name nothing can find again. Trimming before the suffix keeps the part
+/// that says what the object is. The cut lands on a character boundary, so a multibyte identifier
+/// cannot be split mid-character.
+pub fn truncate_identifier(base: &str, suffix: &str) -> String {
+    if base.len() + suffix.len() <= MAX_IDENTIFIER_BYTES {
+        return format!("{base}{suffix}");
+    }
+    let mut cut = MAX_IDENTIFIER_BYTES.saturating_sub(suffix.len());
+    while cut > 0 && !base.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{suffix}", &base[..cut])
+}
+
+/// Postgres's own default name for a table's primary key.
+pub fn primary_key_name(table: &str) -> String {
+    truncate_identifier(table, "_pkey")
+}
+
+/// Postgres's own default name for a single-column foreign key.
+pub fn foreign_key_name(table: &str, column: &str) -> String {
+    truncate_identifier(&format!("{table}_{column}"), "_fkey")
+}
+
+/// Postgres's own default name for the check a field type carries (an `Email` regex, a `URL`
+/// prefix, a TEXT enum's `IN` list, a `Publishable` status), as distinct from a declared bound.
+pub fn type_check_name(table: &str, column: &str) -> String {
+    truncate_identifier(&format!("{table}_{column}"), "_check")
+}
+
 /// Name for the constraint holding a column's declared bounds.
 ///
 /// Deliberately not Postgres's own `{table}_{column}_check`: an inline `CHECK` written by anything
 /// else already claims that name, and a bound Supatype manages has to be distinguishable from one it
 /// merely found, or `doctor` and `adopt` cannot tell them apart.
 pub fn expected_check_constraint_name(table: &str, column: &str) -> String {
-    format!("{table}_{column}_bounds")
+    truncate_identifier(&format!("{table}_{column}"), "_bounds")
 }
 
 /// `COMMENT ON` value for a check constraint: which columns it covers, and a fingerprint of it.
@@ -68,17 +105,17 @@ pub fn fingerprint_of(comment: Option<&str>) -> Option<&str> {
 /// and an add of the same expression, and the fingerprint in the comment keeps that from churning
 /// when nothing actually changed.
 pub fn expected_model_constraint_name(table: &str, index: usize) -> String {
-    format!("{table}_check_{}", index + 1)
+    truncate_identifier(table, &format!("_check_{}", index + 1))
 }
 
 /// Postgres default name for a single-column UNIQUE constraint.
 pub fn expected_unique_constraint_name(table: &str, column: &str) -> String {
-    format!("{table}_{column}_key")
+    truncate_identifier(&format!("{table}_{column}"), "_key")
 }
 
 /// Default name for a model-level index (`indexes` in schema meta).
 pub fn expected_model_index_name(table: &str, fields: &[String]) -> String {
-    format!("{table}_{}_idx", fields.join("_"))
+    truncate_identifier(&format!("{table}_{}", fields.join("_")), "_idx")
 }
 
 /// SQL to stamp a constraint comment (escaped single quotes in comment).

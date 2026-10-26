@@ -283,7 +283,7 @@ fn emit_fk_ops_for_model(
                     .foreign_key
                     .as_deref()
                     .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                let constraint_name = format!("{}_{}_fkey", model.table_name(), fk_col);
+                let constraint_name = crate::managed::foreign_key_name(model.table_name(), fk_col);
 
                 if !db_fk_names.contains(constraint_name.as_str()) {
                     let (ref_table, ref_schema) = if let Some((sys_schema, sys_table)) =
@@ -332,7 +332,7 @@ fn drop_removed_fks(
                         .foreign_key
                         .as_deref()
                         .unwrap_or_else(|| Box::leak(format!("{field_name}_id").into_boxed_str()));
-                    return Some(format!("{}_{}_fkey", model.table_name(), fk_col));
+                    return Some(crate::managed::foreign_key_name(model.table_name(), fk_col));
                 }
             }
             None

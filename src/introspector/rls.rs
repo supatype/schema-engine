@@ -38,7 +38,8 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbRlsPoli
              FROM pg_policy p
              JOIN pg_class c ON c.oid = p.polrelid
              JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname = $1",
+             WHERE n.nspname = $1
+             ORDER BY c.relname, p.polname",
     )
     .bind(schema)
     .fetch_all(&mut *conn)
@@ -72,7 +73,8 @@ pub async fn read_rls_enabled_tables(conn: &mut PgConnection, schema: &str) -> R
         "SELECT c.relname
              FROM pg_class c
              JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname = $1 AND c.relkind = 'r' AND c.relrowsecurity",
+             WHERE n.nspname = $1 AND c.relkind = 'r' AND c.relrowsecurity
+             ORDER BY c.relname",
     )
     .bind(schema)
     .fetch_all(&mut *conn)

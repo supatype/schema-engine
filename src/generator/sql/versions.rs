@@ -138,12 +138,17 @@ pub fn create_versions_table_sql(
 ) -> String {
     let marker = crate::managed::managed_comment("table", versions_table, &[]);
     let index = versions_record_index_name(versions_table);
+    let pk_name = crate::managed::primary_key_name(versions_table);
+    let fk_name = crate::managed::foreign_key_name(versions_table, "record_id");
+    let status_check = crate::managed::type_check_name(versions_table, "status");
+    let record_version_key =
+        crate::managed::truncate_identifier(&format!("{versions_table}_record_id_version"), "_key");
     format!(
         "CREATE TABLE IF NOT EXISTS {schema_q}.{versions_q} (\n    \
-         \"id\" UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n    \
-         \"record_id\" {record_id_type} NOT NULL REFERENCES {schema_q}.{table_q} ({pk_q}) ON DELETE CASCADE,\n    \
+         \"id\" UUID CONSTRAINT {pk_name_q} PRIMARY KEY DEFAULT gen_random_uuid(),\n    \
+         \"record_id\" {record_id_type} NOT NULL CONSTRAINT {fk_name_q} REFERENCES {schema_q}.{table_q} ({pk_q}) ON DELETE CASCADE,\n    \
          \"version\" INTEGER NOT NULL,\n    \
-         \"status\" TEXT NOT NULL CHECK (\"status\" IN ('draft', 'published')),\n    \
+         \"status\" TEXT NOT NULL CONSTRAINT {status_check_q} CHECK (\"status\" IN ('draft', 'published')),\n    \
          \"data\" JSONB NOT NULL,\n    \
          -- When each locale is due to go live, if it has been scheduled.\n    \
          -- Per locale rather than one `publish_at` for the row, because publishing is per locale:\n    \
@@ -157,7 +162,7 @@ pub fn create_versions_table_sql(
          -- column differ drops columns the schema does not declare, and rather than in a table of\n    \
          -- its own because this row already carries the policies and the guard that protect it.\n    \
          \"published_locales\" JSONB NOT NULL DEFAULT '{{}}',\n    \
-         UNIQUE (\"record_id\", \"version\")\n\
+         CONSTRAINT {record_version_key_q} UNIQUE (\"record_id\", \"version\")\n\
          );\n\n\
          COMMENT ON TABLE {schema_q}.{versions_q} IS '{marker}';\n\n\
          CREATE INDEX IF NOT EXISTS {index_q} ON {schema_q}.{versions_q} (\"record_id\", \"version\" DESC);",
@@ -166,6 +171,10 @@ pub fn create_versions_table_sql(
         table_q = quoted(table),
         pk_q = quoted(primary_key),
         index_q = quoted(&index),
+        pk_name_q = quoted(&pk_name),
+        fk_name_q = quoted(&fk_name),
+        status_check_q = quoted(&status_check),
+        record_version_key_q = quoted(&record_version_key),
     )
 }
 

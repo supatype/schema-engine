@@ -6,8 +6,8 @@ use crate::generator::sql::column_conversion::{
 };
 use crate::managed::{
     comment_on_constraint_sql, comment_on_index_sql, expected_check_constraint_name,
-    expected_model_constraint_name, expected_unique_constraint_name, managed_check_comment,
-    managed_comment,
+    expected_model_constraint_name, expected_unique_constraint_name, foreign_key_name,
+    managed_check_comment, managed_comment, primary_key_name, type_check_name,
 };
 use crate::parser::accessors::{column_names_for, db_unique};
 use crate::parser::ast::{
@@ -683,7 +683,14 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
             // the FK constraint is a separate AddForeignKey operation.
             if let FieldAst::Relation(rel) = field.as_ref() {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                    let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
+                    let uniq = if rel.unique_fk {
+                        format!(
+                            " CONSTRAINT \"{}\" UNIQUE",
+                            expected_unique_constraint_name(table, column)
+                        )
+                    } else {
+                        String::new()
+                    };
                     let req = if rel.required { " NOT NULL" } else { "" };
                     let pg_type = fk_pg_type_for_model(ast, &rel.target);
                     return Ok(format!(
@@ -705,7 +712,8 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
                 (FieldAst::Publishable, "status") => Some(format!(
                     "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN IF NOT EXISTS \
                      \"status\" TEXT NOT NULL DEFAULT 'draft' \
-                     CHECK (\"status\" IN ('draft','published','scheduled','archived'));"
+                     CONSTRAINT \"{}\" CHECK (\"status\" IN ('draft','published','scheduled','archived'));",
+                    type_check_name(table, "status")
                 )),
                 (FieldAst::Publishable, "published_at") => Some(format!(
                     "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN IF NOT EXISTS \
@@ -964,11 +972,14 @@ ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({exp
             // (it has no model of its own), so without the marker the ownership gate would refuse to
             // drop it ever, and a removed many-to-many would leave its junction behind for good.
             let marker = managed_comment("table", table, &[]);
+            let fk_a_name = foreign_key_name(table, fk_a);
+            let fk_b_name = foreign_key_name(table, fk_b);
+            let pk_name = primary_key_name(table);
             Ok(format!(
                 "CREATE TABLE IF NOT EXISTS \"{schema}\".\"{table}\" (\n    \
-                 \"{fk_a}\" {type_a} NOT NULL REFERENCES \"{schema}\".\"{ref_table_a}\" (\"{pk_a}\") ON DELETE CASCADE,\n    \
-                 \"{fk_b}\" {type_b} NOT NULL REFERENCES \"{schema}\".\"{ref_table_b}\" (\"{pk_b}\") ON DELETE CASCADE,\n    \
-                 PRIMARY KEY (\"{fk_a}\", \"{fk_b}\")\n\
+                 \"{fk_a}\" {type_a} NOT NULL CONSTRAINT \"{fk_a_name}\" REFERENCES \"{schema}\".\"{ref_table_a}\" (\"{pk_a}\") ON DELETE CASCADE,\n    \
+                 \"{fk_b}\" {type_b} NOT NULL CONSTRAINT \"{fk_b_name}\" REFERENCES \"{schema}\".\"{ref_table_b}\" (\"{pk_b}\") ON DELETE CASCADE,\n    \
+                 CONSTRAINT \"{pk_name}\" PRIMARY KEY (\"{fk_a}\", \"{fk_b}\")\n\
                  );\n\n\
                  COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{marker}';"
             ))
@@ -1017,7 +1028,14 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
                         .map(|f| !matches!(f, FieldAst::Relation(_)))
                         .unwrap_or(false);
                     if !explicitly_declared {
-                        let uniq = if rel.unique_fk { " UNIQUE" } else { "" };
+                        let uniq = if rel.unique_fk {
+                            format!(
+                                " CONSTRAINT \"{}\" UNIQUE",
+                                expected_unique_constraint_name(table, &fk_col)
+                            )
+                        } else {
+                            String::new()
+                        };
                         let req = if rel.required { " NOT NULL" } else { "" };
                         let pg_type = fk_pg_type_for_model(ast, &rel.target);
                         col_defs.push(format!("    \"{fk_col}\" {pg_type}{uniq}{req}"));
@@ -1031,7 +1049,10 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
                 col_defs.push("    \"updated_at\" TIMESTAMPTZ NOT NULL DEFAULT NOW()".into());
             }
             FieldAst::Publishable => {
-                col_defs.push("    \"status\" TEXT NOT NULL DEFAULT 'draft' CHECK (\"status\" IN ('draft', 'published', 'scheduled', 'archived'))".into());
+                col_defs.push(format!(
+                    "    \"status\" TEXT NOT NULL DEFAULT 'draft' CONSTRAINT \"{}\" CHECK (\"status\" IN ('draft', 'published', 'scheduled', 'archived'))",
+                    type_check_name(table, "status")
+                ));
                 col_defs.push("    \"published_at\" TIMESTAMPTZ".into());
                 col_defs.push("    \"scheduled_at\" TIMESTAMPTZ".into());
             }
@@ -1280,7 +1301,10 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         }
         FieldAst::Email(f) => {
             let mut def = scalar_col(table, name, "TEXT", f, false);
-            def.push_str(&format!(" CHECK (\"{name}\" ~* '^[^@]+@[^@]+\\.[^@]+$')"));
+            def.push_str(&format!(
+                " CONSTRAINT \"{}\" CHECK (\"{name}\" ~* '^[^@]+@[^@]+\\.[^@]+$')",
+                type_check_name(table, name)
+            ));
             Ok(def)
         }
         FieldAst::Integer(f) => Ok(scalar_col(table, name, "INTEGER", f, false)),
@@ -1294,27 +1318,22 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         FieldAst::Serial(f) => {
             // SERIAL is self-declaring: NOT NULL + sequence default are implicit.
             // primary_key / unique flags still apply.
-            let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
-            let uniq = if f.unique && !f.primary_key {
-                " UNIQUE"
-            } else {
-                ""
-            };
+            let pk = primary_key_clause(table, f.primary_key);
+            let uniq = unique_clause(table, name, f.unique && !f.primary_key);
             Ok(format!("\"{name}\" SERIAL{pk}{uniq}"))
         }
         FieldAst::BigSerial(f) => {
-            let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
-            let uniq = if f.unique && !f.primary_key {
-                " UNIQUE"
-            } else {
-                ""
-            };
+            let pk = primary_key_clause(table, f.primary_key);
+            let uniq = unique_clause(table, name, f.unique && !f.primary_key);
             Ok(format!("\"{name}\" BIGSERIAL{pk}{uniq}"))
         }
         FieldAst::Money(f) => Ok(scalar_col(table, name, "NUMERIC(19,4)", f, false)),
         FieldAst::Url(f) => {
             let mut def = scalar_col(table, name, "TEXT", f, false);
-            def.push_str(&format!(" CHECK (\"{name}\" ~* '^https?://')"));
+            def.push_str(&format!(
+                " CONSTRAINT \"{}\" CHECK (\"{name}\" ~* '^https?://')",
+                type_check_name(table, name)
+            ));
             Ok(def)
         }
         FieldAst::Ip(f) => Ok(scalar_col(table, name, "INET", f, false)),
@@ -1330,13 +1349,13 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         FieldAst::Xml(f) => Ok(scalar_col(table, name, "XML", f, false)),
         FieldAst::Array(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            let uniq = if f.unique { " UNIQUE" } else { "" };
+            let uniq = unique_clause(table, name, f.unique);
             let elem = f.element_type.to_uppercase();
             let check = render_check(table, name, field);
             Ok(format!("\"{name}\" {elem}[]{req}{uniq}{check}"))
         }
         FieldAst::Slug(f) => {
-            let unique = if f.unique { " UNIQUE" } else { "" };
+            let unique = unique_clause(table, name, f.unique);
             let req = if f.required { " NOT NULL" } else { "" };
             let check = render_check(table, name, field);
             Ok(format!("\"{name}\" TEXT{req}{unique}{check}"))
@@ -1349,14 +1368,15 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
                 .collect::<Vec<_>>()
                 .join(", ");
             let req = if f.required { " NOT NULL" } else { "" };
-            let uniq = if f.unique { " UNIQUE" } else { "" };
+            let uniq = unique_clause(table, name, f.unique);
             let default = f
                 .default
                 .as_ref()
                 .map(|d| format!(" DEFAULT '{d}'"))
                 .unwrap_or_default();
+            let check_name = type_check_name(table, name);
             Ok(format!(
-                "\"{name}\" TEXT{req}{uniq} CHECK (\"{name}\" IN ({vals})){default}"
+                "\"{name}\" TEXT{req}{uniq} CONSTRAINT \"{check_name}\" CHECK (\"{name}\" IN ({vals})){default}"
             ))
         }
         FieldAst::Json(f) => {
@@ -1418,7 +1438,7 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         // Plugin-defined custom field type: use the declared pg_type directly.
         FieldAst::Custom(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            let uniq = if f.unique { " UNIQUE" } else { "" };
+            let uniq = unique_clause(table, name, f.unique);
             let default = f
                 .default
                 .as_ref()
@@ -1646,17 +1666,13 @@ fn scalar_col(
 ) -> String {
     // Localized fields are stored as JSONB regardless of their base type.
     let effective_type = if f.localized { "JSONB" } else { pg_type };
-    let pk = if f.primary_key { " PRIMARY KEY" } else { "" };
+    let pk = primary_key_clause(table, f.primary_key);
     let req = if f.required && !f.primary_key {
         " NOT NULL"
     } else {
         ""
     };
-    let uniq = if f.unique && !f.primary_key {
-        " UNIQUE"
-    } else {
-        ""
-    };
+    let uniq = unique_clause(table, name, f.unique && !f.primary_key);
     let default = f
         .default
         .as_ref()
@@ -1685,6 +1701,32 @@ fn scalar_col(
     })
     .unwrap_or_default();
     format!("\"{name}\" {effective_type}{pk}{req}{uniq}{default}{check}")
+}
+
+/// ` CONSTRAINT "{table}_pkey" PRIMARY KEY`, or nothing.
+///
+/// Named explicitly, with the name Postgres would have chosen, so that no object a push creates is
+/// named by anyone but us. Postgres names an unnamed constraint after the fact and disambiguates a
+/// collision with a digit, and a name only it knows is a name the differ and the ledger cannot
+/// look for.
+fn primary_key_clause(table: &str, primary_key: bool) -> String {
+    if primary_key {
+        format!(" CONSTRAINT \"{}\" PRIMARY KEY", primary_key_name(table))
+    } else {
+        String::new()
+    }
+}
+
+/// ` CONSTRAINT "{table}_{column}_key" UNIQUE`, or nothing. See [`primary_key_clause`].
+fn unique_clause(table: &str, column: &str, unique: bool) -> String {
+    if unique {
+        format!(
+            " CONSTRAINT \"{}\" UNIQUE",
+            expected_unique_constraint_name(table, column)
+        )
+    } else {
+        String::new()
+    }
 }
 
 fn render_default(d: &DefaultValueAst) -> String {
@@ -1969,7 +2011,7 @@ fn add_fk_sql(
     };
     let ref_col = rel.references.as_deref().unwrap_or("id");
     let on_delete = normalize_fk_action(rel.on_delete.as_deref().unwrap_or("restrict"));
-    let constraint = format!("{table}_{fk_col}_fkey");
+    let constraint = foreign_key_name(table, fk_col);
 
     Ok(format!(
         "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" \
@@ -2092,11 +2134,12 @@ mod tests {
         };
         let sql = render_operation(&op, "public", &ast).unwrap();
         assert!(
-            sql.contains("INTEGER NOT NULL REFERENCES \"public\".\"game\""),
+            sql.contains("INTEGER NOT NULL CONSTRAINT \"")
+                && sql.contains("REFERENCES \"public\".\"game\""),
             "expected INTEGER FK to game, got:\n{sql}"
         );
         assert!(
-            sql.contains("INTEGER NOT NULL REFERENCES \"public\".\"platform\""),
+            sql.contains("REFERENCES \"public\".\"platform\""),
             "expected INTEGER FK to platform, got:\n{sql}"
         );
         assert!(

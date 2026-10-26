@@ -62,6 +62,7 @@ jobs:
             --test sdk_exact_value_types_tests \
             --test column_shape_tests \
             --test implicit_index_tests \
+            --test constraint_names_tests \
             --test storage_grant_tests \
             --test storage_rule_tests \
             --test seed_ir_tests \
@@ -183,4 +184,5 @@ jobs:
             --test catalog_introspection_tests \
             --test fingerprint_tests \
             --test project_schema_guard_tests \
-            --test introspection_budget_tests
+            --test introspection_budget_tests \
+            --test golden_tests
