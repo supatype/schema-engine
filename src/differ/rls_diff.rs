@@ -4,9 +4,9 @@ use crate::parser::ast::{AccessAst, AccessRule, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 
-/// Policy naming convention — must match generator/sql/rls.rs.
+/// Policy naming convention; must match generator/sql/rls.rs.
 /// `polcmd` column from pg_policy: r=SELECT, a=INSERT, w=UPDATE, d=DELETE, *=ALL.
-fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
+pub(crate) fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
     vec![
         ("select".to_string(), access.read.as_ref()),
         ("insert".to_string(), access.create.as_ref()),
@@ -34,10 +34,10 @@ fn expected_policies(access: &AccessAst) -> Vec<(String, Option<&AccessRule>)> {
 ///
 /// Two more rewrites Postgres applies, each of which otherwise made every policy
 /// look changed on every push:
-///   * boolean literals are stored lowercase — generated `FALSE` vs stored `false`
+///   * boolean literals are stored lowercase: generated `FALSE` vs stored `false`
 ///     (Private/Public rules produce nothing but these, so they never converged);
-///   * literals gain an explicit cast — generated `'admin'` vs stored `'admin'::text`;
-///   * a scalar subquery gains an output alias — generated `(SELECT auth.uid())` vs
+///   * literals gain an explicit cast: generated `'admin'` vs stored `'admin'::text`;
+///   * a scalar subquery gains an output alias: generated `(SELECT auth.uid())` vs
 ///     stored `( SELECT auth.uid() AS uid)`. Auth calls are wrapped in exactly that
 ///     shape so the planner evaluates them once per query, so without this every
 ///     policy would look changed on every push.
@@ -48,7 +48,7 @@ fn normalise(s: &str, table: &str) -> String {
     // Parens become spaces rather than vanishing. Deleting them welded tokens
     // together on one side only: generated `ANY(ARRAY[…])` collapsed to
     // `ANYARRAY[…]` while Postgres stores `ANY (ARRAY[…])`, which survives as
-    // `ANY ARRAY[…]` — so every multi-role policy was dropped and recreated on
+    // `ANY ARRAY[…]`, so every multi-role policy was dropped and recreated on
     // every push. The trailing whitespace collapse makes the substitution free.
     out = out
         .chars()
@@ -291,7 +291,7 @@ fn canonicalise_interval_literals(input: &str) -> String {
 /// lowercases the bare keywords `TRUE`/`FALSE`/`NULL`. String literals are copied
 /// verbatim, so a role name like `'Admin'` keeps its case, a `::` inside a literal
 /// is not treated as a cast, and the words "as" inside one are not mistaken for an
-/// alias. Only single-word type names are stripped — a multi-word cast such as
+/// alias. Only single-word type names are stripped; a multi-word cast such as
 /// `::timestamp with time zone` is left alone rather than risk swallowing the
 /// operator that follows it.
 fn canonicalise_keywords_and_casts(s: &str) -> String {
@@ -318,7 +318,7 @@ fn canonicalise_keywords_and_casts(s: &str) -> String {
         match upper.as_str() {
             "TRUE" | "FALSE" | "NULL" => out.push_str(&word.to_ascii_lowercase()),
             // Postgres rewrites `INTERVAL '30 days'` as `'30 days'::interval`, and
-            // the cast is already stripped above — so the keyword has to go too or
+            // the cast is already stripped above, so the keyword has to go too or
             // every temporal rule looks changed on every push.
             "INTERVAL" => {
                 word.clear();
@@ -377,7 +377,7 @@ fn canonicalise_keywords_and_casts(s: &str) -> String {
             // taking a bare `]` swallowed the one closing an enclosing
             // `ARRAY['a'::text, 'b'::text]`, so the stored form of every
             // multi-role policy lost its final bracket and never compared equal
-            // to the generated one — recreated on every push.
+            // to the generated one, recreated on every push.
             loop {
                 let mut ahead = chars.clone();
                 if ahead.next() == Some('[') && ahead.next() == Some(']') {
@@ -435,7 +435,7 @@ pub fn diff(
     let rls_enabled_tables: std::collections::HashSet<&str> =
         db.rls_enabled_tables.iter().map(String::as_str).collect();
 
-    // Models with no access rules at all — collected so the deny-all is visible.
+    // Models with no access rules at all, collected so the deny-all is visible.
     let mut unrestricted: Vec<String> = Vec::new();
 
     // Hand-written policies found on managed tables. Left in place, but reported:
@@ -451,14 +451,14 @@ pub fn diff(
         // A table the schema declares but Supatype did not create is left entirely alone.
         //
         // `ENABLE ROW LEVEL SECURITY` on someone else's table changes what every role except its
-        // owner can read — an existing application can stop seeing its own rows. Skipping is also
+        // owner can read: an existing application can stop seeing its own rows. Skipping is also
         // fail-closed for Supatype's API: without the grants (skipped for the same reason) the API
         // has no privileges on the table, so nothing is exposed under rules that are not enforced.
         if let Some(db_table) = db.tables.iter().find(|t| t.name == table) {
             if !crate::managed::is_managed_comment(db_table.comment.as_deref()) {
                 warnings.push(format!(
                     "Table \"{table}\" already exists and is not managed by Supatype, so its \
-                     access rules cannot be applied — a push may not attach row level security, \
+                     access rules cannot be applied: a push may not attach row level security, \
                      policies, privileges or field labels to a table it did not create. `supatype \
                      push` refuses until you run `supatype adopt` to take ownership of it, or point \
                      the model at another table with `tableName`."
@@ -524,7 +524,7 @@ pub fn diff(
                 );
 
                 if let Some(db_pol) = db_pol_map.get(policy_name.as_str()) {
-                    // Policy exists — compare the USING or WITH CHECK expression.
+                    // Policy exists: compare the USING or WITH CHECK expression.
                     let db_expr = match suffix.as_str() {
                         "insert" => db_pol.check_expr.as_deref().unwrap_or(""),
                         _ => db_pol.using_expr.as_deref().unwrap_or(""),
@@ -550,7 +550,7 @@ pub fn diff(
                     // stamps it), otherwise the differ would abandon every policy in
                     // every pre-existing project.
                     if db_expr_norm != expected_expr || check_differs || !db_pol.managed {
-                        // Expression changed — recreate. CreateRlsPolicy already renders
+                        // Expression changed: recreate. CreateRlsPolicy already renders
                         // idempotent SQL (DROP POLICY IF EXISTS + CREATE POLICY), so we must
                         // NOT also emit a separate DropRlsPolicy here: operation ordering runs
                         // CreateRlsPolicy before DropRlsPolicy, so a separate drop would delete
@@ -561,9 +561,9 @@ pub fn diff(
                             risk: Risk::Safe,
                         });
                     }
-                    // else: expression matches — no-op (idempotent)
+                    // else: expression matches, a no-op (idempotent)
                 } else {
-                    // Policy does not exist — create it.
+                    // Policy does not exist: create it.
                     ops.push(Operation::CreateRlsPolicy {
                         table: table.to_string(),
                         policy: policy_name,
@@ -573,7 +573,7 @@ pub fn diff(
             }
 
             // Drop stale policies we own. A policy without the managed marker was
-            // written by hand (SQL editor, psql) and is left alone — dropping it
+            // written by hand (SQL editor, psql) and is left alone, because dropping it
             // would silently delete access control the operator added.
             for db_pol in db_policies {
                 if !db_pol.managed && !expected_names.contains(db_pol.name.as_str()) {
@@ -593,7 +593,7 @@ pub fn diff(
             //
             // This branch previously did nothing unless the table already had
             // policies, so a model without `access` shipped with RLS off while
-            // anon/authenticated hold broad grants — readable by anyone, and
+            // anon/authenticated hold broad grants: readable by anyone, and
             // writable by any signed-in user. RLS on with no policies denies
             // anon and authenticated outright; service_role is BYPASSRLS, so
             // server-side code and seeds are unaffected.
@@ -620,7 +620,7 @@ pub fn diff(
 
     if !unrestricted.is_empty() {
         warnings.push(format!(
-            "{} model(s) declare no access rules — RLS is enabled with no policies, so all \
+            "{} model(s) declare no access rules: RLS is enabled with no policies, so all \
              anon/authenticated access is denied (service_role is unaffected): {}. \
              Declare `access` on these models to grant access.",
             unrestricted.len(),
@@ -646,7 +646,7 @@ pub fn diff(
     );
 
     // ── Tables in DB with RLS but not in schema (dropped models) ─────────────
-    // These are handled by DropTable in table_diff — no need to drop policies separately.
+    // These are handled by DropTable in table_diff; there is no need to drop policies separately.
 
     Ok(())
 }
@@ -654,13 +654,13 @@ pub fn diff(
 // ─── Junction tables ─────────────────────────────────────────────────────────
 
 /// Many-to-many junction tables are generated by the engine, not declared, so
-/// the author has no place to put an `access` block for them — which left every
+/// the author has no place to put an `access` block for them, which left every
 /// junction with RLS off: any signed-in user could add or remove links between
 /// rows they had no rights to. Nothing to copy from Supabase here; it has no
 /// implicit junctions (you create the join table and write its policies).
 ///
 /// Rule: a link is visible only if BOTH endpoints are readable, and writable
-/// only if BOTH endpoints are writable — the intersection of the parent models'
+/// only if BOTH endpoints are writable: the intersection of the parent models'
 /// rules. Where a parent rule depends on row data (Owner, comparisons, membership) the
 /// expression references parent columns that do not exist on the junction table,
 /// so it cannot be applied directly; those fall back to deny-all with a warning
@@ -719,7 +719,7 @@ fn junction_diff(
             kept.insert(policy_name.clone());
 
             // Compare against what is already in the database, exactly as the
-            // model path does — emitting the create unconditionally left every
+            // model path does: emitting the create unconditionally left every
             // diff reporting the same four policies forever.
             let expected_expr = normalise(&access_rule_to_expr(ast, parent_a, rule, schema), table);
             let existing = db_policies.iter().find(|p| p.name == policy_name);
@@ -755,7 +755,7 @@ fn junction_diff(
             ));
         }
 
-        // Anything the derivation did not produce is stale — including an
+        // Anything the derivation did not produce is stale, including an
         // operation that used to be derivable and no longer is (a parent rule
         // changed to a row-dependent one). Leaving those in place would keep
         // granting access the parents no longer allow.
@@ -775,7 +775,7 @@ fn junction_diff(
 }
 
 /// Intersect two parents' rules. `None` for an operation means "cannot express
-/// safely — deny". Only rules that do not reference row data can be intersected,
+/// safely, deny". Only rules that do not reference row data can be intersected,
 /// because the junction table has none of the parents' columns.
 pub(crate) fn intersect_access(a: &AccessAst, b: &AccessAst) -> AccessAst {
     AccessAst {
@@ -800,7 +800,7 @@ pub(crate) fn intersect_rule(a: Option<&AccessRule>, b: Option<&AccessRule>) -> 
         // Row-dependent rules cannot be evaluated against junction columns: a
         // junction table has none of the parents' columns, so anything naming one
         // is meaningless there. Every composed and comparison rule is treated as
-        // row-dependent — some (`Eq<AuthRole, "admin">`) are not, but deciding
+        // row-dependent; some (`Eq<AuthRole, "admin">`) are not, but deciding
         // that needs a full analysis of the tree, and guessing wrong here would
         // silently widen access on a table nobody inspects. The caller turns
         // `None` into a deny plus a warning.
@@ -934,7 +934,7 @@ mod tests {
     }
 
     // Regression: Private/Public rules generate nothing but a boolean literal, and
-    // Postgres stores it lowercase — so every push re-created these policies.
+    // Postgres stores it lowercase, so every push re-created these policies.
     #[test]
     fn normalise_matches_boolean_literal_case() {
         assert_eq!(
@@ -980,7 +980,7 @@ mod tests {
     // Auth calls are wrapped in a scalar subquery so the planner evaluates them
     // once per query rather than once per row. Postgres stores such a subquery
     // with an output alias it invented, so without dropping `AS <alias>` every
-    // policy would look changed on every push — the convergence failure this
+    // policy would look changed on every push, the convergence failure this
     // differ has already been bitten by twice.
     #[test]
     fn normalise_matches_a_stored_scalar_subquery() {
@@ -1036,7 +1036,7 @@ mod tests {
         assert!(!normalise("tags = '{a}'::text[]", "t").contains("text"));
     }
 
-    // Postgres rewrites `INTERVAL '30 days'` as `'30 days'::interval` — the keyword
+    // Postgres rewrites `INTERVAL '30 days'` as `'30 days'::interval`, so the keyword
     // moves into a cast, and the cast is stripped. Without dropping the keyword too,
     // every temporal rule looked changed on every push.
     #[test]

@@ -25,18 +25,18 @@ use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 use std::collections::HashSet;
 
-struct ExpectedCheck {
-    table: String,
+pub(crate) struct ExpectedCheck {
+    pub(crate) table: String,
     /// Columns the rule reads: one for a field's bounds, several for a cross-column constraint.
-    columns: Vec<String>,
+    pub(crate) columns: Vec<String>,
     /// The single column this belongs to, when it is a field's own bounds. `None` for a model-level
     /// constraint, which is what decides whether `ADD COLUMN` has already declared it inline.
-    owning_column: Option<String>,
-    constraint: String,
-    expression: String,
+    pub(crate) owning_column: Option<String>,
+    pub(crate) constraint: String,
+    pub(crate) expression: String,
 }
 
-fn expected_checks(ast: &SchemaAst) -> Vec<ExpectedCheck> {
+pub(crate) fn expected_checks(ast: &SchemaAst) -> Vec<ExpectedCheck> {
     let mut out = Vec::new();
     for model in &ast.models {
         let table = model.table_name().to_string();

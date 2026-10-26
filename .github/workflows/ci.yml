@@ -185,4 +185,5 @@ jobs:
             --test fingerprint_tests \
             --test project_schema_guard_tests \
             --test introspection_budget_tests \
-            --test golden_tests
+            --test golden_tests \
+            --test desired_objects_tests

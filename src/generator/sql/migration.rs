@@ -664,7 +664,7 @@ fn render_create_rls_policy_sql(
     ))
 }
 
-fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {
+pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {
     match op {
         Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast),
         Operation::DropTable { table, .. } => Ok(format!(
@@ -712,8 +712,9 @@ fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<Str
                 (FieldAst::Publishable, "status") => Some(format!(
                     "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN IF NOT EXISTS \
                      \"status\" TEXT NOT NULL DEFAULT 'draft' \
-                     CONSTRAINT \"{}\" CHECK (\"status\" IN ('draft','published','scheduled','archived'));",
-                    type_check_name(table, "status")
+                     CONSTRAINT \"{}\" CHECK ({});",
+                    type_check_name(table, "status"),
+                    super::type_checks::publishable_status_check_expr()
                 )),
                 (FieldAst::Publishable, "published_at") => Some(format!(
                     "ALTER TABLE \"{schema}\".\"{table}\" ADD COLUMN IF NOT EXISTS \
@@ -1050,8 +1051,9 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
             }
             FieldAst::Publishable => {
                 col_defs.push(format!(
-                    "    \"status\" TEXT NOT NULL DEFAULT 'draft' CONSTRAINT \"{}\" CHECK (\"status\" IN ('draft', 'published', 'scheduled', 'archived'))",
-                    type_check_name(table, "status")
+                    "    \"status\" TEXT NOT NULL DEFAULT 'draft' CONSTRAINT \"{}\" CHECK ({})",
+                    type_check_name(table, "status"),
+                    super::type_checks::publishable_status_check_expr()
                 ));
                 col_defs.push("    \"published_at\" TIMESTAMPTZ".into());
                 col_defs.push("    \"scheduled_at\" TIMESTAMPTZ".into());
@@ -1302,8 +1304,9 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         FieldAst::Email(f) => {
             let mut def = scalar_col(table, name, "TEXT", f, false);
             def.push_str(&format!(
-                " CONSTRAINT \"{}\" CHECK (\"{name}\" ~* '^[^@]+@[^@]+\\.[^@]+$')",
-                type_check_name(table, name)
+                " CONSTRAINT \"{}\" CHECK ({})",
+                type_check_name(table, name),
+                super::type_checks::email_check_expr(name)
             ));
             Ok(def)
         }
@@ -1331,8 +1334,9 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
         FieldAst::Url(f) => {
             let mut def = scalar_col(table, name, "TEXT", f, false);
             def.push_str(&format!(
-                " CONSTRAINT \"{}\" CHECK (\"{name}\" ~* '^https?://')",
-                type_check_name(table, name)
+                " CONSTRAINT \"{}\" CHECK ({})",
+                type_check_name(table, name),
+                super::type_checks::url_check_expr(name)
             ));
             Ok(def)
         }
@@ -1361,12 +1365,6 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
             Ok(format!("\"{name}\" TEXT{req}{unique}{check}"))
         }
         FieldAst::Enum(f) => {
-            let vals = f
-                .values
-                .iter()
-                .map(|v| format!("'{v}'"))
-                .collect::<Vec<_>>()
-                .join(", ");
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = unique_clause(table, name, f.unique);
             let default = f
@@ -1375,8 +1373,9 @@ fn field_to_column_def(table: &str, name: &str, field: &FieldAst) -> Result<Stri
                 .map(|d| format!(" DEFAULT '{d}'"))
                 .unwrap_or_default();
             let check_name = type_check_name(table, name);
+            let check = super::type_checks::enum_check_expr(name, &f.values);
             Ok(format!(
-                "\"{name}\" TEXT{req}{uniq} CONSTRAINT \"{check_name}\" CHECK (\"{name}\" IN ({vals})){default}"
+                "\"{name}\" TEXT{req}{uniq} CONSTRAINT \"{check_name}\" CHECK ({check}){default}"
             ))
         }
         FieldAst::Json(f) => {
@@ -1981,7 +1980,7 @@ fn add_unique_constraint_sql(
 
 // ─── FOREIGN KEY ─────────────────────────────────────────────────────────────
 
-fn normalize_fk_action(action: &str) -> &'static str {
+pub(crate) fn normalize_fk_action(action: &str) -> &'static str {
     match action.to_lowercase().replace([' ', '_', '-'], "").as_str() {
         "cascade" => "CASCADE",
         "setnull" => "SET NULL",

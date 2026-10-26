@@ -180,7 +180,7 @@ fn array_element_udt(element_type: &str) -> &'static str {
     }
 }
 
-fn expected_udt(field: &FieldAst) -> Option<String> {
+pub(crate) fn expected_udt(field: &FieldAst) -> Option<String> {
     if is_localized(field) {
         return Some("jsonb".into());
     }
@@ -604,7 +604,7 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
     let mut parts = Vec::new();
 
     if let Some(blocked) = changes.get("blocked").and_then(|v| v.as_str()) {
-        parts.push(format!("{table}.{column}: blocked — {blocked}"));
+        parts.push(format!("{table}.{column}: blocked: {blocked}"));
     }
 
     if let Some(conv) = changes.get("conversion") {
@@ -620,7 +620,7 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                 .and_then(|v| v.as_str())
                 .unwrap_or("?");
             parts.push(format!(
-                "{table}.{column}: cannot cast {from} → {to} — column will be dropped and recreated empty (destructive, data loss)"
+                "{table}.{column}: cannot cast {from} → {to}, so the column will be dropped and recreated empty (destructive, data loss)"
             ));
         }
     }
@@ -628,7 +628,7 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
     if let Some(null_change) = changes.get("nullability") {
         if null_change.get("to").and_then(|v| v.as_str()) == Some("not_null") {
             parts.push(format!(
-                "{table}.{column}: setting NOT NULL — migration will fail if NULL values exist"
+                "{table}.{column}: setting NOT NULL, which fails if NULL values exist"
             ));
         }
     }
@@ -637,7 +637,7 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
         let from = kc.get("from").and_then(|v| v.as_str()).unwrap_or("?");
         let to = kc.get("to").and_then(|v| v.as_str()).unwrap_or("?");
         parts.push(format!(
-            "{table}.{column}: field kind {from} → {to} — existing rows will be converted (cautious)."
+            "{table}.{column}: field kind {from} → {to}: existing rows will be converted (cautious)."
         ));
     }
 
@@ -653,12 +653,12 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                 .unwrap_or("add");
             if direction == "add" {
                 parts.push(format!(
-                    "{table}.{column}: converting to localized field — existing values will be \
+                    "{table}.{column}: converting to localized field: existing values will be \
                      assigned to locale '{locale}'. No data loss (cautious)."
                 ));
             } else {
                 parts.push(format!(
-                    "{table}.{column}: REMOVING localization — only the '{locale}' locale value \
+                    "{table}.{column}: REMOVING localization: only the '{locale}' locale value \
                      will be preserved. Translations in other locales will be permanently lost. \
                      Use --force to proceed (destructive)."
                 ));
@@ -687,7 +687,7 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
                 ));
             } else {
                 parts.push(format!(
-                    "{table}.{column}: type change {from} → {to} may be lossy — verify data before applying"
+                    "{table}.{column}: type change {from} → {to} may be lossy; verify data before applying"
                 ));
             }
         }
@@ -820,7 +820,7 @@ pub fn diff(
     }
 
     // Dropping a column from a table Supatype did not create is the same class of data loss as
-    // dropping the table — smaller, and easier to miss. Gated on the same ownership marker, and
+    // dropping the table: smaller, and easier to miss. Gated on the same ownership marker, and
     // reported rather than skipped quietly. Additive changes are deliberately still allowed: a
     // table you do not own may gain a column, it may not lose one.
     let managed = crate::managed::is_managed_comment(db_table.comment.as_deref());
@@ -829,7 +829,7 @@ pub fn diff(
             if !managed {
                 warnings.push(format!(
                     "Column \"{}\".\"{}\" is gone from your schema, but the table is not managed by \
-                     Supatype (no ownership marker) — leaving it alone. Run `supatype adopt` to \
+                     Supatype (no ownership marker), so it is left alone. Run `supatype adopt` to \
                      bring the table under management, or drop the column by hand.",
                     db_table.name, col
                 ));
@@ -904,7 +904,7 @@ pub fn diff(
 
             // Modifying a column on a table Supatype did not create is the same class of loss as
             // dropping one. `RecreateColumn` literally drops and re-adds the column, and an
-            // `AlterColumn` type change either rewrites the operator's data or fails outright —
+            // `AlterColumn` type change either rewrites the operator's data or fails outright,
             // which is how this was found: a model declaring `id: UUID` against an existing
             // `id serial` produced `cannot cast type integer to uuid` mid-migration, from a table
             // the gate was supposed to be protecting.
@@ -913,7 +913,7 @@ pub fn diff(
             // column; it may not have one changed underneath it.
             if !managed {
                 warnings.push(format!(
-                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed by Supatype (no ownership marker) — leaving it alone. Run `supatype adopt` to bring the table under management, or point the model at a different table with `tableName`.",
+                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed by Supatype (no ownership marker), so it is left alone. Run `supatype adopt` to bring the table under management, or point the model at a different table with `tableName`.",
                     db_table.name, col_name
                 ));
                 continue;
@@ -951,7 +951,7 @@ pub fn diff(
 /// Lives here beside [`field_pg_type`] because both answer questions about a declared field that
 /// several layers need: the migration renderer needs the key to build a foreign key, and the differ
 /// needs it to type the `record_id` on a snapshot table. It was private to the migration renderer,
-/// which is why `field_views.rs` reaches for the serialised form instead — a workaround for a helper
+/// which is why `field_views.rs` reaches for the serialised form instead, a workaround for a helper
 /// that existed and could not be seen.
 pub(crate) fn field_is_primary_key(field: &FieldAst) -> bool {
     match field {

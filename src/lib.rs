@@ -1,4 +1,4 @@
-// Library root — exposes all modules so the engine logic can be reused
+// Library root: exposes all modules so the engine logic can be reused
 // in WASM builds and tests without the CLI layer.
 //
 // Modules that depend on sqlx/tokio (introspector, state, differ) are gated
@@ -12,7 +12,9 @@ pub mod wasm;
 
 pub mod managed;
 
-// DB-dependent modules — not needed in WASM context
+// DB-dependent modules, not needed in WASM context
+#[cfg(not(target_arch = "wasm32"))]
+pub mod desired;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod differ;
 #[cfg(not(target_arch = "wasm32"))]
@@ -20,6 +22,6 @@ pub mod introspector;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod state;
 
-// HTTP server module — only used by the server binary, not WASM
+// HTTP server module, only used by the server binary, not WASM
 #[cfg(not(target_arch = "wasm32"))]
 pub mod server;

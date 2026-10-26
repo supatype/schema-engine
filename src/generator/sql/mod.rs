@@ -11,4 +11,5 @@ pub mod rollback;
 pub mod sso;
 pub mod storage;
 pub mod triggers;
+pub mod type_checks;
 pub mod versions;
