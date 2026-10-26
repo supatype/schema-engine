@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use axum::Json;
-use sqlx::{Column, Executor, PgPool, Row, TypeInfo};
-use tracing::{error, info};
+use sqlx::{Column, PgPool, Row, TypeInfo};
+use tracing::error;
 
 use super::types::*;
 
@@ -47,7 +47,7 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
-    let previous_ast = load_previous_schema(&pool).await;
+    let previous_ast = crate::state::migration_history::load_latest_schema_ast(&pool).await;
     let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
         .map_err(engine_error)?;
     Ok(Json(serde_json::to_value(&diff).unwrap()))
@@ -63,7 +63,7 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
-    let previous_ast = load_previous_schema(&pool).await;
+    let previous_ast = crate::state::migration_history::load_latest_schema_ast(&pool).await;
     let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
         .map_err(engine_error)?;
     let sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
@@ -74,268 +74,37 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
 // ── Push (DB: diff + apply + record in history) ────────────────────────────
 
 pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
-    use crate::state::{migration_history, studio_state};
+    use crate::push;
 
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
-    let storage_sql = crate::generator::sql::storage::generate(&ast).map_err(engine_error)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
 
-    // Internal bookkeeping + auth helpers (shared with the CLI push path).
-    migration_history::bootstrap_internal_state(&pool)
-        .await
-        .map_err(engine_error)?;
-    migration_history::assert_project_schema(&pool, &req.schema)
-        .await
-        .map_err(engine_error)?;
-
-    // Ensure supatype schema and studio tables exist
-    sqlx::raw_sql(studio_state::create_studio_schema_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(studio_state::grant_studio_schema_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&studio_state::create_dashboard_views_table_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&studio_state::create_storage_stats_function_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&studio_state::create_db_stats_function_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&studio_state::create_daily_signups_function_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-    sqlx::raw_sql(&studio_state::create_daily_content_creates_function_sql())
-        .execute(&pool)
-        .await
-        .map_err(engine_error)?;
-
     if req.no_cache {
-        tracing::warn!("{}", migration_history::NO_CACHE_NOTICE);
+        tracing::warn!("{}", crate::state::migration_history::NO_CACHE_NOTICE);
     }
-    // Always the live catalog, as the CLI path reads it. See `Command::Push` in main.rs.
-    let db_state = crate::introspector::introspect(&pool, &req.schema)
+
+    // A refusal the caller can act on is a 409 naming the tables, not a 500.
+    let plan = push::prepare(&pool, &ast, &req.schema)
         .await
-        .map_err(engine_error)?;
-
-    // History, not a cache of the database: how a rename is told apart from a drop and an add.
-    let previous_ast = load_previous_schema(&pool).await;
-    let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
-        .map_err(engine_error)?;
-
-    // Same reason as the CLI path: an empty diff must not report success over a table whose rules
-    // were never applied.
-    crate::generator::sql::migration::assert_no_unmanaged_model_tables(&diff)
         .map_err(refusal_error)?;
 
-    if diff.operations.is_empty() {
-        // Same reason as the CLI path: the publishing layer is the kind of change that produces no
-        // DDL, so a steady-state push is the only one that will ever carry a changed
-        // `draft_visibility`. Rendered before anything is applied, so a schema whose versioned
-        // models have no stated visibility fails rather than half-applying.
-        let versions_sql =
-            crate::generator::sql::versions::render_versions_layer(&ast, &req.schema)
-                .map_err(engine_error)?;
-        sqlx::raw_sql(&storage_sql)
-            .execute(&pool)
-            .await
-            .map_err(engine_error)?;
-        if !versions_sql.trim().is_empty() {
-            sqlx::raw_sql(&versions_sql)
-                .execute(&pool)
-                .await
-                .map_err(engine_error)?;
-        }
-        info!("Schema is up to date, refreshing Studio metadata.");
-        let admin_cfg =
-            crate::generator::typescript::admin::generate(&ast).map_err(engine_error)?;
-        let schema_snap = serde_json::to_value(&ast).map_err(engine_error)?;
-        migration_history::refresh_metadata_on_up_to_date_push(&pool, &admin_cfg, &schema_snap)
-            .await
-            .map_err(engine_error)?;
-        return Ok(Json(serde_json::json!({
-            "status": "up_to_date",
-            "operations": 0,
-            "admin_refreshed": true,
-            "warnings": diff.warnings
-        })));
-    }
-
-    let migration_name = req
-        .name
-        .clone()
-        .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S")));
-
-    let migration_sql =
-        crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
-            .map_err(engine_error)?;
-    let hash = {
-        use sha2::{Digest, Sha256};
-        let mut h = Sha256::new();
-        h.update(migration_sql.as_bytes());
-        format!("sha256:{}", hex::encode(h.finalize()))
-    };
-
-    let apply_body = crate::generator::sql::migration::push_storage_and_model_apply_body(
-        &storage_sql,
-        &diff,
-        req.force,
-        &req.schema,
-        &ast,
-    )
-    .map_err(engine_error)?;
-    let apply_batch = crate::generator::sql::migration::push_storage_and_model_batch_sql(
-        &storage_sql,
-        &diff,
-        req.force,
-        &req.schema,
-        &ast,
-    )
-    .map_err(engine_error)?;
-
-    let sql_down = crate::generator::sql::rollback::generate(&diff, &req.schema).ok();
     let schema_sources = req.schema_sources_base64.as_deref().and_then(|b64| {
         use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
         B64.decode(b64).ok()
     });
-    let migration_sources = migration_history::AppliedMigrationSources {
-        sql_down,
+    let options = push::ApplyOptions {
+        force: req.force,
+        strict: req.strict,
+        name: req.name.clone(),
         schema_sources,
         schema_sources_manifest: req.schema_sources_manifest.clone(),
     };
-
-    let mut tx = pool.begin().await.map_err(engine_error)?;
-
-    if let Err(e) = (&mut *tx).execute(sqlx::raw_sql(apply_body.as_str())).await {
-        migration_history::rollback_push_tx(
-            tx,
-            &pool,
-            &migration_name,
-            &hash,
-            &apply_batch,
-            &e.to_string(),
-        )
-        .await;
-        let msg = crate::generator::sql::migration_errors::enrich_migration_error(
-            &e.to_string(),
-            Some(&diff),
-        );
-        return Err(engine_error(anyhow::anyhow!(msg)));
-    }
-
-    let new_db_state = match crate::introspector::introspect_connection(&mut tx, &req.schema).await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            migration_history::rollback_push_tx(
-                tx,
-                &pool,
-                &migration_name,
-                &hash,
-                &apply_batch,
-                &e.to_string(),
-            )
-            .await;
-            return Err(engine_error(e));
-        }
-    };
-
-    let drift_warnings = crate::differ::integrity::post_push_warnings(&ast, &new_db_state);
-    if req.strict && !crate::differ::integrity::post_push_ok(&ast, &new_db_state, true) {
-        let msg = drift_warnings.join("; ");
-        migration_history::rollback_push_tx(tx, &pool, &migration_name, &hash, &apply_batch, &msg)
-            .await;
-        return Err(engine_error(anyhow::anyhow!(
-            "Push rolled back: post-apply schema drift in strict mode ({msg})"
-        )));
-    }
-
-    if let Err(e) = migration_history::save_schema_state(&mut *tx, &new_db_state).await {
-        migration_history::rollback_push_tx(
-            tx,
-            &pool,
-            &migration_name,
-            &hash,
-            &apply_batch,
-            &e.to_string(),
-        )
-        .await;
-        return Err(engine_error(e));
-    }
-
-    // Which mechanism is enforcing the field rules, probed rather than assumed. A failure
-    // here is a missing diagnostic, not a broken push: the enforcement itself is the
-    // labels, which are already applied in this transaction.
-    if let Err(e) = migration_history::record_field_enforcement(
-        &mut tx,
-        migration_history::labelled_column_count(&ast),
-    )
-    .await
-    {
-        eprintln!("Warning: failed to record field-enforcement capability: {e}");
-    }
-
-    let admin_cfg = crate::generator::typescript::admin::generate(&ast).ok();
-    let studio_metadata = admin_cfg.clone().zip(serde_json::to_value(&ast).ok());
-    if let Err(e) = migration_history::insert_applied_migration(
-        &mut *tx,
-        &migration_name,
-        &hash,
-        serde_json::to_value(&ast).ok(),
-        admin_cfg,
-        &apply_batch,
-        &migration_sources,
-    )
-    .await
-    {
-        migration_history::rollback_push_tx(
-            tx,
-            &pool,
-            &migration_name,
-            &hash,
-            &apply_batch,
-            &e.to_string(),
-        )
-        .await;
-        return Err(engine_error(e));
-    }
-
-    tx.commit().await.map_err(engine_error)?;
-
-    // Studio metadata was previously persisted to `_supatype.schema_state` only on
-    // the up-to-date branch above, so any project whose last push applied a
-    // migration had null `ast_snapshot`/`admin_config`, leaving Studio with no
-    // server-side schema source. Refresh it here too; failure must not undo an
-    // applied migration, so it only warns.
-    if let Some((admin_cfg, schema_snap)) = studio_metadata.as_ref() {
-        if let Err(e) =
-            migration_history::save_studio_metadata_if_present(&pool, admin_cfg, schema_snap).await
-        {
-            tracing::warn!(error = %e, "failed to refresh Studio metadata after migration");
-        }
-    }
-
-    info!(name = %migration_name, ops = diff.operations.len(), "Migration applied");
-    // The schema's own warnings first (a bucket rule left out, say), then what the database looked
-    // like once applied. Both used to be visible only to `supatype diff`, so a push said nothing
-    // about an operation it had just made unreachable.
-    let warnings: Vec<&String> = diff.warnings.iter().chain(&drift_warnings).collect();
-    Ok(Json(serde_json::json!({
-        "status": "applied",
-        "name": migration_name,
-        "operations": diff.operations.len(),
-        "warnings": warnings
-    })))
+    let outcome = push::apply(&pool, plan, options)
+        .await
+        .map_err(engine_error)?;
+    Ok(Json(outcome.to_json()))
 }
 
 // ── Generate (no DB) ────────────────────────────────────────────────────────
@@ -638,13 +407,6 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-async fn load_previous_schema(pool: &PgPool) -> Option<crate::parser::ast::SchemaAst> {
-    use crate::state::migration_history;
-    migration_history::load_latest_schema_snapshot(pool)
-        .await
-        .and_then(|v| serde_json::from_value(v).ok())
-}
 
 /// A refused push, as 409 with the reason and tables when it is one a caller can act on.
 fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {

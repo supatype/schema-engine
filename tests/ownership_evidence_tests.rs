@@ -6,19 +6,14 @@
 //! acceptance tests for the ledger (`plans/Managed-Object-Ownership-Plan.md`), and each kind's PR
 //! flips its own from failing to passing.
 //!
-//! Every test runs the full push the CLI runs: the forward migration (which carries the versions
-//! layer) and then the trigger SQL, the way `push_storage_and_model_apply_body` composes them.
+//! Every test runs the push the CLI and the server run, through `supatype_engine::push`, so what
+//! it proves about a push is true of the one a user gets.
 
 mod common;
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use supatype_engine::{
-    differ::{self, doctor},
-    generator::sql::{migration, triggers},
-    introspector, parser,
-    parser::ast::SchemaAst,
-};
+use supatype_engine::{differ::doctor, introspector, parser, parser::ast::SchemaAst, push};
 
 // ---------------------------------------------------------------------------------------------
 // Fixtures
@@ -80,20 +75,19 @@ fn schema(models: Vec<Value>) -> SchemaAst {
 // Push and introspection helpers
 // ---------------------------------------------------------------------------------------------
 
-/// Apply `ast` the way the CLI does: diff against the live catalog, run the forward migration
-/// (versions layer included), then the trigger SQL.
-async fn push(
-    pool: &PgPool,
-    ast: &SchemaAst,
-    previous: Option<&SchemaAst>,
-    force: bool,
-) -> anyhow::Result<()> {
-    let db = introspector::introspect(pool, "public").await?;
-    let diff = differ::diff_with_previous(ast, &db, previous)?;
-    let sql = migration::forward_sql(&diff, force, "public", ast)?;
-    sqlx::raw_sql(&sql).execute(pool).await?;
-    let trigger_sql = triggers::generate(ast, "public")?;
-    sqlx::raw_sql(&trigger_sql).execute(pool).await?;
+/// The previous schema is history now: the orchestrator reads it from `_supatype.migrations`,
+/// which the first push wrote.
+async fn push(pool: &PgPool, ast: &SchemaAst, force: bool) -> anyhow::Result<()> {
+    let plan = push::prepare(pool, ast, "public").await?;
+    push::apply(
+        pool,
+        plan,
+        push::ApplyOptions {
+            force,
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -189,7 +183,7 @@ async fn removing_a_slug_field_removes_its_trigger_and_writes_keep_working() {
             json!({ "id": int_pk(), "title": text(true), "slug": slug }),
             plain_options(),
         )]);
-        push(&pool, &with_slug, None, false)
+        push(&pool, &with_slug, false)
             .await
             .expect("first push applies");
         exec(
@@ -205,7 +199,7 @@ async fn removing_a_slug_field_removes_its_trigger_and_writes_keep_working() {
             json!({ "id": int_pk(), "title": text(true) }),
             plain_options(),
         )]);
-        push(&pool, &without_slug, Some(&with_slug), true)
+        push(&pool, &without_slug, true)
             .await
             .expect("second push applies");
 
@@ -232,7 +226,7 @@ async fn removing_timestamps_removes_the_updated_at_trigger() {
             json!({ "id": int_pk(), "title": text(true) }),
             json!({ "timestamps": true, "softDelete": false, "singleton": false }),
         )]);
-        push(&pool, &with_ts, None, false)
+        push(&pool, &with_ts, false)
             .await
             .expect("first push applies");
 
@@ -242,7 +236,7 @@ async fn removing_timestamps_removes_the_updated_at_trigger() {
             json!({ "id": int_pk(), "title": text(true) }),
             plain_options(),
         )]);
-        push(&pool, &without_ts, Some(&with_ts), true)
+        push(&pool, &without_ts, true)
             .await
             .expect("second push applies");
 
@@ -270,7 +264,7 @@ async fn removing_versions_removes_the_audit_trigger_from_the_model_table() {
             json!({ "timestamps": false, "softDelete": false, "singleton": false,
                     "versions": { "drafts": false, "keep": 5 } }),
         )]);
-        push(&pool, &versioned, None, false)
+        push(&pool, &versioned, false)
             .await
             .expect("first push applies");
         assert!(
@@ -284,7 +278,7 @@ async fn removing_versions_removes_the_audit_trigger_from_the_model_table() {
             json!({ "id": uuid_pk(), "title": text(true) }),
             plain_options(),
         )]);
-        push(&pool, &plain, Some(&versioned), true)
+        push(&pool, &plain, true)
             .await
             .expect("second push applies");
 
@@ -310,7 +304,7 @@ async fn changing_email_to_text_removes_the_email_check() {
             json!({ "id": int_pk(), "email": email }),
             plain_options(),
         )]);
-        push(&pool, &as_email, None, false)
+        push(&pool, &as_email, false)
             .await
             .expect("first push applies");
         assert!(
@@ -329,7 +323,7 @@ async fn changing_email_to_text_removes_the_email_check() {
             json!({ "id": int_pk(), "email": text(true) }),
             plain_options(),
         )]);
-        push(&pool, &as_text, Some(&as_email), false)
+        push(&pool, &as_text, false)
             .await
             .expect("second push applies");
 
@@ -356,9 +350,7 @@ async fn adding_a_text_enum_value_widens_its_check() {
             json!({ "id": int_pk(), "status": status(&["open", "done"]) }),
             plain_options(),
         )]);
-        push(&pool, &two, None, false)
-            .await
-            .expect("first push applies");
+        push(&pool, &two, false).await.expect("first push applies");
         assert!(
             exec(&pool, "INSERT INTO public.tasks VALUES (1, 'blocked')")
                 .await
@@ -372,7 +364,7 @@ async fn adding_a_text_enum_value_widens_its_check() {
             json!({ "id": int_pk(), "status": status(&["open", "done", "blocked"]) }),
             plain_options(),
         )]);
-        push(&pool, &three, Some(&two), false)
+        push(&pool, &three, false)
             .await
             .expect("second push applies");
 
@@ -408,7 +400,7 @@ async fn retargeting_a_relation_moves_the_foreign_key() {
                 plain_options(),
             ),
         ]);
-        push(&pool, &to_users, None, false)
+        push(&pool, &to_users, false)
             .await
             .expect("first push applies");
         assert_eq!(
@@ -429,7 +421,7 @@ async fn retargeting_a_relation_moves_the_foreign_key() {
                 plain_options(),
             ),
         ]);
-        push(&pool, &to_accounts, Some(&to_users), true)
+        push(&pool, &to_accounts, true)
             .await
             .expect("second push applies");
 
@@ -457,7 +449,7 @@ async fn turning_drafts_off_removes_the_draft_view() {
             json!({ "id": uuid_pk(), "title": text(true) }),
             versions(true),
         )]);
-        push(&pool, &drafting, None, false)
+        push(&pool, &drafting, false)
             .await
             .expect("first push applies");
         assert!(
@@ -471,7 +463,7 @@ async fn turning_drafts_off_removes_the_draft_view() {
             json!({ "id": uuid_pk(), "title": text(true) }),
             versions(false),
         )]);
-        push(&pool, &history_only, Some(&drafting), false)
+        push(&pool, &history_only, false)
             .await
             .expect("second push applies");
 
@@ -502,7 +494,7 @@ async fn removing_the_last_versioned_model_retires_the_cron_jobs() {
             json!({ "timestamps": false, "softDelete": false, "singleton": false,
                     "versions": { "drafts": true, "keep": 5 } }),
         )]);
-        push(&pool, &versioned, None, false)
+        push(&pool, &versioned, false)
             .await
             .expect("first push applies");
         let scheduled: i64 =
@@ -521,7 +513,7 @@ async fn removing_the_last_versioned_model_retires_the_cron_jobs() {
             json!({ "id": uuid_pk(), "title": text(true) }),
             plain_options(),
         )]);
-        push(&pool, &plain, Some(&versioned), true)
+        push(&pool, &plain, true)
             .await
             .expect("second push applies");
 
@@ -560,9 +552,7 @@ async fn a_hand_added_foreign_key_survives_a_push() {
                 plain_options(),
             ),
         ]);
-        push(&pool, &ast, None, false)
-            .await
-            .expect("first push applies");
+        push(&pool, &ast, false).await.expect("first push applies");
         exec(
             &pool,
             "ALTER TABLE public.widgets ADD CONSTRAINT widgets_owner_id_fkey \
@@ -571,9 +561,7 @@ async fn a_hand_added_foreign_key_survives_a_push() {
         .await
         .expect("the operator adds a foreign key of their own");
 
-        push(&pool, &ast, Some(&ast), false)
-            .await
-            .expect("second push applies");
+        push(&pool, &ast, false).await.expect("second push applies");
 
         assert!(
             constraint_exists(&pool, "widgets", "widgets_owner_id_fkey").await,
@@ -596,7 +584,7 @@ async fn a_user_enum_type_survives_a_push() {
             plain_options(),
         )]);
 
-        push(&pool, &ast, None, false).await.expect("push applies");
+        push(&pool, &ast, false).await.expect("push applies");
 
         assert!(
             type_exists(&pool, "mood").await,
@@ -615,9 +603,7 @@ async fn a_user_grant_on_a_managed_table_survives_a_push() {
             json!({ "id": int_pk() }),
             plain_options(),
         )]);
-        push(&pool, &ast, None, false)
-            .await
-            .expect("first push applies");
+        push(&pool, &ast, false).await.expect("first push applies");
         exec(
             &pool,
             "DO $$ BEGIN CREATE ROLE reporting; EXCEPTION WHEN duplicate_object THEN NULL; END $$; \
@@ -626,9 +612,7 @@ async fn a_user_grant_on_a_managed_table_survives_a_push() {
         .await
         .expect("the operator grants a role of their own");
 
-        push(&pool, &ast, Some(&ast), false)
-            .await
-            .expect("second push applies");
+        push(&pool, &ast, false).await.expect("second push applies");
 
         let held: bool = sqlx::query_scalar(
             "SELECT has_table_privilege('reporting', 'public.widgets', 'SELECT')",
@@ -654,7 +638,7 @@ async fn a_user_view_on_a_versions_table_survives_the_versions_being_removed() {
             json!({ "timestamps": false, "softDelete": false, "singleton": false,
                     "versions": { "drafts": true, "keep": 5 } }),
         )]);
-        push(&pool, &versioned, None, false).await.expect("first push applies");
+        push(&pool, &versioned, false).await.expect("first push applies");
         exec(&pool, "CREATE VIEW public.post_history AS SELECT record_id, version FROM public.posts_versions")
             .await
             .expect("the operator builds a view on the history");
@@ -667,7 +651,7 @@ async fn a_user_view_on_a_versions_table_survives_the_versions_being_removed() {
         )]);
         // The push may refuse rather than proceed, and that is acceptable: what is not acceptable
         // is the view disappearing because a drop cascaded into it.
-        let _ = push(&pool, &plain, Some(&versioned), true).await;
+        let _ = push(&pool, &plain, true).await;
 
         assert!(
             view_exists(&pool, "public", "post_history").await,
