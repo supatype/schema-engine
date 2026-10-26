@@ -13,8 +13,9 @@ fn is_extension_managed_table(name: &str) -> bool {
     EXTENSION_MANAGED_TABLES.contains(&name)
 }
 
-/// **Ownership gate.** Destructive operations here are conditional on a table carrying Supatype's
-/// `COMMENT ON TABLE` marker, as read by `crate::managed::is_managed_comment`.
+/// **Ownership gate.** Destructive operations here are conditional on a table being Supatype's, as
+/// `DatabaseState::owns_table` decides: its ledger row (Phase 4.11), or for a table no push has
+/// recorded yet, the `COMMENT ON TABLE` marker an older engine wrote.
 ///
 /// Indexes, constraints and RLS policies have been gated this way for a long time; `doctor` even
 /// reports an unmanaged index as "push will not drop; manual decision required". Tables were never
@@ -71,7 +72,7 @@ pub fn diff(
         .filter(|t| {
             !schema_table_names.contains(t.name.as_str())
                 && !is_extension_managed_table(t.name.as_str())
-                && crate::managed::is_managed_comment(t.comment.as_deref())
+                && db.owns_table(t)
         })
         .map(|t| t.name.as_str())
         .collect();
@@ -166,9 +167,9 @@ pub fn diff(
             //
             // Reported, not skipped in silence: a drop that quietly does nothing is how an operator
             // concludes push is broken. The message names the table and the way out.
-            if !crate::managed::is_managed_comment(db_table.comment.as_deref()) {
+            if !db.owns_table(db_table) {
                 warnings.push(format!(
-                    "Table \"{}\" is not managed by Supatype (no ownership marker) and is not in \
+                    "Table \"{}\" is not managed by Supatype and is not in \
                      your schema, so it is left alone. Run `supatype adopt` to bring it under \
                      management, or remove it by hand.",
                     db_table.name

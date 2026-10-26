@@ -202,7 +202,7 @@ fn flag(b: bool) -> &'static str {
 
 impl ObjectKind {
     /// The label of each hashed part, in the order the part lists below supply them. Empty for the
-    /// kinds whose parts are a dynamic list (a table's columns) or nothing at all (a schema).
+    /// kinds that are hashed on existence alone: a schema and a table.
     pub(crate) fn labels(self) -> &'static [&'static str] {
         match self {
             ObjectKind::Schema | ObjectKind::Table => &[],
@@ -534,7 +534,6 @@ fn relation_entries<'a>(
     out: &mut Vec<ObjectFingerprint>,
 ) {
     for table in tables {
-        let mut column_parts: Vec<String> = Vec::with_capacity(table.columns.len());
         for col in &table.columns {
             let default = col
                 .default
@@ -561,14 +560,12 @@ fn relation_entries<'a>(
                 &col.name,
                 &parts,
             ));
-            column_parts.push(format!("{}={}", col.name, hash(ObjectKind::Column, &parts)));
         }
-        // Sorted by name: the position of a column is not something a push controls on an existing
-        // table, so it must not read as a change.
-        column_parts.sort();
-        let refs: Vec<&str> = column_parts.iter().map(String::as_str).collect();
+        // Existence only (Phase 4.11, a deviation from plan 3.2's "the set of its columns"): each
+        // column is its own ledger row, and one someone added is theirs under D4, so a column set in
+        // the table's fingerprint would report every user column as the table drifting.
         out.push(
-            entry(ObjectKind::Table, &table.schema, "", &table.name, &refs)
+            entry(ObjectKind::Table, &table.schema, "", &table.name, &[])
                 .commented(table.comment.as_deref()),
         );
     }

@@ -65,7 +65,7 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, warnings: &mut Vec<String>) -> 
         // fail-closed for Supatype's API: without the grants (skipped for the same reason) the API
         // has no privileges on the table, so nothing is exposed under rules that are not enforced.
         if let Some(db_table) = db.tables.iter().find(|t| t.name == table) {
-            if !crate::managed::is_managed_comment(db_table.comment.as_deref()) {
+            if !db.owns_table(db_table) {
                 warnings.push(format!(
                     "Table \"{table}\" already exists and is not managed by Supatype, so its \
                      access rules cannot be applied: a push may not attach row level security, \

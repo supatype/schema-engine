@@ -122,12 +122,6 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
                 "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
             )
         }
-        Operation::DropUniqueConstraint {
-            table, constraint, ..
-        } => {
-            format!("-- WARNING: Cannot automatically roll back DROP CONSTRAINT \"{table}\".\"{constraint}\". \
-                     Recreate the unique constraint manually.")
-        }
         // CreateRlsPolicy → DROP POLICY
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";")
@@ -266,9 +260,6 @@ fn forward_description(op: &Operation) -> String {
         Operation::AddUniqueConstraint { table, column, .. } => {
             format!("add unique {table}.{column}")
         }
-        Operation::DropUniqueConstraint {
-            table, constraint, ..
-        } => format!("drop unique {table}.{constraint}"),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("create policy {table}.{policy}")
         }

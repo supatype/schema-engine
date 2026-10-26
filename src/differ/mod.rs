@@ -19,7 +19,7 @@ pub struct DiffOutput {
     pub operations: Vec<Operation>,
     pub summary: DiffSummary,
     pub warnings: Vec<String>,
-    /// Tables a model declares that already exist **and** carry no ownership marker.
+    /// Tables a model declares that already exist **and** are not Supatype's.
     ///
     /// Nothing that changes them may be emitted: not RLS, not policies, not grants, not security
     /// labels. Declaring a model is not permission to alter a table Supatype did not create: enabling
@@ -136,11 +136,6 @@ pub enum Operation {
         constraint: String,
         risk: Risk,
     },
-    DropUniqueConstraint {
-        table: String,
-        constraint: String,
-        risk: Risk,
-    },
     CreateRlsPolicy {
         table: String,
         policy: String,
@@ -227,7 +222,6 @@ pub fn diff_with_previous(
     let mut warnings: Vec<String> = Vec::new();
 
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
-    constraint_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut warnings)?;
     field_access_diff::validate(ast, db, &mut warnings)?;
     warnings.extend(crate::generator::sql::storage::rule_warnings(ast));
@@ -252,7 +246,7 @@ pub fn diff_with_previous(
         _ => Vec::new(),
     };
 
-    // Model tables that already exist without an ownership marker. The security apparatus (grants,
+    // Model tables that already exist and are not Supatype's. The security apparatus (grants,
     // column privileges, field labels) is re-asserted from the AST alone on every push, so the
     // renderer has no way to know which tables are ours unless it is told.
     let unmanaged_model_tables: Vec<String> = ast
@@ -262,7 +256,7 @@ pub fn diff_with_previous(
             db.tables
                 .iter()
                 .find(|t| t.name == m.table_name())
-                .filter(|t| !crate::managed::is_managed_comment(t.comment.as_deref()))
+                .filter(|t| !db.owns_table(t))
                 .map(|t| t.name.clone())
         })
         .collect();
@@ -329,7 +323,6 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::AddIndex { risk, .. }
         | Operation::AddForeignKey { risk, .. }
         | Operation::AddUniqueConstraint { risk, .. }
-        | Operation::DropUniqueConstraint { risk, .. }
         | Operation::CreateRlsPolicy { risk, .. }
         | Operation::CreateJunctionTable { risk, .. }
         | Operation::CreateVersionsTable { risk, .. }

@@ -111,7 +111,8 @@ async fn a_hand_edit_moves_exactly_the_objects_it_touched() {
         push(&pool, &ast).await;
         let before = snapshot(&pool).await;
 
-        // A default on one column: the column and its table change, nothing else does.
+        // A default on one column: the column changes, nothing else does. Not its table, which is
+        // fingerprinted on existence alone since its columns are their own rows (Phase 4.11).
         let table = before
             .keys()
             .find(|k| k.0 == ObjectKind::Column && k.3 == "title")
@@ -128,26 +129,15 @@ async fn a_hand_edit_moves_exactly_the_objects_it_touched() {
         diff.sort();
         assert_eq!(
             diff,
-            vec![
-                format!(
-                    "changed {:?}",
-                    (
-                        ObjectKind::Column,
-                        "public".to_string(),
-                        table.clone(),
-                        "title".to_string()
-                    )
-                ),
-                format!(
-                    "changed {:?}",
-                    (
-                        ObjectKind::Table,
-                        "public".to_string(),
-                        String::new(),
-                        table.clone()
-                    )
-                ),
-            ]
+            vec![format!(
+                "changed {:?}",
+                (
+                    ObjectKind::Column,
+                    "public".to_string(),
+                    table.clone(),
+                    "title".to_string()
+                )
+            )]
         );
 
         // The stored definition is what a ledger shows beside the live one.

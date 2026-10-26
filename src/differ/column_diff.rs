@@ -778,16 +778,16 @@ pub fn diff(
     }
 
     // Dropping a column from a table Supatype did not create is the same class of data loss as
-    // dropping the table: smaller, and easier to miss. Gated on the same ownership marker, and
+    // dropping the table: smaller, and easier to miss. Gated on the table being ours, and
     // reported rather than skipped quietly. Additive changes are deliberately still allowed: a
     // table you do not own may gain a column, it may not lose one.
-    let managed = crate::managed::is_managed_comment(db_table.comment.as_deref());
+    let managed = db.owns_table(db_table);
     for col in &dropped {
         if !renamed_dropped.contains(*col) {
             if !managed {
                 warnings.push(format!(
                     "Column \"{}\".\"{}\" is gone from your schema, but the table is not managed by \
-                     Supatype (no ownership marker), so it is left alone. Run `supatype adopt` to \
+                     Supatype, so it is left alone. Run `supatype adopt` to \
                      bring the table under management, or drop the column by hand.",
                     db_table.name, col
                 ));
@@ -871,7 +871,7 @@ pub fn diff(
             // column; it may not have one changed underneath it.
             if !managed {
                 warnings.push(format!(
-                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed by Supatype (no ownership marker), so it is left alone. Run `supatype adopt` to bring the table under management, or point the model at a different table with `tableName`.",
+                    "Column \"{}\".\"{}\" differs from your schema, but the table is not managed by Supatype, so it is left alone. Run `supatype adopt` to bring the table under management, or point the model at a different table with `tableName`.",
                     db_table.name, col_name
                 ));
                 continue;

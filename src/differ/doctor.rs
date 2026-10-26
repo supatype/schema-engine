@@ -83,9 +83,15 @@ impl DoctorItem {
     }
 }
 
-/// `table.name`, or the name alone for a table-level object.
+/// The kind, then `table.name` or the name alone for a table-level object. Every message opens
+/// with it, so it reads as the start of a sentence: "Table widget", "RLS attributes posts.rls".
 fn label(key: &ObjectKey) -> String {
-    let kind = key.kind.as_str().replace('_', " ");
+    let words = key.kind.as_str().replace('_', " ").replace("rls", "RLS");
+    let mut chars = words.chars();
+    let kind: String = chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default();
     if key.parent.is_empty() {
         format!("{kind} {}", key.name)
     } else {
@@ -164,15 +170,18 @@ pub fn report(
     catalog: &CatalogState,
     ledger: &[LedgerRow],
 ) -> Result<DoctorReport> {
-    let plan = crate::push::reconcile_for_report(ast, db, catalog, ledger)?;
+    // The push reads table ownership from the ledger before it diffs (Phase 4.11), so doctor does.
+    let mut db = db.clone();
+    db.set_table_ownership(ledger);
+    let plan = crate::push::reconcile_for_report(ast, &db, catalog, ledger)?;
     let mut out = DoctorReport::default();
     for action in &plan.actions {
         classify(action, &mut out);
     }
     out.unmanaged_drift
-        .extend(unmanaged_objects(ast, db, catalog, ledger, &plan));
+        .extend(unmanaged_objects(ast, &db, catalog, ledger, &plan));
     let expected = expected(ast, &db.schema)?;
-    table_items(db, &expected.tables, &mut out);
+    undeclared_tables(&db, &expected.tables, &mut out);
     Ok(out)
 }
 
@@ -324,35 +333,16 @@ fn unmanaged_objects(
         .collect()
 }
 
-/// Tables, still by their ownership stamp. The gate declines to drop an unmarked table, and
-/// declines to drop a column from one, so an operator seeing a clean report and a push that leaves
-/// a table behind would conclude push is broken.
-fn table_items(db: &DatabaseState, schema_tables: &HashSet<String>, out: &mut DoctorReport) {
+/// Tables the schema does not declare, which the reconcile records but leaves to the table differ
+/// (Phase 4.11). Ours means a push drops it; not ours means it never will, and saying so keeps an
+/// operator from concluding push is broken when it leaves a table behind. A declared table that is
+/// not ours is the reconcile's conflict.
+fn undeclared_tables(db: &DatabaseState, schema_tables: &HashSet<String>, out: &mut DoctorReport) {
     for table in &db.tables {
-        let managed = is_managed_comment(table.comment.as_deref());
-        let in_schema = schema_tables.contains(&table.name);
-
-        // In the schema and unmarked: push refuses to attach access rules to it until it is
-        // adopted. That is the difference `adopt` resolves.
-        if in_schema && !managed {
-            out.unmanaged_drift.push(DoctorItem::new(
-                "table",
-                &table.name,
-                &table.name,
-                format!(
-                    "Table {} matches a model but is not managed: push will not drop its columns; \
-                     run `supatype adopt` to bring it under management",
-                    table.name
-                ),
-            ));
+        if schema_tables.contains(&table.name) {
             continue;
         }
-        if in_schema {
-            continue;
-        }
-
-        // Absent from the schema. Marked means push will drop it; unmarked means push will not.
-        if managed {
+        if db.owns_table(table) {
             out.stale_managed.push(DoctorItem::new(
                 "table",
                 &table.name,

@@ -23,5 +23,7 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
         extensions: db_extensions,
         enums: db_enums,
         rls_enabled_tables: db_rls_enabled,
+        // The ledger's, filled by whoever reads it.
+        table_ownership: Default::default(),
     })
 }

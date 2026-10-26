@@ -5488,21 +5488,27 @@ fn test_drop_managed_slug_unique_when_removed_from_ast() {
         ..DatabaseState::default()
     };
 
-    let diff = differ::diff(&ast, &db).unwrap();
+    // An older engine's stamp makes it ours (plan section 7), so the reconcile drops it (Phase 4.11).
     assert!(
-        diff.operations.iter().any(|op| {
-            matches!(
-                op,
-                Operation::DropUniqueConstraint {
-                    constraint,
-                    table,
-                    ..
-                } if table == "album" && constraint == "album_slug_key"
-            )
-        }),
-        "expected DropUniqueConstraint for managed album_slug_key; got {:?}",
-        diff.operations
+        unique_drops(&ast, &db).contains(&"album_slug_key".to_string()),
+        "expected the reconcile to drop the stamped album_slug_key"
     );
+}
+
+/// The unique constraints the reconcile drops for `ast` on `db`, with no ledger.
+fn unique_drops(ast: &supatype_engine::parser::ast::SchemaAst, db: &DatabaseState) -> Vec<String> {
+    use supatype_engine::introspector::fingerprint::ObjectKind;
+    use supatype_engine::ledger::reconcile::Action;
+    let catalog = supatype_engine::introspector::catalog::CatalogState::default();
+    supatype_engine::push::reconcile_for_report(ast, db, &catalog, &[])
+        .unwrap()
+        .actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Drop { key, .. } if key.kind == ObjectKind::Unique => Some(key.name.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[test]
@@ -5541,12 +5547,8 @@ fn test_unmanaged_slug_unique_never_auto_dropped() {
         ..DatabaseState::default()
     };
 
-    let diff = differ::diff(&ast, &db).unwrap();
     assert!(
-        !diff
-            .operations
-            .iter()
-            .any(|op| matches!(op, Operation::DropUniqueConstraint { .. })),
+        unique_drops(&ast, &db).is_empty(),
         "unmanaged constraint must not be auto-dropped"
     );
 

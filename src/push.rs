@@ -41,7 +41,8 @@ use crate::state::{migration_history, studio_state};
 /// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
 /// views since 4.6, security labels since 4.7a, policies since 4.7b, grants since 4.7c, RLS
 /// enablement since 4.8, columns since 4.9 (recorded; the column differ alters them), primary keys,
-/// the engine's schemas and serial sequences since 4.10.
+/// the engine's schemas and serial sequences since 4.10, tables (recorded; the table differ makes,
+/// renames and drops them) and unique constraints since 4.11.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -58,6 +59,8 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::PrimaryKey,
     ObjectKind::Schema,
     ObjectKind::Sequence,
+    ObjectKind::Table,
+    ObjectKind::Unique,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
@@ -190,7 +193,11 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     let mut conn = pool.acquire().await?;
     // Always the live catalog. A snapshot from the last push cannot see what changed outside
     // Supatype since, so `diff` showed one plan and push applied another.
-    let live = live(&mut conn, schema).await?;
+    let mut live = live(&mut conn, schema).await?;
+    let ledger = ledger::load_if_present(&mut conn).await?;
+    // Which tables are ours is the ledger's to say (Phase 4.11), so the table and column differs
+    // drop, rename and attach rules only where it does.
+    live.db.set_table_ownership(&ledger);
     let previous_ast = migration_history::load_latest_schema_ast(pool).await;
     let mut diff = differ::diff_with_previous(ast, &live.db, previous_ast.as_ref())?;
 
@@ -199,7 +206,6 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     // applied. Checked here, before the CLI asks anything about a push it is going to refuse.
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
-    let ledger = ledger::load_if_present(&mut conn).await?;
     // D4: the column differ drops only a column the ledger records as ours. One someone added to
     // a managed table, or one an older engine made that this push has not recorded yet, stays.
     let owned_columns: BTreeSet<(&str, &str)> = ledger

@@ -120,14 +120,16 @@ async fn doctor_explains_why_columns_survive_on_an_unstamped_model_table() {
         )
         .unwrap();
 
-        let unmanaged = messages(&report.unmanaged_drift);
+        // A declared table that is not ours is the reconcile's conflict (Phase 4.11): the push
+        // refuses until it is adopted, which is also why its columns survive.
+        let conflicting = messages(&report.conflicting);
         assert!(
-            unmanaged.iter().any(
-                |m| m.contains("Table widget matches a model but is not managed")
-                    && m.contains("supatype adopt")
-            ),
-            "the report does not explain why columns survive on an unstamped table: {unmanaged:?}"
+            conflicting
+                .iter()
+                .any(|m| m.contains("Table widget") && m.contains("supatype adopt")),
+            "the report does not explain why columns survive on an unstamped table: {conflicting:?}"
         );
+        assert!(doctor::has_strict_issues(&report));
     })
     .await;
 }
