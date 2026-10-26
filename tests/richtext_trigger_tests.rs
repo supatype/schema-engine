@@ -11,9 +11,8 @@
 
 mod common;
 
-use supatype_engine::generator::sql::{migration, triggers};
+use supatype_engine::generator::sql::triggers;
 use supatype_engine::parser;
-use supatype_engine::state::database_state::DatabaseState;
 
 const SCHEMA: &str = r#"{
     "astVersion": 2,
@@ -47,21 +46,16 @@ macro_rules! with_schema {
     (|$pool:ident| $body:block) => {
         common::with_integration_pool(|$pool| async move {
             let ast = parser::parse(SCHEMA).expect("the schema fixture parses");
-            let diff =
-                supatype_engine::differ::diff(&ast, &DatabaseState::default()).expect("diffs");
-            let sql = migration::forward_sql(&diff, false, "public", &ast).expect("renders");
+            // The migration a push applies, triggers included (they are the reconcile's since
+            // Phase 4.2). Applying the DDL alone would test a table with no trigger on it and
+            // pass for the wrong reason.
+            let sql = supatype_engine::push::fresh_migration(&ast, "public", false)
+                .expect("renders")
+                .up_script();
             sqlx::raw_sql(&sql)
                 .execute(&$pool)
                 .await
                 .expect("the schema applies");
-            // `forward_sql` renders the DDL; the trigger SQL is applied beside it, which is
-            // what `push` does. Applying only the first would test a table with no trigger on
-            // it and pass for the wrong reason.
-            let trigger_sql = triggers::generate(&ast, "public").expect("renders triggers");
-            sqlx::raw_sql(&trigger_sql)
-                .execute(&$pool)
-                .await
-                .expect("the triggers apply");
             $body
         })
         .await;

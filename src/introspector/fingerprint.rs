@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::catalog::CatalogState;
+use super::catalog::{CatalogState, DbFunction};
 use super::constraints::{DbConstraint, DbConstraintType};
 use super::indexes::DbIndex;
 use super::tables::DbTable;
@@ -146,6 +146,11 @@ pub struct ObjectFingerprint {
     /// moved into the ledger (plan section 7).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// The statement that would create this object as it is, from the catalog's own rendering, for
+    /// the kinds whose definition Postgres hands back whole (triggers, functions). What a rollback
+    /// runs to put back an object the push replaced without a ledger row to remember it by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_sql: Option<String>,
 }
 
 impl ObjectFingerprint {
@@ -279,7 +284,35 @@ fn entry(
         fingerprint: hash(kind, parts),
         definition: render_definition(kind, parts),
         comment: None,
+        create_sql: None,
     }
+}
+
+/// `CREATE OR REPLACE FUNCTION` for a function as the catalog reports it: the O1 definition
+/// renderer for this kind, and what a rollback runs to restore one the push replaced.
+fn function_create_sql(f: &DbFunction) -> String {
+    let volatility = match f.volatility.as_str() {
+        "i" => "IMMUTABLE",
+        "s" => "STABLE",
+        _ => "VOLATILE",
+    };
+    let security = if f.security_definer {
+        " SECURITY DEFINER"
+    } else {
+        ""
+    };
+    format!(
+        "CREATE OR REPLACE FUNCTION \"{}\".\"{}\"({}) RETURNS {} LANGUAGE {} {volatility}{security} AS $supatype_previous${}$supatype_previous$;",
+        f.schema, f.name, f.identity_arguments, f.return_type, f.language, f.body
+    )
+}
+
+/// `pg_get_triggerdef` gives the whole `CREATE TRIGGER`; `OR REPLACE` makes it a restore.
+fn trigger_create_sql(definition: &str) -> String {
+    format!(
+        "{};",
+        definition.replacen("CREATE TRIGGER ", "CREATE OR REPLACE TRIGGER ", 1)
+    )
 }
 
 /// Every fingerprint the two states support, sorted by kind, schema, parent and name.
@@ -503,7 +536,7 @@ fn policy_and_catalog_entries(
         let events = t.events.join(",");
         let columns = t.columns.join(",");
         let definition = normalise_sql(&t.definition);
-        out.push(entry(
+        let mut fingerprint = entry(
             ObjectKind::Trigger,
             &t.schema,
             &t.table,
@@ -517,13 +550,16 @@ fn policy_and_catalog_entries(
                 flag(t.enabled),
                 definition.as_str(),
             ],
-        ));
+        )
+        .commented(t.comment.as_deref());
+        fingerprint.create_sql = Some(trigger_create_sql(&t.definition));
+        out.push(fingerprint);
     }
 
     for f in &catalog.functions {
         let name = format!("{}({})", f.name, f.identity_types);
         let body = normalise_sql(&f.body);
-        out.push(entry(
+        let mut fingerprint = entry(
             ObjectKind::Function,
             &f.schema,
             "",
@@ -535,7 +571,10 @@ fn policy_and_catalog_entries(
                 flag(f.security_definer),
                 body.as_str(),
             ],
-        ));
+        )
+        .commented(f.comment.as_deref());
+        fingerprint.create_sql = Some(function_create_sql(f));
+        out.push(fingerprint);
     }
 
     for v in &catalog.views {

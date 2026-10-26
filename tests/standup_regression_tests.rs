@@ -66,7 +66,7 @@ fn relation_and_explicit_fk_scalar_emit_column_once() {
 fn generated_types_do_not_duplicate_fk_column() {
     let ast = parser::parse(FIXTURE).unwrap();
     let ts = types::generate(&ast).unwrap();
-    // owner_id appears once each in Row / Insert / Update — three times total.
+    // owner_id appears once each in Row / Insert / Update: three times total.
     let occurrences = ts.matches("owner_id").count();
     assert_eq!(
         occurrences, 3,
@@ -92,10 +92,11 @@ fn triggers_create_platform_schema_with_grants_and_slug_trigger() {
 #[test]
 fn push_apply_body_includes_slug_trigger() {
     let ast = parser::parse(FIXTURE).unwrap();
-    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let body =
-        migration::push_storage_and_model_apply_body("-- storage\n", &diff, false, "public", &ast)
-            .unwrap();
+    // The migration a push applies, the trigger layer included: triggers are the reconcile's
+    // creations since Phase 4.2, so a diff alone no longer carries them.
+    let body = supatype_engine::push::fresh_migration(&ast, "public", false)
+        .unwrap()
+        .apply_body("-- storage\n");
     assert!(
         body.contains("CREATE SCHEMA IF NOT EXISTS _platform"),
         "push apply body must ensure the _platform schema"

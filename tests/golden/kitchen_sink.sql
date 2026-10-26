@@ -6,6 +6,13 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE EXTENSION IF NOT EXISTS "vector";
 
+CREATE EXTENSION IF NOT EXISTS "unaccent";
+
+CREATE SCHEMA IF NOT EXISTS _platform;
+GRANT USAGE ON SCHEMA _platform TO PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+
 -- Auth helper functions for project: 
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -271,42 +278,14 @@ BEGIN
 END
 $mask_clear$;
 
-COMMIT;
-
--- triggers
-CREATE SCHEMA IF NOT EXISTS _platform;
-GRANT USAGE ON SCHEMA _platform TO PUBLIC;
-
-
-CREATE OR REPLACE FUNCTION _platform.set_updated_at()
+-- reconciled objects
+CREATE OR REPLACE FUNCTION _platform.normalise_kitchen_sink_rich_text()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.updated_at = NOW();
+  NEW."richTextField" := CASE WHEN NEW."richTextField" IS NULL THEN NULL WHEN NEW."richTextField" ? 'root' THEN NEW."richTextField" WHEN jsonb_typeof(NEW."richTextField") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."richTextField" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."richTextField") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."richTextField") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."richTextField"::text::text)))))) END;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
-
-CREATE EXTENSION IF NOT EXISTS "unaccent";
-
-CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
-RETURNS TEXT AS $$
-BEGIN
-  RETURN lower(
-    regexp_replace(
-      regexp_replace(
-        unaccent(trim(val)),
-        '[^a-zA-Z0-9\s-]', '', 'g'
-      ),
-      '[\s-]+', '-', 'g'
-    )
-  );
-END;
-$$ LANGUAGE plpgsql IMMUTABLE;
-
-CREATE OR REPLACE TRIGGER "kitchen_sink_updated_at_trigger"
-BEFORE UPDATE ON "public"."kitchen_sink"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 CREATE OR REPLACE FUNCTION _platform.set_kitchen_sink_slugField()
 RETURNS TRIGGER AS $$
@@ -326,20 +305,40 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER "kitchen_sink_slugField_trigger"
-BEFORE INSERT OR UPDATE ON "public"."kitchen_sink"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_kitchen_sink_slugField();
-
-CREATE OR REPLACE FUNCTION _platform.normalise_kitchen_sink_rich_text()
+CREATE OR REPLACE FUNCTION _platform.set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW."richTextField" := CASE WHEN NEW."richTextField" IS NULL THEN NULL WHEN NEW."richTextField" ? 'root' THEN NEW."richTextField" WHEN jsonb_typeof(NEW."richTextField") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."richTextField" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."richTextField") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."richTextField") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."richTextField"::text::text)))))) END;
+  NEW.updated_at = NOW();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
+RETURNS TEXT AS $$
+BEGIN
+  RETURN lower(
+    regexp_replace(
+      regexp_replace(
+        unaccent(trim(val)),
+        '[^a-zA-Z0-9\s-]', '', 'g'
+      ),
+      '[\s-]+', '-', 'g'
+    )
+  );
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
 CREATE OR REPLACE TRIGGER "kitchen_sink_rich_text_trigger"
 BEFORE INSERT OR UPDATE ON "public"."kitchen_sink"
 FOR EACH ROW EXECUTE FUNCTION _platform.normalise_kitchen_sink_rich_text();
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+CREATE OR REPLACE TRIGGER "kitchen_sink_slugField_trigger"
+BEFORE INSERT OR UPDATE ON "public"."kitchen_sink"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_kitchen_sink_slugField();
+
+CREATE OR REPLACE TRIGGER "kitchen_sink_updated_at_trigger"
+BEFORE UPDATE ON "public"."kitchen_sink"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+
+COMMIT;

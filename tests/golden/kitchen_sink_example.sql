@@ -8,6 +8,13 @@ CREATE EXTENSION IF NOT EXISTS "vector";
 
 CREATE EXTENSION IF NOT EXISTS "postgis";
 
+CREATE EXTENSION IF NOT EXISTS "unaccent";
+
+CREATE SCHEMA IF NOT EXISTS _platform;
+GRANT USAGE ON SCHEMA _platform TO PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+
 -- Auth helper functions for project: 
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -2282,43 +2289,21 @@ ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_room_id_fkey" FOREIGN KEY ("roo
 ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_speaker_id_fkey" FOREIGN KEY ("speaker_id") REFERENCES "public"."speaker" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "public"."ticket" ADD CONSTRAINT "ticket_attendee_id_fkey" FOREIGN KEY ("attendee_id") REFERENCES "public"."attendee" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "public"."ticket" ADD CONSTRAINT "ticket_auth_user_id_fkey" FOREIGN KEY ("auth_user_id") REFERENCES "auth"."users" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
-COMMIT;
-
--- triggers
-CREATE SCHEMA IF NOT EXISTS _platform;
-GRANT USAGE ON SCHEMA _platform TO PUBLIC;
-
-
-CREATE OR REPLACE FUNCTION _platform.set_updated_at()
+CREATE OR REPLACE FUNCTION _platform.normalise_speaker_rich_text()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW.updated_at = NOW();
+  NEW."bio" := CASE WHEN NEW."bio" IS NULL THEN NULL WHEN NEW."bio" ? 'root' THEN NEW."bio" WHEN jsonb_typeof(NEW."bio") <> 'object' THEN CASE WHEN NEW."bio" IS NULL THEN NULL WHEN NEW."bio" ? 'root' THEN NEW."bio" WHEN jsonb_typeof(NEW."bio") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."bio" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."bio") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."bio") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."bio"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW."bio") AS locale), NEW."bio") END;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-
-CREATE EXTENSION IF NOT EXISTS "unaccent";
-
-CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
-RETURNS TEXT AS $$
+CREATE OR REPLACE FUNCTION _platform.normalise_talk_rich_text()
+RETURNS TRIGGER AS $$
 BEGIN
-  RETURN lower(
-    regexp_replace(
-      regexp_replace(
-        unaccent(trim(val)),
-        '[^a-zA-Z0-9\s-]', '', 'g'
-      ),
-      '[\s-]+', '-', 'g'
-    )
-  );
+  NEW."abstract" := CASE WHEN NEW."abstract" IS NULL THEN NULL WHEN NEW."abstract" ? 'root' THEN NEW."abstract" WHEN jsonb_typeof(NEW."abstract") <> 'object' THEN CASE WHEN NEW."abstract" IS NULL THEN NULL WHEN NEW."abstract" ? 'root' THEN NEW."abstract" WHEN jsonb_typeof(NEW."abstract") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."abstract" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."abstract") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."abstract") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."abstract"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW."abstract") AS locale), NEW."abstract") END;
+  RETURN NEW;
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
-
-CREATE OR REPLACE TRIGGER "page_updated_at_trigger"
-BEFORE UPDATE ON "public"."page"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+$$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION _platform.set_page_slug()
 RETURNS TRIGGER AS $$
@@ -2338,14 +2323,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER "page_slug_trigger"
-BEFORE INSERT OR UPDATE ON "public"."page"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_page_slug();
-
-CREATE OR REPLACE TRIGGER "speaker_updated_at_trigger"
-BEFORE UPDATE ON "public"."speaker"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
 CREATE OR REPLACE FUNCTION _platform.set_speaker_slug()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -2363,30 +2340,6 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER "speaker_slug_trigger"
-BEFORE INSERT OR UPDATE ON "public"."speaker"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_speaker_slug();
-
-CREATE OR REPLACE FUNCTION _platform.normalise_speaker_rich_text()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW."bio" := CASE WHEN NEW."bio" IS NULL THEN NULL WHEN NEW."bio" ? 'root' THEN NEW."bio" WHEN jsonb_typeof(NEW."bio") <> 'object' THEN CASE WHEN NEW."bio" IS NULL THEN NULL WHEN NEW."bio" ? 'root' THEN NEW."bio" WHEN jsonb_typeof(NEW."bio") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."bio" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."bio") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."bio") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."bio"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW."bio") AS locale), NEW."bio") END;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER "speaker_rich_text_trigger"
-BEFORE INSERT OR UPDATE ON "public"."speaker"
-FOR EACH ROW EXECUTE FUNCTION _platform.normalise_speaker_rich_text();
-
-CREATE OR REPLACE TRIGGER "room_updated_at_trigger"
-BEFORE UPDATE ON "public"."room"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
-CREATE OR REPLACE TRIGGER "talk_updated_at_trigger"
-BEFORE UPDATE ON "public"."talk"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 CREATE OR REPLACE FUNCTION _platform.set_talk_slug()
 RETURNS TRIGGER AS $$
@@ -2406,36 +2359,80 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER "talk_slug_trigger"
-BEFORE INSERT OR UPDATE ON "public"."talk"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_talk_slug();
-
-CREATE OR REPLACE FUNCTION _platform.normalise_talk_rich_text()
+CREATE OR REPLACE FUNCTION _platform.set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
-  NEW."abstract" := CASE WHEN NEW."abstract" IS NULL THEN NULL WHEN NEW."abstract" ? 'root' THEN NEW."abstract" WHEN jsonb_typeof(NEW."abstract") <> 'object' THEN CASE WHEN NEW."abstract" IS NULL THEN NULL WHEN NEW."abstract" ? 'root' THEN NEW."abstract" WHEN jsonb_typeof(NEW."abstract") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."abstract" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."abstract") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."abstract") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."abstract"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW."abstract") AS locale), NEW."abstract") END;
+  NEW.updated_at = NOW();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER "talk_rich_text_trigger"
-BEFORE INSERT OR UPDATE ON "public"."talk"
-FOR EACH ROW EXECUTE FUNCTION _platform.normalise_talk_rich_text();
+CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
+RETURNS TEXT AS $$
+BEGIN
+  RETURN lower(
+    regexp_replace(
+      regexp_replace(
+        unaccent(trim(val)),
+        '[^a-zA-Z0-9\s-]', '', 'g'
+      ),
+      '[\s-]+', '-', 'g'
+    )
+  );
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
 
-CREATE OR REPLACE TRIGGER "sponsor_updated_at_trigger"
-BEFORE UPDATE ON "public"."sponsor"
+CREATE OR REPLACE TRIGGER "_global_site_settings_updated_at_trigger"
+BEFORE UPDATE ON "public"."_global_site_settings"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 CREATE OR REPLACE TRIGGER "attendee_updated_at_trigger"
 BEFORE UPDATE ON "public"."attendee"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE OR REPLACE TRIGGER "page_slug_trigger"
+BEFORE INSERT OR UPDATE ON "public"."page"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_page_slug();
+
+CREATE OR REPLACE TRIGGER "page_updated_at_trigger"
+BEFORE UPDATE ON "public"."page"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+CREATE OR REPLACE TRIGGER "room_updated_at_trigger"
+BEFORE UPDATE ON "public"."room"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+CREATE OR REPLACE TRIGGER "speaker_rich_text_trigger"
+BEFORE INSERT OR UPDATE ON "public"."speaker"
+FOR EACH ROW EXECUTE FUNCTION _platform.normalise_speaker_rich_text();
+
+CREATE OR REPLACE TRIGGER "speaker_slug_trigger"
+BEFORE INSERT OR UPDATE ON "public"."speaker"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_speaker_slug();
+
+CREATE OR REPLACE TRIGGER "speaker_updated_at_trigger"
+BEFORE UPDATE ON "public"."speaker"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+CREATE OR REPLACE TRIGGER "sponsor_updated_at_trigger"
+BEFORE UPDATE ON "public"."sponsor"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
+CREATE OR REPLACE TRIGGER "talk_rich_text_trigger"
+BEFORE INSERT OR UPDATE ON "public"."talk"
+FOR EACH ROW EXECUTE FUNCTION _platform.normalise_talk_rich_text();
+
+CREATE OR REPLACE TRIGGER "talk_slug_trigger"
+BEFORE INSERT OR UPDATE ON "public"."talk"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_talk_slug();
+
+CREATE OR REPLACE TRIGGER "talk_updated_at_trigger"
+BEFORE UPDATE ON "public"."talk"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
+
 CREATE OR REPLACE TRIGGER "ticket_updated_at_trigger"
 BEFORE UPDATE ON "public"."ticket"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
-CREATE OR REPLACE TRIGGER "_global_site_settings_updated_at_trigger"
-BEFORE UPDATE ON "public"."_global_site_settings"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+COMMIT;

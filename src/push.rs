@@ -25,7 +25,7 @@ use crate::desired::{desired_objects, statements, ObjectKey};
 use crate::differ::{self, DiffOutput, Operation};
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
-use crate::generator::sql::{storage, triggers, versions};
+use crate::generator::sql::{storage, versions};
 use crate::generator::typescript::admin;
 use crate::introspector::fingerprint::{fingerprints, ObjectFingerprint, ObjectKind};
 use crate::introspector::{self, catalog, catalog::CatalogState};
@@ -35,8 +35,14 @@ use crate::state::database_state::DatabaseState;
 use crate::state::{migration_history, studio_state};
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
-/// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1.
-pub const MOVED_KINDS: &[ObjectKind] = &[ObjectKind::Check, ObjectKind::ForeignKey];
+/// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
+/// triggers and their `_platform` functions since 4.2.
+pub const MOVED_KINDS: &[ObjectKind] = &[
+    ObjectKind::Check,
+    ObjectKind::ForeignKey,
+    ObjectKind::Function,
+    ObjectKind::Trigger,
+];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
 /// `packages/realtime`, `schema-push-lock`). Realtime skips WAL polls while this is held.
@@ -205,6 +211,7 @@ fn reconcile_with(
         live,
         created_by_parent: &created_by_parent,
         dropped_tables: &dropped_tables,
+        owned_schemas: catalog::OWNED_SCHEMAS,
         kinds: MOVED_KINDS,
     }))
 }
@@ -299,11 +306,6 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
         .execute(pool)
         .await
         .context("Failed to apply storage schema/policies")?;
-    let triggers_sql = triggers::generate(plan.ast, &plan.schema)?;
-    sqlx::raw_sql(&triggers_sql)
-        .execute(pool)
-        .await
-        .context("Failed to apply trigger functions")?;
     if !versions_sql.trim().is_empty() {
         sqlx::raw_sql(&versions_sql)
             .execute(pool)
@@ -340,10 +342,7 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
     let name = opts
         .name
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
-    let apply_body = migration.apply_body(
-        &storage::generate(plan.ast)?,
-        &triggers::generate(plan.ast, &plan.schema)?,
-    );
+    let apply_body = migration.apply_body(&storage::generate(plan.ast)?);
     Ok(Rendered {
         name,
         apply_body,

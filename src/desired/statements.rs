@@ -343,6 +343,9 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
     if starts("CREATE EXTENSION") {
         return Attribution::Ignored("extension");
     }
+    if starts("ALTER DEFAULT PRIVILEGES ") {
+        return Attribution::Ignored("default privileges");
+    }
     if starts("CREATE SCHEMA IF NOT EXISTS ") {
         let (parts, _) = match qualified_name(after("CREATE SCHEMA IF NOT EXISTS ")) {
             Some(x) => x,

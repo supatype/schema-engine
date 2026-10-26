@@ -4,6 +4,13 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
+CREATE EXTENSION IF NOT EXISTS "unaccent";
+
+CREATE SCHEMA IF NOT EXISTS _platform;
+GRANT USAGE ON SCHEMA _platform TO PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA _platform GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+
 -- Auth helper functions for project: 
 CREATE SCHEMA IF NOT EXISTS auth;
 
@@ -573,13 +580,31 @@ $mask_clear$;
 ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."orders" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "public"."orders" ADD CONSTRAINT "orders_customer_id_fkey" FOREIGN KEY ("customer_id") REFERENCES "public"."customers" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+CREATE OR REPLACE FUNCTION _platform.normalise_products_rich_text()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW."description" := CASE WHEN NEW."description" IS NULL THEN NULL WHEN NEW."description" ? 'root' THEN NEW."description" WHEN jsonb_typeof(NEW."description") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."description" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."description") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."description") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."description"::text::text)))))) END;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
-COMMIT;
-
--- triggers
-CREATE SCHEMA IF NOT EXISTS _platform;
-GRANT USAGE ON SCHEMA _platform TO PUBLIC;
-
+CREATE OR REPLACE FUNCTION _platform.set_products_slug()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+      NEW."slug" = _platform.slugify(NEW."name"::TEXT);
+    END IF;
+  ELSIF TG_OP = 'UPDATE' THEN
+    IF NEW."name" IS DISTINCT FROM OLD."name" THEN
+      IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."name"::TEXT) THEN
+        NEW."slug" = _platform.slugify(NEW."name"::TEXT);
+      END IF;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION _platform.set_updated_at()
 RETURNS TRIGGER AS $$
@@ -588,9 +613,6 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
-
-CREATE EXTENSION IF NOT EXISTS "unaccent";
 
 CREATE OR REPLACE FUNCTION _platform.slugify(val TEXT)
 RETURNS TEXT AS $$
@@ -611,46 +633,21 @@ CREATE OR REPLACE TRIGGER "customers_updated_at_trigger"
 BEFORE UPDATE ON "public"."customers"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
-CREATE OR REPLACE TRIGGER "products_updated_at_trigger"
-BEFORE UPDATE ON "public"."products"
+CREATE OR REPLACE TRIGGER "orders_updated_at_trigger"
+BEFORE UPDATE ON "public"."orders"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
-
-CREATE OR REPLACE FUNCTION _platform.set_products_slug()
-RETURNS TRIGGER AS $$
-BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."name"::TEXT);
-    END IF;
-  ELSIF TG_OP = 'UPDATE' THEN
-    IF NEW."name" IS DISTINCT FROM OLD."name" THEN
-      IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."name"::TEXT) THEN
-        NEW."slug" = _platform.slugify(NEW."name"::TEXT);
-      END IF;
-    END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER "products_slug_trigger"
-BEFORE INSERT OR UPDATE ON "public"."products"
-FOR EACH ROW EXECUTE FUNCTION _platform.set_products_slug();
-
-CREATE OR REPLACE FUNCTION _platform.normalise_products_rich_text()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW."description" := CASE WHEN NEW."description" IS NULL THEN NULL WHEN NEW."description" ? 'root' THEN NEW."description" WHEN jsonb_typeof(NEW."description") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW."description" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW."description") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\n') FROM jsonb_array_elements(NEW."description") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW."description"::text::text)))))) END;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE TRIGGER "products_rich_text_trigger"
 BEFORE INSERT OR UPDATE ON "public"."products"
 FOR EACH ROW EXECUTE FUNCTION _platform.normalise_products_rich_text();
 
-CREATE OR REPLACE TRIGGER "orders_updated_at_trigger"
-BEFORE UPDATE ON "public"."orders"
+CREATE OR REPLACE TRIGGER "products_slug_trigger"
+BEFORE INSERT OR UPDATE ON "public"."products"
+FOR EACH ROW EXECUTE FUNCTION _platform.set_products_slug();
+
+CREATE OR REPLACE TRIGGER "products_updated_at_trigger"
+BEFORE UPDATE ON "public"."products"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA _platform TO PUBLIC;
+
+COMMIT;

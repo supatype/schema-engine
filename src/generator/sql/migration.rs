@@ -90,8 +90,8 @@ pub fn forward_sql(
     Ok(Migration::render(diff, &[], force, schema, ast)?.up_script())
 }
 
-/// The differ's operations alone between the storage layer and the trigger functions, as a push
-/// of a diff with no reconcile would run them ([`Migration::apply_body`]).
+/// The differ's operations alone after the storage layer, as a push of a diff with no reconcile
+/// would run them ([`Migration::apply_body`]).
 pub fn push_storage_and_model_apply_body(
     storage_sql: &str,
     diff: &DiffOutput,
@@ -100,7 +100,7 @@ pub fn push_storage_and_model_apply_body(
     ast: &SchemaAst,
 ) -> Result<String> {
     let migration = Migration::render(diff, &[], force, schema, ast)?;
-    Ok(migration.apply_body(storage_sql, &super::triggers::generate(ast, schema)?))
+    Ok(migration.apply_body(storage_sql))
 }
 
 /// Single `BEGIN`…`COMMIT` script: [`push_storage_and_model_apply_body`] inside [`batch_sql`].
@@ -187,6 +187,13 @@ fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
         lines.push("CREATE EXTENSION IF NOT EXISTS \"postgis\";".into());
         lines.push(String::new());
     }
+
+    // The trigger functions' schema and the extension `slugify` reads, before the reconcile
+    // creates the functions (Phase 4.2). Unconditional: the shared functions always exist.
+    lines.push("CREATE EXTENSION IF NOT EXISTS \"unaccent\";".into());
+    lines.push(String::new());
+    lines.push(super::triggers::platform_schema_sql().trim_end().into());
+    lines.push(String::new());
 
     // Unconditional, for the same reason the affordance functions below are: a definition that is
     // only re-emitted when the diff happens to carry an RLS operation drifts from the policies that
@@ -374,8 +381,6 @@ fn render_forward_operation_lines(
             | Operation::EnableRls { risk, .. }
             | Operation::CreateRlsPolicy { risk, .. }
             | Operation::DropRlsPolicy { risk, .. }
-            | Operation::CreateTrigger { risk, .. }
-            | Operation::DropTrigger { risk, .. }
             | Operation::CreateJunctionTable { risk, .. }
             | Operation::CreateVersionsTable { risk, .. }
             | Operation::EnableExtension { risk, .. } => match risk {
@@ -476,30 +481,39 @@ impl Migration {
         // the reconcile's additions, which may need a table or column the operations create.
         let removals: Vec<String> = reconcile
             .iter()
+            .filter(|a| !a.removal_is_late())
             .filter_map(reconcile::Action::removal_sql)
             .collect();
+        // A function's removal waits for the operations instead: the trigger that depends on it
+        // may sit on a table they drop, and goes with the table.
+        let (late, early): (Vec<&reconcile::Action>, Vec<&reconcile::Action>) =
+            reconcile.iter().partition(|a| a.removal_is_late());
+        let late_removals: Vec<String> = late.iter().filter_map(|a| a.removal_sql()).collect();
         let additions: Vec<String> = reconcile
             .iter()
             .flat_map(reconcile::Action::addition_sql)
             .collect();
         let mut body = reconciled_section(removals.clone());
         body.extend(render_forward_core(diff, schema, ast)?);
+        body.extend(reconciled_section(late_removals.clone()));
         body.extend(reconciled_section(additions.clone()));
 
-        // Undone in reverse: the additions, then the operations, then what the removals took.
+        // Undone in reverse: the additions, the late removals, the operations, then what the
+        // early removals took.
         let mut down = reconciled_section(
             reconcile
                 .iter()
                 .rev()
                 .filter_map(reconcile::Action::undo_addition)
+                .chain(late.iter().rev().filter_map(|a| a.undo_removal()))
                 .collect(),
         );
         down.extend(super::rollback::statements(diff, schema)?);
         down.extend(reconciled_section(
-            reconcile
+            early
                 .iter()
                 .rev()
-                .filter_map(reconcile::Action::undo_removal)
+                .filter_map(|a| a.undo_removal())
                 .collect(),
         ));
 
@@ -508,7 +522,7 @@ impl Migration {
             body,
             down,
             hash: String::new(),
-            reconciled: removals.len() + additions.len(),
+            reconciled: removals.len() + late_removals.len() + additions.len(),
             risk: if diff.summary.is_destructive {
                 "destructive"
             } else if diff.summary.cautious > 0 {
@@ -563,17 +577,10 @@ impl Migration {
         )
     }
 
-    /// What a push runs inside its transaction: the storage layer, this migration, then the
-    /// trigger functions. The two layers are re-asserted on every push until their kinds move onto
-    /// the reconcile; the trigger functions are `CREATE OR REPLACE` and must run in the same
-    /// transaction as the DDL, or a `NOT NULL` column a trigger populates fails on insert.
-    pub fn apply_body(&self, storage_sql: &str, triggers_sql: &str) -> String {
-        format!(
-            "{}\n{}\n{}",
-            storage_sql.trim(),
-            self.up().trim_end(),
-            triggers_sql.trim_end()
-        )
+    /// What a push runs inside its transaction: the storage layer, then this migration. The
+    /// storage layer is re-asserted on every push until its kinds move onto the reconcile.
+    pub fn apply_body(&self, storage_sql: &str) -> String {
+        format!("{}\n{}", storage_sql.trim(), self.up().trim_end())
     }
 }
 
@@ -641,10 +648,6 @@ fn op_description(op: &Operation) -> String {
         Operation::DropRlsPolicy { table, policy, .. } => {
             format!("Drop RLS policy: {table}.{policy}")
         }
-        Operation::CreateTrigger { table, trigger, .. } => {
-            format!("Create trigger: {table}.{trigger}")
-        }
-        Operation::DropTrigger { table, trigger, .. } => format!("Drop trigger: {table}.{trigger}"),
         Operation::CreateJunctionTable { table, .. } => format!("Create junction table: {table}"),
         Operation::CreateVersionsTable { versions_table, .. } => {
             format!("Create versions table: {versions_table}")
@@ -995,12 +998,6 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
         }
         Operation::DropRlsPolicy { table, policy, .. } => Ok(format!(
             "DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";"
-        )),
-        Operation::CreateTrigger { table, trigger, .. } => Ok(format!(
-            "-- Trigger '{trigger}' on '{table}': run supatype-engine generate (triggers)"
-        )),
-        Operation::DropTrigger { table, trigger, .. } => Ok(format!(
-            "DROP TRIGGER IF EXISTS \"{trigger}\" ON \"{schema}\".\"{table}\";"
         )),
         Operation::CreateJunctionTable {
             table,
