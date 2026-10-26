@@ -376,6 +376,10 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 validation: validation_from_v2(value),
                 localized,
                 read_only,
+                ts_type: value
+                    .get("tsType")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 annotations: annotations.clone(),
             }))
         }
@@ -388,6 +392,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 validation: validation_from_v2(value),
                 localized,
                 read_only,
+                ts_type: None,
                 annotations: annotations.clone(),
             }))
         }
@@ -953,11 +958,22 @@ fn serialize_field(field: &FieldAst) -> Value {
             }
             v
         }
-        FieldAst::Json(j) => serde_json::json!({
-            "kind": "json",
-            "required": j.required,
-            "annotations": j.annotations,
-        }),
+        // `localized` and `tsType` round-trip like every other kind's: dropping them wrote a
+        // localized JSON column back as a plain one, and its declared shape back as any JSON.
+        FieldAst::Json(j) => {
+            let mut v = serde_json::json!({
+                "kind": "json",
+                "required": j.required,
+                "annotations": j.annotations,
+            });
+            if j.localized {
+                v["localized"] = Value::Bool(true);
+            }
+            if let Some(ts_type) = &j.ts_type {
+                v["tsType"] = Value::String(ts_type.clone());
+            }
+            v
+        }
         FieldAst::Button(b) => {
             let mut v = serde_json::json!({
                 "kind": "button",

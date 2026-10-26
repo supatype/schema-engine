@@ -1,8 +1,7 @@
 use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality, SchemaAst};
-use crate::parser::resolver::to_snake_case;
 use anyhow::Result;
 
-/// True if a field is (or contains) a RichText field — used to emit the RichText type alias.
+/// True if a field is (or contains) a RichText field, which is what emits the RichText alias.
 fn field_is_richtext(field: &FieldAst) -> bool {
     match field {
         FieldAst::RichText(_) => true,
@@ -21,7 +20,10 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
     out.push_str("export type Database = {\n  public: {\n    Tables: {\n");
 
     for model in &ast.models {
-        emit_table(model, &mut out);
+        emit_table(ast, model, &mut out);
+    }
+    for junction in &ast.junction_tables {
+        super::relationships::emit_junction(ast, junction, &mut out, "      ");
     }
 
     out.push_str("    }\n");
@@ -111,7 +113,7 @@ pub(crate) fn emit_shared_types(ast: &SchemaAst, out: &mut String) {
 
 // ─── Per-table emitter ───────────────────────────────────────────────────────
 
-fn emit_table(model: &ModelAst, out: &mut String) {
+fn emit_table(ast: &SchemaAst, model: &ModelAst, out: &mut String) {
     let table = &model.table_name();
     out.push_str(&format!("      {table}: {{\n"));
 
@@ -127,7 +129,7 @@ fn emit_table(model: &ModelAst, out: &mut String) {
     emit_fields(model, Mode::Update, out, "          ");
     out.push_str("        }\n");
 
-    out.push_str("        Relationships: []\n");
+    super::relationships::emit(&super::relationships::of_model(ast, model), out, "        ");
     out.push_str("      }\n");
 }
 
@@ -155,10 +157,7 @@ pub(crate) fn emit_fields(model: &ModelAst, mode: Mode, out: &mut String, ind: &
                 // that rejects null: the generated type contradicted the schema it was generated
                 // from, and said the safer-looking thing while being the wrong one.
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                    let fk_col = rel
-                        .foreign_key
-                        .clone()
-                        .unwrap_or_else(|| format!("{}_id", to_snake_case(name)));
+                    let fk_col = super::relationships::foreign_key_column(name, rel);
                     // When the FK column is also declared explicitly as a scalar
                     // field (the `author: RelatedTo<…>` + `author_id` pattern),
                     // that scalar definition is emitted by the `other` branch.
@@ -223,7 +222,7 @@ pub(crate) fn emit_fields(model: &ModelAst, mode: Mode, out: &mut String, ind: &
     }
 }
 
-fn emit_one(
+pub(crate) fn emit_one(
     name: &str,
     ts: &str,
     nullable: bool,
@@ -337,7 +336,7 @@ fn field_has_default(field: &FieldAst) -> bool {
     }
 }
 
-fn ts_type_of(field: &FieldAst) -> (String, bool) {
+pub(crate) fn ts_type_of(field: &FieldAst) -> (String, bool) {
     match field {
         FieldAst::Text(f)
         | FieldAst::Color(f)
@@ -377,7 +376,12 @@ fn ts_type_of(field: &FieldAst) -> (String, bool) {
                 .join(" | ");
             (union, !f.required)
         }
-        FieldAst::Json(f) => ("Json".into(), !f.required),
+        // `JSON<T>` arrives with `T` written out as `tsType`, as do the kinds stored as JSON that
+        // know their shape (`Duration`, `Code`, `Currency`). Without one the column is any JSON.
+        FieldAst::Json(f) => (
+            f.ts_type.clone().unwrap_or_else(|| "Json".into()),
+            !f.required,
+        ),
         FieldAst::Button(f) => ("Button".into(), !f.required),
         FieldAst::Array(f) => {
             let elem = match f.element_type.to_lowercase().as_str() {
