@@ -143,3 +143,52 @@ fn json_shape_and_localization_survive_serialisation() {
         "{out}"
     );
 }
+
+/// A JSON column's nullability is the column's, whatever shape `T` has. The conformance suite
+/// declares `Optional<JSON<{ a: number }>>`; an object shape carries braces and `;`, and the
+/// `| null` has to follow the whole of it in every mode, while a required one gets none.
+#[test]
+fn an_optional_json_object_shape_is_nullable_and_a_required_one_is_not() {
+    let ast = parser::parse(
+        r#"{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Probe",
+      "annotations": { "db": { "tableName": "probes" } },
+      "fields": {
+        "id": { "kind": "uuid", "required": true, "primaryKey": true },
+        "loose": {
+          "kind": "json", "required": false,
+          "tsType": "{ a: number; inner: { b: string } }"
+        },
+        "strict": { "kind": "json", "required": true, "tsType": "{ a: number }" }
+      }
+    }
+  ]
+}"#,
+    )
+    .expect("schema parses");
+    for src in [
+        types::generate(&ast).expect("types generate"),
+        augmentation::generate(&ast).expect("augmentation generates"),
+    ] {
+        let probes = table(&src, "probes");
+        for line in [
+            "loose: { a: number; inner: { b: string } } | null\n",
+            "loose?: { a: number; inner: { b: string } } | null\n",
+            "strict: { a: number }\n",
+            "strict?: { a: number }\n",
+        ] {
+            assert!(
+                probes.contains(line),
+                "missing `{}` in:\n{probes}",
+                line.trim()
+            );
+        }
+        assert!(
+            !probes.contains("strict: { a: number } | null"),
+            "a required column is never null:\n{probes}"
+        );
+    }
+}
