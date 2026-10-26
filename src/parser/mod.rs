@@ -2,6 +2,7 @@ pub mod accessors;
 pub mod annotations;
 pub mod ast;
 pub mod normaliser;
+pub mod owner_rules;
 pub mod resolver;
 pub mod v2;
 pub mod validator;

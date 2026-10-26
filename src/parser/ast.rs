@@ -528,6 +528,17 @@ pub struct RelationFieldAst {
     pub annotations: FieldAnnotations,
 }
 
+impl RelationFieldAst {
+    /// True when this side holds the key: `belongsTo` keeps the foreign key on this model and
+    /// `manyToMany` owns the junction. `hasMany` and `hasOne` keep it on the other model.
+    pub fn is_owning(&self) -> bool {
+        matches!(
+            self.cardinality,
+            RelationCardinality::BelongsTo | RelationCardinality::ManyToMany
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ArrayFieldAst {

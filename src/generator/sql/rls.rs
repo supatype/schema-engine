@@ -1,7 +1,5 @@
 use crate::generator::sql::auth_functions::{API_ROLES, AUTH_SCHEMA};
-use crate::parser::accessors::{
-    db_foreign_key, db_table_name, platform_access, resolve_owner_column,
-};
+use crate::parser::accessors::{db_table_name, platform_access, resolve_owner_column};
 use crate::parser::ast::{
     AccessRule, DefaultValueAst, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst,
     Operand, SchemaAst,
@@ -685,46 +683,40 @@ fn interval(text: &str) -> String {
     format!("INTERVAL {}", quote_literal(text))
 }
 
-/// Owner / OwnerFrom: compare auth.uid() to a row column or ownership via a related model.
+/// `Owner<"f">`: compare `auth.uid()` with a column of the row, or look ownership up through a
+/// related model.
+///
+/// `id` and a UUID field are compared directly, as is a relation's key when the related model is
+/// keyed by the auth user id or declares no owner of its own. A related model with an `Owner`
+/// rule is joined, and its owner column compared. The validator (`parser::owner_rules`) has
+/// already refused every other kind of field.
 ///
 /// Columns are always quoted, which is also what lets `qualify_bare_columns` find these references
 /// when the same expression is reused inside a `can_*` function, where a bare column has no `FROM`
 /// clause to resolve against. Quoting changes no meaning and the differ's normaliser strips quotes,
 /// so no policy is recreated for it.
 fn owner_access_expr(ast: &SchemaAst, model: &ModelAst, kernel_field: &str) -> String {
-    if kernel_field == "id" {
-        return format!("{AUTH_UID} = {}", quote_ident("id"));
-    }
-
-    if let Some((field_name, field)) = model.fields.get_key_value(kernel_field) {
-        if let FieldAst::Relation(rel) = field {
-            let fk = db_foreign_key(field, field_name).unwrap_or_else(|| {
-                crate::parser::accessors::default_foreign_key_column(field_name)
-            });
-
-            if let Some(target) = ast.models.iter().find(|m| m.name == rel.target) {
-                if is_user_identity_model(target) {
-                    return format!("{AUTH_UID} = {}", quote_ident(&fk));
-                }
-                if let Some(owner_col) = owner_column_on_model(target) {
-                    let table = quote_ident(db_table_name(target));
-                    return format!(
-                        "EXISTS (SELECT 1 FROM {table} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
-                        fk_q = quote_ident(&fk),
-                        owner_q = quote_ident(&owner_col)
-                    );
-                }
-            }
-
-            return format!("{AUTH_UID} = {}", quote_ident(&fk));
-        }
-
-        let column = resolve_owner_column(model, kernel_field);
-        return format!("{AUTH_UID} = {}", quote_ident(&column));
-    }
-
     let column = resolve_owner_column(model, kernel_field);
-    format!("{AUTH_UID} = {}", quote_ident(&column))
+    let Some(FieldAst::Relation(rel)) = model.fields.get(kernel_field) else {
+        return format!("{AUTH_UID} = {}", quote_ident(&column));
+    };
+    let owned_target = ast
+        .models
+        .iter()
+        .find(|m| m.name == rel.target)
+        .filter(|target| !is_user_identity_model(target))
+        .and_then(|target| Some((target, owner_column_on_model(target)?)));
+    match owned_target {
+        Some((target, owner_col)) => {
+            let table = quote_ident(db_table_name(target));
+            format!(
+                "EXISTS (SELECT 1 FROM {table} WHERE {table}.\"id\" = {fk_q} AND {AUTH_UID} = {table}.{owner_q})",
+                fk_q = quote_ident(&column),
+                owner_q = quote_ident(&owner_col)
+            )
+        }
+        None => format!("{AUTH_UID} = {}", quote_ident(&column)),
+    }
 }
 
 /// Models whose primary key is the auth user id (e.g. Profile), not a generated UUID.
@@ -745,9 +737,6 @@ fn owner_column_on_model(model: &ModelAst) -> Option<String> {
     let AccessRule::Owner { field } = rule else {
         return None;
     };
-    if field == "id" {
-        return Some("id".to_string());
-    }
     Some(resolve_owner_column(model, field))
 }
 
