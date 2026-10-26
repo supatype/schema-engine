@@ -7,6 +7,7 @@ pub mod grants;
 pub mod migration;
 pub mod migration_errors;
 pub mod online;
+pub mod recreate;
 pub mod rls;
 pub mod rollback;
 pub mod settled;

@@ -3,7 +3,8 @@ use crate::generator::sql::column_conversion::{
     self, add_column_backfill_default, plan_type_conversion, required_field_existing_table_warning,
     supports_kind_data_migration, ConversionStrategyKind,
 };
-use crate::introspector::constraints::DbConstraintType;
+use crate::introspector::constraints::{DbConstraint, DbConstraintType};
+use crate::introspector::dependents::{DbColumnDependent, DependentKind};
 use crate::introspector::tables::{DbColumn, DbTable};
 use crate::parser::accessors::{column_names_for, is_localized};
 use crate::parser::ast::{FieldAst, IdentityGeneration, ModelAst, RelationCardinality, SchemaAst};
@@ -322,54 +323,114 @@ pub(crate) fn field_pg_type(field: &FieldAst) -> String {
     }
 }
 
+/// What has to come back when `table.column` is dropped and added again: everything `pg_depend`
+/// says depends on it (indexes, constraints, triggers, policies, views), other tables' and other
+/// schemas' included. A state read from a snapshot has no `pg_depend` read, and falls back to the
+/// foreign keys and the indexes keyed on the column that its lists attribute to it.
 pub fn discover_column_dependencies(
     table: &str,
     column: &str,
     db: &DatabaseState,
 ) -> Vec<ColumnDependencySnapshot> {
-    let mut deps = Vec::new();
-
-    for c in &db.constraints {
-        if c.constraint_type != DbConstraintType::ForeignKey {
-            continue;
-        }
-        let is_outgoing = c.table == table && c.columns.iter().any(|col| col == column);
-        let is_incoming = c.foreign_table.as_deref() == Some(table)
-            && c.foreign_columns
-                .as_ref()
-                .is_some_and(|cols| cols.iter().any(|col| col == column));
-        if is_outgoing || is_incoming {
-            deps.push(ColumnDependencySnapshot {
-                kind: "foreign_key".into(),
-                table: c.table.clone(),
-                name: c.name.clone(),
-                columns: Some(c.columns.clone()),
-                foreign_table: c.foreign_table.clone(),
-                foreign_columns: c.foreign_columns.clone(),
-                on_delete: c.on_delete.clone(),
-                unique: false,
-                index_method: None,
-            });
-        }
+    if db.column_dependents.is_empty() {
+        return attributed_dependencies(table, column, db);
     }
+    db.column_dependents
+        .iter()
+        .filter(|d| d.table == table && d.column == column)
+        .map(|d| catalog_dependency(d, db))
+        .collect()
+}
 
-    for idx in &db.indexes {
-        if idx.table == table && idx.columns.iter().any(|c| c == column) && !idx.is_primary {
-            deps.push(ColumnDependencySnapshot {
-                kind: "index".into(),
-                table: idx.table.clone(),
-                name: idx.name.clone(),
-                columns: Some(idx.columns.clone()),
-                foreign_table: None,
-                foreign_columns: None,
-                on_delete: None,
-                unique: idx.unique,
-                index_method: Some(idx.method.clone()),
-            });
-        }
+/// One `pg_depend` dependent as the recreate drops and restores it. A foreign key of the project
+/// schema takes its parts from the constraint read, so its referenced table is restored
+/// schema-qualified.
+fn catalog_dependency(dep: &DbColumnDependent, db: &DatabaseState) -> ColumnDependencySnapshot {
+    let key = (dep.kind == DependentKind::ForeignKey && dep.owner_schema == db.schema)
+        .then(|| {
+            db.constraints
+                .iter()
+                .find(|c| c.table == dep.owner && c.name == dep.name)
+        })
+        .flatten();
+    if let Some(key) = key {
+        return foreign_key_dependency(key);
     }
+    let kind = match dep.kind {
+        DependentKind::Index => "index",
+        // A key the constraint read did not see is put back as Postgres printed it.
+        DependentKind::ForeignKey | DependentKind::Constraint => "constraint",
+        DependentKind::Trigger => "trigger",
+        DependentKind::Policy => "policy",
+        DependentKind::View => "view",
+    };
+    ColumnDependencySnapshot {
+        kind: kind.into(),
+        table: dep.owner.clone(),
+        name: dep.name.clone(),
+        schema: Some(dep.owner_schema.clone()),
+        columns: None,
+        foreign_table: None,
+        foreign_schema: None,
+        foreign_columns: None,
+        on_delete: None,
+        definition: Some(dep.definition.clone()),
+        unique: dep.definition.starts_with("CREATE UNIQUE "),
+        index_method: None,
+    }
+}
 
-    deps
+fn foreign_key_dependency(c: &DbConstraint) -> ColumnDependencySnapshot {
+    ColumnDependencySnapshot {
+        kind: "foreign_key".into(),
+        table: c.table.clone(),
+        name: c.name.clone(),
+        schema: None,
+        columns: Some(c.columns.clone()),
+        foreign_table: c.foreign_table.clone(),
+        foreign_schema: c.foreign_schema.clone(),
+        foreign_columns: c.foreign_columns.clone(),
+        on_delete: c.on_delete.clone(),
+        definition: c.definition.clone(),
+        unique: false,
+        index_method: None,
+    }
+}
+
+/// The foreign keys from or to `table.column`, and the indexes keyed on it, from the constraint
+/// and index lists alone.
+fn attributed_dependencies(
+    table: &str,
+    column: &str,
+    db: &DatabaseState,
+) -> Vec<ColumnDependencySnapshot> {
+    let keys = db.constraints.iter().filter(|c| {
+        c.constraint_type == DbConstraintType::ForeignKey
+            && ((c.table == table && c.columns.iter().any(|col| col == column))
+                || (c.foreign_table.as_deref() == Some(table)
+                    && c.foreign_columns
+                        .as_ref()
+                        .is_some_and(|cols| cols.iter().any(|col| col == column))))
+    });
+    let indexes = db.indexes.iter().filter(|idx| {
+        idx.table == table && idx.columns.iter().any(|c| c == column) && !idx.is_primary
+    });
+    keys.map(foreign_key_dependency)
+        .chain(indexes.map(|idx| ColumnDependencySnapshot {
+            kind: "index".into(),
+            table: idx.table.clone(),
+            name: idx.name.clone(),
+            schema: None,
+            columns: Some(idx.columns.clone()),
+            foreign_table: None,
+            foreign_schema: None,
+            foreign_columns: None,
+            on_delete: None,
+            definition: idx.definition.clone(),
+            unique: idx.unique,
+            index_method: Some(idx.method.clone()),
+        }))
+        .collect()
 }
 
 fn detect_changes(

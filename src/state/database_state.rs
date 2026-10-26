@@ -48,6 +48,11 @@ pub struct DatabaseState {
     /// part of a snapshot: a copy of the database under another name has its own.
     #[serde(skip)]
     pub database: String,
+    /// Every index and constraint that depends on a column of this schema, from `pg_depend`: what a
+    /// push that drops a column and adds it again puts back. Never part of a snapshot; a state
+    /// without it (read from one) falls back to the keys and indexes the lists above attribute.
+    #[serde(skip)]
+    pub column_dependents: Vec<crate::introspector::dependents::DbColumnDependent>,
 }
 
 impl DatabaseState {

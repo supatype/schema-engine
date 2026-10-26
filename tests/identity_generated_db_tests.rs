@@ -630,3 +630,330 @@ async fn a_narrowed_write_privilege_leaves_out_generated_columns() {
     })
     .await;
 }
+
+/// What depends on `posts.title_lower` by the user's hand, as Postgres prints it: the foreign key's
+/// `pg_get_constraintdef` and the partial index's `pg_get_indexdef`, each None when it is gone.
+async fn hand_made_on_title_lower(pool: &PgPool) -> (Option<String>, Option<String>) {
+    sqlx::query_as(
+        "SELECT (SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                  WHERE conname = 'posts_title_lower_tag_fkey'),
+                (SELECT pg_get_indexdef(indexrelid) FROM pg_index
+                  WHERE indexrelid = to_regclass('public.posts_title_lower_partial'))",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// A column made again (here: a plain column becoming generated) gets back what the user made on
+/// it exactly as it was: the foreign key's `MATCH FULL` and `DEFERRABLE INITIALLY DEFERRED`, and
+/// the index's `DESC` and `WHERE`, not objects rebuilt from the parts the engine happens to model.
+#[tokio::test]
+async fn a_recreated_column_keeps_a_users_own_key_and_index_exactly() {
+    common::with_integration_pool(|pool| async move {
+        let plain = posts(json!({
+            "id": identity("always"),
+            "title": text(json!({})),
+            "title_lower": text(json!({})),
+        }));
+        converges(&pool, &plain).await;
+        exec(
+            &pool,
+            "CREATE TABLE public.tags (name TEXT PRIMARY KEY);
+             INSERT INTO public.tags (name) VALUES ('hello');
+             INSERT INTO public.posts (title, title_lower) VALUES ('Hello', 'hello');
+             ALTER TABLE public.posts ADD CONSTRAINT posts_title_lower_tag_fkey
+               FOREIGN KEY (title_lower) REFERENCES public.tags (name)
+               MATCH FULL ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED;
+             CREATE INDEX posts_title_lower_partial ON public.posts (title_lower DESC)
+               WHERE title_lower <> '';",
+        )
+        .await
+        .unwrap();
+        let before = hand_made_on_title_lower(&pool).await;
+        assert!(before.0.is_some() && before.1.is_some(), "{before:?}");
+
+        let generated = with_id(identity("always"), Some("lower(title)"));
+        common::push_with(
+            &pool,
+            &generated,
+            push::ApplyOptions {
+                force: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("forced");
+        assert_eq!(how_filled(&pool, "title_lower").await.2, "ALWAYS");
+        assert_eq!(
+            hand_made_on_title_lower(&pool).await,
+            before,
+            "the key and the index come back as they were"
+        );
+    })
+    .await;
+}
+
+/// `posts` with a plain `title_lower`, pushed, a row in it, and `setup` run by hand; then
+/// `title_lower` becomes generated (forced), which drops and adds the column again.
+async fn recreate_title_lower_around(pool: &PgPool, setup: &str) {
+    let plain = posts(json!({
+        "id": identity("always"),
+        "title": text(json!({})),
+        "title_lower": text(json!({})),
+    }));
+    converges(pool, &plain).await;
+    exec(
+        pool,
+        "INSERT INTO public.posts (title, title_lower) VALUES ('Hello', 'hello')",
+    )
+    .await
+    .unwrap();
+    exec(pool, setup).await.unwrap();
+    let generated = with_id(identity("always"), Some("lower(title)"));
+    common::push_with(
+        pool,
+        &generated,
+        push::ApplyOptions {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("forced");
+    assert_eq!(how_filled(pool, "title_lower").await.2, "ALWAYS");
+}
+
+/// Every index and constraint in `public` other than the engine's own, by name, with its
+/// definition as Postgres prints it.
+async fn hand_made_objects(pool: &PgPool) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT c.relname::text, pg_get_indexdef(c.oid) FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public' AND c.relkind = 'i' AND c.relname LIKE 'mine_%'
+         UNION ALL
+         SELECT k.conname::text, pg_get_constraintdef(k.oid) FROM pg_constraint k
+           JOIN pg_namespace n ON n.oid = k.connamespace
+          WHERE n.nspname = 'public' AND k.conname LIKE 'mine_%'
+         ORDER BY 1, 2",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// An index that uses the recreated column only in an expression, in `INCLUDE` or in its `WHERE`
+/// depends on it as much as one keyed on it does: Postgres drops it with the column, and the push
+/// makes it again.
+#[tokio::test]
+async fn a_recreated_column_keeps_indexes_that_use_it_outside_their_keys() {
+    common::with_integration_pool(|pool| async move {
+        let setup = "CREATE INDEX mine_expression ON public.posts (upper(title_lower));
+                     CREATE INDEX mine_include ON public.posts (id) INCLUDE (title_lower);
+                     CREATE INDEX mine_partial ON public.posts (id) WHERE title_lower IS NOT NULL;";
+        recreate_title_lower_around(&pool, setup).await;
+        let index = |name: &str, definition: &str| (name.to_string(), definition.to_string());
+        assert_eq!(
+            hand_made_objects(&pool).await,
+            [
+                index(
+                    "mine_expression",
+                    "CREATE INDEX mine_expression ON public.posts USING btree (upper(title_lower))"
+                ),
+                index(
+                    "mine_include",
+                    "CREATE INDEX mine_include ON public.posts USING btree (id) INCLUDE (title_lower)"
+                ),
+                index(
+                    "mine_partial",
+                    "CREATE INDEX mine_partial ON public.posts USING btree (id) WHERE (title_lower IS NOT NULL)"
+                ),
+            ]
+        );
+    })
+    .await;
+}
+
+/// A unique constraint and a check on the recreated column, and another table's foreign key to it:
+/// the unique constraint's index cannot be dropped on its own, and the key cannot come back before
+/// the unique constraint it needs does.
+#[tokio::test]
+async fn a_recreated_column_keeps_its_constraints_and_the_keys_that_reference_it() {
+    common::with_integration_pool(|pool| async move {
+        let setup = "ALTER TABLE public.posts ADD CONSTRAINT mine_title_lower_key UNIQUE (title_lower);
+                     ALTER TABLE public.posts ADD CONSTRAINT mine_title_lower_check
+                       CHECK (title_lower <> '');
+                     CREATE TABLE public.notes (id INT PRIMARY KEY, post_title TEXT,
+                       CONSTRAINT mine_note_post_fkey FOREIGN KEY (post_title)
+                         REFERENCES public.posts (title_lower) DEFERRABLE INITIALLY DEFERRED);
+                     INSERT INTO public.notes VALUES (1, 'hello');";
+        recreate_title_lower_around(&pool, setup).await;
+        let object = |name: &str, definition: &str| (name.to_string(), definition.to_string());
+        assert_eq!(
+            hand_made_objects(&pool).await,
+            [
+                object(
+                    "mine_note_post_fkey",
+                    "FOREIGN KEY (post_title) REFERENCES posts(title_lower) DEFERRABLE INITIALLY DEFERRED"
+                ),
+                object("mine_title_lower_check", "CHECK ((title_lower <> ''::text))"),
+                object(
+                    "mine_title_lower_key",
+                    "CREATE UNIQUE INDEX mine_title_lower_key ON public.posts USING btree (title_lower)"
+                ),
+                object("mine_title_lower_key", "UNIQUE (title_lower)"),
+            ]
+        );
+    })
+    .await;
+}
+
+/// What a user made by hand on `posts.title_lower`, besides keys and indexes: each trigger's
+/// `pg_get_triggerdef` and `tgenabled` (`O` origin, `D` disabled, `R` replica, `A` always), and
+/// each policy as `pg_policies` describes it, by name.
+async fn hand_made_triggers_and_policies(pool: &PgPool) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT tgname::text, pg_get_triggerdef(oid) || ' | ' || tgenabled::text FROM pg_trigger
+          WHERE tgrelid = 'public.posts'::regclass AND tgname LIKE 'mine_%'
+         UNION ALL
+         SELECT policyname::text,
+                concat_ws(' | ', permissive, cmd, roles::text, qual, with_check)
+           FROM pg_policies
+          WHERE schemaname = 'public' AND tablename = 'posts' AND policyname LIKE 'mine_%'
+         ORDER BY 1, 2",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// A trigger that fires on the recreated column and a policy that reads it come back exactly as
+/// they were, a trigger's enabled state (here: always, and disabled) included. A restrictive
+/// policy that went missing would widen who sees what, so losing one is a security fault, not an
+/// inconvenience.
+#[tokio::test]
+async fn a_recreated_column_keeps_a_users_triggers_and_policies() {
+    common::with_integration_pool(|pool| async move {
+        let setup = "CREATE FUNCTION public.mine_touch() RETURNS trigger LANGUAGE plpgsql
+                       AS $$ BEGIN RETURN NEW; END $$;
+                     CREATE TRIGGER mine_on_title_lower BEFORE UPDATE OF title_lower
+                       ON public.posts FOR EACH ROW EXECUTE FUNCTION public.mine_touch();
+                     CREATE TRIGGER mine_when_title_lower AFTER INSERT ON public.posts
+                       FOR EACH ROW WHEN (NEW.title_lower IS NOT NULL)
+                       EXECUTE FUNCTION public.mine_touch();
+                     ALTER TABLE public.posts ENABLE ALWAYS TRIGGER mine_on_title_lower;
+                     ALTER TABLE public.posts DISABLE TRIGGER mine_when_title_lower;
+                     CREATE POLICY mine_hide_secret ON public.posts AS RESTRICTIVE
+                       FOR SELECT TO authenticated USING (title_lower <> 'secret');
+                     CREATE POLICY mine_write_lower ON public.posts FOR UPDATE TO PUBLIC
+                       USING (true) WITH CHECK (title_lower = lower(title_lower));";
+        recreate_title_lower_around(&pool, setup).await;
+        let object = |name: &str, definition: &str| (name.to_string(), definition.to_string());
+        assert_eq!(
+            hand_made_triggers_and_policies(&pool).await,
+            [
+                object(
+                    "mine_hide_secret",
+                    "RESTRICTIVE | SELECT | {authenticated} | (title_lower <> 'secret'::text)"
+                ),
+                object(
+                    "mine_on_title_lower",
+                    "CREATE TRIGGER mine_on_title_lower BEFORE UPDATE OF title_lower ON public.posts FOR EACH ROW EXECUTE FUNCTION mine_touch() | A"
+                ),
+                object(
+                    "mine_when_title_lower",
+                    "CREATE TRIGGER mine_when_title_lower AFTER INSERT ON public.posts FOR EACH ROW WHEN ((new.title_lower IS NOT NULL)) EXECUTE FUNCTION mine_touch() | D"
+                ),
+                object(
+                    "mine_write_lower",
+                    "PERMISSIVE | UPDATE | {public} | true | (title_lower = lower(title_lower))"
+                ),
+            ]
+        );
+    })
+    .await;
+}
+
+/// `posts.title_lower` plain and pushed with a row, `setup` run by hand, then the push that would
+/// make the column generated: refused, with a message naming what is in the way, and nothing
+/// changed.
+async fn recreate_is_refused_around(pool: &PgPool, setup: &str, names: &[&str]) {
+    let plain = posts(json!({
+        "id": identity("always"),
+        "title": text(json!({})),
+        "title_lower": text(json!({})),
+    }));
+    converges(pool, &plain).await;
+    exec(
+        pool,
+        "INSERT INTO public.posts (title, title_lower) VALUES ('Hello', 'hello')",
+    )
+    .await
+    .unwrap();
+    exec(pool, setup).await.unwrap();
+    let generated = with_id(identity("always"), Some("lower(title)"));
+    let refused = common::push_with(
+        pool,
+        &generated,
+        push::ApplyOptions {
+            force: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("the push is refused");
+    let message = format!("{refused:#}");
+    for name in names {
+        assert!(message.contains(name), "names {name}: {message}");
+    }
+    assert!(
+        !message.contains("Failed to apply migration"),
+        "refused before anything ran: {message}"
+    );
+    assert_eq!(
+        how_filled(pool, "title_lower").await.2,
+        "NEVER",
+        "nothing changed"
+    );
+}
+
+/// A view on the recreated column cannot be put back by the push (it may be anything), so the push
+/// is refused before it changes anything, naming the view.
+#[tokio::test]
+async fn a_view_on_a_recreated_column_refuses_the_push_before_any_change() {
+    common::with_integration_pool(|pool| async move {
+        recreate_is_refused_around(
+            &pool,
+            "CREATE VIEW public.mine_titles AS SELECT id, title_lower FROM public.posts;",
+            &["public.mine_titles", "title_lower"],
+        )
+        .await;
+        let still: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_views WHERE schemaname = 'public' AND viewname = 'mine_titles'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(still, 1, "the view is untouched");
+    })
+    .await;
+}
+
+/// A key from a table in another schema to the recreated column is refused the same way: the push
+/// works in its own schema only.
+#[tokio::test]
+async fn a_dependent_in_another_schema_refuses_the_push_before_any_change() {
+    common::with_integration_pool(|pool| async move {
+        recreate_is_refused_around(
+            &pool,
+            "ALTER TABLE public.posts ADD CONSTRAINT mine_title_lower_key UNIQUE (title_lower);
+             CREATE SCHEMA mine_elsewhere;
+             CREATE TABLE mine_elsewhere.notes (id INT PRIMARY KEY, post_title TEXT,
+               CONSTRAINT mine_note_post_fkey FOREIGN KEY (post_title)
+                 REFERENCES public.posts (title_lower));",
+            &["mine_elsewhere", "mine_note_post_fkey"],
+        )
+        .await;
+    })
+    .await;
+}

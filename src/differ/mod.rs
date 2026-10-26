@@ -180,21 +180,38 @@ pub enum Operation {
     },
 }
 
-/// FK / index metadata captured before a column is dropped and recreated.
+/// What depends on a column, captured before the column is dropped and recreated. `kind` is
+/// `foreign_key`, `constraint` (primary key, unique, exclusion or check), `index`, `trigger`,
+/// `policy` or `view`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnDependencySnapshot {
     pub kind: String,
     pub table: String,
     pub name: String,
+    /// The schema `table` is in, when the dependent was read from the catalog; `None` for the
+    /// project schema. One in another schema is refused rather than dropped and made again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub columns: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub foreign_table: Option<String>,
+    /// The schema of `foreign_table`: a key to `auth.users` is restored to `auth.users`, not to a
+    /// `users` table in the project schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign_schema: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub foreign_columns: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_delete: Option<String>,
+    /// The object as the catalog prints it: `pg_get_constraintdef` for a foreign key,
+    /// `pg_get_indexdef` for an index. The restore is made from it, so every clause survives
+    /// (`MATCH`, `ON UPDATE`, deferral, `NOT VALID`; an index's `WHERE`, `INCLUDE`, `DESC`,
+    /// operator classes). Absent from a snapshot written before it was recorded, which is then
+    /// restored from the parts above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<String>,
     #[serde(default)]
     pub unique: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
