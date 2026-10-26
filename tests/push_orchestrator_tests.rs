@@ -9,7 +9,9 @@
 
 mod common;
 
-use supatype_engine::{ledger, parser, parser::ast::SchemaAst, push};
+use supatype_engine::{
+    introspector::fingerprint::ObjectKind, ledger, parser, parser::ast::SchemaAst, push,
+};
 
 fn fixture() -> SchemaAst {
     parser::parse(include_str!("fixtures/five_model_blog.json")).unwrap()
@@ -49,10 +51,7 @@ async fn migrations(pool: &sqlx::PgPool) -> Vec<(String, String)> {
         .unwrap()
 }
 
-async fn push(pool: &sqlx::PgPool, ast: &SchemaAst) -> anyhow::Result<push::Outcome> {
-    let plan = push::prepare(pool, ast, "public").await?;
-    push::apply(pool, plan, push::ApplyOptions::default()).await
-}
+use common::push;
 
 #[tokio::test]
 async fn a_first_push_applies_once_and_a_second_is_up_to_date_with_no_new_history() {
@@ -82,14 +81,20 @@ async fn a_first_push_applies_once_and_a_second_is_up_to_date_with_no_new_histor
             "an up-to-date push records no migration"
         );
 
-        // The ledger exists from the first push and holds nothing until a kind moves onto the
-        // reconcile.
+        // The ledger holds a row for every object of a moved kind the push created, each linked
+        // to the migration, and nothing of any other kind.
         let mut conn = pool.acquire().await.unwrap();
-        assert!(ledger::load(&mut conn).await.unwrap().is_empty());
+        let rows = ledger::load(&mut conn).await.unwrap();
         assert!(
-            push::MOVED_KINDS.is_empty(),
-            "update this test with the first moved kind"
+            rows.iter().all(|r| push::MOVED_KINDS.contains(&r.key.kind)),
+            "{rows:#?}"
         );
+        assert!(
+            rows.iter()
+                .any(|r| r.key.kind == ObjectKind::Check && r.key.name == "users_email_check"),
+            "the Email type check on users is recorded: {rows:#?}"
+        );
+        assert!(rows.iter().all(|r| r.migration_id.is_some()));
     })
     .await;
 }

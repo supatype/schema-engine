@@ -124,22 +124,6 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
                 "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
             )
         }
-        Operation::AddCheckConstraint {
-            table, constraint, ..
-        } => {
-            format!(
-                "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
-            )
-        }
-        Operation::DropCheckConstraint {
-            table, constraint, ..
-        } => {
-            // The expression is gone with the constraint, so this cannot be rebuilt from the
-            // operation alone. Saying so is better than emitting SQL that restores nothing.
-            format!(
-                "-- WARNING: cannot roll back DROP CONSTRAINT \"{table}\".\"{constraint}\":                  re-push the schema that declared the bound."
-            )
-        }
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => {
@@ -238,7 +222,7 @@ fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {
         Operation::CreateVersionsTable { versions_table, .. } => {
             format!("DROP TABLE IF EXISTS \"{schema}\".\"{versions_table}\" CASCADE;")
         }
-        // EnableExtension → DROP EXTENSION (risky — only emit a warning)
+        // EnableExtension → DROP EXTENSION (risky, so only emit a warning)
         Operation::EnableExtension { name, .. } => {
             format!(
                 "-- WARNING: Rollback of CREATE EXTENSION \"{name}\" would DROP it. \
@@ -301,7 +285,7 @@ fn rollback_alter_column(
                 "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" SET NOT NULL;"
             ));
         } else {
-            // Was nullable — restore by dropping not null
+            // Was nullable: restore by dropping not null
             stmts.push(format!(
                 "ALTER TABLE \"{schema}\".\"{table}\" ALTER COLUMN \"{column}\" DROP NOT NULL;"
             ));
@@ -366,12 +350,6 @@ fn forward_description(op: &Operation) -> String {
         Operation::AddUniqueConstraint { table, column, .. } => {
             format!("add unique {table}.{column}")
         }
-        Operation::AddCheckConstraint { table, columns, .. } => {
-            format!("set bounds {table}.{}", columns.join(", "))
-        }
-        Operation::DropCheckConstraint {
-            table, constraint, ..
-        } => format!("drop bounds {table}.{constraint}"),
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("drop unique {table}.{constraint}"),

@@ -189,4 +189,5 @@ jobs:
             --test desired_objects_tests \
             --test statement_attribution_tests \
             --test ledger_tests \
-            --test push_orchestrator_tests
+            --test push_orchestrator_tests \
+            --test check_ledger_tests

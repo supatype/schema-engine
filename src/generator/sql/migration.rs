@@ -7,7 +7,7 @@ use crate::generator::sql::column_conversion::{
 use crate::managed::{
     comment_on_constraint_sql, comment_on_index_sql, expected_check_constraint_name,
     expected_model_constraint_name, expected_unique_constraint_name, foreign_key_name,
-    managed_check_comment, managed_comment, primary_key_name, type_check_name,
+    managed_comment, primary_key_name, type_check_name,
 };
 use crate::parser::accessors::{column_names_for, db_unique};
 use crate::parser::ast::{
@@ -417,8 +417,6 @@ fn render_forward_operation_lines(
             | Operation::DropForeignKey { risk, .. }
             | Operation::AddUniqueConstraint { risk, .. }
             | Operation::DropUniqueConstraint { risk, .. }
-            | Operation::AddCheckConstraint { risk, .. }
-            | Operation::DropCheckConstraint { risk, .. }
             | Operation::CreateEnum { risk, .. }
             | Operation::DropEnum { risk, .. }
             | Operation::AddEnumValue { risk, .. }
@@ -543,12 +541,6 @@ fn op_description(op: &Operation) -> String {
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("Drop unique constraint: {table}.{constraint}"),
-        Operation::AddCheckConstraint { table, columns, .. } => {
-            format!("Set bounds: {table}.{}", columns.join(", "))
-        }
-        Operation::DropCheckConstraint {
-            table, constraint, ..
-        } => format!("Drop bounds: {table}.{constraint}"),
         Operation::CreateEnum { name, .. } => format!("Create enum: {name}"),
         Operation::DropEnum { name, .. } => format!("Drop enum: {name}"),
         Operation::AddEnumValue {
@@ -802,31 +794,6 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             ..
         } => add_unique_constraint_sql(table, column, constraint, schema),
         Operation::DropUniqueConstraint {
-            table, constraint, ..
-        } => Ok(format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
-        )),
-        Operation::AddCheckConstraint {
-            table,
-            constraint,
-            expression,
-            comment,
-            ..
-        } => Ok(format!(
-            // Dropped first so the operation means "this table carries exactly this bound" rather
-            // than "this bound is new". The differ only emits an add when it believes the
-            // constraint is absent, and it can believe that wrongly: it diffs against a cached
-            // snapshot, and a snapshot written by an engine that recorded less than this one does
-            // will not mention a constraint that is really there. Without the drop, that mismatch
-            // is a duplicate-name error that fails this push and every push after it, with no way
-            // out from inside the tool. The drop costs a revalidation of the table, but only on the
-            // path that was otherwise going to fail: an unchanged bound produces no add at all.
-            "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";
-ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({expression});
-{}",
-            comment_on_constraint_sql(table, constraint, comment, schema)
-        )),
-        Operation::DropCheckConstraint {
             table, constraint, ..
         } => Ok(format!(
             "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
@@ -1122,43 +1089,13 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         }
     }
 
-    // Stamp the bounds constraints CREATE TABLE declared inline. The comment carries a fingerprint
-    // of the expression, which is what lets the differ notice a *changed* bound later without
-    // comparing SQL text that Postgres has already rewritten on read-back.
-    for (field_name, field) in &model.fields {
-        for col in column_names_for(field_name, field) {
-            let Some(expr) = field_check_expression(field, &col) else {
-                continue;
-            };
-            statements.push(comment_on_constraint_sql(
-                table,
-                &expected_check_constraint_name(table, &col),
-                &managed_check_comment(table, &[col.as_str()], &expr),
-                schema,
-            ));
-        }
-    }
-
-    // Model-level constraints, as named table constraints stamped like the column bounds. Named for
-    // the same reason: the name is how the differ finds it again, and the fingerprinted comment is
-    // how a *changed* constraint is noticed without comparing SQL Postgres has already rewritten.
+    // Model-level constraints, as named table constraints. Checks carry no stamp: the ledger
+    // records them (plan 3.2) and their comments are the user's.
     for (index, rule) in model.annotations.db.constraints.iter().enumerate() {
         let expr = crate::generator::sql::constraints::constraint_to_expr(rule)?;
         let constraint = expected_model_constraint_name(table, index);
         statements.push(format!(
             "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" CHECK ({expr});"
-        ));
-        // The columns the rule actually reads, not the constraint's own name. `columns_in` exists
-        // for this; passing the name put `fields=events_check_1` in ownership metadata, which reads
-        // as a column that does not exist.
-        let mut columns = Vec::new();
-        crate::parser::ast::columns_in(rule, &mut columns);
-        let column_refs: Vec<&str> = columns.iter().map(String::as_str).collect();
-        statements.push(comment_on_constraint_sql(
-            table,
-            &constraint,
-            &managed_check_comment(table, &column_refs, &expr),
-            schema,
         ));
     }
 

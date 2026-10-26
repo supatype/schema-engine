@@ -1,4 +1,4 @@
-//! Evolution scenario tests — Phase 1 requirement.
+//! Evolution scenario tests, a Phase 1 requirement.
 //!
 //! Each test follows the pattern:
 //!   1. Base DB state (simulates already-applied schema)
@@ -6,7 +6,7 @@
 //!   3. Compute the diff
 //!   4. Assert expected operations
 //!
-//! These are pure unit tests — no DB required.
+//! These are pure unit tests; no DB required.
 
 use supatype_engine::{
     differ::{self, doctor, Operation, Risk},
@@ -432,7 +432,7 @@ fn test_add_fk_on_existing_table() {
     );
 }
 
-// ─── Scenario 5: FK already exists — no-op ───────────────────────────────────
+// ─── Scenario 5: FK already exists, a no-op ───────────────────────────────────
 
 #[test]
 fn test_fk_already_exists_no_op() {
@@ -520,7 +520,7 @@ fn test_fk_already_exists_no_op() {
     let ast = parser::parse(ast_json).unwrap();
     let db = DatabaseState {
         tables: vec![
-            // Use col_nn for PK — a real DB would never have a nullable PK
+            // Use col_nn for PK: a real DB would never have a nullable PK
             DbTable {
                 schema: "public".into(),
                 name: "users".into(),
@@ -549,7 +549,7 @@ fn test_fk_already_exists_no_op() {
         .collect();
     assert!(
         fk_ops.is_empty(),
-        "FK already exists — must not emit AddForeignKey (idempotency)"
+        "FK already exists: must not emit AddForeignKey (idempotency)"
     );
     assert_eq!(
         diff.operations.len(),
@@ -942,7 +942,7 @@ fn test_junction_table_not_recreated() {
         .collect();
     assert!(
         jt_ops.is_empty(),
-        "junction table already exists — must not recreate"
+        "junction table already exists: must not recreate"
     );
 }
 
@@ -1113,7 +1113,7 @@ fn test_timestamps_option_idempotency() {
         .collect();
     assert!(
         ts_ops.is_empty(),
-        "timestamps already exist — must not add them again"
+        "timestamps already exist: must not add them again"
     );
 }
 
@@ -1181,7 +1181,7 @@ fn test_soft_delete_option_idempotency() {
         .collect();
     assert!(
         ops.is_empty(),
-        "deleted_at already exists — must not add again"
+        "deleted_at already exists: must not add again"
     );
 }
 
@@ -1442,7 +1442,7 @@ fn test_rollback_reverses_add_fk() {
 
 #[test]
 fn test_add_column_not_null_with_default() {
-    // Adding a NOT NULL column with a DEFAULT is safe — Postgres fills existing rows.
+    // Adding a NOT NULL column with a DEFAULT is safe: Postgres fills existing rows.
     let ast_json = r#"{
   "astVersion": 2,
   "models": [
@@ -1910,7 +1910,7 @@ fn test_change_column_type_lossy() {
             schema: "public".into(),
             name: "counters".into(),
             comment: Some("supatype:managed;kind=table".into()),
-            // DB has value as BIGINT (int8) — narrowing to int4; id is PK so NOT NULL
+            // DB has value as BIGINT (int8), narrowing to int4; id is PK so NOT NULL
             columns: vec![col_nn("id", "uuid"), col("value", "int8")],
         }],
         ..DatabaseState::default()
@@ -2463,7 +2463,7 @@ fn test_rls_changed_expression_triggers_recreate() {
     );
     assert!(
         !drop_policy,
-        "must not emit separate DropRlsPolicy — CreateRlsPolicy SQL is idempotent"
+        "must not emit separate DropRlsPolicy: CreateRlsPolicy SQL is idempotent"
     );
 
     let create_policy = diff.operations.iter().any(
@@ -2559,7 +2559,7 @@ fn test_rls_removed_access_rules_drops_policies_and_warns() {
     );
 }
 
-// ─── Scenario 26: RLS generator output — FORCE RLS + correct naming ───────────
+// ─── Scenario 26: RLS generator output, FORCE RLS + correct naming ───────────
 
 #[test]
 fn test_rls_generator_output_force_rls_and_policy_naming() {
@@ -6926,7 +6926,7 @@ fn test_unmanaged_slug_unique_never_auto_dropped() {
         "unmanaged constraint must not be auto-dropped"
     );
 
-    let report = supatype_engine::differ::doctor::report(&ast, &db);
+    let report = supatype_engine::differ::doctor::report(&ast, &db, &[]);
     assert!(
         report
             .unmanaged_drift
@@ -7004,7 +7004,7 @@ fn test_drop_managed_model_index_removed_from_ast() {
 }
 
 /// `Code<"sql">` and `Currency<"USD">` reach the engine as `kind: "json"` carrying an extra
-/// `tsType` — a fact only the TypeScript generator needs. The engine must ignore it and still emit
+/// `tsType`, a fact only the TypeScript generator needs. The engine must ignore it and still emit
 /// `JSONB`; if serde ever rejected the unknown field instead, every schema using either type would
 /// fail to parse rather than to compile, which is a much worse error to debug.
 #[test]
@@ -7065,7 +7065,7 @@ fn test_json_field_with_ts_type_annotation_is_parsed_as_jsonb() {
 /// `HasOne` is the *inverse* side: the column (and its UNIQUE) belongs to whichever model declares
 /// the `RelatedTo`, and `generator/sql/migration.rs` emits nothing for `hasOne`. The spec generator
 /// used to emit an `<name>_id` property for it anyway, so a client generated from the document sent
-/// a column PostgREST rejects — and the document described a table that does not exist.
+/// a column PostgREST rejects, and the document described a table that does not exist.
 #[test]
 fn test_openapi_omits_column_for_inverse_relations() {
     use supatype_engine::generator::openapi;
@@ -7213,7 +7213,7 @@ fn test_admin_config_honours_declared_editor_widget() {
 /// A schema that says which columns are searchable is obeyed.
 ///
 /// Studio's list view filters on the **first** entry of `searchFields`, and that list used to be
-/// every text-like column in field order — so a model whose first text column was a slug searched
+/// every text-like column in field order, so a model whose first text column was a slug searched
 /// slugs, and `Searchable<string>` on the column the author meant did nothing at all. The CLI
 /// merges both spellings into `annotations.platform.searchFields`; this asserts the engine stops
 /// guessing when it finds one.
@@ -7273,7 +7273,7 @@ fn test_admin_config_honours_declared_search_fields() {
             .collect()
     };
 
-    // Declared: exactly those columns, in that order — `title` first, though `slug` comes first in
+    // Declared: exactly those columns, in that order: `title` first, though `slug` comes first in
     // the field list.
     assert_eq!(
         search_fields_of(model(r#", "searchFields": ["title", "slug"]"#)),
@@ -7733,100 +7733,6 @@ fn test_a_bound_on_an_added_column_is_not_dropped() {
     );
 }
 
-/// Tightening a bound on an existing column must produce a migration.
-///
-/// Documents the boundary of what Phases A to D fixed. Column checks are emitted by `CREATE TABLE`
-/// and `ADD COLUMN`; the differ compares only unique and foreign-key constraints, so a bound that
-/// *changes* on a column that already exists may not be diffed at all. This test states which of
-/// those two worlds we are in rather than leaving it to be discovered by a user whose tightened
-/// bound quietly did nothing.
-#[test]
-fn test_changing_a_bound_on_an_existing_column() {
-    let ast_json = r#"{
-  "astVersion": 2,
-  "models": [
-    {
-      "name": "Post",
-      "fields": {
-        "id": { "kind": "uuid", "primaryKey": true, "required": true,
-                "default": { "kind": "genRandomUuid" },
-                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
-        "excerpt": { "kind": "text", "required": false,
-                     "check": "char_length(\"{name}\") <= 80",
-                     "validation": { "maxLength": 80 },
-                     "annotations": { "db": { "pgType": "TEXT", "unique": false } } }
-      },
-      "options": { "timestamps": false, "softDelete": false },
-      "annotations": { "db": { "tableName": "posts", "indexes": [] }, "platform": { "access": {} } }
-    }
-  ]
-}"#;
-
-    let ast = parser::parse(ast_json).unwrap();
-    let db = DatabaseState {
-        tables: vec![DbTable {
-            schema: "public".into(),
-            name: "posts".into(),
-            comment: Some("supatype:managed;kind=table".into()),
-            columns: vec![col("id", "uuid"), col("excerpt", "text")],
-        }],
-        constraints: vec![DbConstraint {
-            table: "posts".into(),
-            name: "posts_excerpt_bounds".into(),
-            constraint_type: DbConstraintType::Check,
-            columns: vec!["excerpt".into()],
-            foreign_table: None,
-            foreign_schema: None,
-            foreign_columns: None,
-            // The database still holds the old, looser bound.
-            check_expression: Some("CHECK ((char_length(excerpt) <= 320))".into()),
-            on_delete: None,
-            // Stamped by the push that created it, carrying the fingerprint of the *old* bound.
-            comment: Some(
-                "supatype:managed;kind=check;table=posts;fields=excerpt;v=1;bounds=deadbeefdeadbeef"
-                    .into(),
-            ),
-        }],
-        ..DatabaseState::default()
-    };
-
-    let diff = differ::diff(&ast, &db).unwrap();
-    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-
-    // The old constraint is dropped and the new bound added, in that order: Postgres has no
-    // ALTER CONSTRAINT for a check expression.
-    assert!(
-        forward.contains(r#"DROP CONSTRAINT IF EXISTS "posts_excerpt_bounds""#),
-        "the stale bound must be dropped:
-{forward}"
-    );
-    assert!(
-        forward.contains(
-            r#"ADD CONSTRAINT "posts_excerpt_bounds" CHECK (char_length("excerpt") <= 80)"#
-        ),
-        "the tightened bound must be added:
-{forward}"
-    );
-    let drop_at = forward
-        .find(r#"DROP CONSTRAINT IF EXISTS "posts_excerpt_bounds""#)
-        .unwrap();
-    let add_at = forward
-        .find(r#"ADD CONSTRAINT "posts_excerpt_bounds""#)
-        .unwrap();
-    assert!(
-        drop_at < add_at,
-        "the drop must precede the add:
-{forward}"
-    );
-
-    // The replacement is stamped, or the next push sees no fingerprint and churns again.
-    assert!(
-        forward.contains(r#"COMMENT ON CONSTRAINT "posts_excerpt_bounds""#),
-        "the new constraint must carry its fingerprint:
-{forward}"
-    );
-}
-
 /// Model-level constraints reach the database as table `CHECK`s.
 ///
 /// The measure operands arrive already resolved by the CLI, so this asserts the engine renders what
@@ -7902,17 +7808,11 @@ fn test_model_constraints_render_as_table_checks() {
         );
     }
 
-    // Combinators nest, and each constraint is stamped so a change to it is diffable.
+    // Combinators nest.
     assert!(
         forward.contains(r#""events_check_5" CHECK ((("sku" = 'AAA') OR ("sku" IS NOT NULL)))"#),
         "{forward}"
     );
-    for index in 1..=5 {
-        assert!(
-            forward.contains(&format!("COMMENT ON CONSTRAINT \"events_check_{index}\"")),
-            "constraint {index} must carry its fingerprint:\n{forward}"
-        );
-    }
 }
 
 /// A rule a `CHECK` cannot evaluate fails the render, rather than becoming a constraint that lies.
@@ -7955,76 +7855,6 @@ fn test_a_caller_dependent_constraint_fails_the_render() {
     assert!(
         message.contains("depends on the caller"),
         "the failure must say why, not merely fail: {message}"
-    );
-}
-
-/// Ownership metadata on a constraint names the columns it reads.
-///
-/// `fields=` is what every other managed object uses to say which columns it covers, and nothing
-/// parses it yet, so a wrong value here would sit unnoticed until something did. The first version
-/// of this code passed the constraint's own name, putting `fields=events_check_1` in the comment: a
-/// column that does not exist, in the metadata the ownership gate is built on.
-#[test]
-fn test_constraint_ownership_comments_name_their_columns() {
-    let ast_json = r#"{
-  "astVersion": 2,
-  "models": [
-    {
-      "name": "Event",
-      "fields": {
-        "id": { "kind": "uuid", "primaryKey": true, "required": true,
-                "default": { "kind": "genRandomUuid" },
-                "annotations": { "db": { "pgType": "UUID", "unique": false } } },
-        "starts_at": { "kind": "datetime", "required": false,
-                "annotations": { "db": { "pgType": "TIMESTAMPTZ" } } },
-        "ends_at": { "kind": "datetime", "required": false,
-                "annotations": { "db": { "pgType": "TIMESTAMPTZ" } } },
-        "sku": { "kind": "text", "required": false,
-                "check": "char_length(\"{name}\") <= 3",
-                "validation": { "maxLength": 3 },
-                "annotations": { "db": { "pgType": "TEXT" } } }
-      },
-      "options": { "timestamps": false, "softDelete": false },
-      "annotations": {
-        "db": {
-          "tableName": "events",
-          "indexes": [],
-          "constraints": [
-            { "type": "compare", "op": "lte",
-              "left": { "kind": "column", "name": "starts_at" },
-              "right": { "kind": "column", "name": "ends_at" } },
-            { "type": "matches", "column": "sku", "pattern": "^[A-Z]+$" }
-          ]
-        },
-        "platform": { "access": {} }
-      }
-    }
-  ]
-}"#;
-
-    let ast = parser::parse(ast_json).unwrap();
-    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let forward = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-
-    // A cross-column rule names both columns, in the order it reads them.
-    assert!(
-        forward.contains("kind=check;table=events;fields=starts_at,ends_at"),
-        "a two-column constraint must name both columns:\n{forward}"
-    );
-    // A single-column rule names the one.
-    assert!(
-        forward.contains("kind=check;table=events;fields=sku;"),
-        "a single-column constraint must name its column:\n{forward}"
-    );
-    // And the column bound keeps naming its own column, not its constraint.
-    assert!(
-        forward.contains("kind=check;table=events;fields=sku;"),
-        "a column bound must name its column:\n{forward}"
-    );
-    // Nothing should ever name a constraint where a column belongs.
-    assert!(
-        !forward.contains("fields=events_check_"),
-        "a constraint name is not a column:\n{forward}"
     );
 }
 
@@ -8100,7 +7930,7 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
         ..DatabaseState::default()
     };
 
-    let report = doctor::report(&ast, &db);
+    let report = doctor::report(&ast, &db, &[]);
     let checks: Vec<_> = report
         .unmanaged_drift
         .iter()
@@ -8176,7 +8006,7 @@ fn test_doctor_leaves_supatype_owned_checks_alone() {
         ..DatabaseState::default()
     };
 
-    let report = doctor::report(&ast, &db);
+    let report = doctor::report(&ast, &db, &[]);
     assert!(
         !report
             .unmanaged_drift
@@ -8184,154 +8014,5 @@ fn test_doctor_leaves_supatype_owned_checks_alone() {
             .any(|item| item.kind == "check_constraint"),
         "a stamped constraint is ours, not drift: {:?}",
         report.unmanaged_drift
-    );
-}
-
-/// Model constraints reconcile like column bounds: changed, added and removed all migrate.
-///
-/// Before this they were created with the table and never looked at again, so editing a constraint
-/// left the database enforcing the old rule while the schema claimed the new one. That is the gap
-/// column bounds had before D4, and it has the same fix: a named constraint, a fingerprinted
-/// comment, and a comparison of fingerprints rather than of SQL Postgres has already rewritten.
-fn constrained_ast(rules: &str) -> String {
-    format!(
-        r#"{{
-  "astVersion": 2,
-  "models": [
-    {{
-      "name": "Event",
-      "fields": {{
-        "id": {{ "kind": "uuid", "primaryKey": true, "required": true,
-                "default": {{ "kind": "genRandomUuid" }},
-                "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }} }},
-        "starts_at": {{ "kind": "datetime", "required": false,
-                "annotations": {{ "db": {{ "pgType": "TIMESTAMPTZ" }} }} }},
-        "ends_at": {{ "kind": "datetime", "required": false,
-                "annotations": {{ "db": {{ "pgType": "TIMESTAMPTZ" }} }} }}
-      }},
-      "options": {{ "timestamps": false, "softDelete": false }},
-      "annotations": {{
-        "db": {{ "tableName": "events", "indexes": [], "constraints": [{rules}] }},
-        "platform": {{ "access": {{}} }}
-      }}
-    }}
-  ]
-}}"#
-    )
-}
-
-const LTE_RULE: &str = r#"{ "type": "compare", "op": "lte",
-  "left": { "kind": "column", "name": "starts_at" },
-  "right": { "kind": "column", "name": "ends_at" } }"#;
-
-const LT_RULE: &str = r#"{ "type": "compare", "op": "lt",
-  "left": { "kind": "column", "name": "starts_at" },
-  "right": { "kind": "column", "name": "ends_at" } }"#;
-
-/// The events table as it stands after a push that installed `expr`.
-fn events_db(existing: Option<(&str, &str)>) -> DatabaseState {
-    DatabaseState {
-        tables: vec![DbTable {
-            schema: "public".into(),
-            name: "events".into(),
-            comment: Some("supatype:managed;kind=table".into()),
-            columns: vec![
-                col("id", "uuid"),
-                col("starts_at", "timestamptz"),
-                col("ends_at", "timestamptz"),
-            ],
-        }],
-        constraints: existing
-            .map(|(name, expr)| {
-                vec![DbConstraint {
-                    table: "events".into(),
-                    name: name.into(),
-                    constraint_type: DbConstraintType::Check,
-                    columns: vec![],
-                    foreign_table: None,
-                    foreign_schema: None,
-                    foreign_columns: None,
-                    check_expression: Some(format!("CHECK (({expr}))")),
-                    on_delete: None,
-                    comment: Some(format!(
-                        "supatype:managed;kind=check;table=events;fields=starts_at,ends_at;v=1;bounds={}",
-                        supatype_engine::managed::check_fingerprint(expr)
-                    )),
-                }]
-            })
-            .unwrap_or_default(),
-        ..DatabaseState::default()
-    }
-}
-
-#[test]
-fn test_an_unchanged_model_constraint_produces_no_migration() {
-    let ast = parser::parse(&constrained_ast(LTE_RULE)).unwrap();
-    let db = events_db(Some(("events_check_1", r#""starts_at" <= "ends_at""#)));
-
-    let diff = differ::diff(&ast, &db).unwrap();
-    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-    assert!(
-        !forward.contains("events_check_1"),
-        "an unchanged constraint must not churn on every push:\n{forward}"
-    );
-}
-
-#[test]
-fn test_a_changed_model_constraint_is_dropped_and_recreated() {
-    // `<=` tightened to `<`.
-    let ast = parser::parse(&constrained_ast(LT_RULE)).unwrap();
-    let db = events_db(Some(("events_check_1", r#""starts_at" <= "ends_at""#)));
-
-    let diff = differ::diff(&ast, &db).unwrap();
-    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-
-    assert!(
-        forward.contains(r#"DROP CONSTRAINT IF EXISTS "events_check_1""#),
-        "the stale constraint must be dropped:\n{forward}"
-    );
-    assert!(
-        forward.contains(r#"ADD CONSTRAINT "events_check_1" CHECK ("starts_at" < "ends_at")"#),
-        "the new rule must be added:\n{forward}"
-    );
-    let drop_at = forward
-        .find(r#"DROP CONSTRAINT IF EXISTS "events_check_1""#)
-        .unwrap();
-    let add_at = forward.find(r#"ADD CONSTRAINT "events_check_1""#).unwrap();
-    assert!(
-        drop_at < add_at,
-        "the drop must precede the add:\n{forward}"
-    );
-}
-
-#[test]
-fn test_a_removed_model_constraint_is_dropped() {
-    // The schema no longer declares it, so the database must stop enforcing it.
-    let ast = parser::parse(&constrained_ast("")).unwrap();
-    let db = events_db(Some(("events_check_1", r#""starts_at" <= "ends_at""#)));
-
-    let diff = differ::diff(&ast, &db).unwrap();
-    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-    assert!(
-        forward.contains(r#"DROP CONSTRAINT IF EXISTS "events_check_1""#),
-        "a constraint removed from the schema must be removed from the database, or it goes on \
-         rejecting writes the schema now permits:\n{forward}"
-    );
-}
-
-#[test]
-fn test_a_new_model_constraint_on_an_existing_table_is_added() {
-    let ast = parser::parse(&constrained_ast(LTE_RULE)).unwrap();
-    let db = events_db(None);
-
-    let diff = differ::diff(&ast, &db).unwrap();
-    let forward = migration::forward_sql(&diff, true, "public", &ast).unwrap();
-    assert!(
-        forward.contains(r#"ADD CONSTRAINT "events_check_1" CHECK ("starts_at" <= "ends_at")"#),
-        "adding a constraint to a table that already exists must migrate:\n{forward}"
-    );
-    assert!(
-        forward.contains(r#"COMMENT ON CONSTRAINT "events_check_1""#),
-        "and be stamped, or the next push sees no fingerprint and churns:\n{forward}"
     );
 }

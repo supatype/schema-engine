@@ -15,7 +15,8 @@
 mod common;
 
 use supatype_engine::{
-    differ, generator::sql::migration, introspector, parser, state::database_state::DatabaseState,
+    differ, generator::sql::migration, introspector, parser, push,
+    state::database_state::DatabaseState,
 };
 
 /// One model carrying every bound shape that reaches the database, scalar and localized.
@@ -87,6 +88,11 @@ fn forward_sql_for(schema_json: &str, db: &DatabaseState) -> String {
     let ast = parser::parse(schema_json).unwrap();
     let diff = differ::diff(&ast, db).unwrap();
     migration::forward_sql(&diff, true, "public", &ast).unwrap()
+}
+
+/// The push a user runs, which is what reconciles a check that already exists.
+async fn push(pool: &sqlx::PgPool, schema_json: &str) -> anyhow::Result<push::Outcome> {
+    common::push(pool, &parser::parse(schema_json).unwrap()).await
 }
 
 /// A row that satisfies every bound. Each case below overrides exactly one column of it.
@@ -209,10 +215,7 @@ async fn every_declared_bound_is_enforced_by_the_database() {
 #[tokio::test]
 async fn tightening_a_bound_migrates_and_takes_effect() {
     common::with_integration_pool(|pool| async move {
-        sqlx::raw_sql(&forward_sql_for(SCHEMA, &DatabaseState::default()))
-            .execute(&pool)
-            .await
-            .expect("generated DDL must apply");
+        push(&pool, SCHEMA).await.expect("the first push applies");
 
         // A value that is legal under the current bound and illegal under the tightened one.
         sqlx::raw_sql(&insert_with("headline", "'exactly10'"))
@@ -220,39 +223,32 @@ async fn tightening_a_bound_migrates_and_takes_effect() {
             .await
             .expect("nine characters is within MaxLength 10");
 
-        // Re-diff against the live database, which is the path a real push takes.
         let tightened = SCHEMA
             .replace(r#""maxLength": 10"#, r#""maxLength": 5"#)
             .replace(
                 r#""check": "char_length(\"{name}\") <= 10""#,
                 r#""check": "char_length(\"{name}\") <= 5""#,
             );
-        let live = introspector::introspect(&pool, "public").await.unwrap();
-        let migration_sql = forward_sql_for(&tightened, &live);
 
-        // Rows breach the new bound, so the migration must refuse rather than silently skip it.
-        // Run it on a connection of its own. The script is a single BEGIN..COMMIT, so a failure part
-        // way through leaves that session inside an aborted transaction, and a pooled connection
-        // carrying that state poisons whatever query picks it up next. A real client rolls back, so
-        // this does too, rather than papering over it by reconnecting.
-        let mut conn = pool.acquire().await.unwrap();
-        let refused = sqlx::raw_sql(&migration_sql).execute(&mut *conn).await;
-        assert!(
-            refused.is_err(),
-            "tightening a bound past existing data must fail, not pass silently:\n{migration_sql}"
-        );
-        sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
-        drop(conn);
+        // Rows breach the new bound, so the push must refuse rather than silently skip it, and
+        // the old bound is still in force, because the push is one transaction.
+        push(&pool, &tightened)
+            .await
+            .expect_err("tightening a bound past existing data must fail, not pass silently");
+        sqlx::raw_sql(&insert_with("headline", "'exactly10'"))
+            .execute(&pool)
+            .await
+            .expect("the old bound still stands after the refused push");
 
-        // And the old bound is still in force, because the migration is one transaction.
         sqlx::raw_sql("DELETE FROM public.pages WHERE true")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::raw_sql(&migration_sql)
-            .execute(&pool)
-            .await
-            .expect("with the offending rows gone, the same migration must apply");
+        let outcome = push(&pool, &tightened).await.unwrap();
+        assert!(
+            matches!(outcome, push::Outcome::Applied { .. }),
+            "with the offending rows gone, the same push must apply: {outcome:?}"
+        );
 
         let now_rejected = sqlx::raw_sql(&insert_with("headline", "'exactly10'"))
             .execute(&pool)
@@ -513,17 +509,14 @@ async fn model_constraints_are_enforced_by_the_database() {
 
 /// Editing a model constraint migrates, against a real database.
 ///
-/// The differ tests assert the DDL; this asserts the outcome. A constraint that is created once and
-/// never reconciled leaves the database enforcing yesterday's rule while the schema claims today's,
-/// and no amount of string matching on generated SQL shows that.
+/// The reconcile tests assert the actions; this asserts the outcome. A constraint that is created
+/// once and never reconciled leaves the database enforcing yesterday's rule while the schema claims
+/// today's, and no amount of string matching on generated SQL shows that.
 #[tokio::test]
 async fn changing_a_model_constraint_takes_effect() {
     common::with_integration_pool(|pool| async move {
         let lte = CONSTRAINED;
-        sqlx::raw_sql(&forward_sql_for(lte, &DatabaseState::default()))
-            .execute(&pool)
-            .await
-            .expect("constraint DDL must apply");
+        push(&pool, lte).await.expect("the first push applies");
 
         // Legal under `starts_at <= ends_at`, and illegal once that becomes `<`.
         let equal_dates = insert_event("ends_at", "TIMESTAMPTZ '2026-01-01'");
@@ -533,27 +526,21 @@ async fn changing_a_model_constraint_takes_effect() {
             .expect("equal timestamps satisfy <=");
 
         let tightened = lte.replace(r#""op": "lte""#, r#""op": "lt""#);
-        let live = introspector::introspect(&pool, "public").await.unwrap();
-        let migration_sql = forward_sql_for(&tightened, &live);
 
-        // The row breaches the new rule, so the migration must refuse rather than skip it.
-        let mut conn = pool.acquire().await.unwrap();
-        let refused = sqlx::raw_sql(&migration_sql).execute(&mut *conn).await;
-        assert!(
-            refused.is_err(),
-            "tightening a constraint past existing data must fail:\n{migration_sql}"
-        );
-        sqlx::raw_sql("ROLLBACK").execute(&mut *conn).await.unwrap();
-        drop(conn);
+        // The row breaches the new rule, so the push must refuse rather than skip it.
+        push(&pool, &tightened)
+            .await
+            .expect_err("tightening a constraint past existing data must fail");
 
         sqlx::raw_sql("DELETE FROM public.events WHERE true")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::raw_sql(&migration_sql)
-            .execute(&pool)
-            .await
-            .expect("with the offending row gone, the same migration must apply");
+        let outcome = push(&pool, &tightened).await.unwrap();
+        assert!(
+            matches!(outcome, push::Outcome::Applied { .. }),
+            "with the offending row gone, the same push must apply: {outcome:?}"
+        );
 
         // The old rule is gone and the new one is live.
         assert!(
@@ -566,17 +553,10 @@ async fn changing_a_model_constraint_takes_effect() {
             .expect("a row satisfying the tightened rule must still insert");
 
         // And a second push with no schema change must be a no-op, or every deploy churns.
-        let live_again = introspector::introspect(&pool, "public").await.unwrap();
-        let ast = parser::parse(&tightened).unwrap();
-        let diff = differ::diff(&ast, &live_again).unwrap();
+        let again = push(&pool, &tightened).await.unwrap();
         assert!(
-            !diff.operations.iter().any(|op| matches!(
-                op,
-                differ::Operation::AddCheckConstraint { .. }
-                    | differ::Operation::DropCheckConstraint { .. }
-            )),
-            "an unchanged constraint must produce no operations on the next push: {:?}",
-            diff.operations
+            matches!(again, push::Outcome::UpToDate { .. }),
+            "an unchanged constraint must produce nothing on the next push: {again:?}"
         );
     })
     .await;
@@ -610,18 +590,19 @@ async fn a_constraint_mentioning_is_not_null_is_not_lost_to_introspection() {
             "the null-check constraint the DDL just applied must come back from introspection"
         );
 
-        // And the push that follows must be a no-op. This is the failure as it was actually met: a
-        // second push refused with `constraint "events_check_6" for relation "events" already
-        // exists`, which locks the project out of every later schema change.
-        let ast = parser::parse(CONSTRAINED).unwrap();
-        let diff = differ::diff(&ast, &live).unwrap();
+        // And the push that follows must not add it twice. This is the failure as it was actually
+        // met: a second push refused with `constraint "events_check_6" for relation "events"
+        // already exists`, which locks the project out of every later schema change. The table
+        // was created outside the ledger, so the first push through it finds every constraint
+        // under our name with no row, proves each one equivalent with the database, and adopts it;
+        // the push after that has nothing to do.
+        push(&pool, CONSTRAINED)
+            .await
+            .expect("the constraints already there are adopted, not added twice");
+        let again = push(&pool, CONSTRAINED).await.unwrap();
         assert!(
-            !diff
-                .operations
-                .iter()
-                .any(|op| matches!(op, differ::Operation::AddCheckConstraint { .. })),
-            "an unchanged constraint must not be added twice: {:?}",
-            diff.operations
+            matches!(again, push::Outcome::UpToDate { .. }),
+            "an adopted constraint must produce nothing on the next push: {again:?}"
         );
 
         // Both legs of the OR have to be false for the rule to bite, so the sku moves off the
@@ -635,39 +616,24 @@ async fn a_constraint_mentioning_is_not_null_is_not_lost_to_introspection() {
     .await;
 }
 
-/// A push must survive a cached snapshot that under-reports what the database holds.
+/// A push must survive a database that holds a constraint no record of ours mentions.
 ///
-/// `push` diffs against `_supatype.schema_state`, not against a fresh introspection, so its input
-/// is whatever some earlier engine build recorded. An engine that recorded less than this one does
-/// leaves a snapshot with constraints missing from it, and the differ then plans to add one that
-/// is already there. That has to be recoverable from inside the tool: the alternative is a project
-/// that cannot apply any schema change again without someone editing a catalog table by hand.
+/// This used to be a cached-snapshot problem: `push` diffed against `_supatype.schema_state`, and
+/// an engine that recorded less than this one left a snapshot with constraints missing from it, so
+/// the differ planned to add one that was already there. The push now reads the live catalog and
+/// the ledger, and the same situation is a constraint under our name with no row: proved
+/// equivalent with the database and adopted, with the rule still enforced afterwards.
 #[tokio::test]
-async fn a_stale_snapshot_missing_a_constraint_still_pushes() {
+async fn a_constraint_no_record_mentions_is_adopted_not_added_twice() {
     common::with_integration_pool(|pool| async move {
         sqlx::raw_sql(&forward_sql_for(CONSTRAINED, &DatabaseState::default()))
             .execute(&pool)
             .await
             .expect("constraint DDL must apply");
 
-        // The snapshot an older engine would have left: everything it saw, minus the constraint it
-        // could not see.
-        let mut stale = introspector::introspect(&pool, "public").await.unwrap();
-        let before = stale.constraints.len();
-        stale.constraints.retain(|c| {
-            !c.check_expression
-                .as_deref()
-                .is_some_and(|def| def.contains("IS NOT NULL"))
-        });
-        assert!(
-            stale.constraints.len() < before,
-            "the fixture must contain a constraint an older engine would have dropped"
-        );
-
-        sqlx::raw_sql(&forward_sql_for(CONSTRAINED, &stale))
-            .execute(&pool)
+        push(&pool, CONSTRAINED)
             .await
-            .expect("a push against an under-reporting snapshot must still apply");
+            .expect("a push over constraints it never recorded must still apply");
 
         // And the rule is still enforced afterwards, not quietly dropped on the way through.
         let breach = insert_event("body", "NULL").replace("'ABC'", "'XYZ'");

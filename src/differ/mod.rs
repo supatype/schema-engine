@@ -1,4 +1,3 @@
-pub mod check_diff;
 pub mod column_diff;
 pub mod constraint_diff;
 pub mod doctor;
@@ -149,23 +148,6 @@ pub enum Operation {
         constraint: String,
         risk: Risk,
     },
-    /// Replace a column's declared bounds. Emitted as a drop and an add, because Postgres has no
-    /// `ALTER CONSTRAINT` for a check expression.
-    AddCheckConstraint {
-        table: String,
-        /// Columns the rule reads. One for a field's bounds, several for a cross-column constraint,
-        /// and it is what lets a failure name the columns rather than a generated constraint name.
-        columns: Vec<String>,
-        constraint: String,
-        expression: String,
-        comment: String,
-        risk: Risk,
-    },
-    DropCheckConstraint {
-        table: String,
-        constraint: String,
-        risk: Risk,
-    },
     DropUniqueConstraint {
         table: String,
         constraint: String,
@@ -313,7 +295,6 @@ pub fn diff_with_previous(
     enum_diff::diff(ast, db, &mut ops, &mut warnings)?;
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
     constraint_diff::diff(ast, db, &mut ops)?;
-    check_diff::diff(ast, db, &mut ops)?;
     index_diff::diff(ast, db, &mut ops)?;
     rls_diff::diff(ast, db, &mut ops, &mut warnings)?;
     field_access_diff::validate(ast, db, &mut warnings)?;
@@ -399,8 +380,6 @@ pub fn risk_of(op: &Operation) -> &Risk {
         | Operation::DropForeignKey { risk, .. }
         | Operation::AddUniqueConstraint { risk, .. }
         | Operation::DropUniqueConstraint { risk, .. }
-        | Operation::AddCheckConstraint { risk, .. }
-        | Operation::DropCheckConstraint { risk, .. }
         | Operation::CreateEnum { risk, .. }
         | Operation::DropEnum { risk, .. }
         | Operation::AddEnumValue { risk, .. }

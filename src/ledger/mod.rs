@@ -15,6 +15,7 @@
 //! PostgREST does not expose, so the data plane cannot read or write it. The reconcile that reads
 //! these rows is [`reconcile`]; this module is only the storage.
 
+pub mod probe;
 pub mod reconcile;
 
 use anyhow::{Context, Result};
@@ -105,11 +106,32 @@ type Row = (
     Option<i32>,
 );
 
+/// [`load`], or no rows when the table does not exist yet: a `diff` or `doctor` against a
+/// database no push has bootstrapped.
+pub async fn load_if_present(conn: &mut PgConnection) -> Result<Vec<LedgerRow>> {
+    match load_rows(conn).await {
+        // `undefined_table`: nothing has bootstrapped the ledger yet, so it holds nothing.
+        Err(e) if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42P01") => {
+            Ok(Vec::new())
+        }
+        other => other
+            .context("load the managed-object ledger")
+            .and_then(decode_rows),
+    }
+}
+
 /// Every row, in key order. A kind or status the running engine does not know (a row written by
 /// a newer engine) is an error, not a skipped row: skipping it would make the reconcile treat the
 /// object as unowned and create a second copy.
 pub async fn load(conn: &mut PgConnection) -> Result<Vec<LedgerRow>> {
-    let rows: Vec<Row> = sqlx::query_as(&format!(
+    load_rows(conn)
+        .await
+        .context("load the managed-object ledger")
+        .and_then(decode_rows)
+}
+
+async fn load_rows(conn: &mut PgConnection) -> std::result::Result<Vec<Row>, sqlx::Error> {
+    sqlx::query_as(&format!(
         "SELECT kind, schema_name, parent, name, desired_fp, desired_sql, live_fp, live_def,
                 status, migration_id
          FROM {SCHEMA}.managed_objects
@@ -117,8 +139,9 @@ pub async fn load(conn: &mut PgConnection) -> Result<Vec<LedgerRow>> {
     ))
     .fetch_all(&mut *conn)
     .await
-    .context("load the managed-object ledger")?;
+}
 
+fn decode_rows(rows: Vec<Row>) -> Result<Vec<LedgerRow>> {
     rows.into_iter()
         .map(
             |(

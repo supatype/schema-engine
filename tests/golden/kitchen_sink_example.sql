@@ -165,10 +165,6 @@ CREATE TABLE IF NOT EXISTS "public"."page" (
 
 COMMENT ON CONSTRAINT "page_slug_key" ON "public"."page" IS 'supatype:managed;kind=unique_constraint;table=page;fields=slug;v=1';
 
-COMMENT ON CONSTRAINT "page_summary_bounds" ON "public"."page" IS 'supatype:managed;kind=check;table=page;fields=summary;v=1;bounds=8d6775ae9759124d';
-
-COMMENT ON CONSTRAINT "page_body_bounds" ON "public"."page" IS 'supatype:managed;kind=check;table=page;fields=body;v=1;bounds=8867b90b357fc427';
-
 DROP INDEX IF EXISTS "public"."page_body_gin_idx";
 CREATE INDEX IF NOT EXISTS "page_body_gin_idx" ON "public"."page" USING gin ("body");
 COMMENT ON INDEX "public"."page_body_gin_idx" IS 'supatype:managed;kind=index;table=page;fields=body;v=1';
@@ -203,8 +199,6 @@ CREATE TABLE IF NOT EXISTS "public"."room" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "room_capacity_bounds" ON "public"."room" IS 'supatype:managed;kind=check;table=room;fields=capacity;v=1;bounds=3cc86cef79bee327';
-
 COMMENT ON TABLE "public"."room" IS 'supatype:managed;kind=table;table=room;fields=;v=1';
 
 -- [safe] Create table: talk
@@ -228,8 +222,6 @@ CREATE TABLE IF NOT EXISTS "public"."talk" (
 COMMENT ON CONSTRAINT "talk_slug_key" ON "public"."talk" IS 'supatype:managed;kind=unique_constraint;table=talk;fields=slug;v=1';
 
 ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_check_1" CHECK ("starts_at" <= "ends_at");
-
-COMMENT ON CONSTRAINT "talk_check_1" ON "public"."talk" IS 'supatype:managed;kind=check;table=talk;fields=starts_at,ends_at;v=1;bounds=6c5aa357a67eaba5';
 
 DROP INDEX IF EXISTS "public"."talk_day_starts_at_idx";
 CREATE INDEX IF NOT EXISTS "talk_day_starts_at_idx" ON "public"."talk" USING btree ("day", "starts_at");
@@ -269,8 +261,6 @@ CREATE TABLE IF NOT EXISTS "public"."attendee" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "attendee_displayName_bounds" ON "public"."attendee" IS 'supatype:managed;kind=check;table=attendee;fields=displayName;v=1;bounds=6626eb29bcdd3164';
-
 COMMENT ON TABLE "public"."attendee" IS 'supatype:managed;kind=table;table=attendee;fields=;v=1';
 
 -- [safe] Create table: ticket
@@ -300,11 +290,7 @@ CREATE TABLE IF NOT EXISTS "public"."chat_message" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "chat_message_body_bounds" ON "public"."chat_message" IS 'supatype:managed;kind=check;table=chat_message;fields=body;v=1;bounds=f673add49cedc30f';
-
 ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_check_1" CHECK (char_length("body") >= 2);
-
-COMMENT ON CONSTRAINT "chat_message_check_1" ON "public"."chat_message" IS 'supatype:managed;kind=check;table=chat_message;fields=body;v=1;bounds=f3a60a89afcd22bb';
 
 DROP INDEX IF EXISTS "public"."chat_message_room_idx";
 CREATE INDEX IF NOT EXISTS "chat_message_room_idx" ON "public"."chat_message" USING btree ("room");

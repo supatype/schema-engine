@@ -78,10 +78,9 @@ fn schema(models: Vec<Value>) -> SchemaAst {
 /// The previous schema is history now: the orchestrator reads it from `_supatype.migrations`,
 /// which the first push wrote.
 async fn push(pool: &PgPool, ast: &SchemaAst, force: bool) -> anyhow::Result<()> {
-    let plan = push::prepare(pool, ast, "public").await?;
-    push::apply(
+    common::push_with(
         pool,
-        plan,
+        ast,
         push::ApplyOptions {
             force,
             ..Default::default()
@@ -91,9 +90,7 @@ async fn push(pool: &PgPool, ast: &SchemaAst, force: bool) -> anyhow::Result<()>
     Ok(())
 }
 
-async fn exec(pool: &PgPool, sql: &str) -> Result<(), sqlx::Error> {
-    sqlx::raw_sql(sql).execute(pool).await.map(|_| ())
-}
+use common::exec;
 
 async fn trigger_exists(pool: &PgPool, table: &str, trigger: &str) -> bool {
     sqlx::query_scalar::<_, bool>(

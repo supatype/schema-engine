@@ -1,4 +1,6 @@
 use crate::introspector::constraints::{DbConstraint, DbConstraintType};
+use crate::introspector::fingerprint::ObjectKind;
+use crate::ledger::LedgerRow;
 use crate::managed::{
     expected_model_index_name, expected_unique_constraint_name, is_managed_comment, managed_comment,
 };
@@ -26,8 +28,17 @@ pub struct DoctorItem {
     pub message: String,
 }
 
-pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
+/// `ledger` is what the push ledger owns (`_supatype.managed_objects`); a kind that has moved onto
+/// it is classified from these rows rather than from comment stamps. Empty for a database no push
+/// has bootstrapped.
+pub fn report(ast: &SchemaAst, db: &DatabaseState, ledger: &[LedgerRow]) -> DoctorReport {
     let schema_tables: HashSet<&str> = ast.models.iter().map(|m| m.table_name()).collect();
+    // Every key the ledger owns, whatever the kind, so a kind that moves onto the ledger changes
+    // nothing here: a filter asks `owned(kind, table, name)`.
+    let owned: HashSet<(ObjectKind, &str, &str)> = ledger
+        .iter()
+        .map(|r| (r.key.kind, r.key.parent.as_str(), r.key.name.as_str()))
+        .collect();
     let expected_uniques = expected_column_uniques(ast);
     let expected_indexes = expected_model_indexes(ast);
 
@@ -57,7 +68,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
                 name: exp.constraint_name.clone(),
                 fields: vec![exp.column.clone()],
                 message: format!(
-                    "AST expects unique on {}.{} — run `supatype push`",
+                    "AST expects unique on {}.{}: run `supatype push`",
                     exp.table, exp.column
                 ),
             });
@@ -80,7 +91,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
                 name: exp.index_name.clone(),
                 fields: exp.fields.clone(),
                 message: format!(
-                    "AST expects index {} on {} — run `supatype push`",
+                    "AST expects index {} on {}: run `supatype push`",
                     exp.index_name, exp.table
                 ),
             });
@@ -111,22 +122,20 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
         }
     }
 
-    // Check constraints Supatype did not write, on tables it manages.
+    // Check constraints Supatype did not write, on tables it manages: no ledger row, and no stamp
+    // from an engine older than the ledger.
     //
-    // Adoption deliberately does **not** stamp these. Recognising someone else's `CHECK` as
-    // equivalent to one we would write means comparing expressions, and `pg_get_constraintdef`
-    // rewrites them on read-back: the fingerprint in our own comments exists precisely because that
-    // comparison is unreliable, and here there is no fingerprint to compare against because we did
-    // not write the original.
-    //
-    // So the honest position is to say so. Push will add its own constraint alongside, which is a
-    // duplicate rule rather than a wrong one, and the operator is the one who can tell whether their
-    // constraint and ours mean the same thing.
+    // Doctor does not decide whether someone else's `CHECK` means what ours would: comparing
+    // expressions needs the database (`ledger::probe`), and that is the push's job, which adopts
+    // an equivalent one under our name and refuses a different one. Here the honest position is to
+    // say the constraint is theirs. Push adds its own alongside, which is a duplicate rule rather
+    // than a wrong one, and the operator is the one who can tell whether the two mean the same.
     let expected_checks = expected_check_constraint_count(ast);
     for constraint in db.constraints.iter().filter(|c| {
         c.constraint_type == DbConstraintType::Check
             && schema_tables.contains(c.table.as_str())
             && !is_managed_comment(c.comment.as_deref())
+            && !owned.contains(&(ObjectKind::Check, c.table.as_str(), c.name.as_str()))
     }) {
         // A column's own NOT NULL or an enum's value list are not rules anyone declared here.
         let expression = constraint.check_expression.as_deref().unwrap_or("");
@@ -189,12 +198,12 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
             fields: idx.columns.clone(),
             message: if is_managed_comment(idx.comment.as_deref()) {
                 format!(
-                    "Managed index {} on {} is not in AST — review before push",
+                    "Managed index {} on {} is not in AST; review before push",
                     idx.name, idx.table
                 )
             } else {
                 format!(
-                    "Unmanaged index {} on {} — push will not drop; manual decision required",
+                    "Unmanaged index {} on {}: push will not drop; manual decision required",
                     idx.name, idx.table
                 )
             },
@@ -211,7 +220,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
     // Indexes and constraints have been reported this way for a long time; tables were not, so the
     // ownership gate could silently decline to drop a table and `doctor` would say nothing. An
     // operator seeing a clean report and a push that leaves a table behind concludes push is broken.
-    // Wording matches the constraint and index cases deliberately — the mechanism is the same one.
+    // Wording matches the constraint and index cases deliberately: the mechanism is the same one.
     let schema_owned: HashSet<&str> = ast
         .models
         .iter()
@@ -232,7 +241,7 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
                 name: table.name.clone(),
                 fields: Vec::new(),
                 message: format!(
-                    "Table {} matches a model but is not managed — push will not drop its columns; \
+                    "Table {} matches a model but is not managed: push will not drop its columns; \
                      run `supatype adopt` to bring it under management",
                     table.name
                 ),
@@ -252,12 +261,12 @@ pub fn report(ast: &SchemaAst, db: &DatabaseState) -> DoctorReport {
             fields: Vec::new(),
             message: if managed {
                 format!(
-                    "Managed table {} is not in AST — review before push",
+                    "Managed table {} is not in AST; review before push",
                     table.name
                 )
             } else {
                 format!(
-                    "Unmanaged table {} — push will not drop; manual decision required",
+                    "Unmanaged table {}: push will not drop; manual decision required",
                     table.name
                 )
             },
@@ -346,17 +355,9 @@ fn expected_model_indexes(ast: &SchemaAst) -> Vec<ExpectedIndex> {
 fn expected_check_constraint_count(ast: &SchemaAst) -> HashMap<&str, usize> {
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for model in &ast.models {
-        let table = model.table_name();
-        let bounds = model
-            .fields
-            .iter()
-            .filter(|(name, field)| {
-                crate::generator::sql::migration::field_check_expression(field, name).is_some()
-            })
-            .count();
-        let total = bounds + model.annotations.db.constraints.len();
+        let total = crate::desired::expected_checks(model).len();
         if total > 0 {
-            *counts.entry(table).or_default() += total;
+            *counts.entry(model.table_name()).or_default() += total;
         }
     }
     counts
@@ -371,12 +372,12 @@ fn doctor_constraint_item(constraint: &DbConstraint) -> DoctorItem {
         fields: fields.clone(),
         message: if is_managed_comment(constraint.comment.as_deref()) {
             format!(
-                "Managed constraint {} on {} is not in AST — review before push",
+                "Managed constraint {} on {} is not in AST; review before push",
                 constraint.name, constraint.table
             )
         } else {
             format!(
-                "Unmanaged constraint {} on {} — push will not drop; manual decision required",
+                "Unmanaged constraint {} on {}: push will not drop; manual decision required",
                 constraint.name, constraint.table
             )
         },
@@ -391,7 +392,7 @@ fn doctor_constraint_item(constraint: &DbConstraint) -> DoctorItem {
 /// will not otherwise touch.
 ///
 /// Only tables the schema actually declares are stamped. Adoption is an opt-in ceremony for objects
-/// the operator has decided belong to Supatype — stamping anything found in the schema would make the
+/// the operator has decided belong to Supatype; stamping anything found in the schema would make the
 /// gate meaningless on its first run, which is the one case it exists for.
 pub fn adopt_stamp_sql(ast: &SchemaAst, db: &DatabaseState, schema: &str) -> Vec<String> {
     let expected_uniques = expected_column_uniques(ast);

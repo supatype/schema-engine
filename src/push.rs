@@ -1,41 +1,41 @@
 //! One push, for the CLI, the server and the tests alike.
 //!
-//! Phase 3c of the managed-object ownership plan (`plans/Managed-Object-Ownership-Plan.md`,
-//! section 4). Until now `main.rs` and `server/routes.rs` each carried their own copy of the push:
-//! bootstrap, introspect, diff, render, apply in a transaction, record. The copies had drifted (one
-//! took the schema-push advisory lock and the other did not; one re-applied the trigger functions
-//! on an up-to-date push and the other did not), and the tests pushed a third way, by rendering
-//! `forward_sql` and executing it, so none of them exercised what a user runs.
+//! Phase 3c and 3d of the managed-object ownership plan (`plans/Managed-Object-Ownership-Plan.md`,
+//! section 4). `main.rs` and `server/routes.rs` once carried their own copies of the push and the
+//! tests pushed a third way; this is the one implementation.
 //!
-//! Two steps, because the CLI confirms renames and risky operations between them:
+//! Three steps, because the CLI confirms renames and risky operations before anything is written
+//! and `diff` wants the plan without the bootstrap:
 //!
-//! 1. [`prepare`]: everything that reads. Bootstrap the engine's own tables, refuse a second
-//!    project in the database, introspect, diff against the live catalog and the previous schema,
-//!    and, for the kinds that have moved onto the ledger, build the desired set, load the ledger
-//!    and reconcile.
-//! 2. [`apply`]: everything that writes, in one transaction, or nothing.
-//!
-//! No kind has moved onto the reconcile yet (`MOVED_KINDS` is empty), so a push today applies
-//! exactly what it applied before this module existed, and skips the reads only the reconcile
-//! would consume. The first kind arrives with the next PR.
+//! 1. [`plan`]: everything that reads. Introspect, diff against the live catalog and the previous
+//!    schema, build the desired set, load the ledger, reconcile the kinds that have moved onto it
+//!    (`MOVED_KINDS`), and ask the database about any same-named object the reconcile could not
+//!    place (`ledger::probe`).
+//! 2. [`prepare`]: the bootstrap (the engine's own tables, the project-schema guard, Studio
+//!    state), then [`plan`].
+//! 3. [`apply`]: everything that writes, in one transaction, or nothing: the migration body, the
+//!    reconcile's statements, the history row, the ledger rows for every object of a moved kind.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
-use sqlx::{Executor, PgPool, Postgres, Transaction};
+use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
-use crate::desired::desired_objects;
+use crate::desired::{desired_objects, statements, ObjectKey};
 use crate::differ::{self, DiffOutput};
-use crate::generator::sql::{migration, migration_errors, rollback, storage, triggers, versions};
+use crate::generator::sql::migration_errors::{self, CheckSite};
+use crate::generator::sql::{migration, rollback, storage, triggers, versions};
 use crate::generator::typescript::admin;
-use crate::introspector::{self, catalog, fingerprint::fingerprints, fingerprint::ObjectKind};
-use crate::ledger::{self, reconcile};
+use crate::introspector::fingerprint::{fingerprints, ObjectFingerprint, ObjectKind};
+use crate::introspector::{self, catalog};
+use crate::ledger::{self, probe, reconcile, LedgerRow};
 use crate::parser::ast::SchemaAst;
+use crate::state::database_state::DatabaseState;
 use crate::state::{migration_history, studio_state};
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
-/// on the reconcile is its differ.
-pub const MOVED_KINDS: &[ObjectKind] = &[];
+/// on the reconcile is its differ: check constraints since Phase 3d.
+pub const MOVED_KINDS: &[ObjectKind] = &[ObjectKind::Check];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
 /// `packages/realtime`, `schema-push-lock`). Realtime skips WAL polls while this is held.
@@ -46,10 +46,19 @@ const PUSH_LOCK_ID: i32 = 1;
 pub struct Plan<'a> {
     pub ast: &'a SchemaAst,
     pub schema: String,
-    pub storage_sql: String,
     /// The CLI may edit this between `prepare` and `apply` (rename confirmations).
     pub diff: DiffOutput,
     pub reconcile: reconcile::Plan,
+}
+
+impl Plan<'_> {
+    /// The diff as the CLI has always printed it, plus the reconcile's actions under `reconcile`:
+    /// one definition for `supatype diff` and the server's `/diff`.
+    pub fn to_json(&self) -> Result<serde_json::Value> {
+        let mut json = serde_json::to_value(&self.diff)?;
+        json["reconcile"] = serde_json::to_value(&self.reconcile.actions)?;
+        Ok(json)
+    }
 }
 
 /// What `apply` was asked to do beyond the plan.
@@ -100,66 +109,100 @@ impl Outcome {
     }
 }
 
-/// Reads and decides. Fails without writing when a declared table exists unmanaged (the error
-/// downcasts to [`migration::UnmanagedModelTables`], so a caller can name the tables) or when a
-/// second project is already in the database.
-pub async fn prepare<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result<Plan<'a>> {
-    let storage_sql = storage::generate(ast)?;
+/// What the catalog holds, read the one way the push reads it: before apply, to reconcile, and
+/// after apply, to record.
+struct Live {
+    db: DatabaseState,
+    fingerprints: Vec<ObjectFingerprint>,
+}
 
-    migration_history::bootstrap_internal_state(pool)
-        .await
-        .context("Failed to bootstrap _supatype internal state")?;
-    migration_history::assert_project_schema(pool, schema).await?;
-    studio_state::bootstrap(pool).await?;
+async fn live(conn: &mut PgConnection, schema: &str) -> Result<Live> {
+    let db = introspector::introspect_connection(conn, schema).await?;
+    let catalog = catalog::read(conn, schema).await?;
+    let fingerprints = fingerprints(&db, &catalog);
+    Ok(Live { db, fingerprints })
+}
 
+/// Reads and decides, writing nothing. For a database no push has touched the ledger is simply
+/// empty. Fails when a declared table exists unmanaged (the error downcasts to
+/// [`migration::UnmanagedModelTables`], so a caller can name the tables).
+pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result<Plan<'a>> {
+    let mut conn = pool.acquire().await?;
     // Always the live catalog. A snapshot from the last push cannot see what changed outside
     // Supatype since, so `diff` showed one plan and push applied another.
-    let db_state = introspector::introspect(pool, schema).await?;
+    let live = live(&mut conn, schema).await?;
     let previous_ast = migration_history::load_latest_schema_ast(pool).await;
-    let diff = differ::diff_with_previous(ast, &db_state, previous_ast.as_ref())?;
+    let diff = differ::diff_with_previous(ast, &live.db, previous_ast.as_ref())?;
 
     // An unchanged schema produces an empty diff, so the renderer's own check would never run and
     // the push would report success while a declared table sat in the API with none of its rules
     // applied. Checked here, before the CLI asks anything about a push it is going to refuse.
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
-    let reconcile = if MOVED_KINDS.is_empty() {
-        reconcile::Plan::default()
-    } else {
-        let desired = desired_objects(ast, schema)?;
-        let mut conn = pool.acquire().await?;
-        let ledger = ledger::load(&mut conn).await?;
-        let catalog = catalog::read(&mut conn, schema).await?;
-        let live = fingerprints(&db_state, &catalog);
-        let none = BTreeSet::new();
-        reconcile::reconcile(reconcile::Inputs {
-            desired: &desired,
-            ledger: &ledger,
-            live: &live,
-            stamped: &none,
-            equivalent: &none,
-            created_by_parent: &none,
-            kinds: MOVED_KINDS,
-        })
-    };
+    let desired = desired_objects(ast, schema)?;
+    let ledger = ledger::load_if_present(&mut conn).await?;
+    let created_by_parent = created_by_parent(&diff, schema, ast)?;
+    let mut reconcile = reconcile::reconcile(reconcile::Inputs {
+        desired: &desired,
+        ledger: &ledger,
+        live: &live.fingerprints,
+        created_by_parent: &created_by_parent,
+        kinds: MOVED_KINDS,
+    });
+    let proven = probe::equivalent(&mut conn, &reconcile).await?;
+    reconcile.adopt_equivalent(&proven);
 
     Ok(Plan {
         ast,
         schema: schema.to_string(),
-        storage_sql,
         diff,
         reconcile,
     })
+}
+
+/// The objects of a moved kind that the migration's own statements create: a check declared
+/// inline in a `CREATE TABLE` or an `ADD COLUMN`. Read off the rendered statements by the same
+/// attribution Phase 2c proved against every fixture, so the reconcile asks nothing of the AST and
+/// is right about whatever the renderer actually writes inline.
+fn created_by_parent(
+    diff: &DiffOutput,
+    schema: &str,
+    ast: &SchemaAst,
+) -> Result<BTreeSet<ObjectKey>> {
+    let mut keys = BTreeSet::new();
+    for op in &diff.operations {
+        // Every operation, not only the obvious parents: a versions table is created by its own
+        // operation with its status check inline, and the attribution is what knows that.
+        let sql = migration::render_operation(op, schema, ast)?;
+        for statement in statements::attribute_all(schema, statements::split_statements(&sql)) {
+            keys.extend(
+                statement
+                    .attribution
+                    .keys()
+                    .iter()
+                    .filter(|k| MOVED_KINDS.contains(&k.kind))
+                    .cloned(),
+            );
+        }
+    }
+    Ok(keys)
+}
+
+/// The bootstrap, then [`plan`]. What a push runs.
+pub async fn prepare<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result<Plan<'a>> {
+    migration_history::bootstrap_internal_state(pool)
+        .await
+        .context("Failed to bootstrap _supatype internal state")?;
+    migration_history::assert_project_schema(pool, schema).await?;
+    studio_state::bootstrap(pool).await?;
+    plan(pool, ast, schema).await
 }
 
 pub async fn apply(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<Outcome> {
     let conflicts: Vec<String> = plan
         .reconcile
         .conflicts()
-        .map(|a| {
-            let k = a.key();
-            format!("{} {}.{}.{}", k.kind.as_str(), k.schema, k.parent, k.name)
-        })
+        .map(|a| a.key().to_string())
         .collect();
     if !conflicts.is_empty() {
         bail!(
@@ -194,7 +237,7 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     // Rendered before anything is applied, so a schema whose versioned models have no stated
     // visibility fails the push rather than half-applying it.
     let versions_sql = versions::render_versions_layer(plan.ast, &plan.schema)?;
-    sqlx::raw_sql(&plan.storage_sql)
+    sqlx::raw_sql(&storage::generate(plan.ast)?)
         .execute(pool)
         .await
         .context("Failed to apply storage schema/policies")?;
@@ -231,6 +274,8 @@ struct Rendered {
     apply_body: String,
     /// The same statements wrapped in `BEGIN`/`COMMIT`, which is what the history stores.
     apply_batch: String,
+    /// The reconcile's statements, counted as operations in the outcome.
+    reconciled: usize,
     sources: migration_history::AppliedMigrationSources,
 }
 
@@ -244,13 +289,13 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
 
     let mut apply_body = migration::push_storage_and_model_apply_body(
-        &plan.storage_sql,
+        &storage::generate(plan.ast)?,
         &plan.diff,
         opts.force,
         &plan.schema,
         plan.ast,
     )?;
-    let reconcile_sql: Vec<&str> = plan
+    let reconcile_sql: Vec<String> = plan
         .reconcile
         .actions
         .iter()
@@ -261,13 +306,33 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
         apply_body.push_str(&reconcile_sql.join("\n"));
     }
 
+    // Rolling back undoes the reconcile's statements first, newest effect first, then the
+    // migration's own.
+    let mut sql_down = rollback::generate(&plan.diff, &plan.schema).ok();
+    let reconcile_down: Vec<String> = plan
+        .reconcile
+        .actions
+        .iter()
+        .rev()
+        .flat_map(reconcile::Action::rollback_sql)
+        .collect();
+    if !reconcile_down.is_empty() {
+        let down = sql_down.get_or_insert_with(String::new);
+        let own = std::mem::take(down);
+        *down = format!(
+            "-- reconciled objects\n{}\n{own}",
+            reconcile_down.join("\n")
+        );
+    }
+
     Ok(Rendered {
         name,
         hash: migration::migration_hash(&migration_sql),
         apply_batch: migration::batch_sql(&apply_body),
         apply_body,
+        reconciled: reconcile_sql.len(),
         sources: migration_history::AppliedMigrationSources {
-            sql_down: rollback::generate(&plan.diff, &plan.schema).ok(),
+            sql_down,
             schema_sources: opts.schema_sources,
             schema_sources_manifest: opts.schema_sources_manifest,
         },
@@ -306,7 +371,7 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
         }
     }
 
-    let operations = plan.diff.operations.len();
+    let operations = plan.diff.operations.len() + rendered.reconciled;
     let mut warnings = plan.diff.warnings;
     warnings.extend(applied.drift_warnings);
     Ok(Outcome::Applied {
@@ -335,23 +400,43 @@ async fn within_transaction(
         .execute(sqlx::raw_sql(&rendered.apply_body))
         .await
     {
-        let msg = migration_errors::enrich_migration_error(&e.to_string(), Some(&plan.diff));
+        let msg = migration_errors::enrich_migration_error(
+            &e.to_string(),
+            Some(&plan.diff),
+            &check_sites(&plan.reconcile),
+        );
         return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
     }
 
-    let new_db_state = introspector::introspect_connection(tx, &plan.schema)
+    let after = live(tx, &plan.schema)
         .await
         .context("Failed to introspect after migration")?;
 
-    let drift_warnings = differ::integrity::post_push_warnings(plan.ast, &new_db_state);
-    if strict && !differ::integrity::post_push_ok(plan.ast, &new_db_state, true) {
+    let drift_warnings = differ::integrity::post_push_warnings(plan.ast, &after.db);
+    if strict && !differ::integrity::post_push_ok(plan.ast, &after.db, true) {
         bail!(
             "Push rolled back: post-apply schema drift in strict mode ({})",
             drift_warnings.join("; ")
         );
     }
 
-    migration_history::save_schema_state(&mut **tx, &new_db_state)
+    let schema_snap = serde_json::to_value(plan.ast).ok();
+    let admin_cfg = admin::generate(plan.ast).ok();
+    let migration_id = migration_history::insert_applied_migration(
+        &mut **tx,
+        &rendered.name,
+        &rendered.hash,
+        schema_snap.clone(),
+        admin_cfg.clone(),
+        &rendered.apply_batch,
+        &rendered.sources,
+    )
+    .await
+    .context("Failed to record migration in history")?;
+
+    record_ledger(tx, &plan.reconcile, &after.fingerprints, migration_id).await?;
+
+    migration_history::save_schema_state(&mut **tx, &after.db)
         .await
         .context("Failed to save schema state cache")?;
 
@@ -367,24 +452,68 @@ async fn within_transaction(
         eprintln!("Warning: failed to record field-enforcement capability: {e}");
     }
 
-    let schema_snap = serde_json::to_value(plan.ast).ok();
-    let admin_cfg = admin::generate(plan.ast).ok();
-    migration_history::insert_applied_migration(
-        &mut **tx,
-        &rendered.name,
-        &rendered.hash,
-        schema_snap.clone(),
-        admin_cfg.clone(),
-        &rendered.apply_batch,
-        &rendered.sources,
-    )
-    .await
-    .context("Failed to record migration in history")?;
-
     Ok(Applied {
         drift_warnings,
         studio_metadata: admin_cfg.zip(schema_snap),
     })
+}
+
+/// The checks this push adds or replaces, for naming the rows that breach one when the apply
+/// fails on it.
+fn check_sites(plan: &reconcile::Plan) -> Vec<CheckSite<'_>> {
+    plan.actions
+        .iter()
+        .filter(|a| a.key().kind == ObjectKind::Check)
+        .filter_map(|a| {
+            let key = a.key();
+            Some(CheckSite {
+                table: &key.parent,
+                constraint: &key.name,
+                expression: statements::check_expression(a.create_sql()?)?,
+            })
+        })
+        .collect()
+}
+
+/// Plan section 4, steps 6 and 7: after apply, every object of a moved kind the reconcile named is
+/// re-read from the catalog and its row written with the `CREATE` intended, the fingerprint found
+/// and the migration that changed it; rows for objects dropped or already gone are removed.
+async fn record_ledger(
+    tx: &mut Transaction<'_, Postgres>,
+    plan: &reconcile::Plan,
+    after: &[ObjectFingerprint],
+    migration_id: i32,
+) -> Result<()> {
+    if plan.actions.is_empty() {
+        return Ok(());
+    }
+    let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
+        after.iter().map(|f| (f.key(), f)).collect();
+    let mut rows = Vec::new();
+    let mut removed = Vec::new();
+    for action in &plan.actions {
+        let key = action.key();
+        match action.row_after() {
+            reconcile::RowAfter::Write { create_sql, status } => {
+                let fp = live.get(key).with_context(|| {
+                    format!("{key} was not found in the catalog after the push applied it")
+                })?;
+                rows.push(LedgerRow {
+                    key: key.clone(),
+                    desired_fp: ledger::desired_fingerprint(key.kind, create_sql),
+                    desired_sql: create_sql.to_string(),
+                    live_fp: fp.fingerprint.clone(),
+                    live_def: fp.definition.clone(),
+                    status,
+                    migration_id: action.is_change().then_some(migration_id),
+                });
+            }
+            reconcile::RowAfter::Remove => removed.push(key.clone()),
+            reconcile::RowAfter::Leave => {}
+        }
+    }
+    ledger::upsert(tx, &rows).await?;
+    ledger::delete(tx, &removed).await
 }
 
 /// A signal to realtime, which skips WAL polls while anyone holds this transaction-level lock;

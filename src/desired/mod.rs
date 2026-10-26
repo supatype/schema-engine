@@ -23,7 +23,6 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 
 use crate::differ::{
-    check_diff::expected_checks,
     column_diff::{expected_udt, field_is_primary_key},
     constraint_diff::expected_column_uniques,
     rls_diff::{expected_policies, intersect_access},
@@ -31,21 +30,69 @@ use crate::differ::{
     Operation, Risk,
 };
 use crate::generator::sql::{
-    migration::{implicit_model_indexes, normalize_fk_action, render_operation},
+    constraints::constraint_to_expr,
+    migration::{
+        field_check_expression, implicit_model_indexes, normalize_fk_action, render_operation,
+    },
     rls::membership_index_targets,
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql},
 };
 use crate::introspector::fingerprint::ObjectKind;
 use crate::managed::{
-    expected_model_index_name, expected_unique_constraint_name, foreign_key_name, managed_comment,
-    primary_key_name, truncate_identifier, type_check_name,
+    comment_on_constraint, comment_on_index, comment_on_table, comment_value,
+    expected_check_constraint_name, expected_model_constraint_name, expected_model_index_name,
+    expected_unique_constraint_name, foreign_key_name, managed_comment, primary_key_name,
+    truncate_identifier, type_check_name,
 };
 use crate::parser::accessors::{
     column_names_for, db_foreign_key, default_foreign_key_column, versions_of, versions_table_name,
 };
 use crate::parser::ast::{AccessAst, FieldAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
+
+/// A check constraint the schema declares on a model: a field's bounds or a model-level rule.
+pub(crate) struct ExpectedCheck {
+    pub(crate) constraint: String,
+    pub(crate) expression: String,
+}
+
+/// Every bounds and model-level check `model` asks for, named as the generator names them.
+pub(crate) fn expected_checks(model: &ModelAst) -> Vec<ExpectedCheck> {
+    let table = model.table_name();
+    let mut out = Vec::new();
+
+    // Field bounds: declared inline on the column, one constraint per column.
+    for (field_name, field) in &model.fields {
+        for col in column_names_for(field_name, field) {
+            if col.is_empty() {
+                continue;
+            }
+            let Some(expression) = field_check_expression(field, &col) else {
+                continue;
+            };
+            out.push(ExpectedCheck {
+                constraint: expected_check_constraint_name(table, &col),
+                expression,
+            });
+        }
+    }
+
+    // Model-level constraints: named by position, because the author writes an expression and
+    // not an identifier. Reordering therefore renames, which the ledger sees as a drop and a
+    // create rather than a change.
+    for (index, rule) in model.annotations.db.constraints.iter().enumerate() {
+        let Ok(expression) = constraint_to_expr(rule) else {
+            // A rule that cannot be rendered fails the migration, loudly, in the generator.
+            continue;
+        };
+        out.push(ExpectedCheck {
+            constraint: expected_model_constraint_name(table, index),
+            expression,
+        });
+    }
+    out
+}
 
 pub use crate::introspector::fingerprint::ObjectKey;
 
@@ -91,6 +138,47 @@ impl ObjectKey {
             | ObjectKind::CronJob => return None,
         })
     }
+
+    /// `COMMENT ON <this object> IS <text>`, `NULL` when `text` is `None`, for the kinds whose
+    /// comment Postgres keeps. Used to take an older engine's stamp out of a comment while keeping
+    /// whatever the user wrote beside it (plan section 6). The table, constraint and index forms
+    /// are the ones `managed.rs` writes stamps with, so writer and remover cannot disagree.
+    pub fn comment_sql(&self, text: Option<&str>) -> Option<String> {
+        let ObjectKey {
+            kind,
+            schema,
+            parent,
+            name,
+        } = self;
+        let value = comment_value(text);
+        Some(match kind {
+            ObjectKind::Table => comment_on_table(schema, name, text),
+            ObjectKind::Column => {
+                format!("COMMENT ON COLUMN \"{schema}\".\"{parent}\".\"{name}\" IS {value};")
+            }
+            ObjectKind::PrimaryKey
+            | ObjectKind::ForeignKey
+            | ObjectKind::Unique
+            | ObjectKind::Check => comment_on_constraint(schema, parent, name, text),
+            ObjectKind::Index => comment_on_index(schema, name, text),
+            ObjectKind::Policy => {
+                format!("COMMENT ON POLICY \"{name}\" ON \"{schema}\".\"{parent}\" IS {value};")
+            }
+            ObjectKind::Trigger => {
+                format!("COMMENT ON TRIGGER \"{name}\" ON \"{schema}\".\"{parent}\" IS {value};")
+            }
+            ObjectKind::View => format!("COMMENT ON VIEW \"{schema}\".\"{name}\" IS {value};"),
+            ObjectKind::Schema
+            | ObjectKind::Function
+            | ObjectKind::RlsAttributes
+            | ObjectKind::EnumType
+            | ObjectKind::Sequence
+            | ObjectKind::TableGrant
+            | ObjectKind::ColumnGrant
+            | ObjectKind::SecurityLabel
+            | ObjectKind::CronJob => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -120,7 +208,7 @@ pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObjec
         b.model_primary_key(model);
         b.model_uniques(model)?;
         b.model_foreign_keys(model)?;
-        b.model_checks(model)?;
+        b.model_checks(model);
         b.model_indexes(model)?;
         b.model_policies(model)?;
         if versions_of(model).is_some() {
@@ -408,21 +496,15 @@ impl<'a> Builder<'a> {
         self.check(table, &name, create);
     }
 
-    fn model_checks(&mut self, model: &ModelAst) -> Result<()> {
+    fn model_checks(&mut self, model: &ModelAst) {
         let table = model.table_name();
-        for exp in expected_checks(self.ast)
-            .into_iter()
-            .filter(|e| e.table == table)
-        {
-            let columns: Vec<&str> = exp.columns.iter().map(String::as_str).collect();
-            let create = self.render(Operation::AddCheckConstraint {
-                table: table.to_string(),
-                columns: exp.columns.clone(),
-                constraint: exp.constraint.clone(),
-                expression: exp.expression.clone(),
-                comment: crate::managed::managed_check_comment(table, &columns, &exp.expression),
-                risk: Risk::Safe,
-            })?;
+        for exp in expected_checks(model) {
+            let create = format!(
+                "{} ADD CONSTRAINT \"{}\" CHECK ({});",
+                self.alter(table),
+                exp.constraint,
+                exp.expression
+            );
             self.check(table, &exp.constraint, create);
         }
         // The checks a field type carries, which the generator writes inline on the column. These
@@ -451,7 +533,6 @@ impl<'a> Builder<'a> {
                 }
             }
         }
-        Ok(())
     }
 
     // --- indexes ------------------------------------------------------------------------------

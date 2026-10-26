@@ -4,7 +4,7 @@ use anyhow::Result;
 /// Topologically sort operations so dependencies are satisfied:
 /// CREATE TABLE before FKs, DROP FK before DROP TABLE, etc.
 pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
-    // TODO: Phase 1 — build dependency graph using petgraph and sort.
+    // TODO: Phase 1: build dependency graph using petgraph and sort.
     // For Phase 0, return operations in a reasonable default order.
     let mut _ordered: Vec<Operation> = Vec::new();
 
@@ -30,12 +30,8 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::RenameColumn { .. } => 6,
         Operation::AlterColumn { .. } => 7,
         Operation::RecreateColumn { .. } => 7,
-        // A changed bound is a drop and an add of the same constraint name, so the drop has to
-        // run before column work settles and the add strictly after it.
-        Operation::DropCheckConstraint { .. } => 5,
         Operation::AddForeignKey { .. } => 8,
         Operation::AddUniqueConstraint { .. } => 8,
-        Operation::AddCheckConstraint { .. } => 8,
         Operation::AddIndex { .. } => 9,
         Operation::EnableRls { .. } => 10,
         // Drop RLS policies BEFORE creating them, so a drop+recreate of the same

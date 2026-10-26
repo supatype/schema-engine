@@ -54,6 +54,7 @@ async fn snapshot(pool: &sqlx::PgPool) -> BTreeMap<Key, (String, String)> {
                  name,
                  fingerprint,
                  definition,
+                 ..
              }| { ((kind, schema, parent, name), (fingerprint, definition)) },
         )
         .collect()

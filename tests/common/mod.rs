@@ -248,3 +248,26 @@ where
         .await;
     admin.close().await;
 }
+
+/// The push a user runs, as the CLI and the server run it: `prepare` then `apply`.
+pub async fn push(
+    pool: &sqlx::PgPool,
+    ast: &supatype_engine::parser::ast::SchemaAst,
+) -> anyhow::Result<supatype_engine::push::Outcome> {
+    push_with(pool, ast, supatype_engine::push::ApplyOptions::default()).await
+}
+
+/// [`push`] with options (`force` for a destructive push).
+pub async fn push_with(
+    pool: &sqlx::PgPool,
+    ast: &supatype_engine::parser::ast::SchemaAst,
+    options: supatype_engine::push::ApplyOptions,
+) -> anyhow::Result<supatype_engine::push::Outcome> {
+    let plan = supatype_engine::push::prepare(pool, ast, "public").await?;
+    supatype_engine::push::apply(pool, plan, options).await
+}
+
+/// Run `sql` as one batch.
+pub async fn exec(pool: &sqlx::PgPool, sql: &str) -> Result<(), sqlx::Error> {
+    sqlx::raw_sql(sql).execute(pool).await.map(|_| ())
+}
