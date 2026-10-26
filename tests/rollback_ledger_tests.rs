@@ -317,3 +317,106 @@ async fn rolling_back_leaves_what_was_released_since_the_push() {
     })
     .await;
 }
+
+/// E36: a rollback runs every statement on the transaction that holds the engine's lock. It used
+/// to choose the migration, check the project and repair `schema_state` on other pool sessions,
+/// which autocommitted outside the lock. On a pool of one connection, any statement sent elsewhere
+/// waits for the connection the rollback's own transaction holds, until the pool gives up.
+#[tokio::test]
+async fn a_rollback_runs_every_statement_on_its_locked_transaction() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        push(&pool, &posts("body")).await.unwrap();
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect_with(pool.connect_options().as_ref().clone())
+            .await
+            .unwrap();
+        migration_history::apply_rollback(&one, "public")
+            .await
+            .expect("the rollback needs no connection beside its own transaction");
+        one.close().await;
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        assert!(!index_exists(&pool, "posts_body_idx").await);
+    })
+    .await;
+}
+
+/// Each migration's name, status and whether it was rolled back, in order.
+async fn history(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT name || ' ' || status || CASE WHEN rolled_back THEN ' rolled_back' ELSE '' END
+           FROM _supatype.migrations ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// E10: a push that reuses a migration's name is refused before it applies anything, and the
+/// earlier migration keeps its record. Recording the failure used to overwrite it
+/// (`ON CONFLICT (name) DO UPDATE SET status = 'failed'`), so a rollback undid the push before it
+/// and the named one could never be rolled back.
+#[tokio::test]
+async fn a_reused_migration_name_is_refused_and_rollback_undoes_the_right_push() {
+    common::with_integration_pool(|pool| async move {
+        let named = |name: &str| push::ApplyOptions {
+            name: Some(name.into()),
+            ..Default::default()
+        };
+        push(&pool, &posts("title")).await.unwrap();
+        common::push_with(&pool, &posts("body"), named("mig_a"))
+            .await
+            .unwrap();
+        let reused = common::push_with(&pool, &posts("id"), named("mig_a"))
+            .await
+            .expect_err("a second migration named mig_a was applied");
+        assert!(format!("{reused:#}").contains("mig_a"), "{reused:#}");
+        assert!(index_exists(&pool, "posts_body_idx").await);
+        assert!(
+            !index_exists(&pool, "posts_id_idx").await,
+            "the refused push applied"
+        );
+        let names = history(&pool).await;
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert_eq!(names[1], "mig_a applied", "{names:?}");
+
+        let undone = migration_history::apply_rollback(&pool, "public")
+            .await
+            .unwrap();
+        assert_eq!(undone.name, "mig_a");
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        assert!(!index_exists(&pool, "posts_body_idx").await);
+    })
+    .await;
+}
+
+/// A failure recorded under a name a migration already has is recorded under a name of its own,
+/// and never changes the row that had it.
+#[tokio::test]
+async fn a_failure_never_overwrites_a_recorded_migration() {
+    common::with_integration_pool(|pool| async move {
+        common::push_with(
+            &pool,
+            &posts("title"),
+            push::ApplyOptions {
+                name: Some("mig_a".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        migration_history::record_failed_migration(&pool, "mig_a", "sha256:x", "SELECT 1;", "boom")
+            .await
+            .unwrap();
+        let names = history(&pool).await;
+        assert_eq!(names[0], "mig_a applied", "{names:?}");
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(
+            names[1].starts_with("mig_a") && names[1].ends_with(" failed"),
+            "{names:?}"
+        );
+    })
+    .await;
+}

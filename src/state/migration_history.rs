@@ -1,6 +1,6 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sqlx::{Executor, PgPool, Postgres, Transaction};
+use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
 // Internal bookkeeping lives in a dedicated schema so it never appears in the
 // user's `public` schema and is never touched by introspection or diffs.
@@ -379,25 +379,49 @@ pub fn backfill_schema_state_project_schema_sql() -> String {
     )
 }
 
-/// Refuse to push a second project into a database that already holds one.
+/// Refuse to run a command for one project against a database that holds another.
 ///
 /// `_supatype.migrations` has no project column, `schema_state` is one row, and the publishing cron
 /// jobs are named with no schema, so two projects in one database share a history they should not:
 /// the second one's push loads the first one's snapshot as "the previous schema" and diffs against
 /// it. Cloud runs one Postgres per project; this makes the same shape explicit for self-host rather
-/// than letting it fail in a way that names nothing.
+/// than letting it fail in a way that names nothing. Every command that reads the project asks
+/// (`push::read_state` does, inside the writer's transaction when there is one), not only push and
+/// adopt: a rebaseline for another schema rewrote this project's ledger (E14b).
 ///
 /// A database with no recorded schema (a fresh one) passes, and [`save_schema_state`] records the
 /// schema at the end of that push. One written by an engine from before this column has its schema
-/// recorded from its snapshot by the bootstrap ([`backfill_schema_state_project_schema_sql`]).
+/// recorded from its snapshot by the bootstrap ([`backfill_schema_state_project_schema_sql`]), and
+/// read from the snapshot here too: the bootstrap runs only when its version changes, so a row
+/// emptied since is not filled again.
 pub async fn assert_project_schema(pool: &PgPool, schema: &str) -> Result<()> {
-    let sql = format!("SELECT project_schema FROM {SCHEMA}.schema_state WHERE id = 1");
-    let recorded: Option<Option<String>> = sqlx::query_scalar(&sql).fetch_optional(pool).await?;
+    assert_project_schema_on(&mut *pool.acquire().await?, schema).await
+}
+
+/// [`assert_project_schema`] on `conn`, inside its transaction when it has one. Asks the catalog
+/// first, so a database no engine has written to passes without a failed statement that would
+/// abort that transaction.
+pub async fn assert_project_schema_on(conn: &mut PgConnection, schema: &str) -> Result<()> {
+    let present: bool = sqlx::query_scalar(&format!(
+        "SELECT to_regclass('{SCHEMA}.schema_state') IS NOT NULL"
+    ))
+    .fetch_one(&mut *conn)
+    .await?;
+    if !present {
+        return Ok(());
+    }
+    // `to_jsonb` reads `project_schema` whether or not an older engine's table has the column.
+    let sql = format!(
+        "SELECT COALESCE(to_jsonb(s) ->> 'project_schema', NULLIF(s.db_state ->> 'schema', '')) \
+         FROM {SCHEMA}.schema_state s WHERE s.id = 1"
+    );
+    let recorded: Option<Option<String>> =
+        sqlx::query_scalar(&sql).fetch_optional(&mut *conn).await?;
     match recorded.flatten() {
         Some(existing) if existing != schema => anyhow::bail!(
-            "This database already holds the project schema \"{existing}\", and this push is for \
-             \"{schema}\". Supatype runs one project per database: point this project at a database \
-             of its own, or set pg_schema back to \"{existing}\"."
+            "This database already holds the project schema \"{existing}\", not \"{schema}\". \
+             Supatype runs one project per database: point this project at a database of its own, \
+             or set pg_schema back to \"{existing}\"."
         ),
         _ => Ok(()),
     }
@@ -492,35 +516,73 @@ fn snapshot_hash(schema_snapshot: &serde_json::Value) -> String {
 
 /// The schema as it was at the last push, decoded. History, not a cache of the database: what
 /// tells a rename apart from a drop and an add.
-pub async fn load_latest_schema_ast(pool: &PgPool) -> Option<crate::parser::ast::SchemaAst> {
-    load_latest_schema_snapshot(pool)
-        .await
-        .and_then(|v| serde_json::from_value(v).ok())
+pub async fn load_latest_schema_ast(
+    conn: &mut PgConnection,
+) -> Result<Option<crate::parser::ast::SchemaAst>> {
+    Ok(load_latest_schema_snapshot(conn)
+        .await?
+        .and_then(|v| serde_json::from_value(v).ok()))
 }
 
-/// Latest applied schema AST snapshot (for kind-aware diffs when PG types are unchanged).
-pub async fn load_latest_schema_snapshot(pool: &PgPool) -> Option<serde_json::Value> {
-    let sql = format!(
-        "SELECT schema_snapshot FROM {SCHEMA}.migrations \
-         WHERE rolled_back = false AND schema_snapshot IS NOT NULL \
-         ORDER BY applied_at DESC LIMIT 1"
-    );
-    if let Ok(Some((v,))) = sqlx::query_as::<_, (serde_json::Value,)>(&sql)
-        .fetch_optional(pool)
-        .await
+/// Latest applied schema AST snapshot (for kind-aware diffs when PG types are unchanged), read on
+/// the caller's connection: inside its transaction when it has one, and never a second connection
+/// from a pool the caller may be holding the only one of.
+///
+/// `None` where nothing records one: no push yet, or tables from before the columns. A read that
+/// fails for any other reason (a lock it gave up waiting for, a lost connection) is an error, not
+/// "no earlier schema": a push decided without its last schema guesses renames and skips the
+/// upgrade check.
+pub async fn load_latest_schema_snapshot(
+    conn: &mut PgConnection,
+) -> Result<Option<serde_json::Value>> {
+    if has_columns(
+        conn,
+        "migrations",
+        &["schema_snapshot", "rolled_back", "applied_at"],
+    )
+    .await?
     {
-        return Some(v);
+        let sql = format!(
+            "SELECT schema_snapshot FROM {SCHEMA}.migrations \
+             WHERE rolled_back = false AND schema_snapshot IS NOT NULL \
+             ORDER BY applied_at DESC LIMIT 1"
+        );
+        if let Some(v) = sqlx::query_scalar(&sql).fetch_optional(&mut *conn).await? {
+            return Ok(Some(v));
+        }
     }
-
+    if !has_columns(conn, "schema_state", &["id", "ast_snapshot"]).await? {
+        return Ok(None);
+    }
     let fallback = format!(
         "SELECT ast_snapshot FROM {SCHEMA}.schema_state WHERE id = 1 AND ast_snapshot IS NOT NULL"
     );
-    sqlx::query_as::<_, (serde_json::Value,)>(&fallback)
-        .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten()
-        .map(|(v,)| v)
+    Ok(sqlx::query_scalar(&fallback)
+        .fetch_optional(&mut *conn)
+        .await?)
+}
+
+/// Whether `_supatype.<table>` exists with every one of `columns`. Asked of the catalog, so a
+/// table an older engine left without them is "nothing recorded" rather than an error that would
+/// abort the caller's transaction.
+async fn has_columns(conn: &mut PgConnection, table: &str, columns: &[&str]) -> Result<bool> {
+    let found: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = $2 AND column_name = ANY($3)",
+    )
+    .bind(SCHEMA)
+    .bind(table)
+    .bind(columns)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(found == columns.len() as i64)
+}
+
+/// The SQLSTATE of a database error.
+pub(crate) fn sql_state(e: &sqlx::Error) -> Option<String> {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .map(|c| c.into_owned())
 }
 
 /// Latest Studio admin config from migration history or schema_state fallback.
@@ -749,15 +811,22 @@ pub async fn save_studio_metadata_if_present(
     Ok(())
 }
 
+/// Record a failed push, never touching a row already recorded: under `$1` when no migration has
+/// that name, and nothing otherwise (`ON CONFLICT DO NOTHING`). It once took the name over with
+/// `ON CONFLICT (name) DO UPDATE SET status = 'failed'`, marking an applied migration failed, so a
+/// rollback undid the push before it instead (E10).
 pub fn insert_failed_migration_sql() -> String {
     format!(
         "INSERT INTO {SCHEMA}.migrations \
          (name, hash, engine_version, sql_up, status, error_message) \
          VALUES ($1, $2, $3, $4, 'failed', $5) \
-         ON CONFLICT (name) DO UPDATE SET status = 'failed', error_message = EXCLUDED.error_message"
+         ON CONFLICT (name) DO NOTHING"
     )
 }
 
+/// Record a failed push under `name`, or, when a migration already has that name, under
+/// `<name>.failed.<time>`: a name of its own, so the failure is kept and the earlier row is not
+/// changed.
 pub async fn record_failed_migration(
     pool: &PgPool,
     name: &str,
@@ -765,15 +834,54 @@ pub async fn record_failed_migration(
     sql_up: &str,
     error: &str,
 ) -> Result<()> {
-    sqlx::query(&insert_failed_migration_sql())
+    let unique = format!(
+        "{name}.failed.{}",
+        chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")
+    );
+    for name in [name, unique.as_str()] {
+        let recorded = sqlx::query(&insert_failed_migration_sql())
+            .bind(name)
+            .bind(hash)
+            .bind(env!("ENGINE_VERSION"))
+            .bind(sql_up)
+            .bind(error)
+            .execute(pool)
+            .await?;
+        if recorded.rows_affected() == 1 {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("a migration named {unique} already exists")
+}
+
+/// Refuse a push named as a migration already recorded here, applied, failed or rolled back:
+/// history is looked up by name (`migrations --name`), so two rows cannot share one. Asked before
+/// planning, and again under the engine's lock before anything is written.
+pub async fn assert_name_unused<'e, E>(executor: E, name: &str) -> Result<()>
+where
+    E: Executor<'e, Database = Postgres>,
+{
+    let sql = format!(
+        "SELECT status || CASE WHEN rolled_back THEN ', rolled back' ELSE '' END \
+         FROM {SCHEMA}.migrations WHERE name = $1"
+    );
+    let found: Option<String> = match sqlx::query_scalar(&sql)
         .bind(name)
-        .bind(hash)
-        .bind(env!("ENGINE_VERSION"))
-        .bind(sql_up)
-        .bind(error)
-        .execute(pool)
-        .await?;
-    Ok(())
+        .fetch_optional(executor)
+        .await
+    {
+        Ok(found) => found,
+        // No history yet: every name is free.
+        Err(e) if sql_state(&e).as_deref() == Some("42P01") => None,
+        Err(e) => return Err(e).context("look up the migration name"),
+    };
+    match found {
+        Some(status) => anyhow::bail!(
+            "A migration named \"{name}\" is already recorded here ({status}), so nothing was \
+             applied. Give this push a name of its own, or leave the name out for a generated one."
+        ),
+        None => Ok(()),
+    }
 }
 
 /// Roll back an in-flight push transaction and best-effort record a failed migration row.
@@ -836,14 +944,16 @@ struct LatestMigrationRow {
     sql_down: Option<String>,
 }
 
-async fn load_latest_applied_migration(pool: &PgPool) -> Result<Option<LatestMigrationRow>> {
+async fn load_latest_applied_migration(
+    conn: &mut PgConnection,
+) -> Result<Option<LatestMigrationRow>> {
     let sql = format!(
         "SELECT id, name, sql_down FROM {SCHEMA}.migrations \
          WHERE rolled_back = false AND COALESCE(status, 'applied') = 'applied' \
          ORDER BY applied_at DESC LIMIT 1"
     );
     Ok(sqlx::query_as::<_, (i32, String, Option<String>)>(&sql)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await?
         .map(|(id, name, sql_down)| LatestMigrationRow { id, name, sql_down }))
 }
@@ -857,7 +967,7 @@ struct PriorMigrationRow {
 }
 
 async fn load_prior_applied_migration(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     exclude_id: i32,
 ) -> Result<Option<PriorMigrationRow>> {
     let sql = format!(
@@ -877,7 +987,7 @@ async fn load_prior_applied_migration(
         ),
     >(&sql)
     .bind(exclude_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?
     .map(
         |(name, schema_snapshot, admin_config, schema_sources, schema_sources_manifest)| {
@@ -923,87 +1033,103 @@ fn without_transaction_control(sql: &str) -> String {
         .collect()
 }
 
+/// Roll back the latest applied migration: its `sql_down`, the ledger rows it wrote, its history
+/// row and Studio's metadata, in one writer's transaction under the engine's lock, refused while a
+/// push, adopt or rebaseline holds it.
+///
+/// Every statement runs on that transaction's connection, the lock taken before the migration to
+/// undo is chosen, so it is still the latest when it is undone. The choice, the project check and
+/// the `schema_state` repairs once ran on other pool sessions, which autocommitted outside the lock
+/// and committed even when the rollback was then refused (E36).
 pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResult> {
-    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-
-    // A rollback writes objects, the history and the ledger, as a push does: under the engine's
-    // lock, refused while a push, adopt or rebaseline holds it, and taken before the migration to
-    // undo is chosen, so it is still the latest when it is undone.
-    let mut tx = pool.begin().await?;
-    crate::push::take_engine_lock(&mut tx).await?;
-    crate::push::take_push_lock(&mut tx).await?;
-
-    let latest = load_latest_applied_migration(pool).await?.ok_or_else(|| {
-        anyhow::anyhow!("no_applied_migration: No applied migration to roll back")
-    })?;
-
+    bootstrap_internal_state(pool).await?;
+    let mut tx = crate::push::begin_writer(pool).await?;
+    // The history is one project's; rolling it back from another would undo that project's
+    // migration and record this schema as the database's.
+    assert_project_schema_on(&mut tx, schema).await?;
+    let latest = load_latest_applied_migration(&mut tx)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("no_applied_migration: No applied migration to roll back")
+        })?;
     let sql_down = latest
         .sql_down
+        .clone()
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| {
             anyhow::anyhow!("no_rollback_sql: Migration has no rollback SQL (metadata-only push?)")
         })?;
+    let prior = load_prior_applied_migration(&mut tx, latest.id).await?;
+    let left = undo_migration(&mut tx, latest.id, &sql_down, schema).await?;
+    restore_studio_metadata(&mut tx, prior.as_ref()).await?;
+    let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
+    save_schema_state(&mut *tx, &new_state).await?;
+    tx.commit().await?;
+    Ok(rolled_back(&latest.name, prior, &left))
+}
 
-    // The history is one project's; rolling it back from another would undo that project's
-    // migration and record this schema as the database's. Asserted as a push asserts it, with the
-    // schema an older engine left unrecorded taken from its snapshot first.
-    for sql in [
-        create_schema_state_table_sql(),
-        ensure_schema_state_project_schema_column_sql(),
-        backfill_schema_state_project_schema_sql(),
-    ] {
-        sqlx::raw_sql(&sql).execute(pool).await?;
-    }
-    assert_project_schema(pool, schema).await?;
-
-    let prior = load_prior_applied_migration(pool, latest.id).await?;
-
-    // The ledger goes back with the objects. Both tables exist on any database a push bootstrapped
-    // since; asserted here for one bootstrapped before the undo table was.
+/// Run `sql_down` for migration `id`, put the ledger back as it was before it and mark it rolled
+/// back. Returns the objects left as they are: released or recorded again since the push, so no
+/// longer the push's to undo.
+async fn undo_migration(
+    tx: &mut PgConnection,
+    id: i32,
+    sql_down: &str,
+    schema: &str,
+) -> Result<Vec<crate::desired::ObjectKey>> {
+    // Both tables exist on any database a push bootstrapped since; asserted here for one
+    // bootstrapped before the undo table was.
     for sql in [
         crate::ledger::create_table_sql(),
         crate::ledger::undo::create_table_sql(),
     ] {
         (&mut *tx).execute(sqlx::raw_sql(&sql)).await?;
     }
-    // What was released or recorded again since the push is no longer the push's to undo: its
-    // statements are left out, as `restore` leaves its row.
-    let leave = crate::ledger::undo::rewritten_since(&mut tx, latest.id).await?;
-    let (sql_down, left) = crate::ledger::undo::leaving_alone(&sql_down, schema, &leave);
-
+    let leave = crate::ledger::undo::rewritten_since(tx, id).await?;
+    let (sql_down, left) = crate::ledger::undo::leaving_alone(sql_down, schema, &leave);
     (&mut *tx)
         .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
-
-    crate::ledger::undo::restore(&mut tx, latest.id).await?;
-
+    crate::ledger::undo::restore(tx, id).await?;
     let mark_sql = format!(
         "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = $1"
     );
-    sqlx::query(&mark_sql)
-        .bind(latest.id)
+    sqlx::query(&mark_sql).bind(id).execute(&mut *tx).await?;
+    Ok(left)
+}
+
+/// Studio reads the schema of the migration now in force: the one before the rolled-back push.
+async fn restore_studio_metadata(
+    tx: &mut PgConnection,
+    prior: Option<&PriorMigrationRow>,
+) -> Result<()> {
+    let Some(PriorMigrationRow {
+        admin_config: Some(admin),
+        schema_snapshot: Some(snap),
+        ..
+    }) = prior
+    else {
+        return Ok(());
+    };
+    let studio_sql = format!(
+        "UPDATE {SCHEMA}.schema_state SET ast_snapshot = $1, admin_config = $2 WHERE id = 1"
+    );
+    sqlx::query(&studio_sql)
+        .bind(snap)
+        .bind(admin)
         .execute(&mut *tx)
         .await?;
+    Ok(())
+}
 
-    if let Some(ref prior) = prior {
-        if let (Some(admin), Some(snap)) = (&prior.admin_config, &prior.schema_snapshot) {
-            let studio_sql = format!(
-                "UPDATE {SCHEMA}.schema_state SET ast_snapshot = $1, admin_config = $2 WHERE id = 1"
-            );
-            sqlx::query(&studio_sql)
-                .bind(snap)
-                .bind(admin)
-                .execute(&mut *tx)
-                .await?;
-        }
-    }
-
-    let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
-    save_schema_state(&mut *tx, &new_state).await?;
-
-    tx.commit().await?;
-
+/// What a rollback of `name` reports, with the migration now in force and its sources.
+fn rolled_back(
+    name: &str,
+    prior: Option<PriorMigrationRow>,
+    left: &[crate::desired::ObjectKey],
+) -> RollbackResult {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     let (restored_name, manifest, sources_b64) = prior
         .map(|p| {
             (
@@ -1013,27 +1139,24 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
             )
         })
         .unwrap_or((None, None, None));
-
-    Ok(RollbackResult {
+    let message = if left.is_empty() {
+        format!("Rolled back migration {name}.")
+    } else {
+        let left: Vec<String> = left.iter().map(ToString::to_string).collect();
+        format!(
+            "Rolled back migration {name}, leaving {} as they are: released or recorded again \
+             since the push.",
+            left.join(", ")
+        )
+    };
+    RollbackResult {
         status: "rolled_back".into(),
-        name: latest.name.clone(),
-        message: if left.is_empty() {
-            format!("Rolled back migration {}.", latest.name)
-        } else {
-            format!(
-                "Rolled back migration {}, leaving {} as they are: released or recorded again \
-                 since the push.",
-                latest.name,
-                left.iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        },
+        name: name.to_string(),
+        message,
         restored_migration_name: restored_name,
         schema_sources_manifest: manifest,
         schema_sources_base64: sources_b64,
-    })
+    }
 }
 
 pub async fn load_migration_sources(
@@ -1056,22 +1179,23 @@ pub async fn load_migration_sources(
 /// calling the old definition indefinitely. They are CREATE OR REPLACE, so
 /// re-applying on every push is cheap and idempotent. Re-applying also puts back
 /// an `auth.*` alias the auth server's own migrations replaced, for hand-written
-/// rules; the generated ones never call those.
+/// rules; the generated ones never call those. Every push runs this inside its own
+/// transaction, under the engine's lock (`push::reassert_auth_helpers`).
 ///
 /// The readers live in `_supatype` and are always applied. The aliases are skipped
 /// when there is no `auth` schema (a plain Postgres target), rather than failing a
 /// push that has nothing to do with auth; the result says whether they were applied.
-pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bool> {
+pub async fn reapply_auth_helpers(conn: &mut PgConnection, auth_schema: &str) -> Result<bool> {
     use crate::generator::sql::auth_functions;
 
-    sqlx::raw_sql(&auth_functions::generate_claim_readers())
-        .execute(pool)
+    (&mut *conn)
+        .execute(sqlx::raw_sql(&auth_functions::generate_claim_readers()))
         .await?;
 
     let exists: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1")
             .bind(auth_schema)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await?;
     if exists.is_none() {
         return Ok(false);
@@ -1081,87 +1205,163 @@ pub async fn reapply_auth_helpers(pool: &PgPool, auth_schema: &str) -> Result<bo
         project_ref: String::new(),
         auth_schema: auth_schema.to_string(),
     };
-    sqlx::raw_sql(&auth_functions::generate_auth_aliases(&config))
-        .execute(pool)
-        .await?;
+    let aliases = auth_functions::generate_auth_aliases(&config);
+    (&mut *conn).execute(sqlx::raw_sql(&aliases)).await?;
     Ok(true)
 }
 
-/// Create and repair everything the engine owns inside `_supatype`, and re-apply
-/// the auth helper functions.
+/// Which bootstrap a database has had: the [`bootstrap_version`] of the engine that last ran it.
+pub fn create_bootstrap_table_sql() -> String {
+    format!(
+        r#"CREATE TABLE IF NOT EXISTS {SCHEMA}.engine_bootstrap (
+    id              INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    version         TEXT NOT NULL,
+    engine_version  TEXT NOT NULL,
+    applied_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)"#
+    )
+}
+
+/// Every statement that creates and repairs what the engine owns, in order, each with what it is
+/// for: the `_supatype` tables and their repairs, then Studio's objects.
+fn bootstrap_statements() -> Vec<(&'static str, String)> {
+    let mut statements = vec![
+        ("_supatype schema", create_internal_schema_sql().to_string()),
+        ("migrations table", create_migrations_table_sql()),
+        // Created with `migrations`, so a seed run never creates its own mid-transaction.
+        ("seeds table", crate::seed::ledger::create_seeds_table_sql()),
+        ("seeds index", crate::seed::ledger::create_seeds_index_sql()),
+        ("studio_members table", create_studio_members_table_sql()),
+        (
+            "studio_members identities",
+            ensure_studio_members_platform_identity_sql(),
+        ),
+        ("studio_audit table", create_studio_audit_table_sql()),
+        ("studio_audit columns", ensure_studio_audit_columns_sql()),
+        ("schema_state table", create_schema_state_table_sql()),
+        (
+            "schema_state Studio columns",
+            ensure_schema_state_studio_columns_sql(),
+        ),
+        (
+            "schema_state capabilities",
+            ensure_schema_state_capabilities_column_sql(),
+        ),
+        (
+            "schema_state project_schema",
+            ensure_schema_state_project_schema_column_sql(),
+        ),
+        (
+            "project_schema backfill",
+            backfill_schema_state_project_schema_sql(),
+        ),
+    ];
+    statements.extend(
+        ensure_all_migration_columns_sql()
+            .into_iter()
+            .map(|sql| ("migrations columns", sql)),
+    );
+    // After `migrations`, which both reference.
+    statements.push(("managed_objects table", crate::ledger::create_table_sql()));
+    statements.push((
+        "managed_objects undo table",
+        crate::ledger::undo::create_table_sql(),
+    ));
+    statements.push(("engine_bootstrap table", create_bootstrap_table_sql()));
+    statements.extend(crate::state::studio_state::bootstrap_statements());
+    statements
+}
+
+/// The bootstrap this engine runs, as a fingerprint of its statements' text: any statement added
+/// or changed is a new version, so no one has to remember to bump it.
+pub fn bootstrap_version() -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for (_, sql) in bootstrap_statements() {
+        h.update(sql.as_bytes());
+        h.update([0]);
+    }
+    h.update(seed_studio_members_from_claims_sql().as_bytes());
+    format!("sha256:{}", hex::encode(h.finalize()))
+}
+
+/// The bootstrap version this database records, `None` before any engine recorded one. Takes no
+/// lock a writer holds, so it never waits behind one.
+async fn recorded_bootstrap(conn: &mut PgConnection) -> Result<Option<String>> {
+    let present: bool = sqlx::query_scalar(&format!(
+        "SELECT to_regclass('{SCHEMA}.engine_bootstrap') IS NOT NULL"
+    ))
+    .fetch_one(&mut *conn)
+    .await?;
+    if !present {
+        return Ok(None);
+    }
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT version FROM {SCHEMA}.engine_bootstrap WHERE id = 1"
+    ))
+    .fetch_optional(&mut *conn)
+    .await?)
+}
+
+/// Create and repair everything the engine owns inside `_supatype`, and Studio's objects, when
+/// this database has not had this engine's bootstrap yet.
 ///
-/// Both push implementations (the CLI binary, `main.rs`, and the HTTP server,
-/// `server/routes.rs`) call this. They previously each wrote out the same
-/// sequence by hand, so every new internal object or repair had to be added
-/// twice; forgetting one produced exactly the silent drift this engine has been
-/// accumulating (a migrations table with no `hash`, RLS state that never
-/// converged, Studio metadata written on only one code path).
+/// Every command that writes calls this first. It once ran on every push, outside any lock: its
+/// `ALTER TABLE _supatype.migrations` waited behind a push in flight and every reader of the table
+/// queued behind it (A4-N1), and two first pushes raced on the catalog (E14a). Now a read that
+/// takes no lock decides whether it is needed, and when it is, it runs in one writer's transaction
+/// under the engine's lock, so a second writer is refused with `engine_busy` instead of waiting.
 pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
-    sqlx::raw_sql(create_internal_schema_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&create_migrations_table_sql())
-        .execute(pool)
-        .await?;
-    // Created in the same bootstrap as `migrations`, so a seed run never has to create
-    // its own table mid-transaction.
-    sqlx::raw_sql(&crate::seed::ledger::create_seeds_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&crate::seed::ledger::create_seeds_index_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&create_studio_members_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_studio_members_platform_identity_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&create_studio_audit_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_studio_audit_columns_sql())
-        .execute(pool)
-        .await?;
-    // Migrating an existing project: carry forward the admins who only have the
-    // old `app_metadata.role` claim, before that claim stops meaning anything.
-    if let Err(e) = sqlx::raw_sql(&seed_studio_members_from_claims_sql())
-        .execute(pool)
+    let version = bootstrap_version();
+    let recorded = recorded_bootstrap(&mut *pool.acquire().await?).await?;
+    if recorded.as_deref() == Some(version.as_str()) {
+        return Ok(());
+    }
+    let mut tx = crate::push::begin_writer(pool).await?;
+    // Another writer may have run it between the read and the lock.
+    if recorded_bootstrap(&mut tx).await?.as_deref() != Some(version.as_str()) {
+        run_bootstrap(&mut tx, &version).await?;
+    }
+    tx.commit().await.context("commit the bootstrap")?;
+    Ok(())
+}
+
+async fn run_bootstrap(tx: &mut PgConnection, version: &str) -> Result<()> {
+    for (what, sql) in bootstrap_statements() {
+        (&mut *tx)
+            .execute(sqlx::raw_sql(&sql))
+            .await
+            .with_context(|| format!("Failed to bootstrap the {what}"))?;
+    }
+    seed_studio_members(tx).await?;
+    sqlx::query(&format!(
+        "INSERT INTO {SCHEMA}.engine_bootstrap (id, version, engine_version) VALUES (1, $1, $2)
+         ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version,
+             engine_version = EXCLUDED.engine_version, applied_at = NOW()"
+    ))
+    .bind(version)
+    .bind(env!("ENGINE_VERSION"))
+    .execute(&mut *tx)
+    .await
+    .context("record the bootstrap version")?;
+    Ok(())
+}
+
+/// Migrating an existing project: carry forward the admins who only have the old
+/// `app_metadata.role` claim, before that claim stops meaning anything. Best effort, in a
+/// savepoint, so a failure leaves the rest of the bootstrap standing.
+async fn seed_studio_members(tx: &mut PgConnection) -> Result<()> {
+    use sqlx::Connection;
+    let mut savepoint = tx.begin().await?;
+    match (&mut *savepoint)
+        .execute(sqlx::raw_sql(&seed_studio_members_from_claims_sql()))
         .await
     {
-        eprintln!("Warning: failed to seed Studio membership from existing admin roles: {e}");
-    }
-    sqlx::raw_sql(&create_schema_state_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_schema_state_studio_columns_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_schema_state_capabilities_column_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&ensure_schema_state_project_schema_column_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&backfill_schema_state_project_schema_sql())
-        .execute(pool)
-        .await?;
-
-    for sql in ensure_all_migration_columns_sql() {
-        sqlx::raw_sql(&sql).execute(pool).await?;
-    }
-    // After `migrations`, which both reference.
-    sqlx::raw_sql(&crate::ledger::create_table_sql())
-        .execute(pool)
-        .await?;
-    sqlx::raw_sql(&crate::ledger::undo::create_table_sql())
-        .execute(pool)
-        .await?;
-
-    // Helper functions are cosmetic to a migration's success, so a failure here
-    // must not abort the push.
-    if let Err(e) = reapply_auth_helpers(pool, "auth").await {
-        eprintln!("Warning: failed to reapply auth helper functions: {e}");
+        Ok(_) => savepoint.commit().await?,
+        Err(e) => {
+            savepoint.rollback().await?;
+            eprintln!("Warning: failed to seed Studio membership from existing admin roles: {e}");
+        }
     }
     Ok(())
 }

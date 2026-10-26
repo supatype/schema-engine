@@ -59,9 +59,9 @@ pub struct Request<'a> {
 
 /// Reads, decides, and with `request.apply` writes the rows, in one transaction.
 ///
-/// Bootstraps first and checks the project schema after, as a push does: adopt is the first
-/// command a project on an existing database runs, so the engine's tables may not exist yet, and
-/// checking before they did failed with `relation "_supatype.schema_state" does not exist`.
+/// Bootstraps first, as a push does: adopt is the first command a project on an existing database
+/// runs, so the engine's tables may not exist yet. The project schema is checked as the state is
+/// read, inside the transaction that writes (`push::read_state`).
 pub async fn run(
     pool: &PgPool,
     ast: &SchemaAst,
@@ -71,14 +71,13 @@ pub async fn run(
     migration_history::bootstrap_internal_state(pool)
         .await
         .context("Failed to bootstrap _supatype internal state")?;
-    migration_history::assert_project_schema(pool, schema).await?;
-    let mut tx = pool.begin().await?;
-    if request.apply {
-        // As a push does: these are ledger writes too.
-        push::take_engine_lock(&mut tx).await?;
-        push::take_push_lock(&mut tx).await?;
-    }
-    let (state, decision) = push::read_and_decide(&mut tx, pool, ast, schema).await?;
+    // As a push does: these are ledger writes too. A preview writes nothing and takes no lock.
+    let mut tx = if request.apply {
+        push::begin_writer(pool).await?
+    } else {
+        pool.begin().await?
+    };
+    let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
     let (outcome, changes, forgotten) = choose(ast, &state, &decision, request)?;
     if request.apply {
         ledger::upsert(&mut tx, &changes).await?;

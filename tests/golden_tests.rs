@@ -17,10 +17,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use supatype_engine::{
-    introspector, parser, push,
-    state::{migration_history, studio_state},
-};
+use supatype_engine::{introspector, parser, push, state::migration_history};
 
 /// Every fixture that is a schema the current parser accepts. `seed_golden_ir.json` is seed IR,
 /// not an AST. Two more are schemas the parser now rejects and nothing else reads, so they have no
@@ -186,13 +183,18 @@ async fn state_value(pool: &sqlx::PgPool) -> serde_json::Value {
 }
 
 /// The engine's own objects, before any migration: what `push::prepare` bootstraps (`_supatype`,
-/// Studio's tables and stats functions in `supatype`). They exist after any push and are the same
-/// for every fixture: the engine's state, not the schema's, with tests of their own.
+/// Studio's tables and stats functions in `supatype`), and the claim readers in `_supatype` that
+/// every push reasserts before its migration. They exist after any push and are the same for every
+/// fixture: the engine's state, not the schema's, with tests of their own.
 async fn engine_baseline(pool: &sqlx::PgPool) -> serde_json::Value {
     migration_history::bootstrap_internal_state(pool)
         .await
         .unwrap();
-    studio_state::bootstrap(pool).await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    migration_history::reapply_auth_helpers(&mut conn, "auth")
+        .await
+        .unwrap();
+    drop(conn);
     state_value(pool).await
 }
 

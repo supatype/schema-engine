@@ -1566,6 +1566,23 @@ GRANT EXECUTE ON FUNCTION {rpc_q}.restore_version(text, text, integer) TO authen
 "#
     )
 }
+
+/// The database `cron.schedule` records for a job scheduled from this one: `cron.database_name`,
+/// whichever database the call is made in. Where pg_cron runs here that is this database; in a
+/// copy of it (a branch, a template copy, a restore under a new name) it is still the original's
+/// name, so looking jobs up by `current_database()` found none of those a push had just made
+/// (A2-N1). Jobs scheduled for other databases with `cron.schedule_in_database` carry their own
+/// database's name, and stay apart. Introspection and the drop of a job look them up the same way.
+pub fn cron_job_database() -> String {
+    format!(
+        "COALESCE(current_setting({}, true), current_database())",
+        quote_literal(CRON_DATABASE_SETTING)
+    )
+}
+
+/// The pg_cron setting naming the database its jobs run in.
+const CRON_DATABASE_SETTING: &str = "cron.database_name";
+
 /// The two scheduled jobs, when this database can run them.
 ///
 /// **Degrades rather than refuses**, the same tier split as field masking and `pg_net`. `pg_cron`
@@ -1582,6 +1599,7 @@ GRANT EXECUTE ON FUNCTION {rpc_q}.restore_version(text, text, integer) TO authen
 /// `IF NOT EXISTS` on the extension and an upsert on the schedule, so re-emission on every push is
 /// free and a changed schedule converges rather than accumulating jobs.
 fn cron_jobs_sql() -> String {
+    let db = cron_job_database();
     format!(
         r#"-- Scheduled publishing and retention, if this database has a scheduler.
 DO $cron$
@@ -1593,11 +1611,12 @@ BEGIN
 
   -- Replaced rather than added to, so a push converges on one job per purpose instead of stacking a
   -- new one every time. Only this database's: `cron.job` holds every database's jobs, and another
-  -- project on the cluster has jobs by the same names.
+  -- project on the cluster has jobs by the same names. `cron.schedule` records
+  -- `cron.database_name`, which is not this database's name in a copy of it.
   PERFORM cron.unschedule(jobid)
      FROM cron.job
     WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions')
-      AND database = current_database();
+      AND database = {db};
 
   -- Every minute: the smallest useful granularity for "publish at nine", and the job does nothing
   -- but one indexed scan per versioned model when there is nothing due.

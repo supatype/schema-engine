@@ -37,7 +37,7 @@ use crate::ledger::{self, drift, probe, reconcile, LedgerRow};
 use crate::parser::ast::SchemaAst;
 use crate::sql_quote::{quote_literal, quote_qualified};
 use crate::state::database_state::DatabaseState;
-use crate::state::{migration_history, studio_state};
+use crate::state::migration_history;
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
@@ -76,21 +76,32 @@ const PUSH_LOCK_ID: i32 = 1;
 /// runs, so refusing on that one would refuse every such push. Only this engine takes this key.
 const ENGINE_LOCK_ID: i32 = 2;
 
-/// Refused because another push, adopt, rebaseline or rollback holds [`ENGINE_LOCK_ID`]. A type, so a caller
-/// can tell it from a failed push and retry: the HTTP server answers it with 409 and
-/// [`ENGINE_BUSY`].
-#[derive(Debug)]
-pub struct EngineBusy;
+/// Refused because of another push, adopt, rebaseline or rollback. A type, so a caller can tell it
+/// from a failed push and retry: the HTTP server answers it with 409 and [`ENGINE_BUSY`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineBusy {
+    /// Another writer holds [`ENGINE_LOCK_ID`].
+    Running,
+    /// Another writer committed after this push was planned and before it took the lock: the plan
+    /// was decided against a ledger that no longer exists.
+    LandedSincePlan,
+}
 
 /// The HTTP refusal reason for [`EngineBusy`].
 pub const ENGINE_BUSY: &str = "engine_busy";
 
 impl std::fmt::Display for EngineBusy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(
-            "another push, adopt, rebaseline or rollback is running on this database; try again. \
-             Nothing was applied.",
-        )
+        f.write_str(match self {
+            EngineBusy::Running => {
+                "another push, adopt, rebaseline or rollback is running on this database; try \
+                 again. Nothing was applied."
+            }
+            EngineBusy::LandedSincePlan => {
+                "another push, adopt, rebaseline or rollback was applied to this database while \
+                 this one was being planned; try again. Nothing was applied."
+            }
+        })
     }
 }
 
@@ -132,28 +143,21 @@ impl ReconcileInputs {
         }
     }
 
-    /// Refuse when `now` is not what the plan was decided from, naming what moved.
+    /// Refuse when `now` is not what the plan was decided from, naming what moved. Only the
+    /// engine's writers write the ledger, so a ledger that moved means one of them committed in
+    /// between: refused as [`EngineBusy::LandedSincePlan`], which a caller retries, like the
+    /// refusal it would have had if it had come a moment earlier (E14a).
     fn assert_current(&self, now: &State) -> Result<()> {
         let now = ReconcileInputs::of(now);
-        let mut moved: BTreeSet<String> = BTreeSet::new();
-        let ledger = |rows: &[LedgerRow]| -> BTreeMap<ObjectKey, LedgerRow> {
-            rows.iter().map(|r| (r.key.clone(), r.clone())).collect()
-        };
-        let (was, is) = (ledger(&self.ledger), ledger(&now.ledger));
-        for key in was.keys().chain(is.keys()) {
-            if was.get(key) != is.get(key) {
-                moved.insert(format!("{key} (ledger)"));
-            }
+        let ledger_key = |r: &LedgerRow| r.key.clone();
+        if !moved(&self.ledger, &now.ledger, ledger_key).is_empty() {
+            return Err(EngineBusy::LandedSincePlan.into());
         }
-        let live = |fps: &[ObjectFingerprint]| -> BTreeMap<ObjectKey, ObjectFingerprint> {
-            fps.iter().map(|f| (f.key(), f.clone())).collect()
-        };
-        let (was, is) = (live(&self.fingerprints), live(&now.fingerprints));
-        for key in was.keys().chain(is.keys()) {
-            if was.get(key) != is.get(key) {
-                moved.insert(key.to_string());
-            }
-        }
+        let moved = moved(
+            &self.fingerprints,
+            &now.fingerprints,
+            ObjectFingerprint::key,
+        );
         if moved.is_empty() {
             return Ok(());
         }
@@ -169,6 +173,17 @@ impl ReconcileInputs {
             }
         )
     }
+}
+
+/// The keys whose entry differs between `was` and `is`, present in one and not the other included.
+fn moved<T: PartialEq>(was: &[T], is: &[T], key: impl Fn(&T) -> ObjectKey) -> BTreeSet<String> {
+    let was: BTreeMap<ObjectKey, &T> = was.iter().map(|item| (key(item), item)).collect();
+    let is: BTreeMap<ObjectKey, &T> = is.iter().map(|item| (key(item), item)).collect();
+    was.keys()
+        .chain(is.keys())
+        .filter(|k| was.get(*k) != is.get(*k))
+        .map(ToString::to_string)
+        .collect()
 }
 
 impl Plan<'_> {
@@ -299,7 +314,11 @@ impl State {
     }
 }
 
+/// The state of `schema` as a push reads it, once the database is known to be `schema`'s project
+/// ([`migration_history::assert_project_schema_on`]): every command reads through here, so none
+/// of them can read, or write, another project's database.
 pub async fn read_state(conn: &mut PgConnection, schema: &str) -> Result<State> {
+    migration_history::assert_project_schema_on(conn, schema).await?;
     let Live {
         mut db,
         catalog,
@@ -346,7 +365,10 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
         Decision {
             diff, reconcile, ..
         },
-    ) = read_and_decide(&mut conn, pool, ast, schema).await?;
+    ) = match read_and_decide(&mut conn, ast, schema).await {
+        Ok(decided) => decided,
+        Err(e) => return Err(busy_if_waiting_on_a_writer(pool, e).await),
+    };
 
     // An unchanged schema produces an empty diff, so the renderer's own check would never run and
     // the push would report success while a declared table sat in the API with none of its rules
@@ -544,15 +566,15 @@ fn previously_declared_columns(
 }
 
 /// Everything a push knows before it writes: [`read_state`] on `conn` (a transaction, for a caller
-/// that then writes), then [`decide_probed`] against the schema of the last push.
+/// that then writes), then [`decide_probed`] against the schema of the last push, read on `conn`
+/// too.
 pub async fn read_and_decide(
     conn: &mut PgConnection,
-    pool: &PgPool,
     ast: &SchemaAst,
     schema: &str,
 ) -> Result<(State, Decision)> {
     let state = read_state(conn, schema).await?;
-    let previous = migration_history::load_latest_schema_ast(pool).await;
+    let previous = migration_history::load_latest_schema_ast(conn).await?;
     let decision = decide_probed(conn, ast, &state, previous.as_ref()).await?;
     Ok((state, decision))
 }
@@ -1202,13 +1224,18 @@ fn created_by_parent(
     Ok(keys)
 }
 
-/// The bootstrap, then [`plan`]. What a push runs.
+/// The bootstrap where it is needed, then [`plan`]. What a push runs.
+///
+/// Refused at once with [`EngineBusy::Running`] while another writer holds the engine's lock:
+/// planning behind it would only wait on the locks it holds, and the apply would be refused anyway
+/// (A4-N1). The apply takes the lock itself, so this is the early answer, not the guard.
 pub async fn prepare<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result<Plan<'a>> {
     migration_history::bootstrap_internal_state(pool)
         .await
         .context("Failed to bootstrap _supatype internal state")?;
-    migration_history::assert_project_schema(pool, schema).await?;
-    studio_state::bootstrap(pool).await?;
+    if engine_lock_held(pool).await? {
+        return Err(EngineBusy::Running.into());
+    }
     plan(pool, ast, schema).await
 }
 
@@ -1267,13 +1294,12 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
 
     // These are writes too: under the engine's lock like any other, and only to the database the
     // plan found up to date.
-    let mut tx = pool.begin().await.context("begin up-to-date push")?;
-    take_engine_lock(&mut tx).await?;
-    take_push_lock(&mut tx).await?;
+    let mut tx = begin_writer(pool).await?;
     let now = read_state(&mut tx, &plan.schema)
         .await
         .context("Failed to re-read the database before applying")?;
     plan.inputs.assert_current(&now)?;
+    reassert_auth_helpers(&mut tx).await?;
 
     (&mut *tx)
         .execute(sqlx::raw_sql(&storage_sql))
@@ -1328,9 +1354,9 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
 async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> Result<Outcome> {
     let strict = opts.strict;
     let rendered = render(&plan, opts)?;
-    let mut tx = pool.begin().await.context("begin migration transaction")?;
-    // Before anything is written, so a refusal records no failed migration.
-    take_engine_lock(&mut tx).await?;
+    // Locked before anything is written, so a refusal records no failed migration.
+    let mut tx = begin_writer(pool).await?;
+    migration_history::assert_name_unused(&mut *tx, &rendered.name).await?;
     let applied = match within_transaction(&mut tx, &plan, strict, &rendered).await {
         Ok(applied) => applied,
         Err(e) => {
@@ -1382,13 +1408,13 @@ async fn within_transaction(
     strict: bool,
     rendered: &Rendered,
 ) -> Result<Applied> {
-    take_push_lock(tx).await?;
     // The reconcile's inputs, read again inside this transaction: what it decided is applied only
     // to the database it decided it against.
     let now = read_state(tx, &plan.schema)
         .await
         .context("Failed to re-read the database before applying")?;
     plan.inputs.assert_current(&now)?;
+    reassert_auth_helpers(tx).await?;
 
     if let Err(e) = (&mut **tx)
         .execute(sqlx::raw_sql(&rendered.apply_body))
@@ -1582,6 +1608,94 @@ fn created_sequence(
     Some((key, sql))
 }
 
+/// How long a writer's backend may sit idle inside its transaction before Postgres ends the
+/// session. The engine sends a writer's statements back to back, so only a client that stopped
+/// answering (frozen, or cut off with no reset) leaves it idle, holding the lock keys and every
+/// table lock it took (E33: 15 minutes to over 2 hours).
+const WRITER_IDLE_TIMEOUT: &str = "60s";
+/// How long one of a writer's statements may wait for a lock. A backend waiting on a lock does not
+/// read its socket, so it cannot see that its client was killed; this bounds that wait, and the
+/// queue of app queries a waiting `ALTER` holds up behind it.
+const WRITER_LOCK_TIMEOUT: &str = "30s";
+/// How often a writer's backend checks, while a statement runs, that its client is still there
+/// (Postgres 14 and later, on platforms that support it).
+const WRITER_CLIENT_CHECK: &str = "5s";
+
+/// A writer's transaction: bounded by the timeouts above, holding [`ENGINE_LOCK_ID`] (or refused
+/// with [`EngineBusy`]) and then [`PUSH_LOCK_ID`]. Push, adopt, rebaseline, rollback and the
+/// bootstrap all begin here, so none of them can outlive a lost client.
+pub(crate) async fn begin_writer(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("begin the writer's transaction")?;
+    bound_writer(&mut tx).await?;
+    take_engine_lock(&mut tx).await?;
+    take_push_lock(&mut tx).await?;
+    Ok(tx)
+}
+
+/// `SET LOCAL` for the writer's timeouts, so they end with its transaction.
+async fn bound_writer(tx: &mut PgConnection) -> Result<()> {
+    sqlx::query(
+        "SELECT set_config('idle_in_transaction_session_timeout', $1, true),
+                set_config('lock_timeout', $2, true),
+                CASE WHEN current_setting('server_version_num')::int >= 140000
+                     THEN set_config('client_connection_check_interval', $3, true) END",
+    )
+    .bind(WRITER_IDLE_TIMEOUT)
+    .bind(WRITER_LOCK_TIMEOUT)
+    .bind(WRITER_CLIENT_CHECK)
+    .execute(&mut *tx)
+    .await
+    .context("bound the writer's transaction")?;
+    Ok(())
+}
+
+/// Whether another session holds the engine's own key, [`ENGINE_LOCK_ID`], in this database. Read
+/// from `pg_locks`, so asking takes no lock and never waits.
+pub(crate) async fn engine_lock_held(pool: &PgPool) -> Result<bool> {
+    let sql = format!(
+        "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted
+            AND classid = {PUSH_LOCK_CLASS} AND objid = {ENGINE_LOCK_ID} AND objsubid = 2
+            AND database = (SELECT oid FROM pg_database WHERE datname = current_database()))"
+    );
+    sqlx::query_scalar(&sql)
+        .fetch_one(pool)
+        .await
+        .context("read whether the engine's lock is held")
+}
+
+/// A read that gave up waiting for a lock (`lock_not_available`, under a preview's lock timeout)
+/// while another writer holds the engine's lock was waiting on that writer: said as
+/// [`EngineBusy::Running`], as the writer would have been told. Any other error is `e` unchanged.
+pub(crate) async fn busy_if_waiting_on_a_writer(pool: &PgPool, e: anyhow::Error) -> anyhow::Error {
+    let waited = e
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+        .any(|cause| migration_history::sql_state(cause).as_deref() == Some("55P03"));
+    if waited && engine_lock_held(pool).await.unwrap_or(false) {
+        return EngineBusy::Running.into();
+    }
+    e
+}
+
+/// The `auth.*` helpers, put back by every push inside its own transaction, best effort in a
+/// savepoint: a migration that replaced them (the auth server's own) is undone by the next push,
+/// and a failure leaves the push standing.
+async fn reassert_auth_helpers(tx: &mut PgConnection) -> Result<()> {
+    use sqlx::Connection;
+    let mut savepoint = tx.begin().await?;
+    match migration_history::reapply_auth_helpers(&mut savepoint, "auth").await {
+        Ok(_) => savepoint.commit().await?,
+        Err(e) => {
+            savepoint.rollback().await?;
+            eprintln!("Warning: failed to reapply auth helper functions: {e}");
+        }
+    }
+    Ok(())
+}
+
 /// A signal to realtime, which skips WAL polls while anyone holds this transaction-level lock;
 /// not mutual exclusion. The CLI may already hold it as a session lock from its own backend, so
 /// the lock is tried rather than waited for: free, this push holds it until commit; held, the
@@ -1607,7 +1721,7 @@ pub(crate) async fn take_engine_lock(tx: &mut PgConnection) -> Result<()> {
         .await
         .context("try the engine's advisory lock")?;
     if !taken {
-        return Err(EngineBusy.into());
+        return Err(EngineBusy::Running.into());
     }
     Ok(())
 }

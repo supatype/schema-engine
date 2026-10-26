@@ -300,9 +300,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             database_url,
             schema,
         } => {
-            let pool = sqlx::PgPool::connect(&database_url)
-                .await
-                .context("Failed to connect to database")?;
+            let pool = supatype_engine::db::connect(&database_url).await?;
             let state = supatype_engine::introspector::introspect(&pool, &schema).await?;
             println!("{}", serde_json::to_string_pretty(&state)?);
         }
@@ -311,7 +309,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             schema,
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let pool = sqlx::PgPool::connect(&database_url).await?;
+            let pool = supatype_engine::db::connect_for_preview(&database_url).await?;
             // The plan a push would apply: the differ's operations and, under `reconcile`, what
             // the ledger would do about the kinds it owns.
             let plan = supatype_engine::push::plan(&pool, &ast, &schema).await?;
@@ -323,7 +321,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             force,
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            let pool = sqlx::PgPool::connect(&database_url).await?;
+            let pool = supatype_engine::db::connect_for_preview(&database_url).await?;
             // The same plan a push would apply, printed as a file instead.
             let plan = supatype_engine::push::plan(&pool, &ast, &schema).await?;
             println!("{}", plan.migration(force)?.file());
@@ -346,9 +344,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             use supatype_engine::push;
 
             let ast = supatype_engine::parser::parse(&input)?;
-            let pool = sqlx::PgPool::connect(&database_url)
-                .await
-                .context("Failed to connect to database")?;
+            let pool = supatype_engine::db::connect(&database_url).await?;
 
             let schema_sources = schema_sources_gz
                 .as_deref()
@@ -371,6 +367,10 @@ async fn run(command: Command, input: String) -> Result<()> {
                 );
             }
 
+            // A reused name is refused before anything is planned (E10).
+            if let Some(name) = &name {
+                supatype_engine::state::migration_history::assert_name_unused(&pool, name).await?;
+            }
             // A refusal goes on stdout too, where the CLI reads the push result, so it can name
             // the tables and offer to adopt them. The message still reaches stderr via the error.
             let mut plan = match push::prepare(&pool, &ast, &schema).await {
@@ -551,12 +551,8 @@ async fn run(command: Command, input: String) -> Result<()> {
         Command::Migrations { database_url, name } => {
             use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
             use supatype_engine::state::migration_history;
-            let pool = sqlx::PgPool::connect(&database_url)
-                .await
-                .context("Failed to connect to database")?;
-            for col_sql in migration_history::ensure_all_migration_columns_sql() {
-                sqlx::raw_sql(&col_sql).execute(&pool).await?;
-            }
+            let pool = supatype_engine::db::connect(&database_url).await?;
+            migration_history::bootstrap_internal_state(&pool).await?;
             if let Some(migration_name) = name.filter(|n| !n.trim().is_empty()) {
                 let sources = migration_history::load_migration_sources(&pool, &migration_name)
                     .await
@@ -582,12 +578,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             schema,
         } => {
             use supatype_engine::state::migration_history;
-            let pool = sqlx::PgPool::connect(&database_url)
-                .await
-                .context("Failed to connect to database")?;
-            for col_sql in migration_history::ensure_all_migration_columns_sql() {
-                sqlx::raw_sql(&col_sql).execute(&pool).await?;
-            }
+            let pool = supatype_engine::db::connect(&database_url).await?;
             let result = migration_history::apply_rollback(&pool, &schema).await?;
             println!("{}", serde_json::to_string(&result)?);
         }
@@ -607,7 +598,7 @@ async fn run(command: Command, input: String) -> Result<()> {
                 anyhow::bail!(refusal);
             }
             let ast = supatype_engine::parser::parse(&input)?;
-            let pool = sqlx::PgPool::connect(&database_url).await?;
+            let pool = supatype_engine::db::connect_for_preview(&database_url).await?;
             let report = if rebaseline {
                 supatype_engine::inspect::rebaseline(&pool, &ast, &schema, accept_access_drift)
                     .await?
@@ -631,7 +622,7 @@ async fn run(command: Command, input: String) -> Result<()> {
         } => {
             use supatype_engine::state::migration_history;
             let ast = supatype_engine::parser::parse(&input)?;
-            let pool = sqlx::PgPool::connect(&database_url).await?;
+            let pool = supatype_engine::db::connect(&database_url).await?;
             if no_cache {
                 eprintln!("{}", migration_history::NO_CACHE_NOTICE);
             }
