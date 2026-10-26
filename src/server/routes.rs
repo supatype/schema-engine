@@ -86,6 +86,9 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     migration_history::bootstrap_internal_state(&pool)
         .await
         .map_err(engine_error)?;
+    migration_history::assert_project_schema(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
 
     // Ensure supatype schema and studio tables exist
     sqlx::raw_sql(studio_state::create_studio_schema_sql())

@@ -364,6 +364,34 @@ pub fn ensure_schema_state_capabilities_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS capabilities JSONB")
 }
 
+/// Which project schema this database belongs to. See [`assert_project_schema`].
+pub fn ensure_schema_state_project_schema_column_sql() -> String {
+    format!("ALTER TABLE {SCHEMA}.schema_state ADD COLUMN IF NOT EXISTS project_schema TEXT")
+}
+
+/// Refuse to push a second project into a database that already holds one.
+///
+/// `_supatype.migrations` has no project column, `schema_state` is one row, and the publishing cron
+/// jobs are named with no schema, so two projects in one database share a history they should not:
+/// the second one's push loads the first one's snapshot as "the previous schema" and diffs against
+/// it. Cloud runs one Postgres per project; this makes the same shape explicit for self-host rather
+/// than letting it fail in a way that names nothing.
+///
+/// A database with no recorded schema (a fresh one, or one written by an engine from before this
+/// column) passes, and [`save_schema_state`] records the schema at the end of that push.
+pub async fn assert_project_schema(pool: &PgPool, schema: &str) -> Result<()> {
+    let sql = format!("SELECT project_schema FROM {SCHEMA}.schema_state WHERE id = 1");
+    let recorded: Option<Option<String>> = sqlx::query_scalar(&sql).fetch_optional(pool).await?;
+    match recorded.flatten() {
+        Some(existing) if existing != schema => anyhow::bail!(
+            "This database already holds the project schema \"{existing}\", and this push is for \
+             \"{schema}\". Supatype runs one project per database: point this project at a database \
+             of its own, or set pg_schema back to \"{existing}\"."
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// Record how field-level access is enforced here, from a live probe rather than an
 /// assumption.
 ///
@@ -572,14 +600,16 @@ where
     E: Executor<'e, Database = Postgres>,
 {
     let sql = format!(
-        "INSERT INTO {SCHEMA}.schema_state (id, db_state, engine_version)
-         VALUES (1, $1, $2)
+        "INSERT INTO {SCHEMA}.schema_state (id, db_state, engine_version, project_schema)
+         VALUES (1, $1, $2, $3)
          ON CONFLICT (id) DO UPDATE SET db_state = EXCLUDED.db_state,
-             captured_at = NOW(), engine_version = EXCLUDED.engine_version"
+             captured_at = NOW(), engine_version = EXCLUDED.engine_version,
+             project_schema = EXCLUDED.project_schema"
     );
     sqlx::query(&sql)
         .bind(serde_json::to_value(state)?)
         .bind(env!("ENGINE_VERSION"))
+        .bind(&state.schema)
         .execute(executor)
         .await?;
     Ok(())
@@ -1001,6 +1031,9 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
     sqlx::raw_sql(&ensure_schema_state_capabilities_column_sql())
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(&ensure_schema_state_project_schema_column_sql())
         .execute(pool)
         .await?;
 

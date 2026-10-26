@@ -181,4 +181,6 @@ jobs:
             --test ownership_evidence_tests \
             --test introspection_coverage_tests \
             --test catalog_introspection_tests \
-            --test fingerprint_tests
+            --test fingerprint_tests \
+            --test project_schema_guard_tests \
+            --test introspection_budget_tests
