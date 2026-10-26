@@ -368,40 +368,101 @@ BEGIN
     EXECUTE 'REVOKE INSERT ON "public"."users" FROM anon';
     EXECUTE 'REVOKE UPDATE ON "public"."users" FROM anon';
     EXECUTE 'REVOKE DELETE ON "public"."users" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."categories" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."categories" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."categories" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."categories" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."comments" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."comments" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."comments" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."comments" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM anon';
   END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."users" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."users" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."users" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."users" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."categories" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."categories" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."categories" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."categories" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."categories" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."categories" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."categories" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."categories" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."posts" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."posts" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."posts" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."posts" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."comments" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."comments" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."comments" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."comments" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."comments" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."comments" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."comments" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."comments" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."tags" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."tags" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."tags" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."tags" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."tags" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."tags" FROM authenticated';

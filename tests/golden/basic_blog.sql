@@ -315,16 +315,35 @@ BEGIN
     EXECUTE 'REVOKE INSERT ON "public"."users" FROM anon';
     EXECUTE 'REVOKE UPDATE ON "public"."users" FROM anon';
     EXECUTE 'REVOKE DELETE ON "public"."users" FROM anon';
-    EXECUTE 'GRANT SELECT ON "public"."posts" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM anon';
   END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."users" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."users" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."users" TO authenticated';
     EXECUTE 'GRANT DELETE ON "public"."users" TO authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT SELECT ON "public"."posts" TO anon';
+    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."posts" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."posts" TO authenticated';
     EXECUTE 'GRANT UPDATE ON "public"."posts" TO authenticated';

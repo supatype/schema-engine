@@ -242,6 +242,11 @@ BEGIN
     EXECUTE 'REVOKE UPDATE ON "public"."documents" FROM anon';
     EXECUTE 'REVOKE DELETE ON "public"."documents" FROM anon';
   END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'GRANT SELECT ON "public"."documents" TO authenticated';
     EXECUTE 'GRANT INSERT ON "public"."documents" TO authenticated';

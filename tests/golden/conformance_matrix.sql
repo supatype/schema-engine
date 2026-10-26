@@ -623,56 +623,145 @@ BEGIN
     EXECUTE 'REVOKE INSERT ON "public"."every" FROM anon';
     EXECUTE 'REVOKE UPDATE ON "public"."every" FROM anon';
     EXECUTE 'REVOKE DELETE ON "public"."every" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."every_localised" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."every_localised" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."every_localised" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."every_localised" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."every_required" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."every_required" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."every_required" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."every_required" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."every_defaulted" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."every_defaulted" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."every_defaulted" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."every_defaulted" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."every_read_only" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."every_read_only" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."every_read_only" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."every_read_only" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."relations" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."relations" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."relations" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."relations" FROM anon';
-    EXECUTE 'REVOKE SELECT ON "public"."composites" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."composites" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."composites" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."composites" FROM anon';
   END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."every" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."every" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."every" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."every" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."every_localised" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."every_localised" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."every_localised" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."every_localised" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."every_localised" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."every_localised" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."every_localised" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."every_localised" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."every_required" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."every_required" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."every_required" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."every_required" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."every_required" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."every_required" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."every_required" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."every_required" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."every_defaulted" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."every_defaulted" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."every_defaulted" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."every_defaulted" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."every_defaulted" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."every_defaulted" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."every_defaulted" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."every_defaulted" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."every_read_only" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."every_read_only" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."every_read_only" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."every_read_only" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."every_read_only" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."every_read_only" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."every_read_only" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."every_read_only" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."relations" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."relations" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."relations" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."relations" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."relations" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."relations" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."relations" FROM authenticated';
     EXECUTE 'REVOKE DELETE ON "public"."relations" FROM authenticated';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE SELECT ON "public"."composites" FROM anon';
+    EXECUTE 'REVOKE INSERT ON "public"."composites" FROM anon';
+    EXECUTE 'REVOKE UPDATE ON "public"."composites" FROM anon';
+    EXECUTE 'REVOKE DELETE ON "public"."composites" FROM anon';
+  END IF;
+END
+$grants$;
+
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE SELECT ON "public"."composites" FROM authenticated';
     EXECUTE 'REVOKE INSERT ON "public"."composites" FROM authenticated';
     EXECUTE 'REVOKE UPDATE ON "public"."composites" FROM authenticated';
