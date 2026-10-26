@@ -11,15 +11,6 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
     // Rough priority order without full graph
     let priority = |op: &Operation| match op {
         Operation::EnableExtension { .. } => 0,
-        Operation::CreateEnum { .. } => 1,
-        // Enum mutations must happen before table/column changes that reference them,
-        // but after CreateEnum (which creates brand-new types).
-        Operation::AddEnumValue { .. } => 2,
-        Operation::RenameEnumValue { .. } => 2,
-        // RemoveEnumValue and ReorderEnumValues recreate the type and alter columns,
-        // so they run early but after additions.
-        Operation::RemoveEnumValue { .. } => 3,
-        Operation::ReorderEnumValues { .. } => 3,
         Operation::RenameTable { .. } => 4,
         Operation::CreateTable { .. } => 4,
         Operation::CreateJunctionTable { .. } => 5,
@@ -41,7 +32,6 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::DropUniqueConstraint { .. } => 15,
         Operation::DropColumn { .. } => 17,
         Operation::DropTable { .. } => 18,
-        Operation::DropEnum { .. } => 19,
     };
 
     let mut indexed: Vec<(usize, Operation)> = ops.into_iter().enumerate().collect();

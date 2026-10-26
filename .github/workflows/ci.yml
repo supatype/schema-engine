@@ -48,7 +48,6 @@ jobs:
             --test migration_tests \
             --test evolution_tests \
             --test normaliser_tests \
-            --test enum_migration_tests \
             --test owner_validation_tests \
             --test column_type_match_tests \
             --test standup_regression_tests \
