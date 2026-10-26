@@ -161,3 +161,45 @@ async fn no_cache_is_still_accepted_and_says_it_is_no_longer_needed() {
     })
     .await;
 }
+
+async fn rls_on(url: &str) -> bool {
+    let pool = sqlx::PgPool::connect(url).await.expect("connect");
+    let on: bool = sqlx::query_scalar(
+        "SELECT relrowsecurity FROM pg_class WHERE oid = 'public.widget'::regclass",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read relrowsecurity");
+    pool.close().await;
+    on
+}
+
+/// Plan 3.5: a pipeline must not silently revert access someone changed on purpose. A push that
+/// is not interactive refuses with the objects on stdout, where the CLI reads them, and applies
+/// nothing; `--overwrite-drift` puts Supatype's definitions back.
+#[tokio::test]
+async fn a_non_interactive_push_refuses_to_overwrite_access_changed_by_hand() {
+    common::with_integration_url(|url| async move {
+        assert!(push(&url).ok);
+        sql(&url, "ALTER TABLE public.widget DISABLE ROW LEVEL SECURITY").await;
+
+        let refused = push(&url);
+        assert!(!refused.ok, "{}", refused.stdout);
+        let result: serde_json::Value = serde_json::from_str(refused.stdout.trim())
+            .unwrap_or_else(|e| panic!("the refusal is JSON ({e}): {}", refused.stdout));
+        assert_eq!(result["reason"], "security_drift", "{result}");
+        assert_eq!(
+            result["objects"][0]["key"]["kind"], "rls_attributes",
+            "{result}"
+        );
+        assert!(!rls_on(&url).await, "a refused push changed the database");
+
+        let consented = engine(
+            &url,
+            &["push", "--force", "--non-interactive", "--overwrite-drift"],
+        );
+        assert!(consented.ok, "{}", consented.stderr);
+        assert!(rls_on(&url).await);
+    })
+    .await;
+}

@@ -86,6 +86,11 @@ enum Command {
         schema_sources_gz: Option<String>,
         #[arg(long, help = "Path to schema_sources manifest JSON")]
         schema_sources_manifest: Option<String>,
+        #[arg(
+            long,
+            help = "Put back policies, grants, labels and RLS changed outside Supatype without asking"
+        )]
+        overwrite_drift: bool,
     },
     /// Generate typed client code (TypeScript by default; use --lang for other languages)
     Generate {
@@ -279,6 +284,7 @@ async fn main() -> Result<()> {
             strict,
             schema_sources_gz,
             schema_sources_manifest,
+            overwrite_drift,
         } => {
             use supatype_engine::generator::sql::migration::{
                 UnmanagedModelTables, UNMANAGED_MODEL_TABLES,
@@ -331,9 +337,11 @@ async fn main() -> Result<()> {
             };
 
             // Interactive rename confirmation (skipped in CI with --non-interactive)
+            let mut overwrite_drift = overwrite_drift;
             if !non_interactive {
                 plan.diff = confirm_renames(plan.diff)?;
                 confirm_risky_changes(&plan.diff)?;
+                overwrite_drift = overwrite_drift || confirm_security_drift(&plan.reconcile)?;
             }
 
             let options = push::ApplyOptions {
@@ -342,8 +350,26 @@ async fn main() -> Result<()> {
                 name,
                 schema_sources,
                 schema_sources_manifest,
+                overwrite_drift,
             };
-            let outcome = push::apply(&pool, plan, options).await?;
+            // A refusal goes on stdout too, so the CLI can show the objects and ask (plan 3.5).
+            let outcome = match push::apply(&pool, plan, options).await {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    use supatype_engine::ledger::drift::{SecurityDrift, SECURITY_DRIFT};
+                    if let Some(drift) = e.downcast_ref::<SecurityDrift>() {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "status": "refused",
+                                "reason": SECURITY_DRIFT,
+                                "objects": drift.objects,
+                            })
+                        );
+                    }
+                    return Err(e);
+                }
+            };
             println!("{}", outcome.to_json());
         }
         Command::Generate { lang, artifact } => {
@@ -785,6 +811,52 @@ fn confirm_risky_changes(diff: &supatype_engine::differ::DiffOutput) -> Result<(
     }
 
     Ok(())
+}
+
+/// Plan 3.5, interactively: show every policy, grant, label or RLS attribute changed or removed
+/// outside Supatype, and put them back only if the person says so. Returns whether to overwrite;
+/// declining aborts the push, since a push cannot apply the rest and leave these as they are.
+fn confirm_security_drift(plan: &supatype_engine::ledger::reconcile::Plan) -> Result<bool> {
+    use std::io::BufRead;
+    use std::io::Write;
+
+    let drifted = supatype_engine::ledger::drift::security_drift(plan);
+    if drifted.is_empty() {
+        return Ok(false);
+    }
+    eprintln!(
+        "\n  {} {} object(s) that decide who may read or write were changed outside Supatype.",
+        " INPUT REQUIRED ".on_yellow().black().bold(),
+        drifted.len().to_string().bold(),
+    );
+    for object in &drifted {
+        eprintln!("\n    {}", object.key.to_string().bold());
+        eprintln!("      {}", "Supatype's:".dimmed());
+        for line in object.recorded.lines() {
+            eprintln!("        {line}");
+        }
+        match &object.live {
+            Some(live) => {
+                eprintln!("      {}", "Now:".dimmed());
+                for line in live.lines() {
+                    eprintln!("        {line}");
+                }
+            }
+            None => eprintln!("      {}", "Now: removed".dimmed()),
+        }
+    }
+    eprint!(
+        "\n  {} Put Supatype's definitions back? {} ",
+        "›".yellow().bold(),
+        "[y/N]:".bold(),
+    );
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    if !destructive_confirmed(line.trim()) {
+        anyhow::bail!("Aborted: access changed outside Supatype was kept, and nothing was applied");
+    }
+    Ok(true)
 }
 
 fn risky_op_summary(op: &supatype_engine::differ::Operation) -> Option<String> {

@@ -120,9 +120,7 @@ async fn a_policy_dropped_by_hand_is_put_back() {
             matches!(actions[..], [Action::Recreate { .. }]),
             "{actions:?}"
         );
-        push::apply(&pool, plan, push::ApplyOptions::default())
-            .await
-            .unwrap();
+        common::apply_with_consent(&pool, plan, &ast).await;
         assert_eq!(
             using_of(&pool, "posts_select").await.as_deref(),
             Some("true")

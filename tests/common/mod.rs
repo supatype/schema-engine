@@ -297,3 +297,33 @@ pub async fn push_with(
 pub async fn exec(pool: &sqlx::PgPool, sql: &str) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(sql).execute(pool).await.map(|_| ())
 }
+
+/// Plan 3.5: a push that would put back access changed outside Supatype refuses without consent,
+/// before anything is applied; with `overwrite_drift` it puts it back. Asserts the first, then
+/// plans again and does the second.
+#[allow(dead_code)]
+pub async fn apply_with_consent(
+    pool: &sqlx::PgPool,
+    plan: supatype_engine::push::Plan<'_>,
+    ast: &supatype_engine::parser::ast::SchemaAst,
+) {
+    use supatype_engine::{ledger::drift::SecurityDrift, push};
+    let refused = push::apply(pool, plan, push::ApplyOptions::default())
+        .await
+        .expect_err("a push that would overwrite access changed by hand must refuse");
+    assert!(
+        refused.downcast_ref::<SecurityDrift>().is_some(),
+        "refused for another reason: {refused}"
+    );
+    let plan = push::prepare(pool, ast, "public").await.unwrap();
+    push::apply(
+        pool,
+        plan,
+        push::ApplyOptions {
+            overwrite_drift: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("with consent the push puts it back");
+}

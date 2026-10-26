@@ -44,6 +44,9 @@ pub struct DbRequest {
     pub no_cache: bool,
     #[serde(default)]
     pub strict: bool,
+    /// Put back access changed outside Supatype (plan 3.5). Without it a push that would refuses.
+    #[serde(default)]
+    pub overwrite_drift: bool,
     #[serde(default)]
     pub yes: bool,
     #[serde(default)]
@@ -112,6 +115,9 @@ pub struct ErrorResponse {
     /// The tables a refusal is about, when it is about tables.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tables: Option<Vec<String>>,
+    /// The objects a refusal is about, when it is about access changed outside Supatype.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objects: Option<Vec<crate::ledger::drift::DriftedObject>>,
 }
 
 #[derive(Serialize)]
