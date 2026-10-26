@@ -48,6 +48,17 @@ pub struct CatalogState {
     /// Empty when the database has no `cron.job`, which is most databases.
     pub cron_jobs: Vec<DbCronJob>,
     pub rls_attributes: Vec<DbRlsAttributes>,
+    /// The roles each policy applies to, which `DatabaseState::rls_policies` does not carry.
+    pub policy_roles: Vec<DbPolicyRoles>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbPolicyRoles {
+    pub table: String,
+    pub policy: String,
+    /// Sorted role names; `public` when the policy applies to everyone.
+    pub roles: Vec<String>,
 }
 
 /// A trigger as `pg_trigger` describes it. `DatabaseState::triggers` reads `information_schema`,
@@ -200,7 +211,35 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<CatalogState>
         security_labels: read_security_labels(conn, &schemas).await?,
         cron_jobs: read_cron_jobs(conn).await?,
         rls_attributes: read_rls_attributes(conn, &schemas).await?,
+        policy_roles: read_policy_roles(conn, schema).await?,
     })
+}
+
+async fn read_policy_roles(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbPolicyRoles>> {
+    let rows: Vec<(String, String, Vec<String>)> = sqlx::query_as(
+        "SELECT c.relname::text, p.polname::text,
+                (SELECT array_agg(role_name ORDER BY role_name)
+                   FROM unnest(p.polroles) AS r(oid)
+                   CROSS JOIN LATERAL (SELECT CASE WHEN r.oid = 0 THEN 'public'
+                                                   ELSE (SELECT rolname::text FROM pg_roles WHERE oid = r.oid)
+                                              END AS role_name) x)
+         FROM pg_policy p
+         JOIN pg_class c ON c.oid = p.polrelid
+         JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = $1
+         ORDER BY c.relname, p.polname",
+    )
+    .bind(schema)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(table, policy, roles)| DbPolicyRoles {
+            table,
+            policy,
+            roles,
+        })
+        .collect())
 }
 
 /// `tgtype` bits, from `pg_trigger.h`.

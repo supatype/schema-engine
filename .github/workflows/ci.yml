@@ -180,4 +180,5 @@ jobs:
             --test versions_runtime_tests \
             --test ownership_evidence_tests \
             --test introspection_coverage_tests \
-            --test catalog_introspection_tests
+            --test catalog_introspection_tests \
+            --test fingerprint_tests

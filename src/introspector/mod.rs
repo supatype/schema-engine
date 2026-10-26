@@ -2,6 +2,7 @@ pub mod catalog;
 pub mod constraints;
 pub mod enums;
 pub mod extensions;
+pub mod fingerprint;
 pub mod indexes;
 pub mod postgres;
 pub mod rls;
