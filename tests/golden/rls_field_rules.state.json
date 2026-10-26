@@ -1702,391 +1702,391 @@
       {
         "schema": "public",
         "name": "can_create_categories",
-        "identityArguments": "categories public.categories",
-        "identityTypes": "public.categories",
+        "identityArguments": "categories public.categories, not_in_graphql boolean",
+        "identityTypes": "public.categories, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
         "comment": null,
-        "arguments": "categories public.categories",
+        "arguments": "categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_categories(categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = ANY(ARRAY['admin', 'editor'])\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_create_comments",
-        "identityArguments": "comments public.comments",
-        "identityTypes": "public.comments",
+        "identityArguments": "comments public.comments, not_in_graphql boolean",
+        "identityTypes": "public.comments, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
         "comment": null,
-        "arguments": "comments public.comments",
+        "arguments": "comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_comments(comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_create_posts",
-        "identityArguments": "posts public.posts",
-        "identityTypes": "public.posts",
+        "identityArguments": "posts public.posts, not_in_graphql boolean",
+        "identityTypes": "public.posts, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
-        "arguments": "posts public.posts",
+        "arguments": "posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_posts(posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_create_tags",
-        "identityArguments": "tags public.tags",
-        "identityTypes": "public.tags",
+        "identityArguments": "tags public.tags, not_in_graphql boolean",
+        "identityTypes": "public.tags, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"tags\".\"name\" = ANY(ARRAY['featured', 'archive'])\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
         "comment": null,
-        "arguments": "tags public.tags",
+        "arguments": "tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"tags\".\"name\" = ANY(ARRAY['featured', 'archive'])\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_tags(tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"tags\".\"name\" = ANY(ARRAY['featured', 'archive'])\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_create_users",
-        "identityArguments": "users public.users",
-        "identityTypes": "public.users",
+        "identityArguments": "users public.users, not_in_graphql boolean",
+        "identityTypes": "public.users, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
         "comment": null,
-        "arguments": "users public.users",
+        "arguments": "users public.users, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_create_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_users(users public.users, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_delete_categories",
-        "identityArguments": "categories public.categories",
-        "identityTypes": "public.categories",
+        "identityArguments": "categories public.categories, not_in_graphql boolean",
+        "identityTypes": "public.categories, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
         "comment": null,
-        "arguments": "categories public.categories",
+        "arguments": "categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_categories(categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_delete_comments",
-        "identityArguments": "comments public.comments",
-        "identityTypes": "public.comments",
+        "identityArguments": "comments public.comments, not_in_graphql boolean",
+        "identityTypes": "public.comments, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
         "comment": null,
-        "arguments": "comments public.comments",
+        "arguments": "comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_comments(comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_delete_posts",
-        "identityArguments": "posts public.posts",
-        "identityTypes": "public.posts",
+        "identityArguments": "posts public.posts, not_in_graphql boolean",
+        "identityTypes": "public.posts, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
-        "arguments": "posts public.posts",
+        "arguments": "posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_posts(posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_delete_tags",
-        "identityArguments": "tags public.tags",
-        "identityTypes": "public.tags",
+        "identityArguments": "tags public.tags, not_in_graphql boolean",
+        "identityTypes": "public.tags, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
         "comment": null,
-        "arguments": "tags public.tags",
+        "arguments": "tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_tags(tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_delete_users",
-        "identityArguments": "users public.users",
-        "identityTypes": "public.users",
+        "identityArguments": "users public.users, not_in_graphql boolean",
+        "identityTypes": "public.users, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
         "comment": null,
-        "arguments": "users public.users",
+        "arguments": "users public.users, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_users(users public.users, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_read_categories",
-        "identityArguments": "categories public.categories",
-        "identityTypes": "public.categories",
+        "identityArguments": "categories public.categories, not_in_graphql boolean",
+        "identityTypes": "public.categories, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
         "comment": null,
-        "arguments": "categories public.categories",
+        "arguments": "categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_categories(categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'admin'\n    OR\n    (EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid())))\n    AND\n    EXISTS (SELECT 1 FROM \"public\".\"posts\" WHERE \"posts\".\"category_id\" = \"categories\".\"id\" AND (\"posts\".\"author_id\" = (SELECT _supatype.jwt_uid()))))\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_read_comments",
-        "identityArguments": "comments public.comments",
-        "identityTypes": "public.comments",
+        "identityArguments": "comments public.comments, not_in_graphql boolean",
+        "identityTypes": "public.comments, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"author_id\" = (SELECT _supatype.jwt_uid())\n    AND\n    NOT ((SELECT _supatype.jwt_role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = _supatype.jwt_claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
         "comment": null,
-        "arguments": "comments public.comments",
+        "arguments": "comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"author_id\" = (SELECT _supatype.jwt_uid())\n    AND\n    NOT ((SELECT _supatype.jwt_role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = _supatype.jwt_claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_comments(comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"author_id\" = (SELECT _supatype.jwt_uid())\n    AND\n    NOT ((SELECT _supatype.jwt_role()) = 'banned')\n    AND\n    \"body\" IS NOT NULL\n    AND\n    \"body\" = _supatype.jwt_claim_text('app_metadata.tier')\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_read_posts",
-        "identityArguments": "posts public.posts",
-        "identityTypes": "public.posts",
+        "identityArguments": "posts public.posts, not_in_graphql boolean",
+        "identityTypes": "public.posts, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 days')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 days'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
-        "arguments": "posts public.posts",
+        "arguments": "posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 days')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 days'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n    OR\n    (\"created_at\" <= (SELECT now())\n    AND\n    \"created_at\" >= (SELECT now() - INTERVAL '30 days')\n    AND\n    \"updated_at\" <= (SELECT now() + INTERVAL '7 days'))\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_read_tags",
-        "identityArguments": "tags public.tags",
-        "identityTypes": "public.tags",
+        "identityArguments": "tags public.tags, not_in_graphql boolean",
+        "identityTypes": "public.tags, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"name\" IS NOT NULL\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
         "comment": null,
-        "arguments": "tags public.tags",
+        "arguments": "tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"name\" IS NOT NULL\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_tags(tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"name\" IS NOT NULL\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_read_users",
-        "identityArguments": "users public.users",
-        "identityTypes": "public.users",
+        "identityArguments": "users public.users, not_in_graphql boolean",
+        "identityTypes": "public.users, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT TRUE\n    OR\n    \"created_at\" >= (SELECT date_trunc('year', now()))\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
         "comment": null,
-        "arguments": "users public.users",
+        "arguments": "users public.users, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n    OR\n    \"created_at\" >= (SELECT date_trunc('year', now()))\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_users(users public.users, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n    OR\n    \"created_at\" >= (SELECT date_trunc('year', now()))\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
@@ -2112,7 +2112,7 @@
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
@@ -2138,7 +2138,7 @@
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
@@ -2164,137 +2164,137 @@
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_update_categories",
-        "identityArguments": "categories public.categories",
-        "identityTypes": "public.categories",
+        "identityArguments": "categories public.categories, not_in_graphql boolean",
+        "identityTypes": "public.categories, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  ",
         "comment": null,
-        "arguments": "categories public.categories",
+        "arguments": "categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_categories(categories public.categories)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_categories(categories public.categories, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"categories\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_update_comments",
-        "identityArguments": "comments public.comments",
-        "identityTypes": "public.comments",
+        "identityArguments": "comments public.comments, not_in_graphql boolean",
+        "identityTypes": "public.comments, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  ",
         "comment": null,
-        "arguments": "comments public.comments",
+        "arguments": "comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_comments(comments public.comments)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_comments(comments public.comments, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"comments\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_update_posts",
-        "identityArguments": "posts public.posts",
-        "identityTypes": "public.posts",
+        "identityArguments": "posts public.posts, not_in_graphql boolean",
+        "identityTypes": "public.posts, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
-        "arguments": "posts public.posts",
+        "arguments": "posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"author_id\"\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_update_tags",
-        "identityArguments": "tags public.tags",
-        "identityTypes": "public.tags",
+        "identityArguments": "tags public.tags, not_in_graphql boolean",
+        "identityTypes": "public.tags, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
         "comment": null,
-        "arguments": "tags public.tags",
+        "arguments": "tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_tags(tags public.tags, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
         "schema": "public",
         "name": "can_update_users",
-        "identityArguments": "users public.users",
-        "identityTypes": "public.users",
+        "identityArguments": "users public.users, not_in_graphql boolean",
+        "identityTypes": "public.users, boolean",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  ",
         "comment": null,
-        "arguments": "users public.users",
+        "arguments": "users public.users, not_in_graphql boolean DEFAULT NULL::boolean",
         "config": [],
         "strict": false,
         "leakproof": false,
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_users(users public.users)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_users(users public.users, not_in_graphql boolean DEFAULT NULL::boolean)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"users\";\n  $function$\n",
         "acl": [
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
@@ -2320,7 +2320,7 @@
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       },
       {
@@ -2346,7 +2346,7 @@
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE",
-          "supatype_api_owner=EXECUTE"
+          "supatype_api_owner_<database>=EXECUTE"
         ]
       }
     ],
@@ -2360,29 +2360,29 @@
         "options": [
           "security_barrier=true"
         ],
-        "owner": "supatype_api_owner"
+        "owner": "supatype_api_owner_<database>"
       },
       {
         "schema": "api",
         "name": "comments",
         "materialized": false,
         "definition": " SELECT id,\n    body,\n    post_id,\n    author_id,\n    created_at,\n    updated_at\n   FROM public.comments;",
-        "comment": "@graphql({\"primary_key_columns\":[\"id\"]})",
+        "comment": "@graphql({\"primary_key_columns\":[\"id\"],\"foreign_keys\":[{\"local_columns\":[\"post_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"posts\",\"foreign_columns\":[\"id\"]},{\"local_columns\":[\"author_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"users\",\"foreign_columns\":[\"id\"]}]})",
         "options": [
           "security_barrier=true"
         ],
-        "owner": "supatype_api_owner"
+        "owner": "supatype_api_owner_<database>"
       },
       {
         "schema": "api",
         "name": "posts",
         "materialized": false,
         "definition": " SELECT id,\n    title,\n    slug,\n    content,\n    author_id,\n    category_id,\n    created_at,\n    updated_at\n   FROM public.posts;",
-        "comment": "@graphql({\"primary_key_columns\":[\"id\"]})",
+        "comment": "@graphql({\"primary_key_columns\":[\"id\"],\"foreign_keys\":[{\"local_columns\":[\"author_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"users\",\"foreign_columns\":[\"id\"]},{\"local_columns\":[\"category_id\"],\"foreign_schema\":\"api\",\"foreign_table\":\"categories\",\"foreign_columns\":[\"id\"]}]})",
         "options": [
           "security_barrier=true"
         ],
-        "owner": "supatype_api_owner"
+        "owner": "supatype_api_owner_<database>"
       },
       {
         "schema": "api",
@@ -2393,7 +2393,7 @@
         "options": [
           "security_barrier=true"
         ],
-        "owner": "supatype_api_owner"
+        "owner": "supatype_api_owner_<database>"
       },
       {
         "schema": "api",
@@ -2404,7 +2404,7 @@
         "options": [
           "security_barrier=true"
         ],
-        "owner": "supatype_api_owner"
+        "owner": "supatype_api_owner_<database>"
       }
     ],
     "schemas": [
@@ -2459,7 +2459,7 @@
       {
         "schema": "api",
         "table": "categories",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2508,7 +2508,7 @@
       {
         "schema": "api",
         "table": "comments",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2569,7 +2569,7 @@
       {
         "schema": "api",
         "table": "posts",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2629,7 +2629,7 @@
       {
         "schema": "api",
         "table": "tags",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2689,7 +2689,7 @@
       {
         "schema": "api",
         "table": "users",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2727,7 +2727,7 @@
       {
         "schema": "public",
         "table": "categories",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2761,7 +2761,7 @@
       {
         "schema": "public",
         "table": "comments",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2795,7 +2795,7 @@
       {
         "schema": "public",
         "table": "posts",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2829,7 +2829,7 @@
       {
         "schema": "public",
         "table": "tags",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -2863,7 +2863,7 @@
       {
         "schema": "public",
         "table": "users",
-        "grantee": "supatype_api_owner",
+        "grantee": "supatype_api_owner_<database>",
         "privileges": [
           "DELETE",
           "INSERT",
@@ -3185,6 +3185,7 @@
         "comment": null
       }
     ],
-    "engineTables": []
+    "engineTables": [],
+    "pending": []
   }
 }

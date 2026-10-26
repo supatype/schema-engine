@@ -387,7 +387,8 @@ fn capabilities_prints_the_features_this_engine_supports() {
     let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(
         body,
-        serde_json::json!({ "features": ["adopt_keys", "adopt_none", "release", "reclaim",
-            "rebaseline", "accept_access_drift", "rebaseline_keys", "overwrite_drift", "engine_busy", "identity_columns"] })
+        serde_json::json!({ "version": env!("ENGINE_VERSION"), "features": ["adopt_keys", "adopt_none", "release", "reclaim",
+            "rebaseline", "accept_access_drift", "rebaseline_keys", "overwrite_drift", "engine_busy", "identity_columns",
+            "migrate_record", "online_ddl"] })
     );
 }

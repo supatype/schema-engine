@@ -490,15 +490,18 @@ fn draft_views_are_dropped_before_column_changes() {
         "the early drop must be guarded on the draft schema existing"
     );
 
-    // Every model's view is named, versioned or not: a model that stopped drafting, or stopped
-    // keeping versions, still has the view, and its history table cannot be dropped while the view
-    // reads it (nothing cascades). A schema with no model emits none of this.
+    // Every changed model's view is named, versioned or not: a model that stopped drafting, or
+    // stopped keeping versions, still has the view, and its history table cannot be dropped while
+    // the view reads it (nothing cascades). A model the push leaves alone keeps its view (LK7).
     let plain = parser::parse(include_str!("fixtures/basic_blog.json")).unwrap();
-    let drops = versions::drop_draft_views_sql(&plain);
+    let changed = std::collections::BTreeSet::from(["posts".to_string()]);
+    let drops = versions::drop_draft_views_sql(&plain, &changed);
     assert!(
         drops.contains("DROP VIEW IF EXISTS \"draft\".\"posts\""),
-        "every model's draft view is named: {drops}"
+        "every changed model's draft view is named: {drops}"
     );
+    let untouched = versions::drop_draft_views_sql(&plain, &Default::default());
+    assert!(untouched.is_empty(), "{untouched}");
     let _ = ast;
 }
 

@@ -48,6 +48,10 @@ pub struct DbRequest {
     /// would have to refuses instead. Push only: `doctor` refuses it.
     #[serde(default)]
     pub overwrite_drift: bool,
+    /// For `migrate`: rehearse the push so the file also records the history and the ledger,
+    /// under the table locks a push takes. Without it the file is planned with no such lock.
+    #[serde(default)]
+    pub record: bool,
     /// For `doctor` with `rebaseline`: record drift on access as the baseline too, which is
     /// otherwise refused and listed.
     #[serde(default)]
@@ -122,20 +126,14 @@ pub struct HealthResponse {
 #[derive(Serialize, Default)]
 pub struct ErrorResponse {
     pub error: String,
-    /// A stable name for a refusal a caller can act on, such as `unmanaged_model_tables`.
+    /// A stable name for a refusal a caller can act on, such as `unmanaged_model_tables`
+    /// (`crate::refusal`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
-    /// The tables a refusal is about, when it is about tables.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tables: Option<Vec<String>>,
-    /// The objects a refusal is about, when it is about access changed outside Supatype.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub objects: Option<Vec<crate::ledger::drift::DriftedObject>>,
-    /// For a `drift_changed` refusal: `unseen`, the objects drifted since the rebaseline's preview,
-    /// and `gone`, those the preview listed that are no longer drifted. Boxed so every other
-    /// response does not carry its size.
+    /// What the refusal names beside its reason, as fields of the response: `tables`, `objects`,
+    /// `unseen` and `gone`, `table` and `holders`, `failures`, `migration`.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub drift_changed: Option<Box<crate::inspect::DriftChangedSincePreview>>,
+    pub details: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Serialize)]

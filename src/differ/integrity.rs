@@ -1,9 +1,13 @@
 //! The check after a push: what doctor reports on the database just pushed, read with the ledger
 //! rows the push has just written, so it sees exactly what the next push would. Anything a push
 //! would still change or refuse there (missing, stale, drifted or conflicting) is something this
-//! push should have settled and did not.
+//! push should have settled and did not. What the push itself finishes after its commit (an index
+//! built concurrently, a key or check validated) is not yet there, and is not counted (IN-C 2).
+
+use std::collections::BTreeSet;
 
 use super::doctor::{report_of, DoctorItem};
+use crate::desired::ObjectKey;
 use crate::parser::ast::SchemaAst;
 use crate::push::{decide, State};
 
@@ -14,8 +18,10 @@ pub struct PostPush {
     pub settled: bool,
 }
 
-pub fn post_push(ast: &SchemaAst, state: &State) -> PostPush {
-    let report = match decide(ast, state, None) {
+/// The check, with `after_commit` (the objects this push puts in place once it commits) left out
+/// of every finding.
+pub fn post_push(ast: &SchemaAst, state: &State, after_commit: &BTreeSet<ObjectKey>) -> PostPush {
+    let mut report = match decide(ast, state, None) {
         Ok(decision) => report_of(ast, state, &decision),
         Err(e) => {
             return PostPush {
@@ -24,21 +30,34 @@ pub fn post_push(ast: &SchemaAst, state: &State) -> PostPush {
             }
         }
     };
+    let finished_later = |item: &DoctorItem| {
+        after_commit
+            .iter()
+            .any(|k| k.kind.as_str() == item.kind && k.parent == item.table && k.name == item.name)
+    };
+    for items in [
+        &mut report.missing,
+        &mut report.stale_managed,
+        &mut report.drifted,
+    ] {
+        items.retain(|item| !finished_later(item));
+    }
     let sections: [(&str, &[DoctorItem]); 4] = [
         ("missing", &report.missing),
         ("stale managed", &report.stale_managed),
         ("drifted", &report.drifted),
         ("conflicting", &report.conflicting),
     ];
+    let warnings: Vec<String> = sections
+        .iter()
+        .flat_map(|(what, items)| {
+            items
+                .iter()
+                .map(move |item| format!("Post-push drift ({what}): {}", item.message))
+        })
+        .collect();
     PostPush {
-        warnings: sections
-            .iter()
-            .flat_map(|(what, items)| {
-                items
-                    .iter()
-                    .map(move |item| format!("Post-push drift ({what}): {}", item.message))
-            })
-            .collect(),
-        settled: !report.blocking,
+        settled: warnings.is_empty(),
+        warnings,
     }
 }

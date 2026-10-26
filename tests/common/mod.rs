@@ -8,6 +8,8 @@
 
 #![allow(dead_code)]
 
+pub mod locks;
+
 use std::future::Future;
 
 use futures_util::FutureExt;

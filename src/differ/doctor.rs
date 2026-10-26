@@ -47,6 +47,19 @@ pub struct DoctorReport {
     /// records it, with the schema's definition. Reported, not a failure (`--strict` passes).
     #[serde(default)]
     pub claimed: Vec<DoctorItem>,
+    /// A key or check of ours added `NOT VALID` and not validated yet, or an index of ours a
+    /// concurrent build left INVALID: the next push finishes it (IN-C 2).
+    #[serde(default)]
+    pub pending: Vec<DoctorItem>,
+    /// Objects doctor could not read, and why: a table another session holds exclusively, whose
+    /// objects are listed as not checked rather than failing the whole report (IN-B). Not a
+    /// failure (`--strict` passes): nothing is known to be wrong.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_checked: Vec<DoctorItem>,
+    /// What is worth knowing that a push does not act on: scheduled publishing recorded in a copy
+    /// of a database where pg_cron never runs it (CC5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<DoctorItem>,
     /// Drifted objects whose live definition `doctor --rebaseline` just recorded as the baseline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rebaselined: Vec<DoctorItem>,
@@ -108,17 +121,22 @@ impl DoctorItem {
 /// The kind, then `table.name` or the name alone for a table-level object. Every message opens
 /// with it, so it reads as the start of a sentence: "Table widget", "RLS attributes posts.rls".
 pub(crate) fn label(key: &ObjectKey) -> String {
-    let words = key.kind.as_str().replace('_', " ").replace("rls", "RLS");
-    let mut chars = words.chars();
-    let kind: String = chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default();
+    let kind = kind_words(key.kind.as_str());
     if key.parent.is_empty() {
         format!("{kind} {}", key.name)
     } else {
         format!("{kind} {}.{}", key.parent, key.name)
     }
+}
+
+/// A kind as the start of a sentence: `rls_attributes` as "RLS attributes".
+pub(crate) fn kind_words(kind: &str) -> String {
+    let words = kind.replace('_', " ").replace("rls", "RLS");
+    let mut chars = words.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 /// The report for states read separately, for a caller with no connection to read them through
@@ -169,6 +187,7 @@ pub fn report_of(ast: &SchemaAst, state: &State, decision: &Decision) -> DoctorR
     if decision.diff.field_masking == crate::differ::FieldMaskingTier::Views {
         tier_two_messages(state, &mut out);
     }
+    out.pending = pending_items(state, decision);
     out.blocking = has_strict_issues(&out);
     out
 }
@@ -226,7 +245,7 @@ fn role_restricted_policy(state: &State, item: &DoctorItem) -> Option<String> {
          expression, or declare the rule in the schema.",
         item.table,
         item.name,
-        crate::generator::sql::field_views::API_OWNER,
+        crate::generator::sql::field_views::api_owner_for(&state.db.database),
     ))
 }
 
@@ -511,4 +530,40 @@ pub fn has_strict_issues(report: &DoctorReport) -> bool {
         || !report.stale_managed.is_empty()
         || !report.drifted.is_empty()
         || !report.conflicting.is_empty()
+        || !report.pending.is_empty()
+}
+
+/// The keys and checks of ours a push added `NOT VALID` and has not validated, and the INVALID
+/// indexes a concurrent build of ours left (IN-C 2): the next push finishes each.
+fn pending_items(state: &State, decision: &Decision) -> Vec<DoctorItem> {
+    let schema = state.db.schema.as_str();
+    let ours = |key: &ObjectKey| {
+        state
+            .ledger
+            .iter()
+            .any(|r| r.key == *key && r.status != crate::ledger::Status::Released)
+            || decision.desired.iter().any(|d| d.key == *key)
+    };
+    state
+        .catalog
+        .pending
+        .iter()
+        .map(|p| ObjectKey {
+            kind: p.kind,
+            schema: schema.to_string(),
+            parent: p.table.clone(),
+            name: p.name.clone(),
+        })
+        .filter(ours)
+        .map(|key| {
+            let rest = if key.kind == ObjectKind::Index {
+                "is INVALID: a concurrent build did not finish. `supatype push` drops it and builds \
+                 it again"
+            } else {
+                "was added NOT VALID and has not been validated against the rows already there: \
+                 `supatype push` validates it"
+            };
+            DoctorItem::about(&key, rest)
+        })
+        .collect()
 }

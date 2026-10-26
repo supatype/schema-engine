@@ -1,0 +1,5 @@
+# cross builds inside a container, which sees only the environment variables listed here. build.rs
+# reads these two to decide the version the binary reports, so a cross-compiled release must see
+# them as a native one does.
+[build.env]
+passthrough = ["SUPATYPE_ENGINE_RELEASE", "SUPATYPE_ENGINE_BUILD_SHA"]

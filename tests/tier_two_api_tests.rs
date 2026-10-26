@@ -136,6 +136,15 @@ async fn prepare(pool: &sqlx::PgPool) {
         .expect("auth helpers");
 }
 
+/// This database's view owner (TI2).
+async fn this_owner(pool: &sqlx::PgPool) -> String {
+    let database: String = sqlx::query_scalar("SELECT current_database()::text")
+        .fetch_one(pool)
+        .await
+        .expect("read the database's name");
+    supatype_engine::generator::sql::field_views::api_owner_for(&database)
+}
+
 async fn push_fixture(pool: &sqlx::PgPool, ast: &SchemaAst) -> push::Outcome {
     let plan = push::prepare(pool, ast, "public")
         .await
@@ -401,6 +410,7 @@ type TriggerFunctionRow = (String, bool, String, Option<Vec<String>>, bool);
 async fn the_views_and_their_triggers_run_as_a_dedicated_owner() {
     common::with_integration_pool(|pool| async move {
         pushed(&pool).await;
+        let expected = this_owner(&pool).await;
         let views: Vec<(String, String, String)> = sqlx::query_as(
             "SELECT c.relname::text, coalesce(array_to_string(c.reloptions, ','), ''),
                     pg_get_userbyid(c.relowner)::text
@@ -413,12 +423,13 @@ async fn the_views_and_their_triggers_run_as_a_dedicated_owner() {
         assert_eq!(views.len(), 2, "{views:?}");
         for (name, options, owner) in &views {
             assert_eq!(options, "security_barrier=true", "{name}");
-            assert_eq!(owner, "supatype_api_owner", "{name}");
+            assert_eq!(owner, &expected, "{name}");
         }
         let owner: (bool, bool, bool, bool) = sqlx::query_as(
             "SELECT rolcanlogin, rolbypassrls, rolsuper, rolinherit FROM pg_roles
-              WHERE rolname = 'supatype_api_owner'",
+              WHERE rolname = $1",
         )
+        .bind(&expected)
         .fetch_one(&pool)
         .await
         .expect("the owner role exists");
@@ -436,7 +447,7 @@ async fn the_views_and_their_triggers_run_as_a_dedicated_owner() {
         assert_eq!(functions.len(), 2, "{functions:?}");
         for (name, definer, owner, config, anon_executes) in &functions {
             assert!(definer, "{name} is not SECURITY DEFINER");
-            assert_eq!(owner, "supatype_api_owner", "{name}");
+            assert_eq!(owner, &expected, "{name}");
             assert!(
                 config
                     .as_ref()
@@ -666,7 +677,7 @@ async fn a_second_push_plans_nothing_and_keeps_the_owner_rights_design() {
         .fetch_one(&pool)
         .await
         .expect("read the view");
-        assert_eq!(options, "security_barrier=true supatype_api_owner");
+        assert_eq!(options, format!("security_barrier=true {}", this_owner(&pool).await));
     })
     .await;
 }
@@ -770,7 +781,7 @@ async fn hand_changes_to_the_views_access_are_reported_and_need_consent() {
         .fetch_one(&pool)
         .await
         .expect("read the view");
-        assert_eq!(options, "security_barrier=true supatype_api_owner");
+        assert_eq!(options, format!("security_barrier=true {}", this_owner(&pool).await));
     })
     .await;
 }
@@ -868,7 +879,7 @@ async fn hand_changes_to_draft_and_versions_privileges_are_reported() {
         assert_access_drift(
             &pool,
             &ast,
-            "REVOKE EXECUTE ON FUNCTION public.can_read_t2_article(public.t2_article) \
+            "REVOKE EXECUTE ON FUNCTION public.can_read_t2_article(public.t2_article, boolean) \
              FROM PUBLIC, anon, authenticated",
             "function public.can_read_t2_article",
         )
@@ -1110,21 +1121,7 @@ fn gql_rename_a(name: &str) -> String {
 async fn graphql_serves_the_views_masked_and_its_mutations_disclose_nothing() {
     common::with_integration_pool(|pool| async move {
         pushed(&pool).await;
-        let installed = sqlx::raw_sql(
-            "CREATE SCHEMA IF NOT EXISTS graphql_public; \
-             CREATE EXTENSION IF NOT EXISTS pg_graphql; \
-             GRANT USAGE ON SCHEMA graphql, graphql_public TO anon, authenticated, service_role; \
-             GRANT SELECT ON ALL TABLES IN SCHEMA graphql TO anon, authenticated, service_role; \
-             GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA graphql TO anon, authenticated, service_role;",
-        )
-        .execute(&pool)
-        .await;
-        if let Err(e) = installed {
-            assert!(
-                !common::force_integration_tests(),
-                "this image cannot provide pg_graphql: {e}"
-            );
-            eprintln!("SKIP: no pg_graphql here ({e})");
+        if !install_pg_graphql(&pool).await {
             return;
         }
         let read = "{ t2_employeeCollection { edges { node { name salary ssn } } } }";
@@ -1264,4 +1261,243 @@ async fn task_titles(pool: &sqlx::PgPool, caller: Caller) -> Result<Vec<String>,
         .map_err(|e| e.to_string());
     let _ = tx.rollback().await;
     titles
+}
+
+// ---------------------------------------------------------------------------------------------
+// F64 (TRAIN-FIX-N1): GraphQL relations between the views
+// ---------------------------------------------------------------------------------------------
+
+/// Every relation kind the engine makes a foreign key for, across masked tables: `Staff` refers to
+/// itself (`manager`) and joins `Project` many-to-many; `Payslip` belongs to its staff member, who
+/// alone may read it; `Badge` belongs to one staff member one-to-one. `salary` and `budget` are
+/// admin-only, so a nested read shows whether the mask holds through a relation.
+fn relations_fixture() -> SchemaAst {
+    let belongs_to = |target: &str, unique: bool| {
+        json!({ "kind": "relation", "cardinality": "belongsTo", "target": target,
+                "uniqueFk": unique, "required": false })
+    };
+    let staff = model(
+        "Staff",
+        "staff",
+        json!({
+            "id": uuid_key(false),
+            "name": column("text", "TEXT", true),
+            "salary": column("integer", "INTEGER", false),
+            "manager": belongs_to("Staff", false),
+            "payslips": { "kind": "relation", "cardinality": "hasMany", "target": "Payslip" },
+            "badge": { "kind": "relation", "cardinality": "hasOne", "target": "Badge" },
+            "projects": { "kind": "relation", "cardinality": "manyToMany", "target": "Project",
+                          "through": "staff_project" }
+        }),
+        json!({ "read": logged_in(), "fields": { "salary": { "read": admin() } } }),
+    );
+    let payslip = model(
+        "Payslip",
+        "payslip",
+        json!({
+            "ref": uuid_key(true),
+            "staff": belongs_to("Staff", false),
+            "month": column("text", "TEXT", true),
+            "amount": column("integer", "INTEGER", false),
+        }),
+        json!({ "read": owner("staff"), "fields": { "amount": { "read": owner("staff") } } }),
+    );
+    let badge = model(
+        "Badge",
+        "badge",
+        json!({ "id": uuid_key(true), "holder": belongs_to("Staff", true),
+                "code": column("text", "TEXT", true) }),
+        json!({ "read": logged_in() }),
+    );
+    let project = model(
+        "Project",
+        "project",
+        json!({ "id": uuid_key(false), "title": column("text", "TEXT", true),
+                "budget": column("integer", "INTEGER", false) }),
+        json!({ "read": logged_in(), "fields": { "budget": { "read": admin() } } }),
+    );
+    let doc = json!({ "astVersion": 2, "models": [staff, payslip, badge, project] }).to_string();
+    parser::parse(&doc).expect("the relations fixture parses")
+}
+
+const P1: &str = "44444444-4444-4444-4444-444444444444";
+
+/// Ada manages Alice and Bob; each has a payslip and a badge, and Alice works on project P1.
+async fn seed_relations(pool: &sqlx::PgPool) {
+    sqlx::raw_sql(&format!(
+        "INSERT INTO public.staff (id, name, salary) VALUES ('{ADMIN}', 'Ada', 150000);
+         INSERT INTO public.staff (id, name, salary, manager_id) VALUES
+           ('{A}', 'Alice', 50000, '{ADMIN}'), ('{B}', 'Bob', 90000, '{ADMIN}');
+         INSERT INTO public.payslip (staff_id, month, amount) VALUES
+           ('{A}', '2026-09', 4100), ('{B}', '2026-09', 7500), ('{ADMIN}', '2026-09', 12500);
+         INSERT INTO public.badge (holder_id, code) VALUES
+           ('{A}', 'A-1'), ('{B}', 'B-1'), ('{ADMIN}', 'ADM-1');
+         INSERT INTO public.project (id, title, budget) VALUES ('{P1}', 'Apollo', 999);
+         INSERT INTO public.staff_project (staff_id, project_id) VALUES ('{A}', '{P1}');"
+    ))
+    .execute(pool)
+    .await
+    .expect("seed the relations fixture");
+}
+
+/// pg_graphql, granted to the API roles as the stack grants it. False when the image has none.
+async fn install_pg_graphql(pool: &sqlx::PgPool) -> bool {
+    let installed = sqlx::raw_sql(
+        "CREATE SCHEMA IF NOT EXISTS graphql_public; \
+         CREATE EXTENSION IF NOT EXISTS pg_graphql; \
+         GRANT USAGE ON SCHEMA graphql, graphql_public TO anon, authenticated, service_role; \
+         GRANT SELECT ON ALL TABLES IN SCHEMA graphql TO anon, authenticated, service_role; \
+         GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA graphql TO anon, authenticated, service_role;",
+    )
+    .execute(pool)
+    .await;
+    match installed {
+        Ok(_) => true,
+        Err(e) => {
+            assert!(
+                !common::force_integration_tests(),
+                "this image cannot provide pg_graphql: {e}"
+            );
+            eprintln!("SKIP: no pg_graphql here ({e})");
+            false
+        }
+    }
+}
+
+/// The nodes of the top-level connection `field` in a GraphQL answer, failing on an error.
+fn connection(answer: &Value, field: &str) -> Vec<Value> {
+    assert_eq!(answer.get("errors"), None, "{answer}");
+    answer["data"][field]["edges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no connection {field}: {answer}"))
+        .iter()
+        .map(|e| e["node"].clone())
+        .collect()
+}
+
+/// One staff node by name.
+fn staff_named<'a>(nodes: &'a [Value], name: &str) -> &'a Value {
+    nodes
+        .iter()
+        .find(|n| n["name"] == name)
+        .unwrap_or_else(|| panic!("no {name} among {nodes:?}"))
+}
+
+/// The names in a nested staff connection, sorted.
+fn names_in(node: &Value, field: &str) -> Vec<String> {
+    let mut names: Vec<String> = node[field]["edges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no {field} on {node}"))
+        .iter()
+        .map(|e| e["node"]["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    names.sort();
+    names
+}
+
+const STAFF_WITH_RELATIONS: &str = "{ staffCollection { edges { node { name salary \
+     staff { name salary } \
+     staffCollection { edges { node { name } } } \
+     payslipCollection { edges { node { month amount } } } \
+     badgeCollection { edges { node { code } } } \
+     staff_projectCollection { edges { node { project { title budget } } } } } } } }";
+
+/// pg_graphql reads a view's foreign keys from its comment, as it reads the primary key, so under
+/// tier 2 the views offer the relations tier 1's tables do, under the same names: a to-one field
+/// named after the table it points at and the reverse collection, a self-reference both ways, and
+/// a many-to-many through its junction. A one-to-one key's reverse is the one shape that differs:
+/// pg_graphql finds no unique index on a view, so it is `badgeCollection` where tier 1 offers
+/// `badge`. Read as user A, every nested row is one A may see and every nested value is masked as
+/// A's own read of that table would mask it.
+#[tokio::test]
+async fn graphql_offers_the_relations_between_the_views_masked_for_the_caller() {
+    common::with_integration_pool(|pool| async move {
+        prepare(&pool).await;
+        let ast = relations_fixture();
+        push_fixture(&pool, &ast).await;
+        seed_relations(&pool).await;
+        if !install_pg_graphql(&pool).await {
+            return;
+        }
+
+        a_reads_down_the_relations(&pool).await;
+        a_reads_up_the_relations(&pool).await;
+        service_role_reads_the_relations_unmasked(&pool).await;
+
+        let again = push_fixture(&pool, &ast).await;
+        assert!(matches!(again, push::Outcome::UpToDate { .. }), "{again:?}");
+    })
+    .await;
+}
+
+/// From each staff member to what refers to them: masked as A sees it, and only rows A may see.
+async fn a_reads_down_the_relations(pool: &sqlx::PgPool) {
+    let answer = gql(pool, Caller::A, STAFF_WITH_RELATIONS).await;
+    let staff = connection(&answer, "staffCollection");
+    assert_eq!(staff.len(), 3, "{answer}");
+    assert!(staff.iter().all(|s| s["salary"].is_null()), "{answer}");
+
+    let alice = staff_named(&staff, "Alice");
+    assert_eq!(alice["staff"], json!({ "name": "Ada", "salary": null }));
+    assert_eq!(
+        alice["badgeCollection"]["edges"],
+        json!([{ "node": { "code": "A-1" } }])
+    );
+    assert_eq!(
+        alice["payslipCollection"]["edges"],
+        json!([{ "node": { "month": "2026-09", "amount": 4100 } }])
+    );
+    assert_eq!(
+        alice["staff_projectCollection"]["edges"],
+        json!([{ "node": { "project": { "title": "Apollo", "budget": null } } }])
+    );
+
+    let ada = staff_named(&staff, "Ada");
+    assert_eq!(names_in(ada, "staffCollection"), ["Alice", "Bob"]);
+    assert_eq!(ada["staff"], Value::Null);
+    // Nothing A may not read: neither Ada's nor Bob's payslip appears under them.
+    assert_eq!(ada["payslipCollection"]["edges"], json!([]), "{answer}");
+    let bob = staff_named(&staff, "Bob");
+    assert_eq!(bob["payslipCollection"]["edges"], json!([]), "{answer}");
+    assert_eq!(bob["staff_projectCollection"]["edges"], json!([]));
+}
+
+/// The to-one direction from each referencing view, the junction's included, masked the same way.
+async fn a_reads_up_the_relations(pool: &sqlx::PgPool) {
+    let cases = [
+        (
+            "payslipCollection",
+            "{ payslipCollection { edges { node { amount staff { name salary } } } } }",
+            json!({ "amount": 4100, "staff": { "name": "Alice", "salary": null } }),
+        ),
+        (
+            "badgeCollection",
+            "{ badgeCollection(filter: {code: {eq: \"B-1\"}}) { edges { node { staff { name } } } } }",
+            json!({ "staff": { "name": "Bob" } }),
+        ),
+        (
+            "staff_projectCollection",
+            "{ staff_projectCollection { edges { node { staff { name } project { title } } } } }",
+            json!({ "staff": { "name": "Alice" }, "project": { "title": "Apollo" } }),
+        ),
+    ];
+    for (collection, query, want) in cases {
+        let answer = gql(pool, Caller::A, query).await;
+        assert_eq!(connection(&answer, collection), [want], "{query}");
+    }
+}
+
+/// service_role, unmasked as in tier 1, sees every row and value through the same relations.
+async fn service_role_reads_the_relations_unmasked(pool: &sqlx::PgPool) {
+    let answer = gql(pool, Caller::Service, STAFF_WITH_RELATIONS).await;
+    let staff = connection(&answer, "staffCollection");
+    assert_eq!(
+        staff_named(&staff, "Bob")["payslipCollection"]["edges"],
+        json!([{ "node": { "month": "2026-09", "amount": 7500 } }])
+    );
+    assert_eq!(staff_named(&staff, "Ada")["salary"], 150000);
+    assert_eq!(
+        staff_named(&staff, "Alice")["staff_projectCollection"]["edges"],
+        json!([{ "node": { "project": { "title": "Apollo", "budget": 999 } } }])
+    );
 }

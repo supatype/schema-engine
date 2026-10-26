@@ -12,6 +12,9 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
     let db_triggers = triggers::read(conn, schema).await?;
     let db_extensions = extensions::read(conn).await?;
     let db_enums = enums::read(conn, schema).await?;
+    let database: String = sqlx::query_scalar("SELECT current_database()::text")
+        .fetch_one(&mut *conn)
+        .await?;
 
     Ok(DatabaseState {
         schema: schema.to_string(),
@@ -29,5 +32,6 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
         recorded_columns: Default::default(),
         column_ownership: Default::default(),
         adopted_columns: Default::default(),
+        database,
     })
 }

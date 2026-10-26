@@ -41,11 +41,250 @@ pub async fn doctor(
         return self::rebaseline(pool, ast, schema, false).await;
     }
     let mut conn = pool.acquire().await?;
-    let (state, decision) = match push::read_and_decide(&mut conn, ast, schema).await {
+    // What another session holds exclusively is left out of the read rather than waited on, and
+    // reported as not checked (IN-B).
+    let held = held_exclusively(&mut conn).await?;
+    set_unreadable(&mut conn, &held).await?;
+    let decided = push::read_and_decide(&mut conn, ast, schema).await;
+    set_unreadable(&mut conn, &[]).await?;
+    let (state, decision) = match decided {
         Ok(decided) => decided,
         Err(e) => return Err(push::busy_if_waiting_on_a_writer(pool, e).await),
     };
-    Ok(doctor::report_of(ast, &state, &decision))
+    let mut report = doctor::report_of(ast, &state, &decision);
+    not_checked(&mut report, &held, schema);
+    report
+        .missing
+        .extend(missing_studio_objects(&mut conn).await?);
+    report.notes.extend(scheduling_note(&mut conn, ast).await?);
+    report.blocking = doctor::has_strict_issues(&report);
+    Ok(report)
+}
+
+/// Studio's objects that are not there (CC4). The engine's setup makes them, and runs again only
+/// when the engine changes, so one dropped by hand stays missing until someone makes it run.
+async fn missing_studio_objects(conn: &mut sqlx::PgConnection) -> Result<Vec<DoctorItem>> {
+    let (kinds, signatures): (Vec<&str>, Vec<&str>) = crate::state::studio_state::STUDIO_OBJECTS
+        .iter()
+        .copied()
+        .unzip();
+    let missing: Vec<(String, String)> = sqlx::query_as(
+        "SELECT o.kind, o.signature FROM unnest($1::text[], $2::text[]) AS o(kind, signature)
+          WHERE (CASE WHEN o.kind = 'function' THEN to_regprocedure(o.signature)::oid
+                      ELSE to_regclass(o.signature)::oid END) IS NULL",
+    )
+    .bind(&kinds)
+    .bind(&signatures)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(missing
+        .iter()
+        .map(|(kind, signature)| missing_studio_object(kind, signature))
+        .collect())
+}
+
+/// The item for the Studio object `signature` (a `kind`) that is not there.
+fn missing_studio_object(kind: &str, signature: &str) -> DoctorItem {
+    use crate::introspector::fingerprint::ObjectKind;
+    let (schema, name) = signature.split_once('.').unwrap_or(("", signature));
+    let key = ObjectKey {
+        kind: if kind == "function" {
+            ObjectKind::Function
+        } else {
+            ObjectKind::Table
+        },
+        schema: schema.to_string(),
+        parent: schema.to_string(),
+        name: name.to_string(),
+    };
+    DoctorItem::for_key(
+        &key,
+        format!(
+            "The Studio {kind} {signature} is missing, so the Studio features that use it fail. \
+             The engine's setup makes it, and runs again only when the engine changes: to make it \
+             now, run `DELETE FROM _supatype.engine_bootstrap;` and push again"
+        ),
+    )
+}
+
+/// The note for a copy of a database (a branch, a restore under a new name) whose schema publishes
+/// on a schedule (CC5): pg_cron runs only the jobs of the database `cron.database_name` names, so
+/// here a scheduled publish is recorded and never runs.
+async fn scheduling_note(
+    conn: &mut sqlx::PgConnection,
+    ast: &SchemaAst,
+) -> Result<Option<DoctorItem>> {
+    let scheduled = !crate::generator::sql::versions::versioned_models(ast).is_empty();
+    if !scheduled {
+        return Ok(None);
+    }
+    let (database, cron_database, installed): (String, Option<String>, bool) = sqlx::query_as(
+        "SELECT current_database()::text, current_setting('cron.database_name', true),
+                EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(cron_runs_elsewhere(
+        &database,
+        cron_database.as_deref(),
+        installed,
+    ))
+}
+
+/// The CC5 note, when pg_cron is installed here and runs another database's jobs.
+fn cron_runs_elsewhere(
+    database: &str,
+    cron_database: Option<&str>,
+    installed: bool,
+) -> Option<DoctorItem> {
+    let cron_database = cron_database.filter(|d| !d.is_empty() && *d != database)?;
+    if !installed {
+        return None;
+    }
+    let key = ObjectKey {
+        kind: crate::introspector::fingerprint::ObjectKind::CronJob,
+        schema: String::new(),
+        parent: String::new(),
+        name: "supatype-scheduled-publish".to_string(),
+    };
+    Some(DoctorItem::for_key(
+        &key,
+        format!(
+            "Scheduled publishing is recorded here but never runs: pg_cron runs only the jobs of \
+             database {cron_database} (cron.database_name), and this is {database}, a copy of it \
+             such as a branch or a restore. Call _supatype.run_due_publishes() from a scheduler \
+             of your own, or point cron.database_name at this database"
+        ),
+    ))
+}
+
+/// A relation another session holds in ACCESS EXCLUSIVE, or a view reading one: reading its
+/// deparsed parts would wait on that session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Held {
+    oid: i64,
+    schema: String,
+    name: String,
+    pid: i32,
+}
+
+/// Every relation of this database another session holds in ACCESS EXCLUSIVE, and every view
+/// reading one, with the session. From `pg_locks`, which takes no lock.
+async fn held_exclusively(conn: &mut sqlx::PgConnection) -> Result<Vec<Held>> {
+    let rows: Vec<(i64, String, String, i32)> = sqlx::query_as(
+        "WITH held AS (
+           SELECT l.relation, l.pid FROM pg_locks l
+            WHERE l.locktype = 'relation' AND l.granted AND l.mode = 'AccessExclusiveLock'
+              AND l.pid <> pg_backend_pid()
+              AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database()))
+         SELECT c.oid::bigint, n.nspname::text, c.relname::text, h.pid
+           FROM held h JOIN pg_class c ON c.oid = h.relation
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+         UNION
+         SELECT v.oid::bigint, n.nspname::text, v.relname::text, h.pid
+           FROM held h
+           JOIN pg_depend d ON d.refobjid = h.relation AND d.classid = 'pg_rewrite'::regclass
+           JOIN pg_rewrite r ON r.oid = d.objid
+           JOIN pg_class v ON v.oid = r.ev_class AND v.oid <> h.relation
+           JOIN pg_namespace n ON n.oid = v.relnamespace",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(oid, schema, name, pid)| Held {
+            oid,
+            schema,
+            name,
+            pid,
+        })
+        .collect())
+}
+
+/// Names `held` in the session setting the introspection leaves out ([`crate::introspector::UNREADABLE`]),
+/// or clears it.
+async fn set_unreadable(conn: &mut sqlx::PgConnection, held: &[Held]) -> Result<()> {
+    let oids: Vec<String> = held.iter().map(|h| h.oid.to_string()).collect();
+    sqlx::query("SELECT set_config($1, $2, false)")
+        .bind(crate::introspector::UNREADABLE)
+        .bind(oids.join(","))
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// Moves every finding about a relation in `held` to `not_checked`: it was left out of the read,
+/// so it reads as missing or changed when it was only not looked at. A held table of `schema` with
+/// no finding is listed too, so the report says what it did not read.
+fn not_checked(report: &mut DoctorReport, held: &[Held], schema: &str) {
+    if held.is_empty() {
+        return;
+    }
+    let sections = [
+        &mut report.missing,
+        &mut report.stale_managed,
+        &mut report.unmanaged_drift,
+        &mut report.drifted,
+        &mut report.conflicting,
+        &mut report.claimed,
+        &mut report.pending,
+    ];
+    let mut unread = Vec::new();
+    for items in sections {
+        unread.extend(take_unread(items, held));
+    }
+    report.not_checked.extend(unread);
+    for h in held.iter().filter(|h| h.schema == schema) {
+        if !report.not_checked.iter().any(|i| i.table == h.name) {
+            let item = DoctorItem::for_key(
+                &ObjectKey {
+                    kind: crate::introspector::fingerprint::ObjectKind::Table,
+                    schema: h.schema.clone(),
+                    parent: String::new(),
+                    name: h.name.clone(),
+                },
+                unread_message("table", &h.name, &h.name, h.pid),
+            );
+            report.not_checked.push(item);
+        }
+    }
+    report.blocking = doctor::has_strict_issues(report);
+}
+
+/// Takes the items about a relation in `held` out of `items`, each said as not checked.
+fn take_unread(items: &mut Vec<DoctorItem>, held: &[Held]) -> Vec<DoctorItem> {
+    let holder = |item: &DoctorItem| {
+        held.iter()
+            .find(|h| h.name == item.table || h.name == item.name)
+            .map(|h| h.pid)
+    };
+    let (unread, read): (Vec<DoctorItem>, Vec<DoctorItem>) = std::mem::take(items)
+        .into_iter()
+        .partition(|i| holder(i).is_some());
+    *items = read;
+    unread
+        .into_iter()
+        .map(|mut item| {
+            let pid = holder(&item).unwrap_or_default();
+            item.message = unread_message(&item.kind, &item.table, &item.name, pid);
+            item.recorded = None;
+            item.live = None;
+            item
+        })
+        .collect()
+}
+
+fn unread_message(kind: &str, table: &str, name: &str, pid: i32) -> String {
+    let what = doctor::kind_words(kind);
+    let object = if table == name {
+        name.to_string()
+    } else {
+        format!("{table}.{name}")
+    };
+    format!(
+        "{what} {object} not checked (lock held by pid {pid}): another session holds {table} \
+         exclusively; run doctor again once it is done"
+    )
 }
 
 /// Records every drifted object's live definition as its baseline, in one transaction, and returns
@@ -73,23 +312,29 @@ pub async fn rebaseline_previewed(
     accept_access_drift: bool,
     previewed: Option<&[String]>,
 ) -> Result<DoctorReport> {
-    // As a push does: these are ledger writes too.
-    let mut tx = push::begin_writer(pool).await?;
-    let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
-    let rows: BTreeMap<&ObjectKey, &LedgerRow> = state.ledger.iter().map(|r| (&r.key, r)).collect();
-    let drift: Vec<(&ObjectKey, LedgerRow, DoctorItem)> = decision
-        .reconcile
-        .actions
-        .iter()
-        .filter_map(|action| rebaselined(action, &rows))
-        .collect();
-    if let Some(previewed) = previewed {
-        DriftChangedSincePreview::check(previewed, drift.iter().map(|(key, ..)| *key))?;
-    }
-    let mut report = doctor::report_of(ast, &state, &decision);
-    let moved = sort_out(drift, accept_access_drift, &mut report);
-    ledger::upsert(&mut tx, &moved).await?;
-    tx.commit().await?;
+    // As a push does: these are ledger writes too. A person is waiting: a lock it cannot take at
+    // once is named, not retried (LK1).
+    let (mut tx, pid) = push::begin_watched_writer(pool).await?;
+    let work = async move {
+        let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
+        let rows: BTreeMap<&ObjectKey, &LedgerRow> =
+            state.ledger.iter().map(|r| (&r.key, r)).collect();
+        let drift: Vec<(&ObjectKey, LedgerRow, DoctorItem)> = decision
+            .reconcile
+            .actions
+            .iter()
+            .filter_map(|action| rebaselined(action, &rows))
+            .collect();
+        if let Some(previewed) = previewed {
+            DriftChangedSincePreview::check(previewed, drift.iter().map(|(key, ..)| *key))?;
+        }
+        let mut report = doctor::report_of(ast, &state, &decision);
+        let moved = sort_out(drift, accept_access_drift, &mut report);
+        ledger::upsert(&mut tx, &moved).await?;
+        tx.commit().await?;
+        Ok(report)
+    };
+    let mut report = crate::online::fail_fast(pool, pid, "rebaseline", work).await?;
     // Drift is a row's live definition moving, so every drifted object had a row; those recorded
     // are drifted no longer.
     let same = |a: &DoctorItem, b: &DoctorItem| {
@@ -263,4 +508,20 @@ fn rebaselined<'a>(
     item.recorded = Some(recorded_def.clone());
     item.live = Some(live_def.clone());
     Some((key, row, item))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cron_runs_elsewhere;
+
+    /// CC5: the note appears only where pg_cron is installed and runs another database's jobs.
+    #[test]
+    fn a_copy_whose_jobs_pg_cron_runs_elsewhere_gets_the_note() {
+        let note = cron_runs_elsewhere("branch_1", Some("postgres"), true).expect("a note");
+        assert!(note.message.contains("never runs"), "{}", note.message);
+        assert!(note.message.contains("branch_1"), "{}", note.message);
+        assert!(cron_runs_elsewhere("postgres", Some("postgres"), true).is_none());
+        assert!(cron_runs_elsewhere("branch_1", Some("postgres"), false).is_none());
+        assert!(cron_runs_elsewhere("branch_1", None, true).is_none());
+    }
 }

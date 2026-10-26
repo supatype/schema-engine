@@ -458,9 +458,10 @@ its base branch:
 
 **Release** (`.github/workflows/release.yml`), triggered by `v*` tags:
 
-1. Refuse to proceed unless the tag matches the `Cargo.toml` version. `ENGINE_VERSION` is baked in
-   from `CARGO_PKG_VERSION` by `build.rs` and reported by both binaries, so a drift between tag and
-   manifest is a lie the CLI would believe.
+1. Refuse to proceed unless the tag matches the `Cargo.toml` version. A release build sets
+   `SUPATYPE_ENGINE_RELEASE`, and `build.rs` bakes `CARGO_PKG_VERSION` into `ENGINE_VERSION`, which
+   both binaries report, so a drift between tag and manifest is a lie the CLI would believe. Any
+   other build reports `<major>.<minor + 1>.0-dev+<commit>` (see `docs/release-process.md`).
 2. Run the test suite.
 3. Build all five targets (Linux arm64 via `cross`) and strip them.
 4. Generate `checksums.sha256` and sign it with minisign.

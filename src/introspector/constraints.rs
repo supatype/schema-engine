@@ -121,7 +121,7 @@ fn match_type(confmatchtype: &str) -> String {
 /// and the doctor report prints `columns` as the item's fields, so filling it would change that
 /// output in a change meant to be read-only.
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstraint>> {
-    let rows: Vec<ConstraintRow> = sqlx::query_as(
+    let rows: Vec<ConstraintRow> = sqlx::query_as(&format!(
         r#"
         SELECT
             rel.relname::text,
@@ -151,9 +151,13 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
         -- `pg_constraint` entirely, and PG18 catalogues it as `contype = 'n'`.
         WHERE ns.nspname = $1
           AND con.contype IN ('p', 'u', 'f', 'c')
+          AND {}
+          AND {}
         ORDER BY rel.relname, con.conname
         "#,
-    )
+        super::readable("con.conrelid"),
+        super::readable("con.confrelid"),
+    ))
     .bind(schema)
     .fetch_all(&mut *conn)
     .await?;

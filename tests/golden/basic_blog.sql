@@ -225,69 +225,69 @@ CREATE TABLE IF NOT EXISTS "public"."posts" (
 );
 
 -- Row-level affordance functions (PostgREST computed columns)
-CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users")
+CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "users";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_users"("public"."users") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_users"("public"."users") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_users"("public"."users", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_users"("public"."users", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_users"("users" "public"."users")
+CREATE OR REPLACE FUNCTION "public"."can_create_users"("users" "public"."users", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'admin'
       FROM (SELECT ($1).*) AS "users";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_users"("public"."users") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_users"("public"."users") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_users"("public"."users", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_users"("public"."users", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_users"("users" "public"."users")
+CREATE OR REPLACE FUNCTION "public"."can_update_users"("users" "public"."users", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "id"
       FROM (SELECT ($1).*) AS "users";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_users"("public"."users") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_users"("public"."users") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_users"("public"."users", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_users"("public"."users", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_users"("users" "public"."users")
+CREATE OR REPLACE FUNCTION "public"."can_delete_users"("users" "public"."users", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'admin'
       FROM (SELECT ($1).*) AS "users";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_users"("public"."users") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_users"("public"."users") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_users"("public"."users", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_users"("public"."users", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_read_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_create_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = ANY(ARRAY['admin', 'editor'])
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_update_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_uid()) = "author_id"
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_posts"("posts" "public"."posts")
+CREATE OR REPLACE FUNCTION "public"."can_delete_posts"("posts" "public"."posts", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT _supatype.jwt_role()) = 'admin'
       FROM (SELECT ($1).*) AS "posts";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_posts"("public"."posts") FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_posts"("public"."posts") TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_posts"("public"."posts", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_posts"("public"."posts", boolean) TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";

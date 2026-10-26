@@ -81,7 +81,7 @@ pub fn objects(sql: &str, schema: &str) -> Vec<DesiredObject> {
 /// model tables; so is `PUBLIC` on these objects, which only a model or junction table records.
 fn governed_role(role: &str) -> bool {
     crate::generator::sql::grants::GRANTED_ROLES.contains(&role)
-        || role == crate::generator::sql::field_views::API_OWNER
+        || crate::generator::sql::field_views::is_api_owner(role)
 }
 
 /// A grant whose every statement is a `REVOKE` intends the role to hold nothing, which the

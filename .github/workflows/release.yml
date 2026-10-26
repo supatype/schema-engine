@@ -26,7 +26,8 @@ env:
 jobs:
   # ─── The tag is the version, and the binary has to agree ────────────────────
   #
-  # ENGINE_VERSION comes from CARGO_PKG_VERSION via build.rs, and it is not cosmetic: it is
+  # ENGINE_VERSION comes from build.rs: CARGO_PKG_VERSION for a release build (the build job sets
+  # SUPATYPE_ENGINE_RELEASE), a `-dev` pre-release otherwise. It is not cosmetic: it is
   # bound to every row of _supatype migration history, written into the generated migration
   # header, and reported by the server. Cargo.toml sat at 0.1.0 while tags ran to v0.1.8, so
   # every migration ever applied recorded an engine version that was never released. Failing
@@ -130,6 +131,13 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
 
+      # Makes this a release build: build.rs reports the crate version (and refuses a tag that
+      # differs from it) instead of the `-dev` pre-release every other build reports. Cross.toml
+      # passes it into the cross-compiling container.
+      - name: Mark the build as the release
+        shell: bash
+        run: echo "SUPATYPE_ENGINE_RELEASE=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_target }}
@@ -166,6 +174,19 @@ jobs:
           cp "target/${{ matrix.rust_target }}/release/supatype-engine${EXT}" "${BIN_NAME}"
           echo "bin_name=${BIN_NAME}" >> "$GITHUB_OUTPUT"
 
+      # Every runner but the cross-compiled one can run what it built: a release binary that does
+      # not report exactly the release version must not ship.
+      - name: Binary reports the release version
+        if: matrix.cross == false
+        shell: bash
+        run: |
+          GOT="$("./${{ steps.prep.outputs.bin_name }}" --version)"
+          echo "${GOT}"
+          if [ "${GOT}" != "supatype-engine ${SUPATYPE_ENGINE_RELEASE}" ]; then
+            echo "::error::The binary reports '${GOT}', not supatype-engine ${SUPATYPE_ENGINE_RELEASE}."
+            exit 1
+          fi
+
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -190,7 +211,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # Hetzner Object Storage — do not use configure-aws-credentials (it calls AWS STS).
+    # Hetzner Object Storage: do not use configure-aws-credentials, which calls AWS STS.
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.CDN_AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.CDN_AWS_SECRET_ACCESS_KEY }}

@@ -1067,6 +1067,7 @@ pub fn field_predicates(ast: &SchemaAst, schema: &str) -> Vec<FieldPredicates> {
                 continue;
             }
             out.push(FieldPredicates {
+                schema: schema.to_string(),
                 table: table.to_string(),
                 column: column.clone(),
                 read,
@@ -1081,6 +1082,9 @@ pub fn field_predicates(ast: &SchemaAst, schema: &str) -> Vec<FieldPredicates> {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FieldPredicates {
+    /// The schema the column's table is in, so a reader (realtime) never infers it from the
+    /// predicate's qualifier. Added beside the other fields, which keep their meaning.
+    pub schema: String,
     pub table: String,
     pub column: String,
     /// The read predicate, absent when only writes are ruled.
@@ -1196,14 +1200,24 @@ $claims_usage_probe$;
 fn render_can_function(schema: &str, table: &str, name: &str, expr: &str) -> String {
     let (function, row, alias) = can_function_names(schema, table, name);
     format!(
-        "CREATE OR REPLACE FUNCTION {function}({alias} {row})\n  \
+        "CREATE OR REPLACE FUNCTION {function}({alias} {row}, {OUT_OF_GRAPHQL} boolean DEFAULT NULL)\n  \
          RETURNS boolean LANGUAGE sql STABLE AS $can$\n    \
          SELECT {expr}\n      \
          FROM (SELECT ($1).*) AS {alias};\n  \
          $can$;\n{}\n",
-        can_function_grants(schema, table, name)
+        grants_on(&format!("{function}({row}, boolean)"))
     )
 }
+
+/// The second parameter of a model's `can_<op>_<table>`, which keeps it out of GraphQL (CT3).
+///
+/// pg_graphql reflects a function taking a table's row as a computed field of that table's type, so
+/// every model listed its four affordance functions as fields, and pg_graphql 1.5.9 has no directive
+/// that leaves one out (its function directives are `name` and `description`). It reflects only a
+/// function that takes the row alone; PostgREST also calls one whose other parameters have
+/// defaults as a computed column, which is how Studio reads them (`select=*,can_update_posts`).
+/// Never read: the answer is the row's alone.
+const OUT_OF_GRAPHQL: &str = "\"not_in_graphql\"";
 
 /// Who may call a `can_*` predicate: the API roles, which is everyone that legitimately does.
 /// Policies, the `supatype_mask` rewrite, the tier 2 views and realtime all call them as the
@@ -1215,11 +1229,15 @@ fn render_can_function(schema: &str, table: &str, name: &str, expr: &str) -> Str
 /// under the function, so they are part of what the ledger records for it, and the first push
 /// after an engine that did not write them re-applies the function with them.
 fn can_function_grants(schema: &str, table: &str, name: &str) -> String {
-    let signature = format!(
+    grants_on(&format!(
         "{}({})",
         quote_qualified(schema, name),
         quote_qualified(schema, table)
-    );
+    ))
+}
+
+/// [`can_function_grants`] for the function `signature` names.
+fn grants_on(signature: &str) -> String {
     format!(
         "REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;\n\
          GRANT EXECUTE ON FUNCTION {signature} TO {};\n",

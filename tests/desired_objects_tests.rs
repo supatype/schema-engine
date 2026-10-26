@@ -317,7 +317,7 @@ async fn a_function_differing_from_ours_only_in_its_search_path_refuses_the_push
             .expect("every function of ours matches its prediction, so it is adopted");
 
         sqlx::raw_sql(&format!(
-            "ALTER FUNCTION public.can_read_posts(public.posts) SET search_path = public; {forget}"
+            "ALTER FUNCTION public.can_read_posts(public.posts, boolean) SET search_path = public; {forget}"
         ))
         .execute(&pool)
         .await

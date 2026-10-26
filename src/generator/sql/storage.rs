@@ -76,8 +76,20 @@ CREATE TABLE IF NOT EXISTS storage.buckets (
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE storage.buckets ADD COLUMN IF NOT EXISTS access_mode TEXT;
-ALTER TABLE storage.buckets ADD COLUMN IF NOT EXISTS s3_bucket_policy TEXT;
+-- Each column only where it is missing: `ADD COLUMN IF NOT EXISTS` takes the table's ACCESS
+-- EXCLUSIVE lock before it looks, and this runs on every push.
+DO $storage_columns$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'storage.buckets'::regclass
+                    AND attname = 'access_mode' AND NOT attisdropped) THEN
+    ALTER TABLE storage.buckets ADD COLUMN IF NOT EXISTS access_mode TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'storage.buckets'::regclass
+                    AND attname = 's3_bucket_policy' AND NOT attisdropped) THEN
+    ALTER TABLE storage.buckets ADD COLUMN IF NOT EXISTS s3_bucket_policy TEXT;
+  END IF;
+END
+$storage_columns$;
 
 CREATE TABLE IF NOT EXISTS storage.objects (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -94,7 +106,14 @@ CREATE TABLE IF NOT EXISTS storage.objects (
 -- The key the live bytes are stored under is `name/<version>`, a fresh one per upload, so an
 -- overwrite never replaces the bytes being served until its row commits. Null means the bytes are
 -- at `name`, which is where every object written before versions lives.
-ALTER TABLE storage.objects ADD COLUMN IF NOT EXISTS version TEXT;
+DO $storage_version$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'storage.objects'::regclass
+                    AND attname = 'version' AND NOT attisdropped) THEN
+    ALTER TABLE storage.objects ADD COLUMN IF NOT EXISTS version TEXT;
+  END IF;
+END
+$storage_version$;
 
 "#
 }
@@ -413,7 +432,13 @@ pub fn is_unmarked_bucket_policy(schema: &str, table: &str, name: &str) -> bool 
 fn generate_storage_rls() -> String {
     let mut out = String::new();
     out.push_str("-- Storage RLS\n\n");
-    out.push_str("ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;\n\n");
+    // Only where it is off: the statement takes the table's ACCESS EXCLUSIVE lock, and the storage
+    // service reads and writes `storage.objects` all the time, on every push.
+    out.push_str(
+        "DO $storage_rls$\nBEGIN\n  IF NOT (SELECT relrowsecurity FROM pg_class\n          \
+         WHERE oid = 'storage.objects'::regclass) THEN\n    \
+         ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;\n  END IF;\nEND\n$storage_rls$;\n\n",
+    );
 
     // Immediately after the ENABLE, never before it, and never without it.
     //

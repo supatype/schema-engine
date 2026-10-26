@@ -5,8 +5,8 @@
 //! silently unmask, and it was the reason field rules could not follow anyone to their own
 //! Postgres. Now the same push generates `api` views.
 //!
-//! These tests never create the masking extension, so they run tier 2 on any image, including
-//! `supatype/postgres`, which only provides it. They used to ask the image whether it could, and
+//! These tests never create the masking extension, except the one that reads tier 1's record, so
+//! they run tier 2 on any image, including `supatype/postgres`, which only provides it. They used to ask the image whether it could, and
 //! that question created the extension, so on CI's image every one of them skipped and tier 2 went
 //! untested (A3-N3).
 
@@ -258,6 +258,38 @@ async fn the_capability_record_says_views_not_broken() {
         assert_eq!(
             columns,
             serde_json::json!([{
+                "schema": "public",
+                "table": "tier_employee",
+                "column": "salary",
+                "read": "public.\"can_read_tier_employee__salary\"",
+                "write": null
+            }])
+        );
+    })
+    .await;
+}
+
+/// The recorded predicates name each column's schema under tier 1 too, so a reader never infers it
+/// from the predicate's qualifier (RT-W3).
+#[tokio::test]
+async fn the_tier_one_record_names_each_columns_schema() {
+    common::with_integration_pool(|pool| async move {
+        if !common::mask_extension_available(&pool).await {
+            return;
+        }
+        prepare(&pool).await;
+        push(&pool).await;
+        let recorded: serde_json::Value = sqlx::query_scalar(
+            "SELECT capabilities -> 'fieldMasking' FROM _supatype.schema_state WHERE id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the recorded enforcement");
+        assert_eq!(recorded["tier"], "extension", "{recorded}");
+        assert_eq!(
+            recorded["columns"],
+            serde_json::json!([{
+                "schema": "public",
                 "table": "tier_employee",
                 "column": "salary",
                 "read": "public.\"can_read_tier_employee__salary\"",

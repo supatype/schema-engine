@@ -44,6 +44,10 @@ pub struct DatabaseState {
     /// expression with (Postgres deparses the live one into other words). Never part of a snapshot.
     #[serde(skip)]
     pub recorded_columns: BTreeMap<(String, String), String>,
+    /// The database's name (`current_database()`), which names its tier 2 view owner (TI2). Never
+    /// part of a snapshot: a copy of the database under another name has its own.
+    #[serde(skip)]
+    pub database: String,
 }
 
 impl DatabaseState {

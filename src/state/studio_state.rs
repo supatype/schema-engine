@@ -29,6 +29,21 @@ pub struct DashboardView {
     pub updated_at: String,
 }
 
+/// Studio's objects, by kind and signature: what doctor checks are there (CC4). The engine's
+/// setup makes them ([`bootstrap_statements`] and the membership and audit tables), and runs again
+/// only when the engine changes.
+pub const STUDIO_OBJECTS: &[(&str, &str)] = &[
+    ("table", "_supatype.studio_members"),
+    ("table", "_supatype.studio_audit"),
+    ("table", "supatype.dashboard_views"),
+    ("function", "supatype.studio_caller_allowed()"),
+    ("function", "supatype.require_studio_caller()"),
+    ("function", "supatype.storage_stats()"),
+    ("function", "supatype.db_stats()"),
+    ("function", "supatype.daily_signups(integer)"),
+    ("function", "supatype.daily_content_creates(text, integer)"),
+];
+
 pub fn create_studio_schema_sql() -> &'static str {
     "CREATE SCHEMA IF NOT EXISTS supatype"
 }
@@ -314,4 +329,18 @@ pub fn bootstrap_statements() -> Vec<(&'static str, String)> {
             create_daily_content_creates_function_sql(),
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every object doctor checks for is one the setup makes, so the list cannot name one that
+    /// was renamed or removed there (CC4).
+    #[test]
+    fn every_studio_object_doctor_checks_is_made_by_the_setup() {
+        let setup = crate::state::migration_history::bootstrap_file_statements().join("\n");
+        for (_, signature) in super::STUDIO_OBJECTS {
+            let name = signature.split('(').next().unwrap_or(signature);
+            assert!(setup.contains(name), "{name} is not made by the setup");
+        }
+    }
 }

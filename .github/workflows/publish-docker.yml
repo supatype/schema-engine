@@ -21,7 +21,11 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
+      # The release's tag, not the triggering ref: release.yml's manual dispatch runs on a branch,
+      # and building that would publish the branch under the release's version.
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -40,8 +44,9 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          # A release build reports the crate version; build.rs refuses one that differs.
           build-args: |
-            ENGINE_VERSION=${{ inputs.version }}
+            SUPATYPE_ENGINE_RELEASE=${{ inputs.version }}
           cache-from: type=gha,scope=${{ steps.slug.outputs.pair }}
           cache-to: type=gha,mode=max,scope=${{ steps.slug.outputs.pair }}
           outputs: type=image,name=supatype/schema-engine,push-by-digest=true,name-canonical=true,push=true
@@ -91,7 +96,10 @@ jobs:
 
       - name: Create multi-platform manifest
         working-directory: /tmp/digests
+        # Both substitutions are split into words on purpose: one `-t <tag>` pair per tag and one
+        # argument per digest.
         run: |
+          # shellcheck disable=SC2046
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf 'supatype/schema-engine@sha256:%s ' *)

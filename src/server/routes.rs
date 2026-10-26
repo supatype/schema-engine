@@ -61,16 +61,24 @@ pub async fn diff(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
     Ok(Json(plan.to_json().map_err(engine_error)?))
 }
 
-// ── Migrate (DB: generate SQL only, rehearsed and rolled back) ─────────────
+// ── Migrate (DB: generate SQL only; with `record`, rehearsed and rolled back) ──
 
 pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> {
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
-    // A writer, under the engine's lock, though everything it writes is rolled back.
-    let pool = connect_db(&url).await?;
-    // The push, written out: applying the file by hand records what the push would.
-    let sql = crate::migrate_file::render(&pool, &ast, &req.schema, req.force)
+    // With `record`, a writer under the engine's lock, though everything it writes is rolled back;
+    // without it, a reader that takes no lock an application waits on.
+    let pool = if req.record {
+        connect_db(&url).await?
+    } else {
+        connect_preview_db(&url).await?
+    };
+    let options = crate::migrate_file::Options {
+        force: req.force,
+        record: req.record,
+    };
+    let sql = crate::migrate_file::render(&pool, &ast, &req.schema, options)
         .await
         .map_err(refusal_error)?;
     Ok(Json(SqlResponse { sql }))
@@ -242,13 +250,11 @@ pub async fn migrations(Json(req): Json<DbRequest>) -> EngineResponse<serde_json
                 "schema_sources_base64": B64.encode(bytes),
                 "schema_sources_manifest": manifest,
             }))),
-            None => Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Migration {name} has no schema snapshot"),
-                    ..Default::default()
-                }),
-            )),
+            None => {
+                let missing = crate::state::migration_history::NoSchemaSnapshot { name };
+                let refusal = crate::refusal::of(&missing.into()).expect("a refusal");
+                Err((StatusCode::NOT_FOUND, Json(refusal_response(refusal))))
+            }
         }
     } else {
         let list = crate::state::migration_history::list_migrations_summary(&pool)
@@ -372,64 +378,22 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// A refused push, adopt or rebaseline, as 409 with the reason and what it is about when it is one
-/// a caller can act on; anything else as [`engine_error`].
+/// A refusal a caller can act on (`crate::refusal`), as 409 with its reason and what it names, the
+/// binary's JSON line in HTTP form; anything else as [`engine_error`].
 fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
-    use crate::generator::sql::migration::{UnmanagedModelTables, UNMANAGED_MODEL_TABLES};
-    use crate::inspect::{DriftChangedSincePreview, DRIFT_CHANGED};
-    use crate::ledger::drift::{SecurityDrift, SECURITY_DRIFT};
-    use crate::push::{EngineBusy, ENGINE_BUSY};
-    if let Some(changed) = e.downcast_ref::<DriftChangedSincePreview>() {
-        error!("rebaseline refused: the drift changed since the preview");
-        return (
-            StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                error: changed.to_string(),
-                reason: Some(DRIFT_CHANGED),
-                drift_changed: Some(Box::new(changed.clone())),
-                ..Default::default()
-            }),
-        );
-    }
-    if let Some(busy) = e.downcast_ref::<EngineBusy>() {
-        error!("refused: the engine is busy");
-        return (
-            StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                error: busy.to_string(),
-                reason: Some(ENGINE_BUSY),
-                ..Default::default()
-            }),
-        );
-    }
-    if let Some(drift) = e.downcast_ref::<SecurityDrift>() {
-        error!(
-            objects = drift.objects.len(),
-            "push refused: security drift"
-        );
-        return (
-            StatusCode::CONFLICT,
-            Json(ErrorResponse {
-                error: drift.to_string(),
-                reason: Some(SECURITY_DRIFT),
-                objects: Some(drift.objects.clone()),
-                ..Default::default()
-            }),
-        );
-    }
-    let Some(refusal) = e.downcast_ref::<UnmanagedModelTables>() else {
+    let Some(refusal) = crate::refusal::of(&e) else {
         return engine_error(e);
     };
-    error!(tables = ?refusal.tables, "push refused: unmanaged model tables");
-    (
-        StatusCode::CONFLICT,
-        Json(ErrorResponse {
-            error: refusal.to_string(),
-            reason: Some(UNMANAGED_MODEL_TABLES),
-            tables: Some(refusal.tables.clone()),
-            ..Default::default()
-        }),
-    )
+    error!(reason = refusal.reason, "refused: {}", refusal.message);
+    (StatusCode::CONFLICT, Json(refusal_response(refusal)))
+}
+
+fn refusal_response(refusal: crate::refusal::Refusal) -> ErrorResponse {
+    ErrorResponse {
+        error: refusal.message,
+        reason: Some(refusal.reason),
+        details: (!refusal.details.is_empty()).then_some(refusal.details),
+    }
 }
 
 fn engine_error(e: impl std::fmt::Display) -> (StatusCode, Json<ErrorResponse>) {
@@ -625,6 +589,29 @@ mod tests {
         let (status, Json(body)) = super::refusal_error(anyhow::anyhow!("failed"));
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body.reason, None);
+    }
+
+    /// LK6: a lock another session holds and a step after commit that failed are 409 refusals with
+    /// their reasons, not the error of a push that failed.
+    #[test]
+    fn a_lock_or_an_after_commit_failure_is_a_409_with_its_reason() {
+        let lock = crate::online::LockNotAvailable {
+            what: "push",
+            attempts: 4,
+            wait: None,
+        };
+        let (status, Json(body)) = super::refusal_error(lock.into());
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body.reason, Some("lock_unavailable"));
+        let after = crate::online::AfterCommitFailed {
+            name: Some("push_1".into()),
+            failures: vec!["index i could not be built".into()],
+        };
+        let (status, Json(body)) = super::refusal_error(after.into());
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body.reason, Some("validation_failed"));
+        let json = serde_json::to_value(&body).unwrap();
+        assert_eq!(json["failures"][0], "index i could not be built", "{json}");
     }
 
     /// `overwrite_drift` is the push's consent; a doctor asked for it refuses, naming the

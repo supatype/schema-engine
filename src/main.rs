@@ -54,8 +54,9 @@ enum Command {
         #[arg(long, default_value = "public")]
         schema: String,
     },
-    /// Print the migration a push would apply, with the history and ledger writes that make
-    /// applying it by hand a push. Runs it in a transaction that is rolled back; applies nothing.
+    /// Print the migration a push would apply, planned without taking any lock an application
+    /// waits on. Applies nothing, and the file records nothing: with `--record` it also carries the
+    /// history and ledger writes that make applying it by hand a push.
     Migrate {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
@@ -63,6 +64,10 @@ enum Command {
         schema: String,
         #[arg(long, help = "Allow destructive operations without prompting")]
         force: bool,
+        /// Rehearse the push in a transaction that is rolled back, so the file also records the
+        /// migration history and which objects are Supatype's. Takes the table locks a push takes.
+        #[arg(long)]
+        record: bool,
     },
     /// Apply schema to database and record in migration history
     Push {
@@ -275,33 +280,11 @@ async fn main() -> Result<()> {
     };
 
     let result = run(cli.command, input).await;
-    // Refused because another writer holds the engine's lock: said on stdout too, beside the other
-    // refusals, so a caller reading the result can tell it from a failure and retry. The message
+    // A refusal is said on stdout too, as one JSON line with its reason, so a caller reading the
+    // result can tell it from a failure and act on it (`supatype_engine::refusal`). The message
     // still reaches stderr via the error, and the exit is non-zero.
-    if let Err(e) = &result {
-        if let Some(busy) = e.downcast_ref::<supatype_engine::push::EngineBusy>() {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "refused",
-                    "reason": supatype_engine::push::ENGINE_BUSY,
-                    "message": busy.to_string(),
-                })
-            );
-        }
-        use supatype_engine::inspect::{DriftChangedSincePreview, DRIFT_CHANGED};
-        if let Some(changed) = e.downcast_ref::<DriftChangedSincePreview>() {
-            println!(
-                "{}",
-                serde_json::json!({
-                    "status": "refused",
-                    "reason": DRIFT_CHANGED,
-                    "unseen": changed.unseen,
-                    "gone": changed.gone,
-                    "message": changed.to_string(),
-                })
-            );
-        }
+    if let Some(refusal) = result.as_ref().err().and_then(supatype_engine::refusal::of) {
+        println!("{}", refusal.line());
     }
     result
 }
@@ -339,12 +322,18 @@ async fn run(command: Command, input: String) -> Result<()> {
             database_url,
             schema,
             force,
+            record,
         } => {
             let ast = supatype_engine::parser::parse(&input)?;
-            // A writer, under the engine's lock, though everything it writes is rolled back.
-            let pool = supatype_engine::db::connect(&database_url).await?;
-            // The push, written out: applying the file by hand records what the push would.
-            let file = supatype_engine::migrate_file::render(&pool, &ast, &schema, force).await?;
+            // With `--record`, a writer under the engine's lock, though everything it writes is
+            // rolled back; without it, a reader that waits on a lock no longer than a preview.
+            let pool = if record {
+                supatype_engine::db::connect(&database_url).await?
+            } else {
+                supatype_engine::db::connect_for_preview(&database_url).await?
+            };
+            let options = supatype_engine::migrate_file::Options { force, record };
+            let file = supatype_engine::migrate_file::render(&pool, &ast, &schema, options).await?;
             println!("{file}");
         }
         Command::Push {
@@ -359,9 +348,6 @@ async fn run(command: Command, input: String) -> Result<()> {
             schema_sources_manifest,
             overwrite_drift,
         } => {
-            use supatype_engine::generator::sql::migration::{
-                UnmanagedModelTables, UNMANAGED_MODEL_TABLES,
-            };
             use supatype_engine::push;
 
             let ast = supatype_engine::parser::parse(&input)?;
@@ -392,24 +378,9 @@ async fn run(command: Command, input: String) -> Result<()> {
             if let Some(name) = &name {
                 supatype_engine::state::migration_history::assert_name_unused(&pool, name).await?;
             }
-            // A refusal goes on stdout too, where the CLI reads the push result, so it can name
-            // the tables and offer to adopt them. The message still reaches stderr via the error.
-            let plan = match push::prepare(&pool, &ast, &schema).await {
-                Ok(plan) => plan,
-                Err(e) => {
-                    if let Some(refusal) = e.downcast_ref::<UnmanagedModelTables>() {
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "status": "refused",
-                                "reason": UNMANAGED_MODEL_TABLES,
-                                "tables": refusal.tables,
-                            })
-                        );
-                    }
-                    return Err(e);
-                }
-            };
+            // A refusal goes on stdout too (`main`), where the CLI reads the push result, so it
+            // can name the tables and offer to adopt them.
+            let plan = push::prepare(&pool, &ast, &schema).await?;
 
             // Interactive confirmations (skipped in CI with --non-interactive). Nothing here edits
             // the plan: a rename is declared in the schema, never asked about (D1), so the diff and
@@ -428,24 +399,9 @@ async fn run(command: Command, input: String) -> Result<()> {
                 schema_sources_manifest,
                 overwrite_drift,
             };
-            // A refusal goes on stdout too, so the CLI can show the objects and ask (plan 3.5).
-            let outcome = match push::apply(&pool, plan, options).await {
-                Ok(outcome) => outcome,
-                Err(e) => {
-                    use supatype_engine::ledger::drift::{SecurityDrift, SECURITY_DRIFT};
-                    if let Some(drift) = e.downcast_ref::<SecurityDrift>() {
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "status": "refused",
-                                "reason": SECURITY_DRIFT,
-                                "objects": drift.objects,
-                            })
-                        );
-                    }
-                    return Err(e);
-                }
-            };
+            // A refusal goes on stdout too (`main`), so the CLI can show the objects and ask
+            // (plan 3.5).
+            let outcome = push::apply(&pool, plan, options).await?;
             println!("{}", outcome.to_json());
         }
         Command::Generate { lang, artifact } => {
@@ -586,7 +542,10 @@ async fn run(command: Command, input: String) -> Result<()> {
                         "schema_sources_manifest": manifest,
                     }),
                     None => {
-                        anyhow::bail!("Migration {migration_name} has no schema snapshot")
+                        return Err(migration_history::NoSchemaSnapshot {
+                            name: migration_name,
+                        }
+                        .into())
                     }
                 };
                 println!("{}", serde_json::to_string(&payload)?);
@@ -883,6 +842,7 @@ mod tests {
             field_masking: supatype_engine::differ::FieldMaskingTier::None,
             field_view_plan: Vec::new(),
             rename_candidates: Vec::new(),
+            rewrites: Vec::new(),
         };
         assert!(has_destructive_ops(&diff));
     }

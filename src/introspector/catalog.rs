@@ -14,6 +14,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, Row};
 
+use super::fingerprint::ObjectKind;
 use super::indexes::{self, DbIndex};
 
 /// The schemas a push writes to besides the project's own.
@@ -74,6 +75,18 @@ pub struct CatalogState {
     /// the preview links have no live fingerprint and the ledger could not record them.
     #[serde(default)]
     pub engine_tables: Vec<EngineSchemaTables>,
+    /// The project schema's objects a concurrent build or a `NOT VALID` addition left unfinished.
+    #[serde(default)]
+    pub pending: Vec<PendingObject>,
+}
+
+/// A key or check not yet validated, or an INVALID index, in the project schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingObject {
+    pub kind: ObjectKind,
+    pub table: String,
+    pub name: String,
 }
 
 /// The tables of one engine schema, read with the same readers as the project schema so an engine
@@ -342,6 +355,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<CatalogState>
         rls_attributes: read_rls_attributes(conn, &schemas).await?,
         policies: read_policies(conn, &schemas).await?,
         engine_tables: read_engine_tables(conn, schema).await?,
+        pending: read_pending(conn, schema).await?,
     })
 }
 
@@ -385,7 +399,7 @@ async fn read_policies(conn: &mut PgConnection, schemas: &[String]) -> Result<Ve
         Option<String>,
         Option<String>,
         Option<String>,
-    )> = sqlx::query_as(
+    )> = sqlx::query_as(&format!(
         "SELECT n.nspname::text, c.relname::text, p.polname::text, p.polcmd::text, p.polpermissive,
                 (SELECT array_agg(role_name ORDER BY role_name)
                    FROM unnest(p.polroles) AS r(oid)
@@ -398,9 +412,10 @@ async fn read_policies(conn: &mut PgConnection, schemas: &[String]) -> Result<Ve
          FROM pg_policy p
          JOIN pg_class c ON c.oid = p.polrelid
          JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = ANY($1)
+         WHERE n.nspname = ANY($1) AND {}
          ORDER BY n.nspname, c.relname, p.polname",
-    )
+        super::readable("p.polrelid"),
+    ))
     .bind(schemas)
     .fetch_all(&mut *conn)
     .await?;
@@ -600,17 +615,18 @@ type ViewRow = (
 );
 
 async fn read_views(conn: &mut PgConnection, schemas: &[String]) -> Result<Vec<DbView>> {
-    let rows: Vec<ViewRow> = sqlx::query_as(
+    let rows: Vec<ViewRow> = sqlx::query_as(&format!(
         "SELECT n.nspname::text, c.relname::text, c.relkind::text,
                 pg_get_viewdef(c.oid, true), obj_description(c.oid, 'pg_class'),
-                COALESCE(ARRAY(SELECT o FROM unnest(c.reloptions) AS o ORDER BY o), '{}'),
+                COALESCE(ARRAY(SELECT o FROM unnest(c.reloptions) AS o ORDER BY o), '{{}}'),
                 pg_get_userbyid(c.relowner)::text
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
-         WHERE n.nspname = ANY($1) AND c.relkind IN ('v', 'm') AND d.objid IS NULL
+         WHERE n.nspname = ANY($1) AND c.relkind IN ('v', 'm') AND d.objid IS NULL AND {}
          ORDER BY n.nspname, c.relname",
-    )
+        super::readable("c.oid"),
+    ))
     .bind(schemas)
     .fetch_all(&mut *conn)
     .await?;
@@ -723,7 +739,7 @@ async fn read_table_grants(
          LEFT JOIN pg_roles r ON r.oid = g.grantee
          LEFT JOIN pg_roles gr ON gr.oid = g.grantor
          LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
-         WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'v', 'm', 'p') AND c.relacl IS NOT NULL
+         WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'v', 'm', 'p', 'S') AND c.relacl IS NOT NULL
            AND d.objid IS NULL
          GROUP BY n.nspname, c.relname, g.grantee, r.rolname
          ORDER BY n.nspname, c.relname, 3"
@@ -843,6 +859,42 @@ async fn granted_roles(conn: &mut PgConnection) -> Result<Vec<String>> {
     .bind(wanted)
     .fetch_all(&mut *conn)
     .await?)
+}
+
+/// The project schema's keys and checks still `NOT VALID`, and its INVALID indexes: what a push
+/// added online and has not finished (IN-C 2), or what someone left half made.
+async fn read_pending(conn: &mut PgConnection, schema: &str) -> Result<Vec<PendingObject>> {
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT CASE con.contype WHEN 'f' THEN 'foreign_key' ELSE 'check' END,
+                rel.relname::text, con.conname::text
+           FROM pg_constraint con
+           JOIN pg_class rel ON rel.oid = con.conrelid
+           JOIN pg_namespace n ON n.oid = rel.relnamespace
+          WHERE n.nspname = $1 AND NOT con.convalidated AND con.contype IN ('f', 'c')
+         UNION ALL
+         SELECT 'index', t.relname::text, i.relname::text
+           FROM pg_index ix
+           JOIN pg_class i ON i.oid = ix.indexrelid
+           JOIN pg_class t ON t.oid = ix.indrelid
+           JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE n.nspname = $1 AND NOT ix.indisvalid
+          ORDER BY 1, 2, 3",
+    )
+    .bind(schema)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(kind, table, name)| PendingObject {
+            kind: match kind.as_str() {
+                "foreign_key" => ObjectKind::ForeignKey,
+                "check" => ObjectKind::Check,
+                _ => ObjectKind::Index,
+            },
+            table,
+            name,
+        })
+        .collect())
 }
 
 async fn cron_available(conn: &mut PgConnection) -> Result<bool> {

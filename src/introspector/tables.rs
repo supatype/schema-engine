@@ -2,8 +2,13 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, Row};
 
-const TABLES_QUERY: &str = "SELECT t.table_name,
-                obj_description(c.oid, 'pg_class') AS comment
+/// The tables of a schema, each with whether its columns may be read without waiting on another
+/// session's lock (`super::readable`): a column's default is deparsed under a lock on the table.
+fn tables_query() -> String {
+    format!(
+        "SELECT t.table_name,
+                obj_description(c.oid, 'pg_class') AS comment,
+                {} AS readable
          FROM information_schema.tables t
          JOIN pg_catalog.pg_namespace n
            ON n.nspname = t.table_schema
@@ -19,7 +24,10 @@ const TABLES_QUERY: &str = "SELECT t.table_name,
            AND t.table_type = 'BASE TABLE'
            AND t.table_name NOT LIKE '\\_platform%'
            AND d.objid IS NULL
-         ORDER BY t.table_name";
+         ORDER BY t.table_name",
+        super::readable("c.oid")
+    )
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,14 +100,20 @@ impl DbColumn {
 }
 
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbTable>> {
-    let table_rows: Vec<(String, Option<String>)> = sqlx::query_as(TABLES_QUERY)
+    let table_rows: Vec<(String, Option<String>, bool)> = sqlx::query_as(&tables_query())
         .bind(schema)
         .fetch_all(&mut *conn)
         .await?;
 
     let mut tables = Vec::new();
-    for (name, comment) in table_rows {
-        let columns = read_columns(conn, schema, &name).await?;
+    for (name, comment, readable) in table_rows {
+        // A table another session holds exclusively is listed with no columns: doctor reports
+        // what it could not read as not checked (IN-B).
+        let columns = if readable {
+            read_columns(conn, schema, &name).await?
+        } else {
+            Vec::new()
+        };
         tables.push(DbTable {
             schema: schema.to_string(),
             name,
@@ -149,12 +163,13 @@ async fn read_columns(conn: &mut PgConnection, schema: &str, table: &str) -> Res
 
 #[cfg(test)]
 mod tests {
-    use super::TABLES_QUERY;
+    use super::tables_query;
 
     #[test]
     fn table_query_excludes_extension_owned_tables() {
-        assert!(TABLES_QUERY.contains("LEFT JOIN pg_catalog.pg_depend d"));
-        assert!(TABLES_QUERY.contains("d.deptype = 'e'"));
-        assert!(TABLES_QUERY.contains("d.objid IS NULL"));
+        let query = tables_query();
+        assert!(query.contains("LEFT JOIN pg_catalog.pg_depend d"));
+        assert!(query.contains("d.deptype = 'e'"));
+        assert!(query.contains("d.objid IS NULL"));
     }
 }

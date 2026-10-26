@@ -41,9 +41,15 @@ carry on from whatever you tagged, because the manifest is updated by the same m
 The job refuses to go further unless `${GITHUB_REF_NAME#v}` equals the crate version from
 `cargo metadata`.
 
-This gate is not cosmetic. `ENGINE_VERSION` comes from `CARGO_PKG_VERSION` through `build.rs`, and it
-is bound to every row of `_supatype` migration history, written into the generated migration header,
-and reported by both binaries. `Cargo.toml` once sat at `0.1.0` while tags ran to `v0.1.8`, so every
+This gate is not cosmetic. `ENGINE_VERSION` comes from `build.rs`, and it is bound to every row of
+`_supatype` migration history, written into the generated migration header, and reported by both
+binaries and by `capabilities`. A release build sets `SUPATYPE_ENGINE_RELEASE` to the tag's version
+and reports exactly `CARGO_PKG_VERSION` (`build.rs` refuses a value that differs from it). Every
+other build (CI, the release train, a local `cargo build`, a Docker build without that argument)
+reports a pre-release of the next minor with its commit as build metadata, `0.7.0-dev+1a2b3c4d5e6f`
+while `Cargo.toml` says `0.6.0`, so history and tests can tell a candidate from the release it
+follows. A Docker build has no `.git`: pass `--build-arg SUPATYPE_ENGINE_BUILD_SHA=<commit>`.
+Nothing writes `Cargo.toml` but release-please. `Cargo.toml` once sat at `0.1.0` while tags ran to `v0.1.8`, so every
 migration applied in that window recorded an engine version that was never released. A forgotten
 bump is now a red release rather than a quiet mislabel.
 

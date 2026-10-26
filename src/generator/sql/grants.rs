@@ -16,6 +16,7 @@
 //! merely leaves today's behaviour in place. `service_role` is never touched: it is
 //! the escape hatch that has to keep working when everything else is locked down.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::differ::rls_diff::intersect_access;
@@ -104,7 +105,7 @@ pub const RULED: [&str; 4] = ["DELETE", "INSERT", "SELECT", "UPDATE"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableGrant {
     pub table: String,
-    pub role: &'static str,
+    pub role: Cow<'static, str>,
     /// Table-level privileges, sorted as the catalog sorts them.
     pub privileges: Vec<&'static str>,
     /// Write privileges narrowed to columns: the operation, and the columns it may not touch. The
@@ -131,7 +132,7 @@ impl TableGrant {
     /// never granted anything, so its object is the one statement that takes everything away.
     pub fn create_sql(&self, schema: &str) -> String {
         let target = quote_qualified(schema, &self.table);
-        let role = self.role;
+        let role = &*self.role;
         if role == PUBLIC {
             return format!("REVOKE ALL PRIVILEGES ON {target} FROM PUBLIC;");
         }
@@ -189,10 +190,10 @@ impl TableGrant {
     }
 
     /// A grant of nothing: what `role` holds on `table` where nothing is granted at all.
-    fn nothing(table: &str, role: &'static str) -> TableGrant {
+    fn nothing(table: &str, role: impl Into<Cow<'static, str>>) -> TableGrant {
         TableGrant {
             table: table.to_string(),
-            role,
+            role: role.into(),
             privileges: Vec::new(),
             narrowed: Vec::new(),
             columns: Vec::new(),
@@ -245,6 +246,24 @@ pub const PUBLIC: &str = "PUBLIC";
 /// `service_role` keeps its base-table access: tier 1 masks a `service_role` caller like any other
 /// (the read predicate simply fails for it), while under tier 2 that caller reads the table
 /// directly and sees everything. Deliberate, and recorded rather than quietly true.
+/// What `role` may do with `sequence`, the sequence a serial column of `model` owns: `USAGE`, which
+/// `nextval` needs, where the model's create rule admits the role, and nothing otherwise. Not
+/// `SELECT` or `UPDATE`: an insert only draws the next value. The same in both tiers: under tier 2
+/// a view with no write trigger inserts through the table's own default, which draws the value as
+/// the caller. An identity column needs none of this, since Postgres draws its value without
+/// checking the caller's privileges on its sequence. A many-to-many junction has no serial key.
+pub fn sequence_grant(model: &ModelAst, sequence: &str, role: &'static str) -> TableGrant {
+    let create = platform_access(model).create.as_ref();
+    TableGrant {
+        privileges: if allowed(role, create) {
+            vec!["USAGE"]
+        } else {
+            Vec::new()
+        },
+        ..TableGrant::nothing(sequence, role)
+    }
+}
+
 pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
     let mut out = Vec::new();
     for model in &ast.models {
@@ -378,7 +397,7 @@ fn model_grant(model: &ModelAst, role: &'static str) -> TableGrant {
     }
     TableGrant {
         table: db_table_name(model).to_string(),
-        role,
+        role: role.into(),
         privileges,
         narrowed,
         columns: declared_columns(model),
@@ -439,15 +458,50 @@ pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String>
 /// every time, and recorded on the ledger with it (F14). The base tables hold nothing for these
 /// roles then ([`table_grants`]).
 pub fn view_grants(model: &ModelAst, view_schema: &str) -> String {
-    let target = quote_qualified(view_schema, db_table_name(model));
+    grants_on_view(view_schema, db_table_name(model), |role| {
+        let grant = model_grant(model, role);
+        RULED
+            .into_iter()
+            .filter(|privilege| {
+                grant.privileges.contains(privilege)
+                    || grant.narrowed.iter().any(|(op, _)| op == privilege)
+            })
+            .collect()
+    })
+}
+
+/// Tier 2's privileges on a many-to-many junction's `api` view: for each API role what it holds on
+/// the junction under tier 1 ([`junction_grants`]), and for `service_role` every row verb.
+pub fn junction_view_grants(
+    ast: &SchemaAst,
+    junction: &JunctionTableAst,
+    view_schema: &str,
+) -> String {
+    let grants = junction_grants(ast, junction);
+    grants_on_view(view_schema, &junction.name, |role| {
+        grants
+            .iter()
+            .find(|g| g.role == role)
+            .map(|g| g.privileges.clone())
+            .unwrap_or_default()
+    })
+}
+
+/// Each API role granted exactly what `held` says it holds on a view and refused the rest of the
+/// row verbs, and `service_role` granted all of them.
+fn grants_on_view(
+    view_schema: &str,
+    view: &str,
+    held: impl Fn(&'static str) -> Vec<&'static str>,
+) -> String {
+    let target = quote_qualified(view_schema, view);
     let mut blocks = Vec::new();
     for role in GRANTED_ROLES {
-        let grant = model_grant(model, role);
+        let granted = held(role);
         let statements: Vec<String> = RULED
             .iter()
             .map(|privilege| {
-                let narrowed = grant.narrowed.iter().any(|(op, _)| op == privilege);
-                if grant.privileges.contains(privilege) || narrowed {
+                if granted.contains(privilege) {
                     format!("GRANT {privilege} ON {target} TO {role}")
                 } else {
                     format!("REVOKE {privilege} ON {target} FROM {role}")
@@ -469,43 +523,16 @@ pub fn view_grants(model: &ModelAst, view_schema: &str) -> String {
 /// The role whose access the rules never narrow: the escape hatch.
 const SERVICE_ROLE: &str = "service_role";
 
-/// What the owner of tier 2's views holds on a model table: every row verb. Nobody connects as it,
-/// and row-level security applies to it with the caller's JWT, so each caller still reaches only
-/// the rows their rules allow.
-pub fn api_owner_grant(model: &ModelAst) -> TableGrant {
+/// What the owner of tier 2's views holds on the table behind one, a model's or a junction's: every
+/// row verb. Nobody connects as it, and row-level security applies to it with the caller's JWT, so
+/// each caller still reaches only the rows their rules allow. A junction's view needs it as a
+/// model's does, and a view whose rule reads a junction as a membership source reads it with the
+/// owner's rights, as an API role does under tier 1.
+pub fn api_owner_grant(table: &str, owner: &str) -> TableGrant {
     TableGrant {
-        table: db_table_name(model).to_string(),
-        role: crate::generator::sql::field_views::API_OWNER,
         privileges: RULED.to_vec(),
-        narrowed: Vec::new(),
-        columns: Vec::new(),
+        ..TableGrant::nothing(table, owner.to_string())
     }
-}
-
-/// What the owner of tier 2's views holds on each junction table that any API role may use: what
-/// any of them may do there ([`junction_grants`]). No view is made over a junction, but a view reads
-/// one with its owner's rights wherever a rule reads it as a membership source, as an API role does
-/// under tier 1; row-level security on the junction still decides which rows that is. A junction no
-/// API role may use gives the owner nothing either, and records nothing.
-pub fn api_owner_junction_grants(ast: &SchemaAst) -> Vec<TableGrant> {
-    ast.junction_tables
-        .iter()
-        .filter_map(|junction| {
-            let mut privileges: Vec<&'static str> = junction_grants(ast, junction)
-                .into_iter()
-                .flat_map(|g| g.privileges)
-                .collect();
-            privileges.sort_unstable();
-            privileges.dedup();
-            (!privileges.is_empty()).then(|| TableGrant {
-                privileges,
-                ..TableGrant::nothing(
-                    &junction.name,
-                    crate::generator::sql::field_views::API_OWNER,
-                )
-            })
-        })
-        .collect()
 }
 
 /// The privileges for one role, applied only if the role exists.

@@ -268,7 +268,15 @@ async fn state_json(pool: &sqlx::PgPool, baseline: &serde_json::Value) -> String
     without_baseline(&mut value, baseline, false);
     let mut text = serde_json::to_string_pretty(&value).unwrap();
     text.push('\n');
-    text
+    // Tier 2's view owner is named after the database (TI2), and each run's database is new.
+    let database: String = sqlx::query_scalar("SELECT current_database()::text")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    text.replace(
+        &supatype_engine::generator::sql::field_views::api_owner_for(&database),
+        "supatype_api_owner_<database>",
+    )
 }
 
 async fn run_fixture(pool: &sqlx::PgPool, name: &str) {

@@ -14,6 +14,13 @@ RUN mkdir src && \
     touch src/generator/mod.rs src/licensing/mod.rs src/parser/mod.rs src/wasm.rs src/server/mod.rs src/differ/mod.rs src/introspector/mod.rs src/state/mod.rs && \
     cargo build --release --bin supatype-engine-server --bin supatype-engine 2>/dev/null || true
 
+# What the binaries report as their version (build.rs). There is no .git in this context, so the
+# caller names the build: the release workflow passes SUPATYPE_ENGINE_RELEASE (the crate version),
+# and any other build passes SUPATYPE_ENGINE_BUILD_SHA (its commit) to report <next minor>-dev+<sha>.
+# Declared after the dependency layer so a new commit does not rebuild every dependency.
+ARG SUPATYPE_ENGINE_RELEASE=""
+ARG SUPATYPE_ENGINE_BUILD_SHA=""
+
 # Copy real source and build
 COPY src/ src/
 RUN cargo build --release --bin supatype-engine-server --bin supatype-engine

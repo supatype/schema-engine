@@ -72,19 +72,22 @@ pub async fn run(
         .await
         .context("Failed to bootstrap _supatype internal state")?;
     // As a push does: these are ledger writes too. A preview writes nothing and takes no lock.
-    let mut tx = if request.apply {
-        push::begin_writer(pool).await?
-    } else {
-        pool.begin().await?
-    };
-    let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
-    let (outcome, changes, forgotten) = choose(ast, &state, &decision, request)?;
-    if request.apply {
+    if !request.apply {
+        let mut tx = pool.begin().await?;
+        let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
+        return Ok(choose(ast, &state, &decision, request)?.0);
+    }
+    // A person is waiting: a lock it cannot take at once is named, not retried (LK1).
+    let (mut tx, pid) = push::begin_watched_writer(pool).await?;
+    let work = async move {
+        let (state, decision) = push::read_and_decide(&mut tx, ast, schema).await?;
+        let (outcome, changes, forgotten) = choose(ast, &state, &decision, request)?;
         ledger::upsert(&mut tx, &changes).await?;
         ledger::delete(&mut tx, &forgotten).await?;
         tx.commit().await?;
-    }
-    Ok(outcome)
+        Ok(outcome)
+    };
+    crate::online::fail_fast(pool, pid, "adopt", work).await
 }
 
 /// The rows adopting would write and those it would remove, and the outcome that says so.

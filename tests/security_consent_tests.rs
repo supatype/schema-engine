@@ -405,7 +405,7 @@ async fn a_junction_table_holds_exactly_what_its_rules_allow() {
 }
 
 const CAN_READ_POSTS_FALSE: &str =
-    "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)
+    "CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts, not_in_graphql boolean DEFAULT NULL)
      RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT false $$";
 
 /// F15 (f), E31: an affordance function decides access as its policy does, so a hand edit to it
@@ -700,7 +700,7 @@ async fn an_older_engines_rules_reading_the_claims_through_auth_are_not_hand_edi
                 "{FORGET_THE_ACCESS_ROWS};
                  ALTER POLICY posts_select ON public.posts
                    USING (author_id = (SELECT auth.uid()));
-                 CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts)
+                 CREATE OR REPLACE FUNCTION public.can_read_posts(posts public.posts, not_in_graphql boolean DEFAULT NULL)
                    RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT \"author_id\" = (SELECT auth.uid())
       FROM (SELECT ($1).*) AS \"posts\";
