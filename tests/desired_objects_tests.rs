@@ -193,6 +193,12 @@ async fn after_a_push_every_desired_object_exists_with_the_structure_it_predicte
                 if o.key.kind == ObjectKind::CronJob && !catalog.cron_available {
                     continue;
                 }
+                // A role the rules allow nothing holds nothing, which the catalog has no row for:
+                // the ledger records it as `holding_nothing`.
+                let holds_nothing = o.structure.get("privileges").is_some_and(String::is_empty);
+                if o.key.kind == ObjectKind::TableGrant && holds_nothing {
+                    continue;
+                }
                 let key = (
                     o.key.kind,
                     o.key.schema.clone(),

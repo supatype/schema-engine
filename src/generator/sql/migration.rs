@@ -231,29 +231,6 @@ fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
     ]
 }
 
-/// Table privileges derived from the access rules.
-///
-/// Emitted after the tables exist, for the same reason the affordance functions
-/// are. Idempotent: a `REVOKE` of a privilege that is not held is a no-op, and the
-/// matching `GRANT` is what restores access when a rule is relaxed, so running this
-/// on every push is what keeps privileges tracking the schema.
-fn render_grant_lines(
-    ast: &SchemaAst,
-    schema: &str,
-    skip: &[String],
-    serve_from: Option<&str>,
-) -> Vec<String> {
-    let sql = crate::generator::sql::grants::generate_table_grants(ast, schema, skip, serve_from);
-    if sql.trim().is_empty() {
-        return Vec::new();
-    }
-    vec![
-        "-- Table privileges derived from access rules (defence in depth)".into(),
-        sql.trim().into(),
-        String::new(),
-    ]
-}
-
 /// The checks that field rules can be enforced here, emitted after the affordance functions the
 /// labels point at. The labels themselves are ledger objects, set by the reconcile after these
 /// have run: a schema that declares a masked column, pushed to a database without the masking
@@ -270,82 +247,47 @@ fn render_mask_probe_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
     ]
 }
 
-/// Everything re-asserted on every push rather than diffed.
+/// Everything re-asserted on every push rather than reconciled: the affordance functions, tier 2's
+/// views with their privileges, and the masking probes. Idempotent by construction (`CREATE OR
+/// REPLACE`, `GRANT`/`REVOKE` pairs, checks), so re-running them is what keeps them tracking the
+/// schema. The model tables' privileges are ledger objects (Phase 4.7c), set by the reconcile.
 ///
-/// These three are idempotent by construction (`CREATE OR REPLACE`, `GRANT`/`REVOKE`
-/// pairs, and `SECURITY LABEL` upserts), so re-running them is what keeps them tracking
-/// the schema instead of drifting from it.
-///
-/// Shared by both forward paths deliberately. They diverged before: the wrapped path
-/// applied the derived privileges and the outer-body path did not, and the outer body is
-/// what every real push actually runs (`push_storage_and_model_apply_body`), so the
-/// privileges were generated and never applied. Anything in this list belongs on every
-/// path that applies a migration.
-fn render_reasserted_lines(
-    diff: &DiffOutput,
-    ast: &SchemaAst,
-    schema: &str,
-    skip: &[String],
-) -> Vec<String> {
-    let views = diff.field_masking == crate::differ::FieldMaskingTier::Views;
-
-    // `can_*` functions are not skipped: they live in the managed schema and read the table, they do
-    // not change it. A Studio affordance for a table the API cannot reach is useless but harmless.
+/// Shared by both forward paths deliberately. They diverged before: the wrapped path applied the
+/// derived privileges and the outer-body path did not, and the outer body is what every real push
+/// actually runs, so the privileges were generated and never applied. Anything in this list
+/// belongs on every path that applies a migration.
+fn render_reasserted_lines(diff: &DiffOutput, ast: &SchemaAst, schema: &str) -> Vec<String> {
+    // `can_*` functions live in the managed schema and read the table, they do not change it.
     let mut lines = render_can_function_lines(ast, schema);
 
-    // Tier 2's views come **before** the grants, which name `api.<table>` and would otherwise run
-    // against a schema that does not exist yet.
-    //
     // One tier or the other, never both. Labels *and* views would give every deployment the views'
-    // weaker aggregate behaviour, and the extension rejects the whole-row references the write trigger
-    // needs.
-    if views {
-        let sql = crate::generator::sql::field_views::render_field_views(
-            ast,
-            &diff.field_view_plan,
-            schema,
-        );
-        if !sql.trim().is_empty() {
-            lines.push(
-                "-- Field-level access, tier 2: api views (this database cannot load supatype_mask)"
-                    .into(),
-            );
-            lines.push(sql.trim_end().into());
-            lines.push(String::new());
-        }
-    }
-
-    // Under tier 2 the API reads the `api` views, so that is where the privileges belong, and the
-    // base tables lose theirs, or `Accept-Profile: public` walks straight round the mask.
-    let serve_from = views.then_some(crate::generator::sql::field_views::VIEW_SCHEMA);
-    lines.extend(render_grant_lines(ast, schema, skip, serve_from));
-
-    if views {
-        // Column privileges are tier 1's second layer, for what a *database role* provably can never
-        // write. Under tier 2 `anon` and `authenticated` hold no privilege on the base table at all,
-        // so narrowing one would be describing access that does not exist.
-    } else {
-        // Strictly after the table grants: these narrow a table-level write privilege to a
-        // column list, and the table grants would hand the whole table back if they ran after.
-        lines.extend(render_column_grant_lines(ast, schema, skip));
+    // weaker aggregate behaviour, and the extension rejects the whole-row references the write
+    // trigger needs.
+    if diff.field_masking != crate::differ::FieldMaskingTier::Views {
         lines.extend(render_mask_probe_lines(ast, schema));
+        return lines;
     }
-
+    let views =
+        crate::generator::sql::field_views::render_field_views(ast, &diff.field_view_plan, schema);
+    if !views.trim().is_empty() {
+        lines.push(
+            "-- Field-level access, tier 2: api views (this database cannot load supatype_mask)"
+                .into(),
+        );
+        lines.push(views.trim_end().into());
+        lines.push(String::new());
+    }
+    // Under tier 2 the API reads the `api` views, so that is where the privileges belong. The views
+    // are made again on every push, which takes their privileges with them, so these are made
+    // again with them rather than recorded.
+    let grants = crate::generator::sql::grants::generate_view_grants(
+        ast,
+        crate::generator::sql::field_views::VIEW_SCHEMA,
+    );
+    lines.push("-- Field-level access, tier 2: privileges on the api views".into());
+    lines.push(grants.trim().into());
+    lines.push(String::new());
     lines
-}
-
-/// Column-level write privileges derived from the field rules: a second layer under the
-/// masking extension, for what a database role provably can never write.
-fn render_column_grant_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
-    let sql = crate::generator::sql::grants::generate_column_grants(ast, schema, skip);
-    if sql.trim().is_empty() {
-        return Vec::new();
-    }
-    vec![
-        "-- Column write privileges derived from field rules (defence in depth)".into(),
-        sql.trim().into(),
-        String::new(),
-    ]
 }
 
 fn render_forward_operation_lines(
@@ -414,12 +356,7 @@ fn render_forward_core(diff: &DiffOutput, schema: &str, ast: &SchemaAst) -> Resu
         lines.push(String::new());
     }
     lines.extend(render_forward_operation_lines(diff, schema, ast)?);
-    lines.extend(render_reasserted_lines(
-        diff,
-        ast,
-        schema,
-        &diff.unmanaged_model_tables,
-    ));
+    lines.extend(render_reasserted_lines(diff, ast, schema));
     // Last, because it reads the snapshot tables the operations above create and the model tables
     // they reference. Errors rather than warns when the push failed to state who may see a draft.
     lines.extend(render_versions_lines(ast, schema)?);

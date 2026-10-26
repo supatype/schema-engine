@@ -236,51 +236,6 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_posts"("posts" "public"."posts")
       FROM (SELECT ($1).*) AS "posts";
   $can$;
 
--- Table privileges derived from access rules (defence in depth)
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'GRANT SELECT ON "public"."users" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."users" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."users" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."users" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'GRANT SELECT ON "public"."users" TO authenticated';
-    EXECUTE 'GRANT INSERT ON "public"."users" TO authenticated';
-    EXECUTE 'GRANT UPDATE ON "public"."users" TO authenticated';
-    EXECUTE 'GRANT DELETE ON "public"."users" TO authenticated';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'GRANT SELECT ON "public"."posts" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."posts" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."posts" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'GRANT SELECT ON "public"."posts" TO authenticated';
-    EXECUTE 'GRANT INSERT ON "public"."posts" TO authenticated';
-    EXECUTE 'GRANT UPDATE ON "public"."posts" TO authenticated';
-    EXECUTE 'GRANT DELETE ON "public"."posts" TO authenticated';
-  END IF;
-END
-$grants$;
-
 -- reconciled objects
 ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."users" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()
@@ -384,5 +339,37 @@ FOR UPDATE USING (
   ) WITH CHECK (
     (SELECT auth.uid()) = "id"
   );
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."posts" FROM anon';
+    EXECUTE 'GRANT SELECT ON "public"."posts" TO anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."posts" FROM authenticated';
+    EXECUTE 'GRANT DELETE, INSERT, SELECT, UPDATE ON "public"."posts" TO authenticated';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."users" FROM anon';
+    EXECUTE 'GRANT SELECT ON "public"."users" TO anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."users" FROM authenticated';
+    EXECUTE 'GRANT DELETE, INSERT, SELECT, UPDATE ON "public"."users" TO authenticated';
+  END IF;
+END
+$grants$;
 
 COMMIT;

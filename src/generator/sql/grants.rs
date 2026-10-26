@@ -17,7 +17,7 @@
 //! the escape hatch that has to keep working when everything else is locked down.
 
 use crate::parser::accessors::{db_table_name, platform_access};
-use crate::parser::ast::{AccessRule, MembershipSource, Operand, SchemaAst};
+use crate::parser::ast::{AccessRule, MembershipSource, ModelAst, Operand, SchemaAst};
 
 /// Whether an unauthenticated caller could ever satisfy a rule.
 ///
@@ -74,91 +74,226 @@ fn operand_reachable_by_anon(operand: &Operand) -> bool {
     }
 }
 
-/// Privilege statements for what the rules prove usable, and revocations for what
-/// they prove unusable.
-///
-/// Wrapped in a role-existence guard. `anon` / `authenticated` are created when a
-/// project is provisioned, but a migration also runs against databases that have
-/// never seen that step -- a bare Postgres in CI, a restored dump, a database whose
-/// operator renamed the roles. A `GRANT` to a role that does not exist aborts the
-/// whole transaction, so a defence-in-depth measure would take the migration down
-/// with it.
-///
-/// Emitted on every push and idempotent: revoking a privilege that is not held is a
-/// no-op, and the matching grant is what restores access when a rule is relaxed.
-/// `skip` names tables the schema declares but Supatype did not create.
-///
-/// Their privileges are not ours to change: a `REVOKE` would take access away from whatever else
-/// uses the table, and a `GRANT` would hand Supatype's API a table whose access rules were never
-/// applied. Skipping leaves it inaccessible to the API, which is the safe direction.
-/// `serve_from` is the schema the API actually reads. Under tier-2 field masking that is `api`, and
-/// the privileges have to follow: schema exposure is PostgREST configuration, not a boundary, so a
-/// mask that lives in a view is only as strong as the roles' inability to read the table behind it.
-/// The base-table privileges are revoked from `anon` and `authenticated` in the same breath.
-///
-/// `service_role` keeps its base-table access, per this module's standing policy: it is the escape
-/// hatch that has to keep working. One consequence to know: tier 1 masks a `service_role` caller like
-/// any other (the read predicate simply fails for it), while under tier 2 that caller reads the table
-/// directly and sees everything. Deliberate, and recorded rather than quietly true.
-///
-/// One `DO` block per role and table, so each block is one object's worth of privileges: the
-/// ledger (`crate::desired::statements`) attributes a statement to the object it touches, and a
-/// block that named every table would belong to all of them.
-pub fn generate_table_grants(
-    ast: &SchemaAst,
-    schema: &str,
-    skip: &[String],
-    serve_from: Option<&str>,
-) -> String {
-    let mut blocks: Vec<String> = Vec::new();
+/// The roles whose privileges on a model table the engine decides. `service_role` is never
+/// touched: it is the escape hatch that has to keep working when everything else is locked down.
+pub const GRANTED_ROLES: [&str; 2] = ["anon", "authenticated"];
 
-    for model in &ast.models {
-        let access = platform_access(model);
-        let table = db_table_name(model);
-        if skip.iter().any(|t| t == table) {
-            continue;
-        }
-        let escaped = table.replace('"', "\"\"");
-        let base = format!("\"{schema}\".\"{escaped}\"");
-        let qualified = match serve_from {
-            Some(view_schema) => format!("\"{view_schema}\".\"{escaped}\""),
-            None => base.clone(),
-        };
-        for role in ["anon", "authenticated"] {
-            let mut stmts: Vec<String> = Vec::new();
-            // Tier 2 only: take the API roles off the table the view reads, so `Accept-Profile`
-            // cannot be used to go round the mask and neither can a stray credential.
-            if serve_from.is_some() {
-                stmts.push(format!("REVOKE ALL PRIVILEGES ON {base} FROM {role}"));
-            }
-            // `authenticated` keeps a privilege whenever the operation is declared at all; which
-            // *rows* it may touch is the policy's business, and revoking here would stop the
-            // policy ever being consulted. `anon` holds it only where the rule can reach it.
-            for (op, rule) in [
-                ("SELECT", access.read.as_ref()),
-                ("INSERT", access.create.as_ref()),
-                ("UPDATE", access.update.as_ref()),
-                ("DELETE", access.delete.as_ref()),
-            ] {
-                let allowed = match role {
-                    "anon" => rule.is_some_and(reachable_by_anon),
-                    _ => rule.is_some(),
-                };
-                stmts.push(privilege_stmt(op, &qualified, role, allowed));
-            }
-            blocks.push(guarded_block(role, &stmts));
-        }
+/// The table privileges the access rules govern, in the order Postgres sorts their names, which
+/// is how the catalog reports a privilege set.
+const RULED: [&str; 4] = ["DELETE", "INSERT", "SELECT", "UPDATE"];
+
+/// Everything one API role may do on one model table: the ledger object (Phase 4.7c, D7).
+///
+/// One object for the table's privileges and its column privileges together, because Postgres
+/// does not keep them apart: revoking a table privilege revokes it on every column too, so a
+/// table grant replaced on its own would silently take its column grants with it.
+///
+/// **The exact set.** Applied as `REVOKE ALL` and then the grants, so nothing else survives: the
+/// image's default privileges had left `anon` and `authenticated` holding `TRUNCATE` (which
+/// row-level security does not govern), `REFERENCES`, `TRIGGER` and `MAINTAIN` on every model
+/// table. Grants to any other role are not this object's and are never touched.
+///
+/// **Conservative in one direction only.** A privilege is revoked only when the rules prove it can
+/// never be used, as the module documentation says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableGrant {
+    pub table: String,
+    pub role: &'static str,
+    /// Table-level privileges, sorted as the catalog sorts them.
+    pub privileges: Vec<&'static str>,
+    /// Write privileges narrowed to columns: the operation, and the columns it may not touch. The
+    /// operation is then not in `privileges`.
+    pub narrowed: Vec<(&'static str, Vec<String>)>,
+}
+
+impl TableGrant {
+    /// The privilege set as the catalog's fingerprint labels it.
+    pub fn privilege_set(&self) -> String {
+        self.privileges.join(",")
     }
 
+    /// Revoke everything, then grant exactly this set, applied only if the role exists: a
+    /// self-hosted database may not have the API roles at all, and a `GRANT` to a role that does
+    /// not exist would abort the whole migration. One block per role and table, so the ledger
+    /// attributes it to one object (`crate::desired::statements`).
+    pub fn create_sql(&self, schema: &str) -> String {
+        let target = qualified(schema, &self.table);
+        let role = self.role;
+        let mut body = format!(
+            "    EXECUTE 'REVOKE ALL PRIVILEGES ON {}';\n",
+            escape(&format!("{target} FROM {role}"))
+        );
+        if !self.privileges.is_empty() {
+            let grant = format!("GRANT {} ON {target} TO {role}", self.privileges.join(", "));
+            body.push_str(&format!("    EXECUTE '{}';\n", escape(&grant)));
+        }
+        for (op, excluded) in &self.narrowed {
+            body.push_str(&column_complement(schema, &self.table, op, role, excluded));
+        }
+        let declare = if self.narrowed.is_empty() {
+            ""
+        } else {
+            "DECLARE\n  granted text;\n"
+        };
+        format!(
+            "DO $grants$\n{declare}BEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN\n{body}  END IF;\nEND\n$grants$;"
+        )
+    }
+}
+
+/// The statement that takes every privilege `role` holds on a table away, guarded on the role and
+/// the table existing: the drop of a [`TableGrant`].
+pub fn revoke_all_sql(schema: &str, table: &str, role: &str) -> String {
+    let target = qualified(schema, table);
+    format!(
+        "DO $grants$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}')\n     AND to_regclass('{}') IS NOT NULL THEN\n    EXECUTE 'REVOKE ALL PRIVILEGES ON {}';\n  END IF;\nEND\n$grants$;",
+        escape(&target),
+        escape(&format!("{target} FROM {role}"))
+    )
+}
+
+fn qualified(schema: &str, table: &str) -> String {
+    format!(
+        "\"{}\".\"{}\"",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\"")
+    )
+}
+
+/// Doubled single quotes, for text inside an `EXECUTE '...'` literal.
+fn escape(sql: &str) -> String {
+    sql.replace('\'', "''")
+}
+
+/// Every model table's [`TableGrant`] for each API role.
+///
+/// `views` is tier 2 of field masking: the API reads the `api` views, so the privileges follow
+/// them and the base table holds nothing for the API roles, or `Accept-Profile` walks straight
+/// round the mask. Schema exposure is PostgREST configuration, not a boundary. The views' own
+/// privileges are re-asserted with them ([`generate_view_grants`]).
+///
+/// `service_role` keeps its base-table access: tier 1 masks a `service_role` caller like any other
+/// (the read predicate simply fails for it), while under tier 2 that caller reads the table
+/// directly and sees everything. Deliberate, and recorded rather than quietly true.
+pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
+    let mut out = Vec::new();
+    for model in &ast.models {
+        for role in GRANTED_ROLES {
+            out.push(if views {
+                TableGrant {
+                    table: db_table_name(model).to_string(),
+                    role,
+                    privileges: Vec::new(),
+                    narrowed: Vec::new(),
+                }
+            } else {
+                model_grant(model, role)
+            });
+        }
+    }
+    out
+}
+
+/// What `role` may do on `model`'s table under its rules. `authenticated` keeps a privilege
+/// whenever the operation is declared at all: which *rows* it may touch is the policy's business,
+/// and revoking here would stop the policy ever being consulted. `anon` holds it only where the
+/// rule can reach it.
+fn model_grant(model: &ModelAst, role: &'static str) -> TableGrant {
+    let access = platform_access(model);
+    let rule_for = |privilege: &str| match privilege {
+        "SELECT" => access.read.as_ref(),
+        "INSERT" => access.create.as_ref(),
+        "UPDATE" => access.update.as_ref(),
+        _ => access.delete.as_ref(),
+    };
+    let mut privileges = Vec::new();
+    let mut narrowed = Vec::new();
+    for privilege in RULED {
+        let allowed = match (role, rule_for(privilege)) {
+            (_, None) => false,
+            ("anon", Some(rule)) => reachable_by_anon(rule),
+            (_, Some(_)) => true,
+        };
+        if !allowed {
+            continue;
+        }
+        let excluded = unwritable_columns(model, privilege, role);
+        if excluded.is_empty() {
+            privileges.push(privilege);
+        } else {
+            narrowed.push((privilege, excluded));
+        }
+    }
+    TableGrant {
+        table: db_table_name(model).to_string(),
+        role,
+        privileges,
+        narrowed,
+    }
+}
+
+// ─── Column privileges for field write rules (defence in depth) ──────────────
+
+/// The columns `role` provably can never write on `op` (`fields.write`), which its write
+/// privilege is narrowed to exclude: a second layer under the masking extension.
+///
+/// **Writes only.** A column `REVOKE` for reads makes `GET /table` with no `select` return
+/// 403 for the whole table, which is the break the field-access design exists to avoid.
+/// Writes have no such problem: `PATCH`/`POST` naming a column the role may not write is
+/// *supposed* to fail.
+///
+/// This is a second layer, not the mechanism. Enforcement is the query rewrite, which can
+/// express `Role<"admin">`; a column privilege cannot, because an application role is a JWT
+/// claim and an admin still connects as `authenticated`. So only what a *database role*
+/// provably can never write is excluded here.
+pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String> {
+    if !matches!(op, "INSERT" | "UPDATE") {
+        return Vec::new();
+    }
+    platform_access(model)
+        .fields
+        .iter()
+        .filter(|(_, rules)| {
+            rules
+                .write
+                .as_ref()
+                .is_some_and(|write| !write_satisfiable(op, role, write))
+        })
+        .map(|(column, _)| column.clone())
+        .collect()
+}
+
+/// Tier 2's privileges on the `api` views, for each API role: what the rules allow, re-asserted
+/// with the views, which a push makes again every time. The base tables hold nothing for these
+/// roles then ([`table_grants`]).
+pub fn generate_view_grants(ast: &SchemaAst, view_schema: &str) -> String {
+    let mut blocks = Vec::new();
+    for model in &ast.models {
+        for role in GRANTED_ROLES {
+            let grant = model_grant(model, role);
+            let target = qualified(view_schema, &grant.table);
+            let statements: Vec<String> = RULED
+                .iter()
+                .map(|privilege| {
+                    let narrowed = grant.narrowed.iter().any(|(op, _)| op == privilege);
+                    if grant.privileges.contains(privilege) || narrowed {
+                        format!("GRANT {privilege} ON {target} TO {role}")
+                    } else {
+                        format!("REVOKE {privilege} ON {target} FROM {role}")
+                    }
+                })
+                .collect();
+            blocks.push(guarded_block(role, &statements));
+        }
+    }
     blocks.join("\n")
 }
 
-/// The privileges for one role on one table, applied only if the role exists: a self-hosted
-/// database may not have the API roles at all.
+/// The privileges for one role, applied only if the role exists.
 fn guarded_block(role: &str, statements: &[String]) -> String {
     let body = statements
         .iter()
-        .map(|s| format!("    EXECUTE '{}';\n", s.replace('\'', "''")))
+        .map(|s| format!("    EXECUTE '{}';\n", escape(s)))
         .collect::<String>();
     format!(
         "DO $grants$
@@ -169,97 +304,6 @@ END
 $grants$;
 "
     )
-}
-
-fn privilege_stmt(privilege: &str, table: &str, role: &str, allowed: bool) -> String {
-    if allowed {
-        format!("GRANT {privilege} ON {table} TO {role}")
-    } else {
-        format!("REVOKE {privilege} ON {table} FROM {role}")
-    }
-}
-
-// ─── Column privileges for field write rules (defence in depth) ──────────────
-
-/// `fields.write` as column privileges, layered under the masking extension.
-///
-/// **Writes only.** A column `REVOKE` for reads makes `GET /table` with no `select` return
-/// 403 for the whole table, which is the break the field-access design exists to avoid.
-/// Writes have no such problem: `PATCH`/`POST` naming a column the role may not write is
-/// *supposed* to fail.
-///
-/// This is a second layer, not the mechanism. Enforcement is the query rewrite, which can
-/// express `Role<"admin">`; a column privilege cannot, because an application role is a JWT
-/// claim and an admin still connects as `authenticated`. So only what a *database role*
-/// provably can never write is revoked here.
-pub fn generate_column_grants(ast: &SchemaAst, schema: &str, skip: &[String]) -> String {
-    let mut blocks: Vec<String> = Vec::new();
-
-    for model in &ast.models {
-        let access = platform_access(model);
-        if access.fields.is_empty() {
-            continue;
-        }
-        if skip.iter().any(|t| t == db_table_name(model)) {
-            continue;
-        }
-        let table = db_table_name(model);
-
-        for (op, table_rule) in [
-            ("INSERT", access.create.as_ref()),
-            ("UPDATE", access.update.as_ref()),
-        ] {
-            // No table-level rule means `generate_table_grants` revoked the operation from
-            // both roles. Granting a column complement back would *widen* what the table
-            // rules just closed, so there is nothing to do.
-            let Some(table_rule) = table_rule else {
-                continue;
-            };
-
-            for role in ["anon", "authenticated"] {
-                if role == "anon" && !reachable_by_anon(table_rule) {
-                    // Same reason: `anon` does not hold the operation at table level.
-                    continue;
-                }
-
-                let excluded: Vec<&str> = access
-                    .fields
-                    .iter()
-                    .filter(|(_, rules)| {
-                        rules
-                            .write
-                            .as_ref()
-                            .is_some_and(|write| !write_satisfiable(op, role, write))
-                    })
-                    .map(|(column, _)| column.as_str())
-                    .collect();
-
-                if excluded.is_empty() {
-                    continue;
-                }
-
-                blocks.push(render_column_grant(schema, table, op, role, &excluded));
-            }
-        }
-    }
-
-    // One `DO` block per role, table and operation, for the same reason the table grants are
-    // split: each statement of a push belongs to one object.
-    blocks
-        .iter()
-        .map(|block| {
-            format!(
-                "DO $colgrants$
-DECLARE
-  granted text;
-BEGIN
-{block}END
-$colgrants$;
-"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Whether any caller connecting as `role` could ever satisfy this write rule for `op`.
@@ -289,41 +333,38 @@ fn write_satisfiable(op: &str, role: &str, write: &AccessRule) -> bool {
     true
 }
 
-/// The complement is computed from `information_schema.columns` at apply time, not from the
-/// AST.
+/// Grant `op` on every column of the table except `excluded`, inside a block already guarded on
+/// the role.
 ///
-/// A column this generator never saw (added out of band, or by a plugin) must still be
+/// The complement is computed from `information_schema.columns` at apply time, not from the
+/// AST. A column this generator never saw (added out of band, or by a plugin) must still be
 /// granted, or the layer meant to be defence in depth silently becomes the thing that breaks
-/// writes. Reading the live column list also makes the statement converge on every push
-/// without tracking what it granted last time.
-fn render_column_grant(
+/// writes.
+fn column_complement(
     schema: &str,
     table: &str,
     op: &str,
     role: &str,
-    excluded: &[&str],
+    excluded: &[String],
 ) -> String {
-    let quoted_table = table.replace('"', "\"\"");
     let exclusion_list = excluded
         .iter()
-        .map(|column| format!("'{}'", column.replace('\'', "''")))
+        .map(|column| format!("'{}'", escape(column)))
         .collect::<Vec<_>>()
         .join(", ");
-
     format!(
-        "  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role}') THEN
-    SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
+        "    SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position)
       INTO granted
       FROM information_schema.columns
-     WHERE table_schema = '{schema}'
+     WHERE table_schema = '{schema_literal}'
        AND table_name = '{table_literal}'
        AND column_name NOT IN ({exclusion_list});
-    EXECUTE 'REVOKE {op} ON \"{schema}\".\"{quoted_table}\" FROM {role}';
     IF granted IS NOT NULL THEN
-      EXECUTE format('GRANT {op} (%s) ON \"{schema}\".\"{quoted_table}\" TO {role}', granted);
+      EXECUTE format('GRANT {op} (%s) ON {target} TO {role}', granted);
     END IF;
-  END IF;
 ",
-        table_literal = table.replace('\'', "''")
+        schema_literal = escape(schema),
+        table_literal = escape(table),
+        target = escape(&qualified(schema, table)),
     )
 }

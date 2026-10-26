@@ -7,7 +7,7 @@
 
 mod common;
 
-use supatype_engine::{differ, generator::sql::migration, introspector, parser};
+use supatype_engine::{introspector, parser};
 
 async fn exec(pool: &sqlx::PgPool, sql: &str) {
     sqlx::raw_sql(sql)
@@ -310,10 +310,8 @@ async fn an_extensions_objects_are_not_reported() {
 async fn a_push_of_a_versioned_schema_is_visible_in_every_kind() {
     common::with_integration_pool(|pool| async move {
         let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
-        let empty = introspector::introspect(&pool, "public").await.unwrap();
-        let diff = differ::diff(&ast, &empty).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        exec(&pool, &sql).await;
+        // The push a user runs: the grants and policies are the reconcile's.
+        common::push(&pool, &ast).await.expect("push applies");
 
         let catalog = introspector::introspect_catalog(&pool, "public")
             .await

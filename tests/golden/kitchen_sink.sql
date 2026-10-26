@@ -222,29 +222,6 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_kitchen_sink"("kitchen_sink" "pu
       FROM (SELECT ($1).*) AS "kitchen_sink";
   $can$;
 
--- Table privileges derived from access rules (defence in depth)
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."kitchen_sink" FROM anon';
-    EXECUTE 'REVOKE INSERT ON "public"."kitchen_sink" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."kitchen_sink" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."kitchen_sink" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE SELECT ON "public"."kitchen_sink" FROM authenticated';
-    EXECUTE 'REVOKE INSERT ON "public"."kitchen_sink" FROM authenticated';
-    EXECUTE 'REVOKE UPDATE ON "public"."kitchen_sink" FROM authenticated';
-    EXECUTE 'REVOKE DELETE ON "public"."kitchen_sink" FROM authenticated';
-  END IF;
-END
-$grants$;
-
 -- reconciled objects
 CREATE OR REPLACE FUNCTION _platform.normalise_kitchen_sink_rich_text()
 RETURNS TRIGGER AS $$
@@ -307,5 +284,19 @@ CREATE OR REPLACE TRIGGER "kitchen_sink_updated_at_trigger"
 BEFORE UPDATE ON "public"."kitchen_sink"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."kitchen_sink" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."kitchen_sink" FROM authenticated';
+  END IF;
+END
+$grants$;
 
 COMMIT;

@@ -25,9 +25,11 @@ use crate::desired::{desired_objects_for, statements, FieldEnforcement, ObjectKe
 use crate::differ::{self, DiffOutput, FieldMaskingTier, Operation};
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
-use crate::generator::sql::{constraint_helpers, field_views, rls, storage, versions};
+use crate::generator::sql::{constraint_helpers, field_views, grants, rls, storage, versions};
 use crate::generator::typescript::admin;
-use crate::introspector::fingerprint::{fingerprints, ObjectFingerprint, ObjectKind};
+use crate::introspector::fingerprint::{
+    fingerprints, holding_nothing, ObjectFingerprint, ObjectKind,
+};
 use crate::introspector::{self, catalog, catalog::CatalogState};
 use crate::ledger::{self, probe, reconcile, LedgerRow};
 use crate::parser::ast::SchemaAst;
@@ -37,7 +39,7 @@ use crate::state::{migration_history, studio_state};
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
 /// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
-/// views since 4.6, security labels since 4.7a, policies since 4.7b.
+/// views since 4.6, security labels since 4.7a, policies since 4.7b, grants since 4.7c.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -48,6 +50,7 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::View,
     ObjectKind::SecurityLabel,
     ObjectKind::Policy,
+    ObjectKind::TableGrant,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
@@ -191,7 +194,7 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
         &diff,
         &ledger,
         &live.fingerprints,
-        live.catalog.cron_available,
+        &live.catalog,
         schema,
         ast,
     )?;
@@ -207,13 +210,16 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
 }
 
 /// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
-/// objects the migration's own statements create and which tables it drops. Without `pg_cron`
-/// the cron jobs are not desired: the layer says so at apply time and there is nothing to record.
+/// objects the migration's own statements create and which tables it drops.
+///
+/// What the database can hold decides what is desired (plan section 10): without `pg_cron` the
+/// cron jobs are not desired, as the layer says so at apply time and there is nothing to record;
+/// a grant to an API role this database does not have is desired nowhere.
 fn reconcile_with(
     diff: &DiffOutput,
     ledger: &[LedgerRow],
     live: &[ObjectFingerprint],
-    cron_available: bool,
+    catalog: &CatalogState,
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<reconcile::Plan> {
@@ -222,20 +228,39 @@ fn reconcile_with(
         FieldMaskingTier::None | FieldMaskingTier::Extension => FieldEnforcement::Labels,
     };
     let mut desired = desired_objects_for(ast, schema, fields)?;
-    if !cron_available {
-        desired.retain(|d| d.key.kind != ObjectKind::CronJob);
-    }
+    desired.retain(|d| match d.key.kind {
+        ObjectKind::CronJob => catalog.cron_available,
+        ObjectKind::TableGrant => catalog.granted_roles.contains(&d.key.name),
+        _ => true,
+    });
+    let live = with_grants_of_nothing(live, ledger.iter().map(|r| &r.key));
     let created_by_parent = created_by_parent(diff, schema, ast)?;
     let dropped_tables = dropped_tables(diff, schema);
     Ok(reconcile::reconcile(reconcile::Inputs {
         desired: &desired,
         ledger,
-        live,
+        live: &live,
         created_by_parent: &created_by_parent,
         dropped_tables: &dropped_tables,
         location,
         kinds: MOVED_KINDS,
     }))
+}
+
+/// `live`, plus a fingerprint of "holds nothing" for every grant among `keys` the catalog has no
+/// row for. A role with no privilege on a table has no `aclexplode` row, so without this a grant
+/// of nothing the ledger recorded would read as dropped by hand on every push.
+fn with_grants_of_nothing<'k>(
+    live: &[ObjectFingerprint],
+    keys: impl Iterator<Item = &'k ObjectKey>,
+) -> Vec<ObjectFingerprint> {
+    let present: BTreeSet<ObjectKey> = live.iter().map(ObjectFingerprint::key).collect();
+    let mut out = live.to_vec();
+    out.extend(
+        keys.filter(|k| k.kind == ObjectKind::TableGrant && !present.contains(k))
+            .map(holding_nothing),
+    );
+    out
 }
 
 /// What a live object's location says about whose it is when the ledger has no row (plan 3.4 and
@@ -264,7 +289,13 @@ fn location(key: &ObjectKey) -> reconcile::Location {
 /// database refuses; everything else goes through [`plan`].
 pub fn fresh_migration(ast: &SchemaAst, schema: &str, force: bool) -> Result<Migration> {
     let diff = differ::diff(ast, &DatabaseState::default())?;
-    let reconcile = reconcile_with(&diff, &[], &[], true, schema, ast)?;
+    // A database that can hold everything: `pg_cron` loaded and both API roles present.
+    let catalog = CatalogState {
+        cron_available: true,
+        granted_roles: grants::GRANTED_ROLES.map(String::from).to_vec(),
+        ..CatalogState::default()
+    };
+    let reconcile = reconcile_with(&diff, &[], &[], &catalog, schema, ast)?;
     Migration::render(&diff, &reconcile.actions, force, schema, ast)
 }
 
@@ -560,6 +591,8 @@ async fn record_ledger(
     if plan.actions.is_empty() {
         return Ok(());
     }
+    // A grant of nothing leaves no catalog row to record, so it is recorded as holding nothing.
+    let after = with_grants_of_nothing(after, plan.actions.iter().map(reconcile::Action::key));
     let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
         after.iter().map(|f| (f.key(), f)).collect();
     let mut rows = Vec::new();

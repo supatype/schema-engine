@@ -1,5 +1,5 @@
-//! Column write privileges derived from `fields.write` — defence in depth under the masking
-//! extension.
+//! Column write privileges derived from `fields.write`. They are defence in depth under the
+//! masking extension.
 //!
 //! The interesting content is what this *refuses* to revoke. A column privilege belongs to a
 //! database role, and every signed-in caller is `authenticated`, so revoking on the strength
@@ -13,7 +13,7 @@ use supatype_engine::{generator::sql::grants, parser};
 ///
 /// Purpose-built rather than the shared access fixture: that one declares no `create` rule and
 /// an ownership `update` rule, so nothing is provably unwritable and it correctly emits
-/// nothing — exercising none of the branches below.
+/// nothing, which exercises none of the branches below.
 const SCHEMA: &str = r#"{
   "astVersion": 2,
   "models": [
@@ -48,31 +48,33 @@ const SCHEMA: &str = r#"{
   ]
 }"#;
 
-fn column_grants() -> String {
-    let ast = parser::parse(SCHEMA).expect("schema parses");
-    grants::generate_column_grants(&ast, "public", &[])
+fn role_grants(schema: &str) -> Vec<grants::TableGrant> {
+    let ast = parser::parse(schema).expect("schema parses");
+    grants::table_grants(&ast, false)
 }
 
-/// The excluded-column list for one (operation, role) pair.
-fn excluded_for(sql: &str, op: &str, role: &str) -> Vec<String> {
-    let needle = format!("REVOKE {op} ");
-    let block = sql
-        .split("IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = ")
-        .skip(1)
-        .map(|b| b.split("END IF;").next().unwrap_or("").to_string())
-        .find(|b| b.starts_with(&format!("'{role}'")) && b.contains(&needle))
-        .unwrap_or_else(|| panic!("no {op} block for {role} in:\n{sql}"));
+/// The statements of every grant that narrows a write privilege to columns.
+fn column_grants() -> String {
+    role_grants(SCHEMA)
+        .iter()
+        .filter(|g| !g.narrowed.is_empty())
+        .map(|g| g.create_sql("public"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
-    let list = block
-        .split("column_name NOT IN (")
-        .nth(1)
-        .and_then(|rest| rest.split(')').next())
-        .unwrap_or("");
+/// The columns `role` may not write on `op`; empty when the operation is not narrowed.
+fn excluded_for(op: &str, role: &str) -> Vec<String> {
+    role_grants(SCHEMA)
+        .into_iter()
+        .find(|g| g.role == role)
+        .and_then(|g| g.narrowed.into_iter().find(|(o, _)| *o == op))
+        .map(|(_, columns)| columns)
+        .unwrap_or_default()
+}
 
-    list.split(',')
-        .map(|item| item.trim().trim_matches('\'').to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
+fn narrows_nothing(schema: &str) -> bool {
+    role_grants(schema).iter().all(|g| g.narrowed.is_empty())
 }
 
 fn has(list: &[String], column: &str) -> bool {
@@ -80,12 +82,11 @@ fn has(list: &[String], column: &str) -> bool {
 }
 
 // An anonymous caller has no `auth.uid()` and no app role, so ownership and role rules are
-// both unreachable for `anon` — those columns can never be written as that role.
+// both unreachable for `anon`. Those columns can never be written as that role.
 #[test]
 fn anon_loses_every_column_it_can_never_write() {
-    let sql = column_grants();
     for op in ["INSERT", "UPDATE"] {
-        let excluded = excluded_for(&sql, op, "anon");
+        let excluded = excluded_for(op, "anon");
         assert!(has(&excluded, "locked"), "{op}: {excluded:?}");
         assert!(has(&excluded, "mine"), "{op}: {excluded:?}");
         assert!(has(&excluded, "admin_only"), "{op}: {excluded:?}");
@@ -97,12 +98,11 @@ fn anon_loses_every_column_it_can_never_write() {
 }
 
 // The heart of it. `authenticated` is every signed-in caller, so a rule naming an application
-// role is satisfiable by some of them — revoking would lock out the admins the rule exists to
+// role is satisfiable by some of them. Revoking would lock out the admins the rule exists to
 // admit. On the UPDATE path only `Private` is provable.
 #[test]
 fn authenticated_keeps_columns_some_caller_can_write() {
-    let sql = column_grants();
-    let excluded = excluded_for(&sql, "UPDATE", "authenticated");
+    let excluded = excluded_for("UPDATE", "authenticated");
 
     assert!(
         has(&excluded, "locked"),
@@ -121,12 +121,11 @@ fn authenticated_keeps_columns_some_caller_can_write() {
 
 // On INSERT there is no row, so the extension evaluates a row-dependent write predicate
 // against `NULL::t` and it yields NULL for every caller. Nobody can write the column on that
-// path, which makes the privilege provably unusable — unlike on UPDATE.
+// path, which makes the privilege provably unusable. On UPDATE it is not.
 #[test]
 fn authenticated_loses_row_dependent_columns_on_insert_only() {
-    let sql = column_grants();
-    let insert = excluded_for(&sql, "INSERT", "authenticated");
-    let update = excluded_for(&sql, "UPDATE", "authenticated");
+    let insert = excluded_for("INSERT", "authenticated");
+    let update = excluded_for("UPDATE", "authenticated");
 
     assert!(
         has(&insert, "mine"),
@@ -158,33 +157,31 @@ fn the_granted_column_list_is_read_from_the_catalog() {
 // return 403 for the whole table, which is the break the field-access design exists to avoid.
 #[test]
 fn reads_are_never_restricted_by_privilege() {
-    let sql = column_grants();
-    assert!(!sql.contains("REVOKE SELECT"), "{sql}");
-    assert!(
-        !sql.contains("GRANT SELECT"),
-        "reads are the extension's job:\n{sql}"
-    );
+    for grant in role_grants(SCHEMA) {
+        assert!(
+            grant.narrowed.iter().all(|(op, _)| *op != "SELECT"),
+            "reads are the extension's job: {grant:?}"
+        );
+    }
+    assert!(!column_grants().contains("GRANT SELECT ("));
 }
 
-// A GRANT to a missing role aborts the transaction, and this is defence in depth — it must
-// never take the migration down with it.
+// A GRANT to a missing role aborts the transaction, and this is defence in depth: it must never
+// take the migration down with it.
 #[test]
 fn column_grants_are_guarded_on_the_role_existing() {
     assert!(column_grants().contains("FROM pg_roles WHERE rolname ="));
 }
 
-// No table-level write rule means the table grants revoked the operation from both roles.
-// Granting a column complement back would widen what they just closed.
+// No table-level write rule means the role holds no write privilege on the table. Granting a
+// column complement back would widen what the rules closed.
 #[test]
 fn a_table_with_no_write_rule_gets_no_column_grants() {
     let schema = SCHEMA
         .replace("\"create\": { \"type\": \"public\" },", "")
         .replace("\"update\": { \"type\": \"public\" },", "");
-    let ast = parser::parse(&schema).expect("schema parses");
     assert!(
-        grants::generate_column_grants(&ast, "public", &[])
-            .trim()
-            .is_empty(),
+        narrows_nothing(&schema),
         "nothing may be granted where the table rules granted nothing"
     );
 }
@@ -197,7 +194,7 @@ fn no_field_rules_means_no_column_grants() {
             .fields
             .clear();
     }
-    assert!(grants::generate_column_grants(&ast, "public", &[])
-        .trim()
-        .is_empty());
+    assert!(grants::table_grants(&ast, false)
+        .iter()
+        .all(|g| g.narrowed.is_empty()));
 }

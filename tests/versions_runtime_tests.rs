@@ -23,15 +23,15 @@ mod common;
 use std::future::Future;
 
 use sqlx::{Executor, PgConnection};
-use supatype_engine::{
-    differ, generator::sql::migration, parser, state::database_state::DatabaseState,
-};
+use supatype_engine::{parser, push};
 
-/// The migration for the versioned fixture, as a push would apply it.
+/// The migration for the versioned fixture, as a push to an empty database applies it: the
+/// differ's operations and the reconcile's creations, the grants among them.
 fn forward_migration() -> String {
     let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
-    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    migration::forward_sql(&diff, false, "public", &ast).unwrap()
+    push::fresh_migration(&ast, "public", false)
+        .unwrap()
+        .up_script()
 }
 
 const EDITOR: &str = "11111111-1111-1111-1111-111111111111";
@@ -443,7 +443,7 @@ async fn a_localized_field_survives_the_snapshot_round_trip_and_defaults_to_ever
             .await;
 
             let drafted: (Option<String>, Option<String>) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr' FROM draft.posts WHERE id = $1::uuid",
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr') FROM draft.posts WHERE id = $1::uuid",
             )
             .bind(POST)
             .fetch_one(&mut *db)
@@ -460,7 +460,7 @@ async fn a_localized_field_survives_the_snapshot_round_trip_and_defaults_to_ever
             // Publication is per record, not per locale: both locales go live together, because
             // they share one column and `published_at` is one column on the row.
             let live: (Option<String>, Option<String>) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr') FROM public.posts WHERE id = $1::uuid",
             )
             .bind(POST)
             .fetch_one(&mut *db)
@@ -557,7 +557,7 @@ async fn one_locale_can_go_live_while_another_stays_in_draft() {
             // policy. That is the whole reason this is enforceable: row level security cannot hide
             // one key of a column, and nothing has to, because the value was never written.
             let live: (Option<String>, Option<String>, bool) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr', body ? 'fr' FROM public.posts
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr'), body ? 'fr' FROM public.posts
                   WHERE id = $1::uuid",
             )
             .bind(POST)
@@ -570,7 +570,7 @@ async fn one_locale_can_go_live_while_another_stays_in_draft() {
 
             // The draft still holds both, so the translation is not lost, just unpublished.
             let drafted: (Option<String>, Option<String>) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr' FROM draft.posts WHERE id = $1::uuid",
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr') FROM draft.posts WHERE id = $1::uuid",
             )
             .bind(POST)
             .fetch_one(&mut *db)
@@ -598,7 +598,7 @@ async fn one_locale_can_go_live_while_another_stays_in_draft() {
                 .await
                 .expect("publish French");
             let both: (Option<String>, Option<String>) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr') FROM public.posts WHERE id = $1::uuid",
             )
             .bind(POST)
             .fetch_one(&mut *db)
@@ -625,7 +625,7 @@ async fn unpublishing_one_locale_leaves_the_others_live() {
                 .expect("unpublish French");
 
             let live: (Option<String>, Option<String>, bool) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr', published_at IS NOT NULL FROM public.posts
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr'), published_at IS NOT NULL FROM public.posts
                   WHERE id = $1::uuid",
             )
             .bind(POST)
@@ -790,7 +790,7 @@ async fn one_locale_can_be_scheduled_while_another_is_already_live() {
             .expect("schedule French");
 
             let before: (Option<String>, Option<String>) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr') FROM public.posts WHERE id = $1::uuid",
             )
             .bind(POST)
             .fetch_one(&mut *db)
@@ -805,7 +805,7 @@ async fn one_locale_can_be_scheduled_while_another_is_already_live() {
                 .expect("run the job");
 
             let after: (Option<String>, Option<String>) = sqlx::query_as(
-                "SELECT body->>'en', body->>'fr' FROM public.posts WHERE id = $1::uuid",
+                "SELECT coalesce(nullif(_supatype.richtext_text(body->'en'), ''), body->>'en'), coalesce(nullif(_supatype.richtext_text(body->'fr'), ''), body->>'fr') FROM public.posts WHERE id = $1::uuid",
             )
             .bind(POST)
             .fetch_one(&mut *db)
@@ -1241,8 +1241,8 @@ async fn an_anonymous_reader_is_told_nothing_about_a_draft() {
 
             // Both halves of being anonymous. `SET ROLE anon` changes only the Postgres role; the
             // session keeps whatever claims were set, so a test that switched role alone would
-            // still be the editor as far as every policy is concerned — and would pass while
-            // asserting nothing.
+            // still be the editor as far as every policy is concerned. It would pass while asserting
+            // nothing.
             sqlx::query("SELECT set_config('request.jwt.claims', '', false)")
                 .execute(&mut *db)
                 .await
@@ -1455,10 +1455,14 @@ async fn a_blanket_grant_does_not_survive_the_next_push() {
             );
 
             // Pushing again takes it back, so the exposure lasts until the next deploy rather than
-            // for ever.
-            db.execute(sqlx::raw_sql(&forward_migration()))
+            // for ever: the versions layer, which every push re-asserts, revokes it.
+            let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
+            let layer =
+                supatype_engine::generator::sql::versions::render_versions_layer(&ast, "public")
+                    .expect("the layer renders");
+            db.execute(sqlx::raw_sql(&layer))
                 .await
-                .expect("re-apply the migration");
+                .expect("re-apply the versions layer");
 
             sqlx::query("SET ROLE anon")
                 .execute(&mut *db)

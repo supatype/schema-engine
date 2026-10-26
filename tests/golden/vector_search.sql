@@ -199,29 +199,6 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_documents"("documents" "public".
       FROM (SELECT ($1).*) AS "documents";
   $can$;
 
--- Table privileges derived from access rules (defence in depth)
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'GRANT SELECT ON "public"."documents" TO anon';
-    EXECUTE 'REVOKE INSERT ON "public"."documents" FROM anon';
-    EXECUTE 'REVOKE UPDATE ON "public"."documents" FROM anon';
-    EXECUTE 'REVOKE DELETE ON "public"."documents" FROM anon';
-  END IF;
-END
-$grants$;
-
-DO $grants$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'GRANT SELECT ON "public"."documents" TO authenticated';
-    EXECUTE 'GRANT INSERT ON "public"."documents" TO authenticated';
-    EXECUTE 'GRANT UPDATE ON "public"."documents" TO authenticated';
-    EXECUTE 'GRANT DELETE ON "public"."documents" TO authenticated';
-  END IF;
-END
-$grants$;
-
 -- reconciled objects
 CREATE OR REPLACE FUNCTION _platform.set_updated_at()
 RETURNS TRIGGER AS $$
@@ -268,5 +245,21 @@ FOR UPDATE USING (
   ) WITH CHECK (
     (SELECT auth.role()) = 'admin'
   );
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."documents" FROM anon';
+    EXECUTE 'GRANT SELECT ON "public"."documents" TO anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."documents" FROM authenticated';
+    EXECUTE 'GRANT DELETE, INSERT, SELECT, UPDATE ON "public"."documents" TO authenticated';
+  END IF;
+END
+$grants$;
 
 COMMIT;

@@ -57,6 +57,11 @@ pub struct CatalogState {
     /// A fact about the database, not its state, so not part of the serialised catalog.
     #[serde(skip)]
     pub cron_available: bool,
+    /// The API roles the engine grants to that exist here. A self-hosted database may have neither,
+    /// and a grant to a role that does not exist is desired nowhere (plan section 10). A fact
+    /// about the database, not its state, so not part of the serialised catalog.
+    #[serde(skip)]
+    pub granted_roles: Vec<String>,
     pub rls_attributes: Vec<DbRlsAttributes>,
     /// Every policy in the swept schemas, with the roles and comment `DatabaseState::rls_policies`
     /// does not carry.
@@ -259,6 +264,7 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<CatalogState>
         security_labels: read_security_labels(conn, &schemas).await?,
         cron_jobs: read_cron_jobs(conn).await?,
         cron_available: cron_available(conn).await?,
+        granted_roles: granted_roles(conn).await?,
         rls_attributes: read_rls_attributes(conn, &schemas).await?,
         policies: read_policies(conn, &schemas).await?,
         engine_tables: read_engine_tables(conn, schema).await?,
@@ -693,6 +699,19 @@ async fn read_security_labels(
             label,
         })
         .collect())
+}
+
+async fn granted_roles(conn: &mut PgConnection) -> Result<Vec<String>> {
+    let wanted: Vec<String> = crate::generator::sql::grants::GRANTED_ROLES
+        .iter()
+        .map(|r| (*r).to_string())
+        .collect();
+    Ok(sqlx::query_scalar(
+        "SELECT rolname::text FROM pg_roles WHERE rolname = ANY($1) ORDER BY rolname",
+    )
+    .bind(wanted)
+    .fetch_all(&mut *conn)
+    .await?)
 }
 
 async fn cron_available(conn: &mut PgConnection) -> Result<bool> {
