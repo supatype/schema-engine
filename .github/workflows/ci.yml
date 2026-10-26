@@ -235,6 +235,7 @@ jobs:
             --test push_orchestrator_tests \
             --test extension_schema_tests \
             --test check_ledger_tests \
+            --test model_constraint_names_tests \
             --test phase3_acceptance_tests \
             --test one_migration_tests \
             --test foreign_key_ledger_tests \

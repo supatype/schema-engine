@@ -295,7 +295,7 @@ CREATE TABLE IF NOT EXISTS "public"."talk" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_check_1" CHECK ("starts_at" <= "ends_at");
+ALTER TABLE "public"."talk" ADD CONSTRAINT "talk_starts_at_lte_ends_at" CHECK ("starts_at" <= "ends_at");
 
 CREATE INDEX IF NOT EXISTS "talk_day_starts_at_idx" ON "public"."talk" USING btree ("day", "starts_at");
 
@@ -348,7 +348,7 @@ CREATE TABLE IF NOT EXISTS "public"."chat_message" (
     "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_check_1" CHECK (char_length("body") >= 2);
+ALTER TABLE "public"."chat_message" ADD CONSTRAINT "chat_message_body_min_length" CHECK (char_length("body") >= 2);
 
 CREATE INDEX IF NOT EXISTS "chat_message_room_idx" ON "public"."chat_message" USING btree ("room");
 

@@ -1330,7 +1330,7 @@ fn create_table_sql(
     // records them (plan 3.2) and their comments are the user's.
     for (index, rule) in model.annotations.db.constraints.iter().enumerate() {
         let expr = crate::generator::sql::constraints::constraint_to_expr(rule)?;
-        let constraint = names.model_constraint(table, index);
+        let constraint = names.model_constraint(table, index, rule);
         statements.push(format!(
             "ALTER TABLE {target} ADD CONSTRAINT {} CHECK ({expr});",
             quote_ident(&constraint)

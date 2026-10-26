@@ -20,7 +20,7 @@ use supatype_engine::managed::{
     policy_name, primary_key_name, type_check_name, ObjectNames, MAX_IDENTIFIER_BYTES,
 };
 use supatype_engine::parser;
-use supatype_engine::parser::ast::SchemaAst;
+use supatype_engine::parser::ast::{AccessRule, SchemaAst};
 
 #[test]
 fn the_defaults_are_postgres_defaults() {
@@ -38,7 +38,14 @@ fn the_defaults_are_postgres_defaults() {
         expected_check_constraint_name("users", "name"),
         "users_name_bounds"
     );
-    assert_eq!(expected_model_constraint_name("talk", 0), "talk_check_1");
+    assert_eq!(
+        expected_model_constraint_name(
+            "talk",
+            &rule(json!({ "type": "compare", "op": "lte",
+            "left": col("starts_at"), "right": col("ends_at") }))
+        ),
+        "talk_starts_at_lte_ends_at"
+    );
     assert_eq!(
         expected_model_index_name("talk", &["day".into(), "starts_at".into()]),
         "talk_day_starts_at_idx"
@@ -114,7 +121,7 @@ fn every_helper_respects_the_limit() {
         expected_unique_constraint_name(&long, &long),
         type_check_name(&long, &long),
         expected_check_constraint_name(&long, &long),
-        expected_model_constraint_name(&long, 9),
+        expected_model_constraint_name(&long, &rule(min_length("body", 2))),
         expected_model_index_name(&long, &[long.clone(), long.clone()]),
         make_object_name(&"é".repeat(40), None, "idx"),
     ] {
@@ -505,4 +512,305 @@ fn every_generated_name_of_a_long_table_fits() {
         );
     }
     assert!(seen > 20, "{seen}");
+}
+
+// Model-level constraints (CK1): named for what they check, not where they sit in the list.
+
+fn rule(value: Value) -> AccessRule {
+    serde_json::from_value(value).expect("a constraint rule")
+}
+
+fn col(name: &str) -> Value {
+    json!({ "kind": "column", "name": name })
+}
+
+fn lit(value: Value) -> Value {
+    json!({ "kind": "literal", "value": value })
+}
+
+fn length(column: &str) -> Value {
+    json!({ "kind": "length", "column": column, "form": "chars" })
+}
+
+fn items(column: &str) -> Value {
+    json!({ "kind": "itemCount", "column": column, "form": "array" })
+}
+
+fn compare(left: Value, op: &str, right: Value) -> Value {
+    json!({ "type": "compare", "op": op, "left": left, "right": right })
+}
+
+fn min_length(column: &str, n: i64) -> Value {
+    compare(length(column), "gte", lit(json!(n)))
+}
+
+fn not_null(column: &str) -> Value {
+    json!({ "type": "nullCheck", "operand": col(column), "isNull": false })
+}
+
+fn name_of(value: Value) -> String {
+    expected_model_constraint_name("chat_message", &rule(value))
+}
+
+#[test]
+fn a_model_constraint_is_named_for_what_it_checks() {
+    let eq_draft = compare(col("status"), "eq", lit(json!("draft")));
+    let cases = [
+        (min_length("body", 2), "chat_message_body_min_length"),
+        (
+            compare(length("body"), "gt", lit(json!(1))),
+            "chat_message_body_min_length",
+        ),
+        (
+            compare(length("body"), "lte", lit(json!(500))),
+            "chat_message_body_max_length",
+        ),
+        (
+            compare(length("body"), "lt", lit(json!(500))),
+            "chat_message_body_max_length",
+        ),
+        (
+            compare(length("code"), "eq", lit(json!(6))),
+            "chat_message_code_length_eq",
+        ),
+        // A literal on the left reads the other way round.
+        (
+            compare(lit(json!(2)), "lte", length("body")),
+            "chat_message_body_min_length",
+        ),
+        (
+            compare(items("tags"), "gte", lit(json!(1))),
+            "chat_message_tags_min_items",
+        ),
+        (
+            compare(items("tags"), "lte", lit(json!(3))),
+            "chat_message_tags_max_items",
+        ),
+        (
+            compare(col("price"), "gte", lit(json!(0))),
+            "chat_message_price_min",
+        ),
+        (
+            compare(col("price"), "lt", lit(json!(100))),
+            "chat_message_price_max",
+        ),
+        (eq_draft.clone(), "chat_message_status_eq"),
+        (
+            compare(col("status"), "neq", lit(json!("gone"))),
+            "chat_message_status_ne",
+        ),
+        (
+            compare(col("sku"), "like", lit(json!("A%"))),
+            "chat_message_sku_like",
+        ),
+        (
+            compare(col("starts_at"), "lte", col("ends_at")),
+            "chat_message_starts_at_lte_ends_at",
+        ),
+        (compare(col("a"), "gt", col("b")), "chat_message_a_gt_b"),
+        (
+            compare(length("a"), "lte", length("b")),
+            "chat_message_a_length_lte_b_length",
+        ),
+        (
+            not_null("published_at"),
+            "chat_message_published_at_not_null",
+        ),
+        (
+            json!({ "type": "nullCheck", "operand": col("deleted_at"), "isNull": true }),
+            "chat_message_deleted_at_null",
+        ),
+        (
+            json!({ "type": "matches", "column": "sku", "pattern": "^[A-Z]{3}$" }),
+            "chat_message_sku_format",
+        ),
+        (
+            json!({ "type": "not", "rule": { "type": "nullCheck",
+                    "operand": col("deleted_at"), "isNull": true } }),
+            "chat_message_deleted_at_not_null",
+        ),
+        (
+            json!({ "type": "not", "rule": eq_draft.clone() }),
+            "chat_message_not_status_eq",
+        ),
+        (
+            json!({ "type": "any", "rules": [eq_draft, not_null("published_at")] }),
+            "chat_message_status_eq_or_published_at_not_null",
+        ),
+        (
+            json!({ "type": "all", "rules": [
+                min_length("body", 2), compare(length("body"), "lte", lit(json!(500)))
+            ] }),
+            "chat_message_body_min_length_and_body_max_length",
+        ),
+    ];
+    for (value, want) in cases {
+        let shown = value.to_string();
+        assert_eq!(name_of(value), want, "{shown}");
+    }
+}
+
+/// The name says what is checked, not the bound: tightening a minimum from 2 to 3 keeps the
+/// constraint's name, so the push replaces it under that name rather than renaming it.
+#[test]
+fn the_bound_is_not_part_of_the_name() {
+    assert_eq!(
+        name_of(min_length("body", 2)),
+        name_of(min_length("body", 3))
+    );
+}
+
+fn hash_suffixed(name: &str) -> bool {
+    let Some((_, suffix)) = name.rsplit_once('_') else {
+        return false;
+    };
+    suffix.len() == 8 && suffix.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn reminders_lte(later: &str) -> AccessRule {
+    rule(compare(col("first_reminder_sent_at"), "lte", col(later)))
+}
+
+#[test]
+fn a_long_name_is_cut_to_the_limit_with_a_hash_of_the_whole() {
+    let table = "organization_membership_invitation_reminder_schedules";
+    let first = expected_model_constraint_name(table, &reminders_lte("second_reminder_sent_at"));
+    let second = expected_model_constraint_name(table, &reminders_lte("third_reminder_sent_at"));
+    for name in [&first, &second] {
+        assert_eq!(name.len(), MAX_IDENTIFIER_BYTES, "{name}");
+        assert!(name.starts_with(table), "{name}");
+        assert!(hash_suffixed(name), "{name}");
+    }
+    assert_ne!(
+        first, second,
+        "the same 54-byte prefix, told apart by the hash"
+    );
+    assert_eq!(
+        first,
+        expected_model_constraint_name(table, &reminders_lte("second_reminder_sent_at")),
+        "deterministic"
+    );
+    // Cut on a character boundary.
+    let wide = expected_model_constraint_name(&"\u{e9}".repeat(40), &rule(min_length("body", 2)));
+    assert!(wide.len() <= MAX_IDENTIFIER_BYTES, "{wide}");
+    assert!(hash_suffixed(&wide), "{wide}");
+    // A name that fits is never hashed.
+    assert!(!hash_suffixed(&name_of(min_length("body", 2))));
+}
+
+fn with_rules(table: &str, rules: Vec<Value>) -> SchemaAst {
+    let mut m = model(
+        "Message",
+        table,
+        json!({ "id": id(), "body": text(false), "tags": text(false) }),
+    );
+    m["annotations"]["db"]["constraints"] = json!(rules);
+    parse(vec![m])
+}
+
+/// The name each of the one model's rules gets, in declared order.
+fn rule_names(ast: &SchemaAst) -> Vec<String> {
+    let names = ObjectNames::for_schema(ast);
+    let model = &ast.models[0];
+    model
+        .annotations
+        .db
+        .constraints
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| names.model_constraint(model.table_name(), index, rule))
+        .collect()
+}
+
+/// Two rules that would take the same name: the one whose rule sorts first keeps it and the other
+/// takes `_2`, whatever order they are declared in, so reordering renames nothing.
+#[test]
+fn two_rules_wanting_one_name_are_told_apart_whatever_their_order() {
+    let (two, five) = (min_length("body", 2), min_length("body", 5));
+    let forward = with_rules("chat_message", vec![two.clone(), five.clone()]);
+    assert_eq!(
+        rule_names(&forward),
+        [
+            "chat_message_body_min_length",
+            "chat_message_body_min_length_2"
+        ]
+    );
+    let backward = with_rules("chat_message", vec![five, two]);
+    assert_eq!(
+        rule_names(&backward),
+        [
+            "chat_message_body_min_length_2",
+            "chat_message_body_min_length"
+        ]
+    );
+}
+
+/// A collision on a long table still fits, and still differs.
+#[test]
+fn a_collision_on_a_long_table_still_fits() {
+    let table = "organization_membership_invitation_reminder_schedules_x";
+    let ast = with_rules(
+        table,
+        vec![
+            min_length("body", 2),
+            min_length("body", 5),
+            min_length("body", 9),
+        ],
+    );
+    let chosen = rule_names(&ast);
+    for name in &chosen {
+        assert!(name.len() <= MAX_IDENTIFIER_BYTES, "{name}");
+    }
+    let distinct: std::collections::BTreeSet<&String> = chosen.iter().collect();
+    assert_eq!(distinct.len(), 3, "{chosen:?}");
+}
+
+/// The desired set carries the readable name, and its `CREATE` gives that name.
+#[test]
+fn the_desired_check_is_created_under_its_readable_name() {
+    let ast = with_rules("chat_message", vec![min_length("body", 2)]);
+    let desired = desired_objects(&ast, "public").unwrap();
+    let check = desired
+        .iter()
+        .find(|o| o.key.kind == ObjectKind::Check && o.key.name == "chat_message_body_min_length")
+        .unwrap_or_else(|| panic!("{desired:?}"));
+    assert!(
+        check.create_sql.contains(
+            r#"ADD CONSTRAINT "chat_message_body_min_length" CHECK (char_length("body") >= 2)"#
+        ),
+        "{}",
+        check.create_sql
+    );
+}
+
+/// A rule keeps the name the ledger records for it: once the rule that held the plain name is
+/// removed, the one that took `_2` keeps `_2`, and of two rules the one recorded under the plain
+/// name keeps it whichever sorts first.
+#[test]
+fn a_recorded_rule_name_is_kept() {
+    let table = "chat_message";
+    let mut alone = with_rules(table, vec![min_length("body", 5)]);
+    assert_eq!(rule_names(&alone), ["chat_message_body_min_length"]);
+    alone.recorded_names.record(
+        table,
+        "check",
+        "chat_message_body_min_length_2",
+        Some(r#"char_length("body") >= 5"#),
+    );
+    assert_eq!(rule_names(&alone), ["chat_message_body_min_length_2"]);
+
+    let mut both = with_rules(table, vec![min_length("body", 2), min_length("body", 5)]);
+    both.recorded_names.record(
+        table,
+        "check",
+        "chat_message_body_min_length",
+        Some(r#"char_length("body") >= 5"#),
+    );
+    assert_eq!(
+        rule_names(&both),
+        [
+            "chat_message_body_min_length_2",
+            "chat_message_body_min_length"
+        ]
+    );
 }

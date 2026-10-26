@@ -109,7 +109,7 @@ async fn checks_are_recorded_on_creation_and_left_alone_on_a_second_push() {
         let names: Vec<&str> = rows.iter().map(|r| r.key.name.as_str()).collect();
         assert_eq!(
             names,
-            ["products_check_1", "products_name_bounds"],
+            ["products_name_bounds", "products_price_min"],
             "the inline bound and the model rule are both recorded"
         );
         assert!(rows.iter().all(|r| r.status == Status::Managed));
@@ -205,7 +205,7 @@ async fn a_rule_added_to_an_existing_table_is_created_and_one_removed_is_dropped
                 .iter()
                 .map(|r| r.key.name.as_str())
                 .collect::<Vec<_>>(),
-            ["products_check_1"]
+            ["products_price_min"]
         );
         exec(&pool, "INSERT INTO public.products VALUES (1, 'a', -1)")
             .await
