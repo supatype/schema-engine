@@ -216,6 +216,10 @@ enum Command {
         /// `kind:name` for a table-level object. Repeatable.
         #[arg(long)]
         release: Vec<String>,
+        /// A released object to hand back to Supatype, named the same way: the next push brings
+        /// it to the schema again. Repeatable.
+        #[arg(long)]
+        reclaim: Vec<String>,
         /// No longer does anything: the database is always read live. Accepted for one release so
         /// scripts that pass it keep working, and says so.
         #[arg(long, hide = true)]
@@ -572,6 +576,7 @@ async fn main() -> Result<()> {
             schema,
             yes,
             release,
+            reclaim,
             no_cache,
         } => {
             use supatype_engine::state::migration_history;
@@ -581,7 +586,12 @@ async fn main() -> Result<()> {
             if no_cache {
                 eprintln!("{}", migration_history::NO_CACHE_NOTICE);
             }
-            let outcome = supatype_engine::adopt::run(&pool, &ast, &schema, &release, yes).await?;
+            let request = supatype_engine::adopt::Request {
+                release: &release,
+                reclaim: &reclaim,
+                apply: yes,
+            };
+            let outcome = supatype_engine::adopt::run(&pool, &ast, &schema, request).await?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);
         }
     }
