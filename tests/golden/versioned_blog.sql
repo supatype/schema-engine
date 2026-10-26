@@ -1173,6 +1173,7 @@ SELECT (jsonb_populate_record(NULL::"public"."posts", v."data")).*
       FROM "public"."posts_versions" pv
      ORDER BY pv."record_id", pv."version" DESC
   ) v;
+REVOKE ALL ON "draft"."posts" FROM anon;
 GRANT SELECT ON "draft"."posts" TO authenticated, service_role;
 
 ALTER TABLE "public"."ledger_versions" ENABLE ROW LEVEL SECURITY;

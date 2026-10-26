@@ -347,6 +347,34 @@ impl Action {
     /// The statements that put the desired object in place. The migration runs every addition
     /// after its own operations, which may create the table or column the object needs.
     pub fn addition_sql(&self) -> Vec<String> {
+        let mut out = self.placing_sql();
+        out.extend(self.acl_restore_sql());
+        out
+    }
+
+    /// Who may call a function, put back as recorded after a hand change to it (F14). Its parent
+    /// script makes the function again with `CREATE OR REPLACE`, which keeps whatever privileges it
+    /// finds, so a grant added by hand would survive the put-back and a revoke the script does not
+    /// repeat would stand. Run after everything else, it leaves exactly the recorded callers.
+    fn acl_restore_sql(&self) -> Option<String> {
+        let Action::Drift {
+            key,
+            recorded_def,
+            live_def,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        if key.kind != ObjectKind::Function {
+            return None;
+        }
+        let recorded = function_acl(recorded_def)?;
+        let live = function_acl(live_def)?;
+        (recorded != live).then(|| acl_statements(key, recorded, live))
+    }
+
+    fn placing_sql(&self) -> Vec<String> {
         match self {
             Action::Create {
                 create_sql,
@@ -704,6 +732,89 @@ fn claim(inputs: &Inputs<'_>, key: ObjectKey, d: &DesiredObject, l: &ObjectFinge
     }
 }
 
+/// The `acl` part of a function's definition: who may call it. `None` for a row an older engine
+/// recorded before it was part of the fingerprint.
+fn function_acl(definition: &str) -> Option<&str> {
+    definition.lines().find_map(|l| l.strip_prefix("acl="))
+}
+
+/// Whether a function's callers changed since it was recorded, which decides access: an RPC
+/// function an API role may call is part of the API (F14).
+fn acl_changed(row: &LedgerRow, live: &ObjectFingerprint) -> bool {
+    row.key.kind == ObjectKind::Function
+        && matches!(
+            (function_acl(&row.live_def), function_acl(&live.definition)),
+            (Some(recorded), Some(now)) if recorded != now
+        )
+}
+
+/// The roles an `acl` part names (`grantee=PRIVILEGE,...`).
+fn acl_grantees(acl: &str) -> BTreeSet<&str> {
+    acl.split(',')
+        .filter_map(|entry| entry.rsplit_once('=').map(|(grantee, _)| grantee))
+        .filter(|grantee| !grantee.is_empty())
+        .collect()
+}
+
+/// Takes `EXECUTE` from every role the live `acl` names, and from `PUBLIC`, then gives it to exactly
+/// the roles the recorded one names.
+fn acl_statements(key: &ObjectKey, recorded: &str, live: &str) -> String {
+    let (name, arguments) = key.name.split_once('(').unwrap_or((&key.name, ")"));
+    let signature = format!("{}({arguments}", quote_qualified(&key.schema, name));
+    let role = |grantee: &str| {
+        if grantee == "PUBLIC" {
+            "PUBLIC".to_string()
+        } else {
+            quote_ident(grantee)
+        }
+    };
+    let mut revoked = acl_grantees(live);
+    revoked.insert("PUBLIC");
+    let revokes = revoked
+        .into_iter()
+        .map(|g| format!("REVOKE ALL ON FUNCTION {signature} FROM {};", role(g)));
+    let grants = acl_grantees(recorded)
+        .into_iter()
+        .map(|g| format!("GRANT EXECUTE ON FUNCTION {signature} TO {};", role(g)));
+    revokes.chain(grants).collect::<Vec<_>>().join("\n")
+}
+
+/// The labelled parts of a definition (`label=value` per line, as the fingerprint writes them), or
+/// `None` when a line carries no label of `kind`'s.
+fn labelled_parts(kind: ObjectKind, definition: &str) -> Option<BTreeMap<&str, &str>> {
+    let labels = kind.labels();
+    definition
+        .lines()
+        .map(|line| {
+            let (label, value) = line.split_once('=')?;
+            labels.contains(&label).then_some((label, value))
+        })
+        .collect()
+}
+
+/// Whether `live` was changed since the ledger recorded it.
+///
+/// A part the recorded definition does not carry was not fingerprinted when it was recorded: an
+/// older engine wrote the row before that part entered the fingerprint (a view's options and owner,
+/// say). Such a row is compared on the parts it does carry, so an upgrade is not taken for a hand
+/// edit on every object of the kind; the push then records the whole fingerprint.
+fn changed_since_recorded(row: &LedgerRow, live: &ObjectFingerprint) -> bool {
+    if live.fingerprint == row.live_fp {
+        return false;
+    }
+    let (Some(recorded), Some(now)) = (
+        labelled_parts(row.key.kind, &row.live_def),
+        labelled_parts(row.key.kind, &live.definition),
+    ) else {
+        return true;
+    };
+    let older = recorded.len() < now.len() && recorded.keys().all(|l| now.contains_key(l));
+    !older
+        || recorded
+            .iter()
+            .any(|(label, value)| now.get(label) != Some(value))
+}
+
 pub fn reconcile(inputs: Inputs<'_>) -> Plan {
     let kinds: BTreeSet<ObjectKind> = inputs.kinds.iter().copied().collect();
     let desired: BTreeMap<&ObjectKey, &DesiredObject> = inputs
@@ -757,7 +868,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 if !row.intends(&d.create_sql) {
                     // Decided before drift, since the schema changed too; but a hand edit it would
                     // overwrite is still one, and must not escape the consent drift needs.
-                    let drifted = (l.fingerprint != row.live_fp).then(|| HandEdit {
+                    let drifted = changed_since_recorded(row, l).then(|| HandEdit {
                         recorded_def: row.live_def.clone(),
                         live_def: l.definition.clone(),
                         live_fp: l.fingerprint.clone(),
@@ -770,14 +881,14 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                         status,
                         drifted,
                     });
-                } else if l.fingerprint != row.live_fp {
+                } else if changed_since_recorded(row, l) {
                     changes.push(Action::Drift {
                         key,
                         recorded_def: row.live_def.clone(),
                         live_def: l.definition.clone(),
                         live_fp: l.fingerprint.clone(),
                         create_sql: d.create_sql.clone(),
-                        security_relevant: d.security_relevant,
+                        security_relevant: d.security_relevant || acl_changed(row, l),
                         inline: replaced_inline,
                         status,
                     });

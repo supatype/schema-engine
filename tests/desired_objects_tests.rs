@@ -19,7 +19,8 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 
 use supatype_engine::{
-    desired::{desired_objects, DesiredObject},
+    desired::{desired_objects, desired_objects_for, DesiredObject, FieldEnforcement},
+    differ::FieldMaskingTier,
     introspector::fingerprint::ObjectKind,
     parser,
     parser::ast::SchemaAst,
@@ -91,11 +92,20 @@ fn names_in_set(set: &[DesiredObject]) -> BTreeSet<String> {
         .collect()
 }
 
-/// The migration a push of `ast` would apply to an empty database: the differ's operations and
-/// the reconcile's creations, as one body.
-async fn first_push_sql(pool: &sqlx::PgPool, ast: &SchemaAst) -> String {
+/// The migration a push of `ast` would apply to an empty database (the differ's operations and
+/// the reconcile's creations, as one body), and the desired set for the masking tier it chose.
+async fn first_push(pool: &sqlx::PgPool, ast: &SchemaAst) -> (String, Vec<DesiredObject>) {
     let plan = push::prepare(pool, ast, "public").await.unwrap();
-    plan.migration(false).unwrap().up()
+    let set = match plan.diff.field_masking {
+        FieldMaskingTier::Views => desired_objects_for(
+            ast,
+            "public",
+            FieldEnforcement::Views(&plan.diff.field_view_plan),
+        ),
+        _ => desired_objects(ast, "public"),
+    }
+    .unwrap();
+    (plan.migration(false).unwrap().up(), set)
 }
 
 #[tokio::test]
@@ -103,8 +113,7 @@ async fn the_set_and_the_migration_name_the_same_objects() {
     for name in PUSHABLE {
         common::with_integration_pool(|pool| async move {
             let ast = fixture(name);
-            let sql = first_push_sql(&pool, &ast).await;
-            let set = desired_objects(&ast, "public").unwrap();
+            let (sql, set) = first_push(&pool, &ast).await;
 
             let in_sql = names_in_sql(&sql);
             let in_set = names_in_set(&set);
