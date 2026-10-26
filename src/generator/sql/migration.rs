@@ -11,7 +11,7 @@ use crate::introspector::fingerprint::ObjectKind;
 use crate::ledger::reconcile;
 use crate::managed::ObjectNames;
 use crate::parser::ast::{
-    scalar_of, AccessRule, DefaultValueAst, FieldAst, IndexAst, ModelAst, RelationCardinality,
+    scalar_of, DefaultValueAst, FieldAst, IndexAst, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
 };
 use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
@@ -896,58 +896,14 @@ fn render_create_rls_policy_sql(
         ));
     }
 
-    // Junction tables have no model of their own, so their policies are derived
-    // from the intersection of both parents' rules (see differ::rls_diff).
+    // A junction has no model of its own: its policies follow from its ends
+    // (`junction_access`).
     let junction = ast
         .junction_tables
         .iter()
         .find(|j| j.name == table)
         .ok_or_else(|| anyhow!("CreateRlsPolicy: unknown table {table}"))?;
-    let parent_a = ast
-        .models
-        .iter()
-        .find(|m| m.name == junction.model_a)
-        .ok_or_else(|| {
-            anyhow!(
-                "CreateRlsPolicy: junction {table} parent {} not found",
-                junction.model_a
-            )
-        })?;
-    let parent_b = ast
-        .models
-        .iter()
-        .find(|m| m.name == junction.model_b)
-        .ok_or_else(|| {
-            anyhow!(
-                "CreateRlsPolicy: junction {table} parent {} not found",
-                junction.model_b
-            )
-        })?;
-
-    let derived = crate::differ::rls_diff::intersect_access(parent_a.access(), parent_b.access());
-    let rule = match suffix {
-        "select" => derived.read,
-        "insert" => derived.create,
-        "update" => derived.update,
-        _ => derived.delete,
-    }
-    .ok_or_else(|| {
-        anyhow!("CreateRlsPolicy: junction {table} has no derivable access rule for {suffix}")
-    })?;
-
-    // The differ only derives row-independent rules for junctions, because the
-    // junction table has none of the parents' columns for a row-dependent
-    // expression to reference. Assert that here rather than emit invalid SQL.
-    if matches!(rule, AccessRule::Owner { .. } | AccessRule::Any { .. }) {
-        bail!(
-            "CreateRlsPolicy: junction {table} derived a row-dependent rule for {suffix}; \
-             it cannot reference parent columns"
-        );
-    }
-
-    Ok(crate::generator::sql::rls::render_policy_migration_sql(
-        schema, table, suffix, ast, parent_a, &rule,
-    ))
+    crate::generator::sql::junction_access::policy_sql(schema, ast, junction, suffix)
 }
 
 pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {

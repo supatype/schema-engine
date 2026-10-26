@@ -606,6 +606,57 @@ async fn one_locale_can_go_live_while_another_stays_in_draft() {
     .await;
 }
 
+/// DR5: a record created with translations in it holds them in its draft only. Studio inserted the
+/// live row with everything typed into the form, so publishing English later put the untranslated
+/// French live with it.
+#[tokio::test]
+async fn a_record_created_as_a_draft_puts_no_locale_live_until_it_is_published() {
+    with_seeded(|db| {
+        Box::pin(async move {
+            let created: serde_json::Value = sqlx::query_scalar(
+                r#"SELECT supatype.create_record('posts',
+                     '{"title": "Fresh", "body": {"en": "English copy", "fr": "Copie francaise"}}')"#,
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("create a record as a draft");
+            let id = created["record_id"].as_str().expect("the new record's id").to_string();
+            assert_eq!(created["version"], 1, "{created}");
+
+            let live_body: Option<serde_json::Value> =
+                sqlx::query_scalar("SELECT body FROM public.posts WHERE id = $1::uuid")
+                    .bind(&id)
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("read the live row");
+            let empty = serde_json::json!({});
+            assert_eq!(live_body.as_ref().unwrap_or(&empty), &empty, "no locale is live yet");
+
+            sqlx::query("SELECT supatype.publish('posts', $1, NULL, ARRAY['en'])")
+                .bind(&id)
+                .execute(&mut *db)
+                .await
+                .expect("publish English only");
+            let live: (bool, bool) =
+                sqlx::query_as("SELECT body ? 'en', body ? 'fr' FROM public.posts WHERE id = $1::uuid")
+                    .bind(&id)
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("read the live row");
+            assert_eq!(live, (true, false), "English is live and French is not");
+
+            let drafted: Option<String> =
+                sqlx::query_scalar("SELECT body->>'fr' FROM draft.posts WHERE id = $1::uuid")
+                    .bind(&id)
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("read the draft view");
+            assert_eq!(drafted.as_deref(), Some("Copie francaise"));
+        })
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn unpublishing_one_locale_leaves_the_others_live() {
     with_seeded(|db| {

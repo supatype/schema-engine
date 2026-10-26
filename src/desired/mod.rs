@@ -26,7 +26,7 @@ use anyhow::Result;
 use crate::differ::{
     column_diff::{expected_udt, field_is_primary_key},
     constraint_diff::expected_column_uniques,
-    rls_diff::{expected_policies, intersect_access},
+    rls_diff::expected_policies,
     table_diff::versions_record_id,
     Operation, Risk,
 };
@@ -36,6 +36,7 @@ use crate::generator::sql::{
     constraints::constraint_to_expr,
     field_views::{render_field_views, FieldViewTable},
     grants::{revoke_all_sql, table_grants},
+    junction_access::{junction_access, policy_suffixes, JunctionAccess},
     migration::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, option_columns,
         render_operation_named,
@@ -815,7 +816,7 @@ impl<'a> Builder<'a> {
     /// columns get beside them (`rls.rs` emits `idx_{table}_{column}_rls` with every policy whose
     /// rule reads another table, fitted to the identifier limit by the same rule as here).
     fn policies_for(&mut self, table: &str, access: &AccessAst) -> Result<()> {
-        let mut policies: Vec<(String, &'static str)> = Vec::new();
+        let mut suffixes = Vec::new();
         for (suffix, rule) in expected_policies(access) {
             if let Some(rule) = rule {
                 for (target_table, column) in membership_index_targets(rule) {
@@ -824,10 +825,16 @@ impl<'a> Builder<'a> {
                     self.index(&target_table, &name, &[column], "btree", false, create);
                 }
             }
-            policies.push((suffix.clone(), polcmd(&suffix)));
+            suffixes.push(suffix);
         }
-        for (suffix, command) in policies {
-            let name = policy_name(table, &suffix);
+        self.policies_named(table, &suffixes)
+    }
+
+    /// `table`'s policies with these suffixes, each rendered by its `CreateRlsPolicy`.
+    fn policies_named(&mut self, table: &str, suffixes: &[String]) -> Result<()> {
+        for suffix in suffixes {
+            let command = polcmd(suffix);
+            let name = policy_name(table, suffix);
             let create = self.render(Operation::CreateRlsPolicy {
                 table: table.to_string(),
                 policy: name.clone(),
@@ -1213,14 +1220,11 @@ impl<'a> Builder<'a> {
             );
         }
 
-        let (Some(a), Some(b)) = (
-            self.ast.models.iter().find(|m| m.name == jt.model_a),
-            self.ast.models.iter().find(|m| m.name == jt.model_b),
-        ) else {
-            return Ok(());
-        };
-        let derived = intersect_access(a.access(), b.access());
-        self.policies_for(table, &derived)
+        // An end missing from the schema leaves the intersection of nothing: no policies.
+        match junction_access(self.ast, jt) {
+            JunctionAccess::Intersected(derived) => self.policies_for(table, &derived),
+            linked => self.policies_named(table, &policy_suffixes(&linked)),
+        }
     }
 }
 
