@@ -108,9 +108,9 @@ fn test_storage_buckets_merge_and_declarative_rls() {
     assert_eq!(b.file_size_limit, Some(52428800));
     assert!(b.access.is_some());
 
-    let sql = storage::generate(&ast).unwrap();
+    let sql = storage::bucket_policies_sql(&ast);
     assert!(sql.contains("storage_docs_sel"));
-    // Named only to be dropped: a model policy left over from before the bucket declared rules
+    // Not desired, so a model policy left from before the bucket declared rules is dropped: it
     // would be ORed with them.
     assert!(
         !sql.contains("CREATE POLICY \"posts_docs_sel\""),

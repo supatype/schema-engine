@@ -2133,7 +2133,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "_global_site_settings",
@@ -2142,7 +2142,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "_global_site_settings",
@@ -2151,7 +2151,7 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "_global_site_settings",
@@ -2160,7 +2160,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "attendee",
@@ -2169,7 +2169,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = id)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "attendee",
@@ -2178,7 +2178,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "attendee",
@@ -2187,7 +2187,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "attendee",
@@ -2196,7 +2196,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = id)",
         "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "chat_message",
@@ -2205,7 +2205,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "chat_message",
@@ -2214,7 +2214,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "chat_message",
@@ -2223,7 +2223,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "chat_message",
@@ -2232,7 +2232,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
         "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "page",
@@ -2241,7 +2241,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "page",
@@ -2250,7 +2250,7 @@
         "permissive": true,
         "usingExpr": "_supatype.sees_draft_page((id)::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "page",
@@ -2259,7 +2259,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "page",
@@ -2268,7 +2268,7 @@
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "page",
@@ -2277,7 +2277,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "page_versions",
@@ -2286,7 +2286,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "_supatype.can_edit_page(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "page_versions",
@@ -2295,7 +2295,7 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "page_versions",
@@ -2304,7 +2304,7 @@
         "permissive": true,
         "usingExpr": "_supatype.can_edit_page(record_id)",
         "checkExpr": "_supatype.can_edit_page(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "room",
@@ -2313,7 +2313,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "room",
@@ -2322,7 +2322,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "room",
@@ -2331,7 +2331,7 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "room",
@@ -2340,7 +2340,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker",
@@ -2349,7 +2349,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker",
@@ -2358,7 +2358,7 @@
         "permissive": true,
         "usingExpr": "_supatype.sees_draft_speaker((id)::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker",
@@ -2367,7 +2367,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker",
@@ -2376,7 +2376,7 @@
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker",
@@ -2385,7 +2385,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker_versions",
@@ -2394,7 +2394,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "_supatype.can_edit_speaker(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker_versions",
@@ -2403,7 +2403,7 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "speaker_versions",
@@ -2412,7 +2412,7 @@
         "permissive": true,
         "usingExpr": "_supatype.can_edit_speaker(record_id)",
         "checkExpr": "_supatype.can_edit_speaker(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "sponsor",
@@ -2421,7 +2421,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "sponsor",
@@ -2430,7 +2430,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "sponsor",
@@ -2439,7 +2439,7 @@
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "sponsor",
@@ -2448,7 +2448,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk",
@@ -2457,7 +2457,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk",
@@ -2466,7 +2466,7 @@
         "permissive": true,
         "usingExpr": "_supatype.sees_draft_talk((id)::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk",
@@ -2475,7 +2475,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk",
@@ -2484,7 +2484,7 @@
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk",
@@ -2493,7 +2493,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk_versions",
@@ -2502,7 +2502,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "_supatype.can_edit_talk(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk_versions",
@@ -2511,7 +2511,7 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "talk_versions",
@@ -2520,7 +2520,7 @@
         "permissive": true,
         "usingExpr": "_supatype.can_edit_talk(record_id)",
         "checkExpr": "_supatype.can_edit_talk(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "ticket",
@@ -2529,7 +2529,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "ticket",
@@ -2538,7 +2538,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "ticket",
@@ -2547,7 +2547,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "ticket",
@@ -2556,7 +2556,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
         "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "managed": true
+        "managed": false
       }
     ],
     "triggers": [
@@ -4760,342 +4760,786 @@
         "forced": false
       }
     ],
-    "policyRoles": [
+    "policies": [
       {
+        "schema": "public",
         "table": "_global_site_settings",
-        "policy": "_global_site_settings_delete",
+        "name": "_global_site_settings_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "_global_site_settings",
-        "policy": "_global_site_settings_insert",
+        "name": "_global_site_settings_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "_global_site_settings",
-        "policy": "_global_site_settings_select",
+        "name": "_global_site_settings_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "_global_site_settings",
-        "policy": "_global_site_settings_update",
+        "name": "_global_site_settings_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "attendee",
-        "policy": "attendee_delete",
+        "name": "attendee_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "attendee",
-        "policy": "attendee_insert",
+        "name": "attendee_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "attendee",
-        "policy": "attendee_select",
+        "name": "attendee_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "attendee",
-        "policy": "attendee_update",
+        "name": "attendee_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "chat_message",
-        "policy": "chat_message_delete",
+        "name": "chat_message_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "chat_message",
-        "policy": "chat_message_insert",
+        "name": "chat_message_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "chat_message",
-        "policy": "chat_message_select",
+        "name": "chat_message_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "chat_message",
-        "policy": "chat_message_update",
+        "name": "chat_message_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page",
-        "policy": "page_delete",
+        "name": "page_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page",
-        "policy": "page_draft_select",
+        "name": "page_draft_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.sees_draft_page((id)::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page",
-        "policy": "page_insert",
+        "name": "page_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page",
-        "policy": "page_select",
+        "name": "page_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(published_at <= ( SELECT now() AS now))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page",
-        "policy": "page_update",
+        "name": "page_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page_versions",
-        "policy": "page_versions_insert",
+        "name": "page_versions_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "_supatype.can_edit_page(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page_versions",
-        "policy": "page_versions_select",
+        "name": "page_versions_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "page_versions",
-        "policy": "page_versions_update",
+        "name": "page_versions_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.can_edit_page(record_id)",
+        "checkExpr": "_supatype.can_edit_page(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "room",
-        "policy": "room_delete",
+        "name": "room_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "room",
-        "policy": "room_insert",
+        "name": "room_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "room",
-        "policy": "room_select",
+        "name": "room_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "room",
-        "policy": "room_update",
+        "name": "room_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker",
-        "policy": "speaker_delete",
+        "name": "speaker_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker",
-        "policy": "speaker_draft_select",
+        "name": "speaker_draft_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.sees_draft_speaker((id)::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker",
-        "policy": "speaker_insert",
+        "name": "speaker_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker",
-        "policy": "speaker_select",
+        "name": "speaker_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(published_at <= ( SELECT now() AS now))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker",
-        "policy": "speaker_update",
+        "name": "speaker_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker_versions",
-        "policy": "speaker_versions_insert",
+        "name": "speaker_versions_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "_supatype.can_edit_speaker(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker_versions",
-        "policy": "speaker_versions_select",
+        "name": "speaker_versions_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "speaker_versions",
-        "policy": "speaker_versions_update",
+        "name": "speaker_versions_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.can_edit_speaker(record_id)",
+        "checkExpr": "_supatype.can_edit_speaker(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "sponsor",
-        "policy": "sponsor_delete",
+        "name": "sponsor_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "sponsor",
-        "policy": "sponsor_insert",
+        "name": "sponsor_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "sponsor",
-        "policy": "sponsor_select",
+        "name": "sponsor_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(published_at <= ( SELECT now() AS now))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "sponsor",
-        "policy": "sponsor_update",
+        "name": "sponsor_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk",
-        "policy": "talk_delete",
+        "name": "talk_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk",
-        "policy": "talk_draft_select",
+        "name": "talk_draft_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.sees_draft_talk((id)::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk",
-        "policy": "talk_insert",
+        "name": "talk_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk",
-        "policy": "talk_select",
+        "name": "talk_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(published_at <= ( SELECT now() AS now))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk",
-        "policy": "talk_update",
+        "name": "talk_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk_versions",
-        "policy": "talk_versions_insert",
+        "name": "talk_versions_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "_supatype.can_edit_talk(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk_versions",
-        "policy": "talk_versions_select",
+        "name": "talk_versions_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "talk_versions",
-        "policy": "talk_versions_update",
+        "name": "talk_versions_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.can_edit_talk(record_id)",
+        "checkExpr": "_supatype.can_edit_talk(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "ticket",
-        "policy": "ticket_delete",
+        "name": "ticket_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "ticket",
-        "policy": "ticket_insert",
+        "name": "ticket_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "ticket",
-        "policy": "ticket_select",
+        "name": "ticket_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "ticket",
-        "policy": "ticket_update",
+        "name": "ticket_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_speaker_headshots_del",
+        "command": "d",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() = owner))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_speaker_headshots_ins",
+        "command": "a",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": null,
+        "checkExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() IS NOT NULL))",
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_speaker_headshots_sel",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'speaker-headshots'::text) AND true)",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_speaker_headshots_upd",
+        "command": "w",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() = owner))",
+        "checkExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() = owner))",
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_sponsor_assets_del",
+        "command": "d",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'sponsor-assets'::text) AND false)",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_sponsor_assets_ins",
+        "command": "a",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": null,
+        "checkExpr": "((bucket_id = 'sponsor-assets'::text) AND (role() = 'sponsor'::text))",
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_sponsor_assets_sel",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'sponsor-assets'::text) AND (role() = 'sponsor'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_sponsor_assets_upd",
+        "command": "w",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'sponsor-assets'::text) AND false)",
+        "checkExpr": "((bucket_id = 'sponsor-assets'::text) AND false)",
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_ticket_files_del",
+        "command": "d",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_ticket_files_ins",
+        "command": "a",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": null,
+        "checkExpr": "((bucket_id = 'ticket-files'::text) AND (uid() IS NOT NULL))",
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_ticket_files_sel",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "storage",
+        "table": "objects",
+        "name": "storage_ticket_files_upd",
+        "command": "w",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
+        "checkExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
+        "comment": null
       }
     ],
     "engineTables": [

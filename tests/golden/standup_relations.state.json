@@ -209,7 +209,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = id)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "profile",
@@ -218,7 +218,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "profile",
@@ -227,7 +227,7 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "profile",
@@ -236,7 +236,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = id)",
         "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "team",
@@ -245,7 +245,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "team",
@@ -254,7 +254,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'authenticated'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "team",
@@ -263,7 +263,7 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "team",
@@ -272,7 +272,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
         "checkExpr": "(( SELECT uid() AS uid) = owner_id)",
-        "managed": true
+        "managed": false
       }
     ],
     "triggers": [
@@ -804,62 +804,110 @@
         "forced": false
       }
     ],
-    "policyRoles": [
+    "policies": [
       {
+        "schema": "public",
         "table": "profile",
-        "policy": "profile_delete",
+        "name": "profile_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "profile",
-        "policy": "profile_insert",
+        "name": "profile_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "profile",
-        "policy": "profile_select",
+        "name": "profile_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "profile",
-        "policy": "profile_update",
+        "name": "profile_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "team",
-        "policy": "team_delete",
+        "name": "team_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "team",
-        "policy": "team_insert",
+        "name": "team_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'authenticated'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "team",
-        "policy": "team_select",
+        "name": "team_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "team",
-        "policy": "team_update",
+        "name": "team_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "checkExpr": "(( SELECT uid() AS uid) = owner_id)",
+        "comment": null
       }
     ],
     "engineTables": []

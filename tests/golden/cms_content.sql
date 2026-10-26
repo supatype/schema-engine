@@ -238,48 +238,6 @@ ALTER TABLE "public"."articles" ENABLE ROW LEVEL SECURITY;
 -- [safe] Enable RLS: article_tags
 ALTER TABLE "public"."article_tags" ENABLE ROW LEVEL SECURITY;
 
--- [safe] Create RLS policy: articles.articles_select
-DROP POLICY IF EXISTS "articles_select" ON "public"."articles";
-CREATE POLICY "articles_select" ON "public"."articles"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "articles_select" ON "public"."articles" IS 'supatype:managed;kind=rls_policy;table=articles;fields=select;v=1';
-
-
--- [safe] Create RLS policy: articles.articles_insert
-DROP POLICY IF EXISTS "articles_insert" ON "public"."articles";
-CREATE POLICY "articles_insert" ON "public"."articles"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
-  );
-
-COMMENT ON POLICY "articles_insert" ON "public"."articles" IS 'supatype:managed;kind=rls_policy;table=articles;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: articles.articles_update
-DROP POLICY IF EXISTS "articles_update" ON "public"."articles";
-CREATE POLICY "articles_update" ON "public"."articles"
-FOR UPDATE USING (
-    (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
-  ) WITH CHECK (
-    (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
-  );
-
-COMMENT ON POLICY "articles_update" ON "public"."articles" IS 'supatype:managed;kind=rls_policy;table=articles;fields=update;v=1';
-
-
--- [safe] Create RLS policy: articles.articles_delete
-DROP POLICY IF EXISTS "articles_delete" ON "public"."articles";
-CREATE POLICY "articles_delete" ON "public"."articles"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "articles_delete" ON "public"."articles" IS 'supatype:managed;kind=rls_policy;table=articles;fields=delete;v=1';
-
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_authors"("authors" "public"."authors")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -555,5 +513,23 @@ CREATE OR REPLACE TRIGGER "tags_slug_trigger"
 BEFORE INSERT OR UPDATE ON "public"."tags"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_tags_slug();
 
+CREATE POLICY "articles_delete" ON "public"."articles"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "articles_insert" ON "public"."articles"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
+  );
+CREATE POLICY "articles_select" ON "public"."articles"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "articles_update" ON "public"."articles"
+FOR UPDATE USING (
+    (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
+  ) WITH CHECK (
+    (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
+  );
 
 COMMIT;

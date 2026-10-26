@@ -676,7 +676,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "customers",
@@ -685,7 +685,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "true",
-        "managed": true
+        "managed": false
       },
       {
         "table": "customers",
@@ -694,7 +694,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = id)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "customers",
@@ -703,7 +703,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) = id)",
         "checkExpr": "(( SELECT uid() AS uid) = id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "orders",
@@ -712,7 +712,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "orders",
@@ -721,7 +721,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT uid() AS uid) = customers.id))))",
-        "managed": true
+        "managed": false
       },
       {
         "table": "orders",
@@ -730,7 +730,7 @@
         "permissive": true,
         "usingExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT uid() AS uid) = customers.id))))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "orders",
@@ -739,7 +739,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "products",
@@ -748,7 +748,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "products",
@@ -757,7 +757,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "products",
@@ -766,7 +766,7 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "products",
@@ -775,7 +775,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
-        "managed": true
+        "managed": false
       }
     ],
     "triggers": [
@@ -1544,90 +1544,162 @@
         "forced": false
       }
     ],
-    "policyRoles": [
+    "policies": [
       {
+        "schema": "public",
         "table": "customers",
-        "policy": "customers_delete",
+        "name": "customers_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "customers",
-        "policy": "customers_insert",
+        "name": "customers_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "true",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "customers",
-        "policy": "customers_select",
+        "name": "customers_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "customers",
-        "policy": "customers_update",
+        "name": "customers_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "orders",
-        "policy": "orders_delete",
+        "name": "orders_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "orders",
-        "policy": "orders_insert",
+        "name": "orders_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT uid() AS uid) = customers.id))))",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "orders",
-        "policy": "orders_select",
+        "name": "orders_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(EXISTS ( SELECT 1\n   FROM customers\n  WHERE ((customers.id = orders.customer_id) AND (( SELECT uid() AS uid) = customers.id))))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "orders",
-        "policy": "orders_update",
+        "name": "orders_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "products",
-        "policy": "products_delete",
+        "name": "products_delete",
+        "command": "d",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "products",
-        "policy": "products_insert",
+        "name": "products_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "products",
-        "policy": "products_select",
+        "name": "products_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "products",
-        "policy": "products_update",
+        "name": "products_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'admin'::text)",
+        "comment": null
       }
     ],
     "engineTables": []

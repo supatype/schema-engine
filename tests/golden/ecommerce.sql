@@ -234,132 +234,6 @@ ALTER TABLE "public"."orders" ENABLE ROW LEVEL SECURITY;
 -- [safe] Enable RLS: order_items
 ALTER TABLE "public"."order_items" ENABLE ROW LEVEL SECURITY;
 
--- [safe] Create RLS policy: customers.customers_select
-DROP POLICY IF EXISTS "customers_select" ON "public"."customers";
-CREATE POLICY "customers_select" ON "public"."customers"
-FOR SELECT USING (
-    (SELECT auth.uid()) = "id"
-  );
-
-COMMENT ON POLICY "customers_select" ON "public"."customers" IS 'supatype:managed;kind=rls_policy;table=customers;fields=select;v=1';
-
-
--- [safe] Create RLS policy: customers.customers_insert
-DROP POLICY IF EXISTS "customers_insert" ON "public"."customers";
-CREATE POLICY "customers_insert" ON "public"."customers"
-FOR INSERT WITH CHECK (
-    TRUE
-  );
-
-COMMENT ON POLICY "customers_insert" ON "public"."customers" IS 'supatype:managed;kind=rls_policy;table=customers;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: customers.customers_update
-DROP POLICY IF EXISTS "customers_update" ON "public"."customers";
-CREATE POLICY "customers_update" ON "public"."customers"
-FOR UPDATE USING (
-    (SELECT auth.uid()) = "id"
-  ) WITH CHECK (
-    (SELECT auth.uid()) = "id"
-  );
-
-COMMENT ON POLICY "customers_update" ON "public"."customers" IS 'supatype:managed;kind=rls_policy;table=customers;fields=update;v=1';
-
-
--- [safe] Create RLS policy: customers.customers_delete
-DROP POLICY IF EXISTS "customers_delete" ON "public"."customers";
-CREATE POLICY "customers_delete" ON "public"."customers"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "customers_delete" ON "public"."customers" IS 'supatype:managed;kind=rls_policy;table=customers;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: products.products_select
-DROP POLICY IF EXISTS "products_select" ON "public"."products";
-CREATE POLICY "products_select" ON "public"."products"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "products_select" ON "public"."products" IS 'supatype:managed;kind=rls_policy;table=products;fields=select;v=1';
-
-
--- [safe] Create RLS policy: products.products_insert
-DROP POLICY IF EXISTS "products_insert" ON "public"."products";
-CREATE POLICY "products_insert" ON "public"."products"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "products_insert" ON "public"."products" IS 'supatype:managed;kind=rls_policy;table=products;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: products.products_update
-DROP POLICY IF EXISTS "products_update" ON "public"."products";
-CREATE POLICY "products_update" ON "public"."products"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'admin'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "products_update" ON "public"."products" IS 'supatype:managed;kind=rls_policy;table=products;fields=update;v=1';
-
-
--- [safe] Create RLS policy: products.products_delete
-DROP POLICY IF EXISTS "products_delete" ON "public"."products";
-CREATE POLICY "products_delete" ON "public"."products"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "products_delete" ON "public"."products" IS 'supatype:managed;kind=rls_policy;table=products;fields=delete;v=1';
-
-
--- [safe] Create RLS policy: orders.orders_select
-DROP POLICY IF EXISTS "orders_select" ON "public"."orders";
-CREATE POLICY "orders_select" ON "public"."orders"
-FOR SELECT USING (
-    EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT auth.uid()) = "customers"."id")
-  );
-
-COMMENT ON POLICY "orders_select" ON "public"."orders" IS 'supatype:managed;kind=rls_policy;table=orders;fields=select;v=1';
-
-
--- [safe] Create RLS policy: orders.orders_insert
-DROP POLICY IF EXISTS "orders_insert" ON "public"."orders";
-CREATE POLICY "orders_insert" ON "public"."orders"
-FOR INSERT WITH CHECK (
-    EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT auth.uid()) = "customers"."id")
-  );
-
-COMMENT ON POLICY "orders_insert" ON "public"."orders" IS 'supatype:managed;kind=rls_policy;table=orders;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: orders.orders_update
-DROP POLICY IF EXISTS "orders_update" ON "public"."orders";
-CREATE POLICY "orders_update" ON "public"."orders"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'admin'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "orders_update" ON "public"."orders" IS 'supatype:managed;kind=rls_policy;table=orders;fields=update;v=1';
-
-
--- [safe] Create RLS policy: orders.orders_delete
-DROP POLICY IF EXISTS "orders_delete" ON "public"."orders";
-CREATE POLICY "orders_delete" ON "public"."orders"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "orders_delete" ON "public"."orders" IS 'supatype:managed;kind=rls_policy;table=orders;fields=delete;v=1';
-
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_customers"("customers" "public"."customers")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -619,5 +493,59 @@ CREATE OR REPLACE TRIGGER "products_updated_at_trigger"
 BEFORE UPDATE ON "public"."products"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "customers_delete" ON "public"."customers"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "customers_insert" ON "public"."customers"
+FOR INSERT WITH CHECK (
+    TRUE
+  );
+CREATE POLICY "customers_select" ON "public"."customers"
+FOR SELECT USING (
+    (SELECT auth.uid()) = "id"
+  );
+CREATE POLICY "customers_update" ON "public"."customers"
+FOR UPDATE USING (
+    (SELECT auth.uid()) = "id"
+  ) WITH CHECK (
+    (SELECT auth.uid()) = "id"
+  );
+CREATE POLICY "orders_delete" ON "public"."orders"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "orders_insert" ON "public"."orders"
+FOR INSERT WITH CHECK (
+    EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT auth.uid()) = "customers"."id")
+  );
+CREATE POLICY "orders_select" ON "public"."orders"
+FOR SELECT USING (
+    EXISTS (SELECT 1 FROM "customers" WHERE "customers"."id" = "customer_id" AND (SELECT auth.uid()) = "customers"."id")
+  );
+CREATE POLICY "orders_update" ON "public"."orders"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'admin'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "products_delete" ON "public"."products"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "products_insert" ON "public"."products"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "products_select" ON "public"."products"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "products_update" ON "public"."products"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'admin'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'admin'
+  );
 
 COMMIT;

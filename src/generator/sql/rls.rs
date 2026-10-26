@@ -43,13 +43,21 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
             "ALTER TABLE \"{schema}\".\"{table}\" FORCE ROW LEVEL SECURITY;\n\n"
         ));
 
+        // A script of its own, so each policy is dropped before it is made and the script can run
+        // twice. A push does not use it: there the reconcile drops and creates.
+        let drop = |suffix: &str| {
+            format!("DROP POLICY IF EXISTS \"{table}_{suffix}\" ON \"{schema}\".\"{table}\";\n")
+        };
         if let Some(rule) = &access.read {
+            out.push_str(&drop("select"));
             out.push_str(&render_select_policy_sql(schema, table, ast, model, rule));
         }
         if let Some(rule) = &access.create {
+            out.push_str(&drop("insert"));
             out.push_str(&render_insert_policy_sql(schema, table, ast, model, rule));
         }
         if let Some(rule) = &access.update {
+            out.push_str(&drop("update"));
             out.push_str(&render_update_policy_sql(
                 schema,
                 table,
@@ -60,6 +68,7 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
             ));
         }
         if let Some(rule) = &access.delete {
+            out.push_str(&drop("delete"));
             out.push_str(&render_delete_policy_sql(schema, table, ast, model, rule));
         }
     }
@@ -128,17 +137,10 @@ pub fn render_policy_migration_sql(
         other => return format!("-- unknown RLS policy suffix: {other}\n"),
     };
 
-    // Stamp ownership so the differ can distinguish our policies from
-    // hand-written ones instead of guessing from the name. Without this, a
-    // user's own policy is dropped on the next push, and one that happens to
-    // match our naming is silently replaced.
-    let comment = crate::managed::managed_comment("rls_policy", table, &[suffix]);
-
-    // The membership indexes a rule's join columns need are the reconcile's (Phase 4.3), so one
-    // dropped by hand comes back on the next push whether or not the policy changed.
-    format!(
-        "{sql}COMMENT ON POLICY \"{table}_{suffix}\" ON \"{schema}\".\"{table}\" IS '{comment}';\n"
-    )
+    // The `CREATE POLICY` alone. Which policies are ours is the ledger's record (Phase 4.7b), not
+    // a comment, and the reconcile drops a policy before making it again. The membership indexes
+    // a rule's join columns need are the reconcile's too (Phase 4.3).
+    sql.trim_end().to_string()
 }
 
 pub(crate) fn render_select_policy_sql(
@@ -151,8 +153,7 @@ pub(crate) fn render_select_policy_sql(
     let expr = access_rule_to_expr(ast, model, rule, schema);
     let name = format!("{table}_select");
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
+        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR SELECT USING (\n    {expr}\n  );\n\n"
     )
 }
@@ -167,8 +168,7 @@ pub(crate) fn render_insert_policy_sql(
     let expr = access_rule_to_expr(ast, model, rule, schema);
     let name = format!("{table}_insert");
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
+        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR INSERT WITH CHECK (\n    {expr}\n  );\n\n"
     )
 }
@@ -190,8 +190,7 @@ pub(crate) fn render_update_policy_sql(
     };
     let name = format!("{table}_update");
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
+        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR UPDATE USING (\n    {using_expr}\n  ) WITH CHECK (\n    {check_expr}\n  );\n\n"
     )
 }
@@ -206,8 +205,7 @@ pub(crate) fn render_delete_policy_sql(
     let expr = access_rule_to_expr(ast, model, rule, schema);
     let name = format!("{table}_delete");
     format!(
-        "DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{table}\";\n\
-         CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
+        "CREATE POLICY \"{name}\" ON \"{schema}\".\"{table}\"\n\
            FOR DELETE USING (\n    {expr}\n  );\n\n"
     )
 }

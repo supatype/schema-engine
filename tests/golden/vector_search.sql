@@ -174,48 +174,6 @@ COMMENT ON TABLE "public"."documents" IS 'supatype:managed;kind=table;table=docu
 -- [safe] Enable RLS: documents
 ALTER TABLE "public"."documents" ENABLE ROW LEVEL SECURITY;
 
--- [safe] Create RLS policy: documents.documents_select
-DROP POLICY IF EXISTS "documents_select" ON "public"."documents";
-CREATE POLICY "documents_select" ON "public"."documents"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "documents_select" ON "public"."documents" IS 'supatype:managed;kind=rls_policy;table=documents;fields=select;v=1';
-
-
--- [safe] Create RLS policy: documents.documents_insert
-DROP POLICY IF EXISTS "documents_insert" ON "public"."documents";
-CREATE POLICY "documents_insert" ON "public"."documents"
-FOR INSERT WITH CHECK (
-    (SELECT auth.role()) = ANY(ARRAY['admin', 'ingest'])
-  );
-
-COMMENT ON POLICY "documents_insert" ON "public"."documents" IS 'supatype:managed;kind=rls_policy;table=documents;fields=insert;v=1';
-
-
--- [safe] Create RLS policy: documents.documents_update
-DROP POLICY IF EXISTS "documents_update" ON "public"."documents";
-CREATE POLICY "documents_update" ON "public"."documents"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'admin'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "documents_update" ON "public"."documents" IS 'supatype:managed;kind=rls_policy;table=documents;fields=update;v=1';
-
-
--- [safe] Create RLS policy: documents.documents_delete
-DROP POLICY IF EXISTS "documents_delete" ON "public"."documents";
-CREATE POLICY "documents_delete" ON "public"."documents"
-FOR DELETE USING (
-    (SELECT auth.role()) = 'admin'
-  );
-
-COMMENT ON POLICY "documents_delete" ON "public"."documents" IS 'supatype:managed;kind=rls_policy;table=documents;fields=delete;v=1';
-
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."documents")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -292,5 +250,23 @@ CREATE OR REPLACE TRIGGER "documents_updated_at_trigger"
 BEFORE UPDATE ON "public"."documents"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "documents_delete" ON "public"."documents"
+FOR DELETE USING (
+    (SELECT auth.role()) = 'admin'
+  );
+CREATE POLICY "documents_insert" ON "public"."documents"
+FOR INSERT WITH CHECK (
+    (SELECT auth.role()) = ANY(ARRAY['admin', 'ingest'])
+  );
+CREATE POLICY "documents_select" ON "public"."documents"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "documents_update" ON "public"."documents"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'admin'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'admin'
+  );
 
 COMMIT;

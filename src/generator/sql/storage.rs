@@ -1,4 +1,3 @@
-use crate::managed::{managed_comment, MANAGED_PREFIX};
 use crate::parser::ast::{
     AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageAccessMode, StorageBucketAst,
 };
@@ -8,15 +7,13 @@ use anyhow::Result;
 /// Generates SQL for the storage subsystem:
 ///   1. `storage` schema + `storage.buckets` + `storage.objects` DDL (idempotent).
 ///   2. UPSERT for every bucket inferred from image/file fields.
-///   3. RLS policies on `storage.objects`, from each bucket's rules or the models that use it.
+///   3. Row-level security and the caller roles' privileges on `storage.objects`.
+///
+/// The policies on `storage.objects` are ledger objects ([`bucket_policies_sql`]): the reconcile
+/// creates them, and drops the ones a schema that has removed its last bucket no longer asks for.
 pub fn generate(ast: &SchemaAst) -> Result<String> {
     if ast.storage_buckets.is_empty() {
-        // Still swept: a schema that has just removed its last bucket must take that bucket's
-        // policies with it, or they keep granting what the schema no longer declares.
-        return Ok(format!(
-            "-- No storage buckets declared in schema.\n\n{}",
-            retire_unexpected_policies_sql(&[])
-        ));
+        return Ok("-- No storage buckets declared in schema.\n".to_string());
     }
     refuse_colliding_policy_labels(ast)?;
 
@@ -31,7 +28,7 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
         out.push('\n');
     }
 
-    out.push_str(&generate_storage_rls(ast));
+    out.push_str(&generate_storage_rls());
 
     Ok(out)
 }
@@ -290,45 +287,27 @@ impl<'a> ObjectPolicies<'a> {
         format!("{}_{}", self.name, op.names().suffix)
     }
 
-    /// The names of the policies this set creates.
-    fn created(&self) -> impl Iterator<Item = String> + '_ {
-        ObjectOp::ALL
-            .into_iter()
-            .zip(&self.rules)
-            .filter(|(_, rule)| rule.is_some())
-            .map(|(op, _)| self.policy_name(op))
-    }
-
+    /// The `CREATE POLICY` of every declared rule. A rule removed from the schema takes its policy
+    /// with it because nothing desires that policy any more and the reconcile drops it.
     fn render(&self) -> String {
         let b = sql_quote_bucket_id(self.bucket_id);
         let mut out = format!("-- {}\n", self.comment);
         for (op, rule) in ObjectOp::ALL.into_iter().zip(&self.rules) {
-            let policy = self.policy_name(op);
-            // Dropped whether or not the rule is still declared. A rule removed from the schema
-            // has to take its policy with it, or the access it granted outlives the rule.
-            out.push_str(&format!(
-                "DROP POLICY IF EXISTS \"{policy}\" ON storage.objects;\n"
-            ));
             let Some(rule) = rule else { continue };
             let expr = format!(
                 "bucket_id = '{b}' AND ({})",
                 access_rule_to_storage_expr(rule)
             );
-            let marker = managed_comment(STORAGE_POLICY_KIND, "objects", &[&policy]);
             out.push_str(&format!(
-                "CREATE POLICY \"{policy}\" ON storage.objects\n  {};\n\
-                 COMMENT ON POLICY \"{policy}\" ON storage.objects IS '{}';\n",
+                "CREATE POLICY \"{}\" ON \"storage\".\"objects\"\n  {};\n",
+                self.policy_name(op),
                 op.clause(&expr),
-                marker.replace('\'', "''"),
             ));
         }
         out.push('\n');
         out
     }
 }
-
-/// The `kind` in the managed marker on every policy this module creates.
-const STORAGE_POLICY_KIND: &str = "storage_policy";
 
 /// Each `(model, bucket)` pair where a model's file or image field stores into the bucket.
 fn model_bucket_uses(ast: &SchemaAst) -> Vec<(&ModelAst, &str)> {
@@ -387,57 +366,50 @@ fn object_policy_sets(ast: &SchemaAst) -> Vec<ObjectPolicies<'_>> {
     sets
 }
 
-/// Drop every policy this module created on an earlier push that the schema no longer asks for.
-///
-/// The per-set drops only reach names the current schema can still spell. A bucket removed from
-/// the schema, a model renamed, or a file field pointed elsewhere leaves policies no set names, and
-/// a permissive policy left behind is ORed with whatever replaced it. The managed marker is what
-/// tells ours from a policy someone wrote by hand, which this never touches.
-///
-/// Engines before the marker wrote bucket policies as `storage_<label>_sel|ins|del` with no comment,
-/// so an unmarked policy of exactly that shape is treated as ours too. Left behind they matter more
-/// than they did: the caller roles now hold INSERT, UPDATE and DELETE, so an old "any signed-in
-/// user" delete policy would take effect. A model's policies from before the marker
-/// (`<table>_<bucket>_*`) cannot be told from a hand-written one once the model is gone, so those
-/// are left alone.
-fn retire_unexpected_policies_sql(sets: &[ObjectPolicies<'_>]) -> String {
-    let expected = sets
+/// The policies on `storage.objects` the bucket rules and the models that store into buckets ask
+/// for, one `CREATE POLICY` each: what the desired set reads them from (Phase 4.7b). Buckets with
+/// declarative `access` get a single policy set per bucket; others inherit model `access`. The
+/// reconcile creates them after the storage layer, which makes `storage.objects` and turns its
+/// row-level security on, and drops one when nothing asks for it any more: a bucket removed, a
+/// model renamed, a file field pointed elsewhere.
+pub fn bucket_policies_sql(ast: &SchemaAst) -> String {
+    object_policy_sets(ast)
         .iter()
-        .flat_map(ObjectPolicies::created)
-        .map(|name| format!("'{}'", name.replace('\'', "''")))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let marker = format!("{MANAGED_PREFIX};kind={STORAGE_POLICY_KIND};%");
-    format!(
-        "DO $retire_storage_policies$\n\
-         DECLARE p record;\n\
-         BEGIN\n  \
-           IF to_regclass('storage.objects') IS NULL THEN RETURN; END IF;\n  \
-           FOR p IN\n    \
-             SELECT polname FROM pg_policy\n     \
-              WHERE polrelid = 'storage.objects'::regclass\n       \
-                AND (obj_description(oid, 'pg_policy') LIKE '{marker}'\n         \
-                     OR (obj_description(oid, 'pg_policy') IS NULL\n             \
-                         AND polname ~ '^storage_[A-Za-z0-9_]+_(sel|ins|del)$'))\n       \
-                AND polname <> ALL (ARRAY[{expected}]::text[])\n  \
-           LOOP\n    \
-             EXECUTE format('DROP POLICY %I ON storage.objects', p.polname);\n  \
-           END LOOP;\n\
-         END\n\
-         $retire_storage_policies$;\n\n"
-    )
+        .map(ObjectPolicies::render)
+        .collect()
 }
 
-/// Generates RLS policies for `storage.objects`.
-/// Buckets with declarative `access` get a single policy set per bucket; others inherit model `access`.
-fn generate_storage_rls(ast: &SchemaAst) -> String {
+/// Whether a policy has the shape engines before the managed marker gave a bucket's policies:
+/// `storage_<label>_sel|ins|del` on `storage.objects`. Only the engine named policies so, so one
+/// with no row is ours, and dropped when the schema no longer asks for it, as the sweep dropped
+/// it: the caller roles hold INSERT, UPDATE and DELETE, so an old "any signed-in user" delete
+/// policy would take effect. A model's policies from before the marker (`<table>_<bucket>_*`)
+/// cannot be told from a hand-written one, so those are left alone.
+pub fn is_unmarked_bucket_policy(schema: &str, table: &str, name: &str) -> bool {
+    let label = name
+        .strip_prefix("storage_")
+        .and_then(|rest| {
+            ["_sel", "_ins", "_del"]
+                .iter()
+                .find_map(|suffix| rest.strip_suffix(suffix))
+        })
+        .unwrap_or("");
+    schema == "storage"
+        && table == "objects"
+        && !label.is_empty()
+        && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Row-level security and the caller roles' privileges on `storage.objects`. The policies that
+/// decide are the reconcile's ([`bucket_policies_sql`]).
+fn generate_storage_rls() -> String {
     let mut out = String::new();
     out.push_str("-- Storage RLS\n\n");
     out.push_str("ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;\n\n");
 
     // Immediately after the ENABLE, never before it, and never without it.
     //
-    // The storage service runs every read, write and delete as the caller, so the policies below
+    // The storage service runs every read, write and delete as the caller, so the reconcile's policies
     // decide. A role is refused before RLS is consulted unless it holds the grant for the command,
     // so each caller role needs all four. That is safe only because RLS is on: an operation no
     // policy allows is refused, so this exposes exactly what the schema declared. The ordering is
@@ -448,11 +420,6 @@ fn generate_storage_rls(ast: &SchemaAst) -> String {
         "GRANT SELECT, INSERT, UPDATE, DELETE ON storage.objects TO anon, authenticated;\n\n",
     );
 
-    let sets = object_policy_sets(ast);
-    out.push_str(&retire_unexpected_policies_sql(&sets));
-    for set in &sets {
-        out.push_str(&set.render());
-    }
     out
 }
 

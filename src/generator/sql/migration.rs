@@ -371,7 +371,6 @@ fn render_forward_operation_lines(
             | Operation::DropUniqueConstraint { risk, .. }
             | Operation::EnableRls { risk, .. }
             | Operation::CreateRlsPolicy { risk, .. }
-            | Operation::DropRlsPolicy { risk, .. }
             | Operation::CreateJunctionTable { risk, .. }
             | Operation::CreateVersionsTable { risk, .. }
             | Operation::EnableExtension { risk, .. } => match risk {
@@ -624,9 +623,6 @@ fn op_description(op: &Operation) -> String {
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("Create RLS policy: {table}.{policy}")
         }
-        Operation::DropRlsPolicy { table, policy, .. } => {
-            format!("Drop RLS policy: {table}.{policy}")
-        }
         Operation::CreateJunctionTable { table, .. } => format!("Create junction table: {table}"),
         Operation::CreateVersionsTable { versions_table, .. } => {
             format!("Create versions table: {versions_table}")
@@ -860,9 +856,6 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
         Operation::CreateRlsPolicy { table, policy, .. } => {
             render_create_rls_policy_sql(table, policy, schema, ast)
         }
-        Operation::DropRlsPolicy { table, policy, .. } => Ok(format!(
-            "DROP POLICY IF EXISTS \"{policy}\" ON \"{schema}\".\"{table}\";"
-        )),
         Operation::CreateJunctionTable {
             table,
             fk_a,

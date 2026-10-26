@@ -243,48 +243,6 @@ ALTER TABLE "public"."ledger" ENABLE ROW LEVEL SECURITY;
 -- [safe] Enable RLS: tags
 ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
 
--- [safe] Create RLS policy: posts.posts_select
-DROP POLICY IF EXISTS "posts_select" ON "public"."posts";
-CREATE POLICY "posts_select" ON "public"."posts"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "posts_select" ON "public"."posts" IS 'supatype:managed;kind=rls_policy;table=posts;fields=select;v=1';
-
-
--- [safe] Create RLS policy: posts.posts_update
-DROP POLICY IF EXISTS "posts_update" ON "public"."posts";
-CREATE POLICY "posts_update" ON "public"."posts"
-FOR UPDATE USING (
-    (SELECT auth.role()) = 'editor'
-  ) WITH CHECK (
-    (SELECT auth.role()) = 'editor'
-  );
-
-COMMENT ON POLICY "posts_update" ON "public"."posts" IS 'supatype:managed;kind=rls_policy;table=posts;fields=update;v=1';
-
-
--- [safe] Create RLS policy: ledger.ledger_select
-DROP POLICY IF EXISTS "ledger_select" ON "public"."ledger";
-CREATE POLICY "ledger_select" ON "public"."ledger"
-FOR SELECT USING (
-    (SELECT auth.uid()) IS NOT NULL
-  );
-
-COMMENT ON POLICY "ledger_select" ON "public"."ledger" IS 'supatype:managed;kind=rls_policy;table=ledger;fields=select;v=1';
-
-
--- [safe] Create RLS policy: tags.tags_select
-DROP POLICY IF EXISTS "tags_select" ON "public"."tags";
-CREATE POLICY "tags_select" ON "public"."tags"
-FOR SELECT USING (
-    TRUE
-  );
-
-COMMENT ON POLICY "tags_select" ON "public"."tags" IS 'supatype:managed;kind=rls_policy;table=tags;fields=select;v=1';
-
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_posts"("posts" "public"."posts")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -1139,7 +1097,6 @@ CREATE POLICY "posts_versions_select" ON "public"."posts_versions"
     OR (SELECT _supatype.sees_all_drafts())
     OR _supatype.preview_allows('posts', "record_id"::text)
   );
-COMMENT ON POLICY "posts_versions_select" ON "public"."posts_versions" IS 'supatype:managed;kind=rls_policy;table=posts_versions;fields=select;v=1';
 
 REVOKE ALL PRIVILEGES ON "public"."posts_versions" FROM anon;
 REVOKE ALL PRIVILEGES ON "public"."posts_versions" FROM authenticated;
@@ -1172,17 +1129,14 @@ GRANT EXECUTE ON FUNCTION _supatype."sees_draft_posts"(text) TO anon, authentica
 DROP POLICY IF EXISTS "posts_draft_select" ON "public"."posts";
 CREATE POLICY "posts_draft_select" ON "public"."posts"
   FOR SELECT USING (_supatype."sees_draft_posts"("id"::text));
-COMMENT ON POLICY "posts_draft_select" ON "public"."posts" IS 'supatype:managed;kind=rls_policy;table=posts;fields=draft_select;v=1';
 
 DROP POLICY IF EXISTS "posts_versions_insert" ON "public"."posts_versions";
 CREATE POLICY "posts_versions_insert" ON "public"."posts_versions"
   FOR INSERT WITH CHECK (_supatype."can_edit_posts"("record_id"));
-COMMENT ON POLICY "posts_versions_insert" ON "public"."posts_versions" IS 'supatype:managed;kind=rls_policy;table=posts_versions;fields=insert;v=1';
 
 DROP POLICY IF EXISTS "posts_versions_update" ON "public"."posts_versions";
 CREATE POLICY "posts_versions_update" ON "public"."posts_versions"
   FOR UPDATE USING (_supatype."can_edit_posts"("record_id")) WITH CHECK (_supatype."can_edit_posts"("record_id"));
-COMMENT ON POLICY "posts_versions_update" ON "public"."posts_versions" IS 'supatype:managed;kind=rls_policy;table=posts_versions;fields=update;v=1';
 
 GRANT INSERT, UPDATE ON "public"."posts_versions" TO authenticated;
 
@@ -1238,15 +1192,12 @@ CREATE POLICY "ledger_versions_select" ON "public"."ledger_versions"
     OR (SELECT _supatype.sees_all_drafts())
     OR _supatype.preview_allows('ledger', "record_id"::text)
   );
-COMMENT ON POLICY "ledger_versions_select" ON "public"."ledger_versions" IS 'supatype:managed;kind=rls_policy;table=ledger_versions;fields=select;v=1';
 
 REVOKE ALL PRIVILEGES ON "public"."ledger_versions" FROM anon;
 REVOKE ALL PRIVILEGES ON "public"."ledger_versions" FROM authenticated;
 GRANT SELECT ON "public"."ledger_versions" TO authenticated;
 GRANT ALL ON "public"."ledger_versions" TO service_role;
 
-DROP POLICY IF EXISTS "ledger_versions_insert" ON "public"."ledger_versions";
-DROP POLICY IF EXISTS "ledger_versions_update" ON "public"."ledger_versions";
 REVOKE INSERT, UPDATE ON "public"."ledger_versions" FROM authenticated;
 
 CREATE OR REPLACE FUNCTION _supatype."ledger_versions_audit"() RETURNS trigger
@@ -1335,5 +1286,23 @@ CREATE OR REPLACE TRIGGER "posts_updated_at_trigger"
 BEFORE UPDATE ON "public"."posts"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "ledger_select" ON "public"."ledger"
+FOR SELECT USING (
+    (SELECT auth.uid()) IS NOT NULL
+  );
+CREATE POLICY "posts_select" ON "public"."posts"
+FOR SELECT USING (
+    TRUE
+  );
+CREATE POLICY "posts_update" ON "public"."posts"
+FOR UPDATE USING (
+    (SELECT auth.role()) = 'editor'
+  ) WITH CHECK (
+    (SELECT auth.role()) = 'editor'
+  );
+CREATE POLICY "tags_select" ON "public"."tags"
+FOR SELECT USING (
+    TRUE
+  );
 
 COMMIT;

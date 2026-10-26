@@ -616,7 +616,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "ledger_versions",
@@ -625,7 +625,7 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('ledger'::text, (record_id)::text))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts",
@@ -634,7 +634,7 @@
         "permissive": true,
         "usingExpr": "_supatype.sees_draft_posts((id)::text)",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts",
@@ -643,7 +643,7 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts",
@@ -652,7 +652,7 @@
         "permissive": true,
         "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
         "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts_versions",
@@ -661,7 +661,7 @@
         "permissive": true,
         "usingExpr": null,
         "checkExpr": "_supatype.can_edit_posts(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts_versions",
@@ -670,7 +670,7 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('posts'::text, (record_id)::text))",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       },
       {
         "table": "posts_versions",
@@ -679,7 +679,7 @@
         "permissive": true,
         "usingExpr": "_supatype.can_edit_posts(record_id)",
         "checkExpr": "_supatype.can_edit_posts(record_id)",
-        "managed": true
+        "managed": false
       },
       {
         "table": "tags",
@@ -688,7 +688,7 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
-        "managed": true
+        "managed": false
       }
     ],
     "triggers": [
@@ -1761,69 +1761,123 @@
         "forced": false
       }
     ],
-    "policyRoles": [
+    "policies": [
       {
+        "schema": "public",
         "table": "ledger",
-        "policy": "ledger_select",
+        "name": "ledger_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "ledger_versions",
-        "policy": "ledger_versions_select",
+        "name": "ledger_versions_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('ledger'::text, (record_id)::text))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts",
-        "policy": "posts_draft_select",
+        "name": "posts_draft_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.sees_draft_posts((id)::text)",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts",
-        "policy": "posts_select",
+        "name": "posts_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts",
-        "policy": "posts_update",
+        "name": "posts_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts_versions",
-        "policy": "posts_versions_insert",
+        "name": "posts_versions_insert",
+        "command": "a",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": null,
+        "checkExpr": "_supatype.can_edit_posts(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts_versions",
-        "policy": "posts_versions_select",
+        "name": "posts_versions_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('posts'::text, (record_id)::text))",
+        "checkExpr": null,
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "posts_versions",
-        "policy": "posts_versions_update",
+        "name": "posts_versions_update",
+        "command": "w",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "_supatype.can_edit_posts(record_id)",
+        "checkExpr": "_supatype.can_edit_posts(record_id)",
+        "comment": null
       },
       {
+        "schema": "public",
         "table": "tags",
-        "policy": "tags_select",
+        "name": "tags_select",
+        "command": "r",
+        "permissive": true,
         "roles": [
           "public"
-        ]
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
       }
     ],
     "engineTables": [
