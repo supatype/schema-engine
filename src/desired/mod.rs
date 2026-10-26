@@ -37,7 +37,8 @@ use crate::generator::sql::{
     field_views::{render_field_views, FieldViewTable},
     grants::{revoke_all_sql, table_grants},
     migration::{
-        field_check_expression, implicit_model_indexes, normalize_fk_action, render_operation,
+        field_check_expression, implicit_model_indexes, normalize_fk_action, option_columns,
+        render_operation,
     },
     rls::{drop_field_label_sql, field_labels, membership_index_targets, MASK_PROVIDER},
     type_checks,
@@ -394,6 +395,21 @@ impl<'a> Builder<'a> {
                     vec![self.table_key(table)],
                 );
             }
+        }
+        // The columns the model's options add (`timestamps`, `softDelete`), which `CREATE TABLE`
+        // writes beside the fields: without a row they could never be dropped when the option goes.
+        for (column, definition) in option_columns(model) {
+            let create = format!(
+                "{} ADD COLUMN IF NOT EXISTS \"{column}\" {definition};",
+                self.alter(table)
+            );
+            let structure = BTreeMap::from([("udt", "timestamptz".to_string())]);
+            self.push(
+                self.key(ObjectKind::Column, table, column),
+                structure,
+                create,
+                vec![self.table_key(table)],
+            );
         }
         Ok(())
     }

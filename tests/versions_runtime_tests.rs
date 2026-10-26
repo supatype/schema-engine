@@ -925,8 +925,15 @@ async fn the_scheduler_is_wired_up_when_the_database_has_one() {
             "a push must register both jobs when the database can run them"
         );
 
-        // Re-emitted on every push, and it has to converge rather than stack a second copy.
-        apply_and_seed(&mut conn).await;
+        // Re-emitted on every push by the versions layer, and it has to converge rather than stack
+        // a second copy.
+        let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
+        let layer =
+            supatype_engine::generator::sql::versions::render_versions_layer(&ast, "public")
+                .expect("the layer renders");
+        conn.execute(sqlx::raw_sql(&layer))
+            .await
+            .expect("re-apply the versions layer");
         let count: i64 =
             sqlx::query_scalar("SELECT count(*) FROM cron.job WHERE jobname LIKE 'supatype-%'")
                 .fetch_one(&mut *conn)

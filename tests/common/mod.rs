@@ -9,6 +9,8 @@
 #![allow(dead_code)]
 
 use std::future::Future;
+
+use futures_util::FutureExt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use testcontainers::core::IntoContainerPort;
@@ -198,12 +200,18 @@ where
             .execute(&admin)
             .await
             .unwrap_or_else(|e| panic!("CREATE DATABASE {db_name} failed: {e}"));
-        f(database_url_with_name(&admin_url, &db_name)).await;
+        // Caught so the database is dropped whether the test passes or panics.
+        let outcome = std::panic::AssertUnwindSafe(f(database_url_with_name(&admin_url, &db_name)))
+            .catch_unwind()
+            .await;
         terminate_db_sessions(&admin, &db_name).await;
         let _ = sqlx::raw_sql(&format!(r#"DROP DATABASE IF EXISTS "{db_name}""#))
             .execute(&admin)
             .await;
         admin.close().await;
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
         return;
     }
 
@@ -250,7 +258,11 @@ where
         .await
         .unwrap_or_else(|e| panic!("connect ephemeral database {db_name}: {e}"));
 
-    f(pool.clone()).await;
+    // Caught so the database is dropped whether the test passes or panics; a failing test used to
+    // leave its database behind, and a long session of red runs left hundreds.
+    let outcome = std::panic::AssertUnwindSafe(f(pool.clone()))
+        .catch_unwind()
+        .await;
     pool.close().await;
 
     terminate_db_sessions(&admin, &db_name).await;
@@ -258,6 +270,9 @@ where
         .execute(&admin)
         .await;
     admin.close().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
 }
 
 /// The push a user runs, as the CLI and the server run it: `prepare` then `apply`.

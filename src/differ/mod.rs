@@ -196,7 +196,7 @@ pub struct ColumnDependencySnapshot {
     pub index_method: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Risk {
     Safe,
@@ -267,32 +267,53 @@ pub fn diff_with_previous(
         })
         .collect();
 
-    let safe = ordered_ops
-        .iter()
-        .filter(|o| matches!(risk_of(o), Risk::Safe))
-        .count();
-    let cautious = ordered_ops
-        .iter()
-        .filter(|o| matches!(risk_of(o), Risk::Cautious))
-        .count();
-    let destructive = ordered_ops
-        .iter()
-        .filter(|o| matches!(risk_of(o), Risk::Destructive))
-        .count();
-
     Ok(DiffOutput {
+        summary: DiffSummary::of(&ordered_ops),
         operations: ordered_ops,
         unmanaged_model_tables,
         field_masking,
         field_view_plan,
-        summary: DiffSummary {
-            safe,
-            cautious,
-            destructive,
-            is_destructive: destructive > 0,
-        },
         warnings,
     })
+}
+
+impl DiffSummary {
+    /// How many of `operations` are safe, cautious and destructive.
+    pub fn of(operations: &[Operation]) -> DiffSummary {
+        let count = |risk: Risk| operations.iter().filter(|o| *risk_of(o) == risk).count();
+        let destructive = count(Risk::Destructive);
+        DiffSummary {
+            safe: count(Risk::Safe),
+            cautious: count(Risk::Cautious),
+            destructive,
+            is_destructive: destructive > 0,
+        }
+    }
+}
+
+impl DiffOutput {
+    /// Withholds every column drop for a column `owned` does not say is ours (D4): a column someone
+    /// added to a managed table is never the engine's to drop. Each is reported instead.
+    pub fn keep_columns_not_ours(&mut self, owned: impl Fn(&str, &str) -> bool) {
+        let mut kept = Vec::new();
+        self.operations.retain(|op| match op {
+            Operation::DropColumn { table, column, .. } if !owned(table, column) => {
+                kept.push(format!("\"{table}\".\"{column}\""));
+                false
+            }
+            _ => true,
+        });
+        if kept.is_empty() {
+            return;
+        }
+        self.warnings.push(format!(
+            "{} column(s) the schema does not declare are not Supatype's, so they are left in place: \
+             {}. Declare a column in the schema to manage it, or drop it by hand.",
+            kept.len(),
+            kept.join(", ")
+        ));
+        self.summary = DiffSummary::of(&self.operations);
+    }
 }
 
 pub fn risk_of(op: &Operation) -> &Risk {

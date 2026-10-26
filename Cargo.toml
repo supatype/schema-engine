@@ -3,8 +3,8 @@ name = "supatype-engine"
 version = "0.6.0"
 edition = "2021"
 authors = ["Supatype"]
-description = "Supatype schema engine — closed source binary"
-# No license field — proprietary, all rights reserved
+description = "Supatype schema engine, a closed source binary"
+# No license field: proprietary, all rights reserved
 
 [[bin]]
 name = "supatype-engine"
@@ -23,7 +23,7 @@ path = "src/lib.rs"
 # ─── Core deps (WASM-compatible) ─────────────────────────────────────────────
 
 [dependencies]
-# Serialisation — used by parser + generator, WASM-compatible
+# Serialisation, used by the parser and the generator, WASM-compatible
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
@@ -31,10 +31,10 @@ serde_json = { version = "1", features = ["preserve_order"] }
 anyhow = "1"
 thiserror = "2"
 
-# Ordered map — preserves field insertion order from JSON input
+# Ordered map, which preserves field insertion order from JSON input
 indexmap = { version = "2", features = ["serde"] }
 
-# Pure computation — wasm-compatible
+# Pure computation, wasm-compatible
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
@@ -42,7 +42,7 @@ petgraph = "0.7"
 strsim = "0.11"
 similar = "2"
 
-# Terminal styling — zero-dependency, wasm-compatible
+# Terminal styling, zero-dependency and wasm-compatible
 owo-colors = "4"
 
 # ─── Server-only deps (excluded from wasm32 builds) ──────────────────────────
@@ -65,7 +65,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Timestamps for migration names (DB module only — uses system clock)
+# Timestamps for migration names (DB module only, since it uses the system clock)
 chrono = { version = "0.4", features = ["serde"] }
 
 # ─── WASM-only deps ───────────────────────────────────────────────────────────
@@ -76,6 +76,8 @@ wasm-bindgen = "0.2"
 # ─── Dev dependencies ─────────────────────────────────────────────────────────
 
 [dev-dependencies]
+# `catch_unwind` on a future, so a failing integration test still drops its database.
+futures-util = "0.3"
 tokio-test = "0.4"
 testcontainers = "0.23"
 testcontainers-modules = { version = "0.11", features = ["postgres"] }

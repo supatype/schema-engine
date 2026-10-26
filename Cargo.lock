@@ -2258,6 +2258,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "futures-util",
  "hex",
  "indexmap 2.13.0",
  "owo-colors",

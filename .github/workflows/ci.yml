@@ -199,4 +199,5 @@ jobs:
             --test label_ledger_tests \
             --test policy_ledger_tests \
             --test grant_ledger_tests \
-            --test rls_ledger_tests
+            --test rls_ledger_tests \
+            --test column_ledger_tests

@@ -697,14 +697,11 @@ pub fn diff(
         })
         .collect();
 
-    let mut options_cols: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if model.options.timestamps && !model.fields.contains_key("timestamps") {
-        options_cols.insert("created_at".into());
-        options_cols.insert("updated_at".into());
-    }
-    if model.options.soft_delete && !model.fields.contains_key("softDelete") {
-        options_cols.insert("deleted_at".into());
-    }
+    let options_cols: std::collections::HashSet<String> =
+        crate::generator::sql::migration::option_columns(model)
+            .into_iter()
+            .map(|(column, _)| column.to_string())
+            .collect();
 
     let schema_col_names: std::collections::HashSet<&str> =
         schema_columns.keys().map(|s| s.as_str()).collect();

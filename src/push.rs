@@ -40,7 +40,7 @@ use crate::state::{migration_history, studio_state};
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
 /// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
 /// views since 4.6, security labels since 4.7a, policies since 4.7b, grants since 4.7c, RLS
-/// enablement since 4.8.
+/// enablement since 4.8, columns since 4.9 (recorded; the column differ alters them).
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -53,6 +53,7 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Policy,
     ObjectKind::TableGrant,
     ObjectKind::RlsAttributes,
+    ObjectKind::Column,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
@@ -184,7 +185,7 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     // Supatype since, so `diff` showed one plan and push applied another.
     let live = live(&mut conn, schema).await?;
     let previous_ast = migration_history::load_latest_schema_ast(pool).await;
-    let diff = differ::diff_with_previous(ast, &live.db, previous_ast.as_ref())?;
+    let mut diff = differ::diff_with_previous(ast, &live.db, previous_ast.as_ref())?;
 
     // An unchanged schema produces an empty diff, so the renderer's own check would never run and
     // the push would report success while a declared table sat in the API with none of its rules
@@ -192,6 +193,14 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
     let ledger = ledger::load_if_present(&mut conn).await?;
+    // D4: the column differ drops only a column the ledger records as ours. One someone added to
+    // a managed table, or one an older engine made that this push has not recorded yet, stays.
+    let owned_columns: BTreeSet<(&str, &str)> = ledger
+        .iter()
+        .filter(|r| r.key.kind == ObjectKind::Column && r.key.schema == schema)
+        .map(|r| (r.key.parent.as_str(), r.key.name.as_str()))
+        .collect();
+    diff.keep_columns_not_ours(|table, column| owned_columns.contains(&(table, column)));
     let mut reconcile = reconcile_with(
         &diff,
         &ledger,

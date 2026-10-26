@@ -835,6 +835,26 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
 
 // ─── CREATE TABLE ────────────────────────────────────────────────────────────
 
+/// The columns a model's options add beside its fields: `timestamps` and `softDelete`, unless a
+/// field of the same name already provides one. One list, so the `CREATE TABLE` that makes them and
+/// the desired set that records them (Phase 4.9) cannot disagree.
+pub fn option_columns(model: &ModelAst) -> Vec<(&'static str, &'static str)> {
+    let has = |names: &[&str]| names.iter().any(|n| model.fields.contains_key(*n));
+    let mut out = Vec::new();
+    if model.options.timestamps && !has(&["timestamps"]) {
+        if !has(&["created_at", "createdAt"]) {
+            out.push(("created_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"));
+        }
+        if !has(&["updated_at", "updatedAt"]) {
+            out.push(("updated_at", "TIMESTAMPTZ NOT NULL DEFAULT NOW()"));
+        }
+    }
+    if model.options.soft_delete && !has(&["softDelete", "deleted_at"]) {
+        out.push(("deleted_at", "TIMESTAMPTZ"));
+    }
+    out
+}
+
 fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<String> {
     let table = &model.table_name();
     let mut col_defs: Vec<String> = Vec::new();
@@ -899,26 +919,8 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         }
     }
 
-    // Timestamps from options (if not already added as composite field)
-    if model.options.timestamps && !model.fields.contains_key("timestamps") {
-        let has_created =
-            model.fields.contains_key("created_at") || model.fields.contains_key("createdAt");
-        let has_updated =
-            model.fields.contains_key("updated_at") || model.fields.contains_key("updatedAt");
-        if !has_created {
-            col_defs.push("    \"created_at\" TIMESTAMPTZ NOT NULL DEFAULT NOW()".into());
-        }
-        if !has_updated {
-            col_defs.push("    \"updated_at\" TIMESTAMPTZ NOT NULL DEFAULT NOW()".into());
-        }
-    }
-
-    let has_soft_delete_field = model.fields.contains_key("softDelete");
-    if model.options.soft_delete
-        && !has_soft_delete_field
-        && !model.fields.contains_key("deleted_at")
-    {
-        col_defs.push("    \"deleted_at\" TIMESTAMPTZ".into());
+    for (column, definition) in option_columns(model) {
+        col_defs.push(format!("    \"{column}\" {definition}"));
     }
 
     let mut statements = vec![format!(
