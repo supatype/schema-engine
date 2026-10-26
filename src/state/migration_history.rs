@@ -631,6 +631,9 @@ pub fn insert_migration_sql() -> String {
     )
 }
 
+/// What a migration row records beside its forward statements. `sql_up` and `sql_down` hold
+/// statements only, no `BEGIN`/`COMMIT`: whoever runs them owns the transaction, as
+/// [`apply_rollback`] does.
 #[derive(Default)]
 pub struct AppliedMigrationSources {
     pub sql_down: Option<String>,
@@ -768,12 +771,11 @@ pub async fn rollback_push_tx(
     pool: &PgPool,
     migration_name: &str,
     hash: &str,
-    apply_batch: &str,
+    sql_up: &str,
     err: &str,
 ) {
     let _ = tx.rollback().await;
-    if let Err(record_err) =
-        record_failed_migration(pool, migration_name, hash, apply_batch, err).await
+    if let Err(record_err) = record_failed_migration(pool, migration_name, hash, sql_up, err).await
     {
         eprintln!("Warning: could not record failed migration: {record_err}");
     }

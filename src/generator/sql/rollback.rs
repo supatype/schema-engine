@@ -7,17 +7,15 @@
 use crate::differ::{DiffOutput, Operation};
 use anyhow::Result;
 
+/// The rollback as a script of its own: the statements of [`statements`] inside one transaction.
 pub fn generate(diff: &DiffOutput, schema: &str) -> Result<String> {
-    let mut lines = vec![
-        "-- ============================================================".into(),
-        "-- ROLLBACK MIGRATION".into(),
-        "-- ============================================================".into(),
-        String::new(),
-        "BEGIN;".into(),
-        String::new(),
-    ];
+    Ok(script(&statements(diff, schema)?))
+}
 
-    // Apply rollback ops in reverse order of the forward migration
+/// The inverse of each forward operation, newest first, each under a comment naming what it
+/// undoes. Statements only: the caller owns the transaction.
+pub fn statements(diff: &DiffOutput, schema: &str) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
     for op in diff.operations.iter().rev() {
         if let Some(sql) = rollback_op(op, schema)? {
             lines.push(format!("-- rollback: {}", forward_description(op)));
@@ -25,9 +23,22 @@ pub fn generate(diff: &DiffOutput, schema: &str) -> Result<String> {
             lines.push(String::new());
         }
     }
+    Ok(lines)
+}
 
-    lines.push("COMMIT;".into());
-    Ok(lines.join("\n"))
+/// `lines` as the rollback section of a migration file: headed, inside `BEGIN`/`COMMIT`.
+pub fn script(lines: &[String]) -> String {
+    let mut out = vec![
+        "-- ============================================================".into(),
+        "-- ROLLBACK MIGRATION".into(),
+        "-- ============================================================".into(),
+        String::new(),
+        "BEGIN;".into(),
+        String::new(),
+    ];
+    out.extend(lines.iter().cloned());
+    out.push("COMMIT;".into());
+    out.join("\n")
 }
 
 fn rollback_op(op: &Operation, schema: &str) -> Result<Option<String>> {

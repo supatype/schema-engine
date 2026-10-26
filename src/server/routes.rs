@@ -72,14 +72,11 @@ pub async fn migrate(Json(req): Json<DbRequest>) -> EngineResponse<SqlResponse> 
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    let db_state = crate::introspector::introspect(&pool, &req.schema)
+    // The same plan a push would apply, returned as a file instead.
+    let plan = crate::push::plan(&pool, &ast, &req.schema)
         .await
-        .map_err(engine_error)?;
-    let previous_ast = crate::state::migration_history::load_latest_schema_ast(&pool).await;
-    let diff = crate::differ::diff_with_previous(&ast, &db_state, previous_ast.as_ref())
-        .map_err(engine_error)?;
-    let sql = crate::generator::sql::migration::generate(&diff, req.force, &req.schema, &ast)
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
+    let sql = plan.migration(req.force).map_err(engine_error)?.file();
     Ok(Json(SqlResponse { sql }))
 }
 
