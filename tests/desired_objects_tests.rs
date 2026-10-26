@@ -164,6 +164,9 @@ async fn after_a_push_every_desired_object_exists_with_the_structure_it_predicte
             .execute(&pool)
             .await
             .unwrap();
+            // `desired_objects` describes a database that enforces field rules with labels, so
+            // the extension is installed: without it the push would choose the `api` views.
+            assert!(common::mask_extension_available(&pool).await);
             common::push(&pool, &ast)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: applies: {e}"));

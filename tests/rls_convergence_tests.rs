@@ -566,16 +566,9 @@ async fn field_rules_mask_a_column_end_to_end() {
             return;
         }
         let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
-        // Introspected, not `DatabaseState::default()`: the field-masking tier is chosen from the
-        // database's extension list, and a default state claims there are none, which selects
-        // tier 2 and emits views instead of the labels this test is about.
-        let db = introspector::introspect(&pool, "public").await.expect("introspect");
-        let diff = differ::diff(&ast, &db).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
-            .await
-            .expect("migration applies");
+        // The push a user runs: the labels are the reconcile's, which the differ's file alone
+        // does not carry, and the tier is chosen from the live extension list.
+        common::push(&pool, &ast).await.expect("migration applies");
 
         let labels = supatype_labels(&pool).await;
         assert!(
@@ -616,9 +609,8 @@ async fn field_rules_mask_a_column_end_to_end() {
     .await;
 }
 
-/// Removing a rule has to stop the masking. Nothing diffs labels, so this is the only
-/// thing standing between a deleted rule and a column masked forever by a rule that no
-/// longer exists.
+/// Removing a rule has to stop the masking, end to end: the reconcile takes the label off
+/// because its row has no rule behind it any more, and the column reads in full again.
 #[tokio::test]
 async fn removing_a_field_rule_clears_its_label() {
     common::with_integration_pool(|pool| async move {
@@ -626,13 +618,9 @@ async fn removing_a_field_rule_clears_its_label() {
             return;
         }
         let ast = parser::parse(FIELD_FIXTURE).expect("fixture parses");
-        // Introspected, not `DatabaseState::default()`: the field-masking tier is chosen from the
-        // database's extension list, and a default state claims there are none, which selects
-        // tier 2 and emits views instead of the labels this test is about.
-        let db = introspector::introspect(&pool, "public").await.expect("introspect");
-        let diff = differ::diff(&ast, &db).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        sqlx::raw_sql(&sql).execute(&pool).await.expect("first push");
+        // The push a user runs: the labels are the reconcile's, which the differ's file alone
+        // does not carry, and the tier is chosen from the live extension list.
+        common::push(&pool, &ast).await.expect("first push");
         let probe: String = sqlx::query_scalar(
             "INSERT INTO public.users (email, name) VALUES ('probe@example.com', 'probe')              RETURNING id::text",
         )
@@ -648,11 +636,7 @@ async fn removing_a_field_rule_clears_its_label() {
                 .clear();
         }
 
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let second = differ::diff(&relaxed, &db).unwrap();
-        let sql = migration::forward_sql(&second, false, "public", &relaxed).unwrap();
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
+        common::push(&pool, &relaxed)
             .await
             .expect("second push applies");
 
@@ -707,8 +691,7 @@ async fn a_push_that_cannot_grant_auth_usage_is_refused() {
         .await
         .expect("stage a database whose auth schema the pusher does not own");
 
-        let labels =
-            supatype_engine::generator::sql::rls::generate_security_labels(&ast, "public", &[]);
+        let labels = supatype_engine::generator::sql::rls::generate_security_labels(&ast, "public");
         let mut tx = pool.begin().await.expect("begin");
         sqlx::raw_sql("SET LOCAL ROLE mask_push_probe")
             .execute(&mut *tx)

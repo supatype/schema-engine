@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
-use crate::desired::{desired_objects_for, statements, ObjectKey};
-use crate::differ::{self, DiffOutput, Operation};
+use crate::desired::{desired_objects_for, statements, FieldEnforcement, ObjectKey};
+use crate::differ::{self, DiffOutput, FieldMaskingTier, Operation};
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
 use crate::generator::sql::{constraint_helpers, field_views, rls, storage, versions};
@@ -37,7 +37,7 @@ use crate::state::{migration_history, studio_state};
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
 /// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
-/// views since 4.6.
+/// views since 4.6, security labels since 4.7.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -46,6 +46,7 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Index,
     ObjectKind::CronJob,
     ObjectKind::View,
+    ObjectKind::SecurityLabel,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
@@ -215,7 +216,11 @@ fn reconcile_with(
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<reconcile::Plan> {
-    let mut desired = desired_objects_for(ast, schema, &diff.field_view_plan)?;
+    let fields = match diff.field_masking {
+        FieldMaskingTier::Views => FieldEnforcement::Views(&diff.field_view_plan),
+        FieldMaskingTier::None | FieldMaskingTier::Extension => FieldEnforcement::Labels,
+    };
+    let mut desired = desired_objects_for(ast, schema, fields)?;
     if !cron_available {
         desired.retain(|d| d.key.kind != ObjectKind::CronJob);
     }
@@ -228,6 +233,7 @@ fn reconcile_with(
         created_by_parent: &created_by_parent,
         dropped_tables: &dropped_tables,
         owned_schemas: catalog::OWNED_SCHEMAS,
+        owned_label_providers: &[rls::MASK_PROVIDER],
         kinds: MOVED_KINDS,
     }))
 }

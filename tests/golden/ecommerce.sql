@@ -546,31 +546,6 @@ BEGIN
 END
 $grants$;
 
--- Field-level access: security labels read by supatype_mask
-DO $mask_clear$
-DECLARE
-  stale record;
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'supatype_mask') THEN
-    RETURN;
-  END IF;
-
-  FOR stale IN
-    SELECT c.relname AS tbl, a.attname AS col
-      FROM pg_seclabel l
-      JOIN pg_class c ON c.oid = l.objoid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      JOIN pg_attribute a ON a.attrelid = l.objoid AND a.attnum = l.objsubid
-     WHERE l.provider = 'supatype'
-       AND l.classoid = 'pg_class'::regclass
-       AND n.nspname = 'public'
-  LOOP
-    EXECUTE format('SECURITY LABEL FOR supatype ON COLUMN %I.%I.%I IS NULL',
-                   'public', stale.tbl, stale.col);
-  END LOOP;
-END
-$mask_clear$;
-
 -- reconciled objects
 ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "public"."orders" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "public"."order_items" ADD CONSTRAINT "order_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "public"."products" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;

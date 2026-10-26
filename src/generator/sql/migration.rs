@@ -254,19 +254,17 @@ fn render_grant_lines(
     ]
 }
 
-/// Security labels for the field rules, emitted after the affordance functions they
-/// point at.
-///
-/// Includes the capability probe: a schema that declares a masked column, pushed to a
-/// database without the masking extension, fails here rather than applying and leaving
-/// the column readable.
-fn render_security_label_lines(ast: &SchemaAst, schema: &str, skip: &[String]) -> Vec<String> {
-    let sql = crate::generator::sql::rls::generate_security_labels(ast, schema, skip);
+/// The checks that field rules can be enforced here, emitted after the affordance functions the
+/// labels point at. The labels themselves are ledger objects, set by the reconcile after these
+/// have run: a schema that declares a masked column, pushed to a database without the masking
+/// extension, fails here rather than applying and leaving the column readable.
+fn render_mask_probe_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = crate::generator::sql::rls::generate_mask_probes(ast, schema);
     if sql.trim().is_empty() {
         return Vec::new();
     }
     vec![
-        "-- Field-level access: security labels read by supatype_mask".into(),
+        "-- Field-level access: supatype_mask can enforce the labels".into(),
         sql.trim().into(),
         String::new(),
     ]
@@ -330,7 +328,7 @@ fn render_reasserted_lines(
         // Strictly after the table grants: these narrow a table-level write privilege to a
         // column list, and the table grants would hand the whole table back if they ran after.
         lines.extend(render_column_grant_lines(ast, schema, skip));
-        lines.extend(render_security_label_lines(ast, schema, skip));
+        lines.extend(render_mask_probe_lines(ast, schema));
     }
 
     lines

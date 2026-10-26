@@ -863,6 +863,50 @@ fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> Str
     )
 }
 
+/// One column's `SECURITY LABEL FOR supatype`, the object the ledger records under
+/// (`schema`, `table.column`, provider).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldLabel {
+    pub table: String,
+    pub column: String,
+    /// The label text, `MASK READ ... WRITE ...`, as `pg_seclabel` will hold it.
+    pub label: String,
+}
+
+impl FieldLabel {
+    /// The statement that sets the label.
+    pub fn create_sql(&self, schema: &str) -> String {
+        format!(
+            "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN {} IS {};",
+            label_target(schema, &self.table, &self.column),
+            sql_string(&self.label)
+        )
+    }
+}
+
+/// `"schema"."table"."column"`, quoted as a `SECURITY LABEL` names its column.
+fn label_target(schema: &str, table: &str, column: &str) -> String {
+    format!(
+        "\"{}\".\"{}\".\"{}\"",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\""),
+        column.replace('"', "\"\"")
+    )
+}
+
+/// The statement that takes a column's label off, guarded on the extension: without the provider
+/// registered a `SECURITY LABEL` statement cannot even parse.
+pub fn drop_field_label_sql(schema: &str, table: &str, column: &str) -> String {
+    let statement = format!(
+        "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN {} IS NULL",
+        label_target(schema, table, column)
+    );
+    format!(
+        "DO $mask_label$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = '{MASK_EXTENSION}') THEN\n    EXECUTE {};\n  END IF;\nEND\n$mask_label$;",
+        sql_string(&statement)
+    )
+}
+
 /// `SECURITY LABEL FOR supatype` per field rule: what makes a `fields` rule actually
 /// enforced rather than merely described.
 ///
@@ -876,22 +920,15 @@ fn field_predicate_ref(schema: &str, op: &str, table: &str, column: &str) -> Str
 /// function call per row per read to answer a question nobody asked. The `can_read_*`
 /// function is still generated (Studio wants a uniform affordance surface); it just
 /// does not appear in the label.
-/// `skip` names tables the schema declares but Supatype did not create; see
-/// [`crate::differ::DiffOutput::unmanaged_model_tables`]. A `SECURITY LABEL` on their column is a
-/// change to their table.
-pub fn generate_security_labels(ast: &SchemaAst, schema: &str, skip: &[String]) -> String {
-    let mut statements: Vec<String> = Vec::new();
-    let mut keep: Vec<String> = Vec::new();
-
+///
+/// Each label is a ledger object (plan section 5): the reconcile sets it, and takes it off when
+/// the rule goes, which the stale-label sweep used to do.
+pub fn field_labels(ast: &SchemaAst, schema: &str) -> Vec<FieldLabel> {
+    let mut out = Vec::new();
     for model in &ast.models {
         let table = db_table_name(model);
-        if skip.iter().any(|t| t == table) {
-            continue;
-        }
-
         for (column, rules) in &platform_access(model).fields {
             let mut parts: Vec<String> = Vec::new();
-
             if rules.read.is_some() {
                 parts.push(format!(
                     "READ {}",
@@ -907,27 +944,33 @@ pub fn generate_security_labels(ast: &SchemaAst, schema: &str, skip: &[String]) 
             if parts.is_empty() {
                 continue;
             }
-
-            keep.push(format!("({}, {})", sql_string(table), sql_string(column)));
-            statements.push(format!(
-                "SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN \"{schema}\".\"{t}\".\"{c}\"\n  \
-                 IS 'MASK {body}';",
-                t = table.replace('"', "\"\""),
-                c = column.replace('"', "\"\""),
-                body = parts.join(" ")
-            ));
+            out.push(FieldLabel {
+                table: table.to_string(),
+                column: column.clone(),
+                label: format!("MASK {}", parts.join(" ")),
+            });
         }
     }
+    out
+}
 
-    let mut out = String::new();
-
-    // Refusing the push is the third tier in the field-access plan, and the only honest
-    // answer: a schema that declares a column masked, applied to a database that cannot
-    // mask it, is a database whose security posture silently differs from its source.
-    // Never silently unmask.
-    if !statements.is_empty() {
-        out.push_str(&format!(
-            "DO $mask_probe$
+/// The checks a push of field rules runs before any label is set: that the masking extension is
+/// there, and that the predicates the labels name can be evaluated. Empty for a schema with no
+/// field rules, which must not start requiring either.
+///
+/// Refusing the push is the third tier in the field-access plan, and the only honest answer: a
+/// schema that declares a column masked, applied to a database that cannot mask it, is a database
+/// whose security posture silently differs from its source. Never silently unmask.
+pub fn generate_mask_probes(ast: &SchemaAst, schema: &str) -> String {
+    let n = field_labels(ast, schema).len();
+    if n == 0 {
+        return String::new();
+    }
+    // Proof that the privilege those predicates need actually landed. The grant itself is in the
+    // preamble, emitted on every push, so this does not re-issue it: a grant can be a silent no-op
+    // (see `render_auth_usage_probe`), and checking is the half worth doing twice.
+    format!(
+        "DO $mask_probe$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = '{MASK_EXTENSION}') THEN
     RAISE EXCEPTION 'field-level access requires the {MASK_EXTENSION} extension'
@@ -938,25 +981,18 @@ BEGIN
 END
 $mask_probe$;
 
-",
-            n = statements.len()
-        ));
-    }
+{}",
+        render_auth_usage_probe(n)
+    )
+}
 
-    // Proof that the privilege those predicates need actually landed. The grant itself is in the
-    // preamble, emitted on every push, so this no longer re-issues it: a grant can be a silent
-    // no-op (see `render_auth_usage_probe`), and checking is the half worth doing twice.
-    if !statements.is_empty() {
-        out.push_str(&render_auth_usage_probe(statements.len()));
-    }
-
-    out.push_str(&render_stale_label_clear(&keep, schema));
-
-    for statement in &statements {
-        out.push_str(statement);
+/// The probes, then every label: what a schema's field rules apply as one script.
+pub fn generate_security_labels(ast: &SchemaAst, schema: &str) -> String {
+    let mut out = generate_mask_probes(ast, schema);
+    for label in field_labels(ast, schema) {
+        out.push_str(&label.create_sql(schema));
         out.push_str("\n\n");
     }
-
     out
 }
 
@@ -1006,59 +1042,6 @@ END
 $auth_usage_probe$;
 
 "#
-    )
-}
-
-/// Drop every label this push does not re-assert, so removing a field rule stops the
-/// masking rather than leaving a column masked by a rule that no longer exists.
-///
-/// **Every label under our provider is ours.** Policies need a managed-object marker
-/// because `pg_policy` is a shared namespace where a developer's hand-written policy has
-/// to survive a push; a security label provider is a namespace this extension owns
-/// outright, so there is no hand-written label under `supatype` to protect. Labels under
-/// any other provider, and in any other schema, are untouched.
-///
-/// Emitted even when the schema has no field rules at all: that is exactly the case
-/// where the last rule was just removed. Guarded on the extension existing, because
-/// without the provider registered a `SECURITY LABEL` statement cannot even parse; and
-/// without the provider there can be no labels to clear.
-fn render_stale_label_clear(keep: &[String], schema: &str) -> String {
-    let exclusion = if keep.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "
-         AND (c.relname, a.attname) NOT IN ({})",
-            keep.join(", ")
-        )
-    };
-
-    format!(
-        "DO $mask_clear$
-DECLARE
-  stale record;
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = '{MASK_EXTENSION}') THEN
-    RETURN;
-  END IF;
-
-  FOR stale IN
-    SELECT c.relname AS tbl, a.attname AS col
-      FROM pg_seclabel l
-      JOIN pg_class c ON c.oid = l.objoid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      JOIN pg_attribute a ON a.attrelid = l.objoid AND a.attnum = l.objsubid
-     WHERE l.provider = '{MASK_PROVIDER}'
-       AND l.classoid = 'pg_class'::regclass
-       AND n.nspname = '{schema}'{exclusion}
-  LOOP
-    EXECUTE format('SECURITY LABEL FOR {MASK_PROVIDER} ON COLUMN %I.%I.%I IS NULL',
-                   '{schema}', stale.tbl, stale.col);
-  END LOOP;
-END
-$mask_clear$;
-
-"
     )
 }
 

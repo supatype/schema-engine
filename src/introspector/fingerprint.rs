@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::catalog::{CatalogState, DbFunction};
+use super::catalog::{CatalogState, DbFunction, DbSecurityLabel};
 use super::constraints::{DbConstraint, DbConstraintType};
 use super::indexes::DbIndex;
 use super::tables::DbTable;
@@ -312,6 +312,26 @@ fn trigger_create_sql(definition: &str) -> String {
     format!(
         "{};",
         definition.replacen("CREATE TRIGGER ", "CREATE OR REPLACE TRIGGER ", 1)
+    )
+}
+
+/// The `SECURITY LABEL` that puts a label back as the catalog reports it: what a rollback runs to
+/// restore one the push took off or replaced.
+fn security_label_create_sql(l: &DbSecurityLabel) -> String {
+    let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+    let target = match &l.column {
+        Some(column) => format!(
+            "COLUMN {}.{}.{}",
+            quote(&l.schema),
+            quote(&l.table),
+            quote(column)
+        ),
+        None => format!("TABLE {}.{}", quote(&l.schema), quote(&l.table)),
+    };
+    format!(
+        "SECURITY LABEL FOR {} ON {target} IS '{}';",
+        quote(&l.provider),
+        l.label.replace('\'', "''")
     )
 }
 
@@ -649,13 +669,15 @@ fn policy_and_catalog_entries(
             Some(column) => format!("{}.{}", l.table, column),
             None => l.table.clone(),
         };
-        out.push(entry(
+        let mut fingerprint = entry(
             ObjectKind::SecurityLabel,
             &l.schema,
             &parent,
             &l.provider,
             &[l.label.as_str()],
-        ));
+        );
+        fingerprint.create_sql = Some(security_label_create_sql(l));
+        out.push(fingerprint);
     }
 
     for j in &catalog.cron_jobs {

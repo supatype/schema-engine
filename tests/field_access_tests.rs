@@ -90,7 +90,7 @@ fn a_model_with_no_field_rules_emits_no_field_functions() {
 
 fn security_labels() -> String {
     let ast = parser::parse(FIXTURE).expect("fixture parses");
-    rls::generate_security_labels(&ast, "public", &[])
+    rls::generate_security_labels(&ast, "public")
 }
 
 #[test]
@@ -155,45 +155,21 @@ fn field_rules_refuse_to_apply_without_the_extension() {
     );
 }
 
-// Removing a rule has to stop the masking, or a column stays masked by a rule that no
-// longer exists.
+// A schema with no field rules sets no label and probes for nothing: every such schema would
+// otherwise refuse to apply to a database without the extension. Taking off the labels a removed
+// rule left is the reconcile's (`tests/label_ledger_tests.rs`).
 #[test]
-fn labels_not_re_asserted_are_cleared() {
-    let sql = security_labels();
-    assert!(
-        sql.contains("SECURITY LABEL FOR supatype ON COLUMN %I.%I.%I IS NULL"),
-        "no stale-label clearing:\n{sql}"
-    );
-    assert!(
-        sql.contains("('users', 'email')") && sql.contains("('users', 'id')"),
-        "current rules were not excluded from the clear:\n{sql}"
-    );
-}
-
-// The clear block still has to run for a schema with no field rules — that is precisely
-// the push where the last rule was removed. The probe must not, or every schema without
-// field rules would refuse to apply to a database without the extension.
-#[test]
-fn a_schema_with_no_field_rules_clears_but_does_not_probe() {
+fn a_schema_with_no_field_rules_neither_labels_nor_probes() {
     let mut ast = parser::parse(FIXTURE).expect("fixture parses");
     for model in &mut ast.models {
         supatype_engine::parser::accessors::platform_access_mut(model)
             .fields
             .clear();
     }
-    let sql = rls::generate_security_labels(&ast, "public", &[]);
-
+    let sql = rls::generate_security_labels(&ast, "public");
     assert!(
-        sql.contains("IS NULL"),
-        "no clear block for a schema with no field rules:\n{sql}"
-    );
-    assert!(
-        !sql.contains("RAISE EXCEPTION"),
-        "a schema with no field rules must not require the extension:\n{sql}"
-    );
-    assert!(
-        !sql.contains("SECURITY LABEL FOR supatype ON COLUMN \""),
-        "emitted a label with no rule to back it:\n{sql}"
+        sql.trim().is_empty(),
+        "a schema with no field rules emitted label SQL:\n{sql}"
     );
 }
 
@@ -256,7 +232,7 @@ fn a_schema_with_no_field_rules_neither_grants_nor_probes() {
             .fields
             .clear();
     }
-    let sql = rls::generate_security_labels(&ast, "public", &[]);
+    let sql = rls::generate_security_labels(&ast, "public");
 
     assert!(
         !sql.contains("GRANT USAGE ON SCHEMA"),
