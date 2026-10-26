@@ -288,7 +288,6 @@ pub const STUDIO_POLICIES: [(&str, &str); 2] =
 /// them in the app. Read admits `read` and `write`; write admits only `write`, and is `FOR ALL`
 /// so a delete, which has no `WITH CHECK`, is admitted by it and never by the read policy.
 pub fn studio_policy_sql(schema: &str, table: &str, suffix: &str) -> String {
-    let claim = studio_claim_sql();
     let outside_rule = format!(
         "current_setting({}, true) IS DISTINCT FROM 'on'",
         quote_literal(IN_RULE_SETTING)
@@ -296,7 +295,8 @@ pub fn studio_policy_sql(schema: &str, table: &str, suffix: &str) -> String {
     let head = policy_head(schema, table, suffix);
     if suffix == STUDIO_READ_POLICY {
         return format!(
-            "{head}\nAS PERMISSIVE FOR SELECT USING (\n    {claim} IN ('read', 'write')\n    AND {outside_rule}\n  );"
+            "{head}\nAS PERMISSIVE FOR SELECT USING (\n    {}\n    AND {outside_rule}\n  );",
+            studio_reader_sql()
         );
     }
     let admitted = format!("{}\n    AND {outside_rule}", studio_writer_sql());
@@ -311,6 +311,12 @@ fn studio_claim_sql() -> String {
         "(SELECT {CLAIMS_SCHEMA}.jwt_claim_text({}))",
         quote_literal(STUDIO_CLAIM)
     )
+}
+
+/// The request comes through Studio: its [`STUDIO_CLAIM`] is `read` or `write`. NULL, not false,
+/// for a request without the claim, so a caller outside a policy tests it with `IS TRUE`.
+pub fn studio_reader_sql() -> String {
+    format!("{} IN ('read', 'write')", studio_claim_sql())
 }
 
 /// The request is a Studio editor's: its [`STUDIO_CLAIM`] is `write`.
