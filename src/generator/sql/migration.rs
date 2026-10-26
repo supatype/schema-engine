@@ -69,7 +69,12 @@ pub fn assert_no_unmanaged_model_tables(diff: &DiffOutput) -> Result<()> {
 fn assert_forward_allowed(diff: &DiffOutput, force: bool) -> Result<()> {
     // Defence in depth for library callers that render SQL without going through a push entry point.
     assert_no_unmanaged_model_tables(diff)?;
+    assert_consent(diff, force)
+}
 
+/// Refuse, without `force`, a diff that drops data or rewrites a large table. Public because a push
+/// asks it before it renders anything, to record the refusal with what it would have run.
+pub fn assert_consent(diff: &DiffOutput, force: bool) -> Result<()> {
     if diff.summary.is_destructive && !force {
         bail!(
             "{} destructive operation(s) detected. Use --force to proceed.",

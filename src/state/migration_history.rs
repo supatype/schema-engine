@@ -80,7 +80,9 @@ pub fn create_migrations_table_sql() -> String {
     pushed_via              TEXT,
     pushed_from             TEXT,
     pushed_by_verified      BOOLEAN,
-    renames                 JSONB
+    renames                 JSONB,
+    refusal                 JSONB,
+    superseded_at           TIMESTAMPTZ
 )"#
     )
 }
@@ -437,6 +439,7 @@ pub fn ensure_all_migration_columns_sql() -> Vec<String> {
         ensure_migrations_sql_down_column_sql(),
         ensure_migrations_schema_sources_column_sql(),
         ensure_migrations_audit_columns_sql(),
+        super::refused_push::ensure_columns_sql(),
     ]
 }
 
@@ -902,8 +905,9 @@ where
     Ok(id)
 }
 
-/// Updates `admin_config` and `schema_snapshot` on the latest non-rolled-back migration row.
-/// Returns the number of rows updated (0 if there are no applicable migration records).
+/// Updates `admin_config` and `schema_snapshot` on the latest applied, non-rolled-back migration
+/// row: never a failed or refused one, which applied nothing and must not be read back as the
+/// schema in force. Returns the number of rows updated (0 if there are no applicable records).
 pub async fn update_latest_migration_admin(
     pool: impl sqlx::PgExecutor<'_>,
     admin_config: &serde_json::Value,
@@ -911,7 +915,8 @@ pub async fn update_latest_migration_admin(
 ) -> Result<u64> {
     let sql = format!(
         "UPDATE {SCHEMA}.migrations SET admin_config = $1, schema_snapshot = $2 \
-         WHERE id = (SELECT MAX(id) FROM {SCHEMA}.migrations WHERE rolled_back = FALSE)"
+         WHERE id = (SELECT MAX(id) FROM {SCHEMA}.migrations \
+                     WHERE rolled_back = FALSE AND COALESCE(status, 'applied') = 'applied')"
     );
     let res = sqlx::query(&sql)
         .bind(admin_config)
@@ -930,6 +935,8 @@ pub async fn refresh_metadata_on_up_to_date_push(
     audit: &PushAudit,
 ) -> Result<()> {
     save_studio_metadata_if_present(&mut *conn, admin_config, schema_snapshot).await?;
+    // This push applied: a refusal or failure before it no longer describes the project.
+    super::refused_push::supersede(&mut *conn).await?;
 
     let n = update_latest_migration_admin(&mut *conn, admin_config, schema_snapshot).await?;
     if n > 0 {
