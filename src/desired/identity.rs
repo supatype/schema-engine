@@ -344,10 +344,11 @@ const QUOTED_KEYWORDS: &[&str] = &[
     "xmltable",
 ];
 
-/// `quote_ident`'s rule: bare when the name is a plain lowercase identifier that is not a quoted
-/// keyword, quoted otherwise. Leaving keywords bare keyed `public.user` against the catalog's
-/// `public."user"`.
-fn quote_if_needed(ident: &str) -> String {
+/// Postgres's own `quote_ident` rule, which is how the catalog spells a name: bare when the name is
+/// a plain lowercase identifier that is not a quoted keyword, quoted by
+/// [`crate::sql_quote::quote_ident`] otherwise. Leaving keywords bare keyed `public.user` against
+/// the catalog's `public."user"`.
+pub(crate) fn quote_if_needed(ident: &str) -> String {
     let simple = !ident.is_empty()
         && ident
             .chars()
@@ -357,7 +358,7 @@ fn quote_if_needed(ident: &str) -> String {
     if simple {
         ident.to_string()
     } else {
-        format!("\"{}\"", ident.replace('"', "\"\""))
+        crate::sql_quote::quote_ident(ident)
     }
 }
 

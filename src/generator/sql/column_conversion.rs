@@ -1,7 +1,8 @@
-//! Column type / kind conversion registry — maps (from_udt, to_pg, kinds) → migration strategy.
+//! Column type / kind conversion registry: maps (from_udt, to_pg, kinds) to a migration strategy.
 
 use crate::differ::Risk;
 use crate::parser::ast::{BlocksFieldAst, DefaultValueAst, FieldAst, ScalarFieldAst};
+use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,17 +182,17 @@ fn storage_ref_from_text_expr(col: &str, bucket: &str) -> String {
         "CASE WHEN {col} IS NULL THEN NULL \
          WHEN left(trim({col}::text), 1) = '{{' THEN {col}::text::jsonb \
          WHEN {col}::text LIKE '/assets/images/%' THEN \
-           jsonb_build_object('bucket', '{bucket}', 'path', 'images/' || substring({col}::text from 16)) \
+           jsonb_build_object('bucket', {bucket}, 'path', 'images/' || substring({col}::text from 16)) \
          WHEN {col}::text LIKE '/%' THEN \
-           jsonb_build_object('bucket', '{bucket}', 'path', ltrim({col}::text, '/')) \
-         ELSE jsonb_build_object('bucket', '{bucket}', 'path', {col}::text) END",
+           jsonb_build_object('bucket', {bucket}, 'path', ltrim({col}::text, '/')) \
+         ELSE jsonb_build_object('bucket', {bucket}, 'path', {col}::text) END",
         col = col,
-        bucket = bucket.replace('\'', "''"),
+        bucket = quote_literal(bucket),
     )
 }
 
 fn blocks_wrap_expr(col: &str, block_name: &str) -> String {
-    let name = block_name.replace('\'', "''");
+    let name = quote_literal(block_name);
     format!(
         "CASE WHEN {col} IS NULL THEN NULL \
          WHEN jsonb_typeof({col}) = 'array' AND EXISTS (\
@@ -199,9 +200,9 @@ fn blocks_wrap_expr(col: &str, block_name: &str) -> String {
            WHERE elem ? 'type' AND elem ? 'data'\
          ) THEN {col} \
          WHEN jsonb_typeof({col}) = 'object' THEN \
-           jsonb_build_array(jsonb_build_object('type', '{name}', 'data', {col})) \
+           jsonb_build_array(jsonb_build_object('type', {name}, 'data', {col})) \
          ELSE jsonb_build_array(jsonb_build_object(\
-           'type', '{name}', 'data', jsonb_build_object('value', {col})\
+           'type', {name}, 'data', jsonb_build_object('value', {col})\
          )) END",
         col = col,
         name = name,
@@ -304,18 +305,18 @@ pub fn kind_migrate_pre_update(
     to: &str,
     target_field: &FieldAst,
 ) -> Option<String> {
-    let col = format!("\"{column}\"");
+    let col = quote_ident(column);
+    let target = quote_qualified(schema, table);
     match (from, to) {
         ("json", "richText") => Some(format!(
-            "UPDATE \"{schema}\".\"{table}\" SET \"{column}\" = {expr} \
-             WHERE \"{column}\" IS NOT NULL AND NOT (\"{column}\" ? 'root');",
+            "UPDATE {target} SET {col} = {expr} \
+             WHERE {col} IS NOT NULL AND NOT ({col} ? 'root');",
             expr = lexical_normalise_expr(&col, is_localised(target_field)),
         )),
         ("json", "blocks") => {
             let block = first_block_name(target_field).unwrap_or_else(|| "block".into());
             Some(format!(
-                "UPDATE \"{schema}\".\"{table}\" SET \"{column}\" = {expr} \
-                 WHERE \"{column}\" IS NOT NULL;",
+                "UPDATE {target} SET {col} = {expr} WHERE {col} IS NOT NULL;",
                 expr = blocks_wrap_expr(&col, &block),
             ))
         }
@@ -325,8 +326,8 @@ pub fn kind_migrate_pre_update(
                  FROM jsonb_array_elements({col}) elem), '')"
             );
             Some(format!(
-                "UPDATE \"{schema}\".\"{table}\" SET \"{column}\" = {lex} \
-                 WHERE \"{column}\" IS NOT NULL AND jsonb_typeof(\"{column}\") = 'array';",
+                "UPDATE {target} SET {col} = {lex} \
+                 WHERE {col} IS NOT NULL AND jsonb_typeof({col}) = 'array';",
                 lex = text_to_lexical_jsonb_expr(&array_text),
             ))
         }
@@ -353,7 +354,7 @@ pub fn plan_type_conversion(
             .get("direction")
             .and_then(|v| v.as_str())
             .unwrap_or("add");
-        // Only unwrap locale maps — not Lexical richText / json / blocks documents.
+        // Only unwrap locale maps, never Lexical richText / json / blocks documents.
         if direction == "remove"
             && matches!(from_kind, Some("richText") | Some("json") | Some("blocks"))
         {
@@ -363,10 +364,11 @@ pub fn plan_type_conversion(
                 .get("default_locale")
                 .and_then(|v| v.as_str())
                 .unwrap_or("en");
+            let (locale, col) = (quote_literal(locale), quote_ident(column));
             let using = if direction == "add" {
-                format!("jsonb_build_object('{locale}', \"{column}\"::text)")
+                format!("jsonb_build_object({locale}, {col}::text)")
             } else {
-                format!("(\"{column}\"->>'{locale}')::text")
+                format!("({col}->>{locale})::text")
             };
             return ConversionStrategy {
                 kind: ConversionStrategyKind::TransformCast,
@@ -408,7 +410,7 @@ pub fn plan_type_conversion(
     }
 
     let to_upper = to_pg_upper(to_pg);
-    let col = format!("\"{column}\"");
+    let col = quote_ident(column);
 
     if to_upper == "JSONB" {
         if to_kind == Some("richText") {
@@ -484,17 +486,16 @@ pub fn plan_type_conversion(
 
     if to_upper == "TEXT" && from_udt == "jsonb" {
         let using = if changes.get("localization").is_some() {
-            format!("(\"{column}\"->>'en')::text")
+            format!("({col}->>'en')::text")
         } else if from_kind == Some("richText") {
-            // Postgres forbids subqueries in ALTER COLUMN … USING — extract in UPDATE first.
-            let col_q = format!("\"{column}\"");
-            let extract = lexical_plain_text_extract_sql(&col_q);
+            // Postgres forbids subqueries in ALTER COLUMN … USING, so extract in an UPDATE first.
+            let extract = lexical_plain_text_extract_sql(&col);
             return ConversionStrategy {
                 kind: ConversionStrategyKind::TransformCast,
-                using_expr: Some(format!("({col_q} #>> '{{}}')::text")),
+                using_expr: Some(format!("({col} #>> '{{}}')::text")),
                 pre_update: Some(format!(
-                    "UPDATE \"{schema}\".\"{table}\" SET \"{column}\" = to_jsonb({extract}) \
-                     WHERE \"{column}\" IS NOT NULL;"
+                    "UPDATE {} SET {col} = to_jsonb({extract}) WHERE {col} IS NOT NULL;",
+                    quote_qualified(schema, table)
                 )),
                 blocked_reason: None,
             };
@@ -556,7 +557,7 @@ pub fn plan_type_conversion(
 
     ConversionStrategy {
         kind: ConversionStrategyKind::TransformCast,
-        using_expr: Some(format!("\"{column}\"::{to_pg}", to_pg = to_pg)),
+        using_expr: Some(format!("{col}::{to_pg}")),
         pre_update: None,
         blocked_reason: None,
     }
@@ -605,15 +606,14 @@ pub fn rich_text_default_sql(default: &DefaultValueAst) -> Option<String> {
             value: serde_json::Value::String(s),
         } => {
             if is_lexical_json_string(s) {
-                Some(format!("'{}'::jsonb", s.replace('\'', "''")))
+                Some(format!("{}::jsonb", quote_literal(s)))
             } else {
-                let escaped = s.replace('\'', "''");
-                Some(text_to_lexical_jsonb_expr(&format!("'{escaped}'")))
+                Some(text_to_lexical_jsonb_expr(&quote_literal(s)))
             }
         }
         DefaultValueAst::Value { value } if is_lexical_document_value(value) => {
             let json = serde_json::to_string(value).ok()?;
-            Some(format!("'{}'::jsonb", json.replace('\'', "''")))
+            Some(format!("{}::jsonb", quote_literal(&json)))
         }
         _ => None,
     }
@@ -663,24 +663,22 @@ pub fn add_column_backfill_default(field: &FieldAst) -> Option<String> {
         FieldAst::Money(f) if f.required => Some("0".into()),
         FieldAst::Json(f) if f.required => Some("'{}'::jsonb".into()),
         FieldAst::Blocks(f) if f.required => Some("'[]'::jsonb".into()),
-        FieldAst::Enum(f) if f.required && f.default.is_none() => f
-            .values
-            .first()
-            .map(|v| format!("'{}'", v.replace('\'', "''"))),
+        FieldAst::Enum(f) if f.required && f.default.is_none() => {
+            f.values.first().map(|v| quote_literal(v))
+        }
         _ => None,
     }
 }
 
 pub fn using_expr_for_alter(strategy: &ConversionStrategy, column: &str, to_pg: &str) -> String {
+    let cast = || format!("{}::{to_pg}", quote_ident(column));
     match &strategy.kind {
-        ConversionStrategyKind::SafeCast | ConversionStrategyKind::TransformCast => strategy
-            .using_expr
-            .clone()
-            .unwrap_or_else(|| format!("\"{column}\"::{to_pg}")),
-        ConversionStrategyKind::KindMigrate => format!("\"{column}\"::{to_pg}"),
-        ConversionStrategyKind::RecreateColumn | ConversionStrategyKind::Blocked => {
-            format!("\"{column}\"::{to_pg}")
+        ConversionStrategyKind::SafeCast | ConversionStrategyKind::TransformCast => {
+            strategy.using_expr.clone().unwrap_or_else(cast)
         }
+        ConversionStrategyKind::KindMigrate
+        | ConversionStrategyKind::RecreateColumn
+        | ConversionStrategyKind::Blocked => cast(),
     }
 }
 

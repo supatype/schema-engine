@@ -41,8 +41,8 @@ use crate::generator::sql::{
         render_operation_named,
     },
     rls::{
-        drop_field_label_sql, drop_table_label_sql, field_labels, membership_index_targets,
-        MASK_PROVIDER,
+        drop_field_label_sql, drop_table_label_sql, field_labels, membership_index_create_sql,
+        membership_index_targets, MASK_PROVIDER,
     },
     type_checks,
     versions::{versions_record_index_name, versions_record_index_sql, versions_record_key_name},
@@ -60,6 +60,7 @@ use crate::parser::accessors::{
 };
 use crate::parser::ast::{AccessAst, FieldAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
+use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 
 /// A check constraint the schema declares on a model: a field's bounds or a model-level rule.
 pub(crate) struct ExpectedCheck {
@@ -118,34 +119,43 @@ impl ObjectKey {
             parent,
             name,
         } = self;
+        let on_parent = quote_qualified(schema, parent);
         Some(match kind {
-            ObjectKind::Table => format!("DROP TABLE IF EXISTS \"{schema}\".\"{name}\";"),
-            ObjectKind::Column => {
-                format!("ALTER TABLE \"{schema}\".\"{parent}\" DROP COLUMN IF EXISTS \"{name}\";")
-            }
+            ObjectKind::Table => format!("DROP TABLE IF EXISTS {};", quote_qualified(schema, name)),
+            ObjectKind::Column => format!(
+                "ALTER TABLE {on_parent} DROP COLUMN IF EXISTS {};",
+                quote_ident(name)
+            ),
             ObjectKind::PrimaryKey
             | ObjectKind::ForeignKey
             | ObjectKind::Unique
             | ObjectKind::Check => format!(
-                "ALTER TABLE \"{schema}\".\"{parent}\" DROP CONSTRAINT IF EXISTS \"{name}\";"
+                "ALTER TABLE {on_parent} DROP CONSTRAINT IF EXISTS {};",
+                quote_ident(name)
             ),
-            ObjectKind::Index => format!("DROP INDEX IF EXISTS \"{schema}\".\"{name}\";"),
-            ObjectKind::Policy => {
-                format!("DROP POLICY IF EXISTS \"{name}\" ON \"{schema}\".\"{parent}\";")
-            }
-            ObjectKind::Trigger => {
-                format!("DROP TRIGGER IF EXISTS \"{name}\" ON \"{schema}\".\"{parent}\";")
-            }
-            ObjectKind::View => format!("DROP VIEW IF EXISTS \"{schema}\".\"{name}\";"),
+            ObjectKind::Index => format!("DROP INDEX IF EXISTS {};", quote_qualified(schema, name)),
+            ObjectKind::Policy => format!(
+                "DROP POLICY IF EXISTS {} ON {on_parent};",
+                quote_ident(name)
+            ),
+            ObjectKind::Trigger => format!(
+                "DROP TRIGGER IF EXISTS {} ON {on_parent};",
+                quote_ident(name)
+            ),
+            ObjectKind::View => format!("DROP VIEW IF EXISTS {};", quote_qualified(schema, name)),
             // The name is `ident(types)`, the identity the ledger keys a function by.
             ObjectKind::Function => {
                 let (ident, args) = name.split_once('(').unwrap_or((name, ")"));
-                format!("DROP FUNCTION IF EXISTS \"{schema}\".\"{ident}\"({args};")
+                format!(
+                    "DROP FUNCTION IF EXISTS {}({args};",
+                    quote_qualified(schema, ident)
+                )
             }
             // Guarded as the schedule is: a database without `pg_cron` has no job to unschedule.
             // Only this database's job, as introspection reads them: `cron.job` is the cluster's.
             ObjectKind::CronJob => format!(
-                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}' AND database = current_database();\n  END IF;\nEND;\n$cron$;"
+                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = {} AND database = current_database();\n  END IF;\nEND;\n$cron$;",
+                quote_literal(name)
             ),
             // The parent is `table.column`, or the table for a label on the table itself; only our
             // own provider's labels are ever desired or dropped.
@@ -174,23 +184,21 @@ impl ObjectKey {
             name,
         } = self;
         let value = comment_value(text);
+        let (on_parent, n) = (quote_qualified(schema, parent), quote_ident(name));
         Some(match kind {
             ObjectKind::Table => comment_on_table(schema, name, text),
-            ObjectKind::Column => {
-                format!("COMMENT ON COLUMN \"{schema}\".\"{parent}\".\"{name}\" IS {value};")
-            }
+            ObjectKind::Column => format!("COMMENT ON COLUMN {on_parent}.{n} IS {value};"),
             ObjectKind::PrimaryKey
             | ObjectKind::ForeignKey
             | ObjectKind::Unique
             | ObjectKind::Check => comment_on_constraint(schema, parent, name, text),
             ObjectKind::Index => comment_on_index(schema, name, text),
-            ObjectKind::Policy => {
-                format!("COMMENT ON POLICY \"{name}\" ON \"{schema}\".\"{parent}\" IS {value};")
-            }
-            ObjectKind::Trigger => {
-                format!("COMMENT ON TRIGGER \"{name}\" ON \"{schema}\".\"{parent}\" IS {value};")
-            }
-            ObjectKind::View => format!("COMMENT ON VIEW \"{schema}\".\"{name}\" IS {value};"),
+            ObjectKind::Policy => format!("COMMENT ON POLICY {n} ON {on_parent} IS {value};"),
+            ObjectKind::Trigger => format!("COMMENT ON TRIGGER {n} ON {on_parent} IS {value};"),
+            ObjectKind::View => format!(
+                "COMMENT ON VIEW {} IS {value};",
+                quote_qualified(schema, name)
+            ),
             ObjectKind::Schema
             | ObjectKind::Function
             | ObjectKind::RlsAttributes
@@ -220,7 +228,10 @@ pub struct DesiredObject {
 /// The statement a serial's sequence is recorded with: `ALTER SEQUENCE ... OWNED BY` its column.
 pub fn sequence_owned_by_sql(schema: &str, name: &str, table: &str, column: &str) -> String {
     format!(
-        "ALTER SEQUENCE \"{schema}\".\"{name}\" OWNED BY \"{schema}\".\"{table}\".\"{column}\";"
+        "ALTER SEQUENCE {} OWNED BY {}.{};",
+        quote_qualified(schema, name),
+        quote_qualified(schema, table),
+        quote_ident(column)
     )
 }
 
@@ -378,7 +389,7 @@ impl<'a> Builder<'a> {
     }
 
     fn alter(&self, table: &str) -> String {
-        format!("ALTER TABLE \"{}\".\"{table}\"", self.schema)
+        format!("ALTER TABLE {}", quote_qualified(self.schema, table))
     }
 
     // --- tables and columns -------------------------------------------------------------------
@@ -423,8 +434,9 @@ impl<'a> Builder<'a> {
         // writes beside the fields: without a row they could never be dropped when the option goes.
         for (column, definition) in option_columns(model) {
             let create = format!(
-                "{} ADD COLUMN IF NOT EXISTS \"{column}\" {definition};",
-                self.alter(table)
+                "{} ADD COLUMN IF NOT EXISTS {} {definition};",
+                self.alter(table),
+                quote_ident(column)
             );
             let structure = BTreeMap::from([("udt", "timestamptz".to_string())]);
             self.push(
@@ -443,12 +455,13 @@ impl<'a> Builder<'a> {
         let name = self.names.primary_key(table);
         let cols = columns
             .iter()
-            .map(|c| format!("\"{c}\""))
+            .map(|c| quote_ident(c))
             .collect::<Vec<_>>()
             .join(", ");
         let create = format!(
-            "{} ADD CONSTRAINT \"{name}\" PRIMARY KEY ({cols});",
-            self.alter(table)
+            "{} ADD CONSTRAINT {} PRIMARY KEY ({cols});",
+            self.alter(table),
+            quote_ident(&name)
         );
         let mut structure = BTreeMap::new();
         structure.insert("columns", columns.join(","));
@@ -507,8 +520,10 @@ impl<'a> Builder<'a> {
                         .unwrap_or_else(|| default_foreign_key_column(field_name));
                     let name = self.names.unique(table, &column);
                     let create = format!(
-                        "{} ADD CONSTRAINT \"{name}\" UNIQUE (\"{column}\");",
-                        self.alter(table)
+                        "{} ADD CONSTRAINT {} UNIQUE ({});",
+                        self.alter(table),
+                        quote_ident(&name),
+                        quote_ident(&column)
                     );
                     self.unique(table, &name, &[column], create);
                 }
@@ -608,8 +623,9 @@ impl<'a> Builder<'a> {
     fn type_check(&mut self, table: &str, column: &str, expression: &str) {
         let name = self.names.type_check(table, column);
         let create = format!(
-            "{} ADD CONSTRAINT \"{name}\" CHECK ({expression});",
-            self.alter(table)
+            "{} ADD CONSTRAINT {} CHECK ({expression});",
+            self.alter(table),
+            quote_ident(&name)
         );
         self.check(table, &name, create);
     }
@@ -618,9 +634,9 @@ impl<'a> Builder<'a> {
         let table = model.table_name();
         for exp in expected_checks(model, &self.names) {
             let create = format!(
-                "{} ADD CONSTRAINT \"{}\" CHECK ({});",
+                "{} ADD CONSTRAINT {} CHECK ({});",
                 self.alter(table),
-                exp.constraint,
+                quote_ident(&exp.constraint),
                 exp.expression
             );
             self.check(table, &exp.constraint, create);
@@ -722,8 +738,9 @@ impl<'a> Builder<'a> {
         if model.options.singleton {
             let name = self.names.singleton_index(table);
             let create = format!(
-                "CREATE UNIQUE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{table}\" ((TRUE));",
-                self.schema
+                "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ((TRUE));",
+                quote_ident(&name),
+                quote_qualified(self.schema, table)
             );
             // No column key, and one expression, which Postgres deparses as `true`.
             let mut structure = index_structure(&[], "btree", true, "");
@@ -749,12 +766,7 @@ impl<'a> Builder<'a> {
             if let Some(rule) = rule {
                 for (target_table, column) in membership_index_targets(rule) {
                     let name = membership_index_name(&target_table, &column);
-                    let create = format!(
-                        "CREATE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{}\" (\"{}\");",
-                        self.schema,
-                        target_table.replace('"', "\"\""),
-                        column.replace('"', "\"\"")
-                    );
+                    let create = membership_index_create_sql(self.schema, &target_table, &column);
                     self.index(&target_table, &name, &[column], "btree", false, create);
                 }
             }
@@ -860,7 +872,7 @@ impl<'a> Builder<'a> {
                 parent: String::new(),
                 name: name.to_string(),
             };
-            let create = format!("CREATE SCHEMA IF NOT EXISTS \"{name}\";");
+            let create = format!("CREATE SCHEMA IF NOT EXISTS {};", quote_ident(name));
             self.push(key, BTreeMap::new(), create, Vec::new());
         }
     }
@@ -1015,9 +1027,11 @@ impl<'a> Builder<'a> {
 
         let fk = self.names.foreign_key(&vt, "record_id");
         let fk_create = format!(
-            "{} ADD CONSTRAINT \"{fk}\" FOREIGN KEY (\"record_id\") REFERENCES \"{}\".\"{table}\" (\"{primary_key}\") ON DELETE CASCADE;",
+            "{} ADD CONSTRAINT {} FOREIGN KEY (\"record_id\") REFERENCES {} ({}) ON DELETE CASCADE;",
             self.alter(&vt),
-            self.schema
+            quote_ident(&fk),
+            quote_qualified(self.schema, table),
+            quote_ident(&primary_key)
         );
         self.foreign_key(
             &vt,
@@ -1036,8 +1050,9 @@ impl<'a> Builder<'a> {
 
         let key = versions_record_key_name(&vt);
         let key_create = format!(
-            "{} ADD CONSTRAINT \"{key}\" UNIQUE (\"record_id\", \"version\");",
-            self.alter(&vt)
+            "{} ADD CONSTRAINT {} UNIQUE (\"record_id\", \"version\");",
+            self.alter(&vt),
+            quote_ident(&key)
         );
         self.unique(
             &vt,
@@ -1084,9 +1099,12 @@ impl<'a> Builder<'a> {
             let ref_table = parent.table_name().to_string();
             let name = self.names.foreign_key(table, fk_col);
             let create = format!(
-                "{} ADD CONSTRAINT \"{name}\" FOREIGN KEY (\"{fk_col}\") REFERENCES \"{}\".\"{ref_table}\" (\"{pk}\") ON DELETE CASCADE;",
+                "{} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE CASCADE;",
                 self.alter(table),
-                self.schema
+                quote_ident(&name),
+                quote_ident(fk_col),
+                quote_qualified(self.schema, &ref_table),
+                quote_ident(&pk)
             );
             self.foreign_key(
                 table,

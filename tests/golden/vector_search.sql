@@ -175,24 +175,32 @@ CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."d
     SELECT TRUE
       FROM (SELECT ($1).*) AS "documents";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_documents"("public"."documents") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_documents"("public"."documents") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_documents"("documents" "public"."documents")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = ANY(ARRAY['admin', 'ingest'])
       FROM (SELECT ($1).*) AS "documents";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_documents"("public"."documents") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_documents"("public"."documents") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_documents"("documents" "public"."documents")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "documents";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_documents"("public"."documents") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_documents"("public"."documents") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_documents"("documents" "public"."documents")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "documents";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_documents"("public"."documents") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_documents"("public"."documents") TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";

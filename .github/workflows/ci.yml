@@ -68,7 +68,8 @@ jobs:
             --test seed_validate_tests \
             --test seed_plan_tests \
             --test conformance_tests \
-            --test identity_generated_tests
+            --test identity_generated_tests \
+            --test sql_quote_lint
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})
@@ -178,6 +179,7 @@ jobs:
             --test richtext_trigger_tests \
             --test schema_isolation_tests \
             --test studio_members_tests \
+            --test studio_state_security_tests \
             --test table_adoption_tests \
             --test live_state_tests \
             --test storage_policy_sweep_tests \
@@ -217,4 +219,5 @@ jobs:
             --test table_ledger_tests \
             --test rebaseline_tests \
             --test rollback_ledger_tests \
-            --test object_names_tests
+            --test object_names_tests \
+            --test sql_quoting_tests

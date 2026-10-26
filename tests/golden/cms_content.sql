@@ -211,96 +211,128 @@ CREATE OR REPLACE FUNCTION "public"."can_read_authors"("authors" "public"."autho
     SELECT FALSE
       FROM (SELECT ($1).*) AS "authors";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_authors"("public"."authors") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_authors"("public"."authors") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_authors"("authors" "public"."authors")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "authors";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_authors"("public"."authors") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_authors"("public"."authors") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_authors"("authors" "public"."authors")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "authors";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_authors"("public"."authors") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_authors"("public"."authors") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_authors"("authors" "public"."authors")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "authors";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_authors"("public"."authors") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_authors"("public"."authors") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT TRUE
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_articles"("public"."articles") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_articles"("public"."articles") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_articles"("public"."articles") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT (SELECT auth.role()) = 'admin'
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_articles"("public"."articles") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_tags"("public"."tags") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_tags"("public"."tags") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_tags"("public"."tags") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "tags";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_tags"("public"."tags") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_tags"("public"."tags") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_read_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_read_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_articles"("public"."articles") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_create_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_create_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_articles"("public"."articles") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_update_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_update_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_articles"("public"."articles") TO anon, authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION "public"."can_delete_articles"("articles" "public"."articles")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
       FROM (SELECT ($1).*) AS "articles";
   $can$;
+REVOKE ALL ON FUNCTION "public"."can_delete_articles"("public"."articles") FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_articles"("public"."articles") TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";

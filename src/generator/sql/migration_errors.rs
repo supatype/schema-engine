@@ -54,9 +54,11 @@ pub fn enrich_migration_error(
         let (what, find_them) = match site {
             Some(c) => (
                 format!("\"{}\".\"{}\"", c.table, c.constraint),
+                // A query the reader copies and runs, so the table is quoted as SQL quotes it.
                 format!(
-                    "• Find the rows that breach it:\n    SELECT * FROM \"{}\" WHERE NOT ({});\n",
-                    c.table, c.expression
+                    "• Find the rows that breach it:\n    SELECT * FROM {} WHERE NOT ({});\n",
+                    crate::sql_quote::quote_ident(c.table),
+                    c.expression
                 ),
             ),
             None => (format!("the column behind \"{constraint}\""), String::new()),

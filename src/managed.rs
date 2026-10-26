@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{FieldAst, IndexAst, ModelAst, SchemaAst};
+use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 
 pub const MANAGED_PREFIX: &str = "supatype:managed";
 
@@ -792,10 +793,7 @@ impl ObjectNames {
 /// The value side of a `COMMENT ON ... IS`: a quoted literal, or `NULL` to clear it, for the ledger
 /// putting back what a user wrote beside a stamp it removes.
 pub fn comment_value(text: Option<&str>) -> String {
-    match text {
-        Some(t) => format!("'{}'", t.replace('\'', "''")),
-        None => "NULL".to_string(),
-    }
+    text.map_or_else(|| "NULL".to_string(), quote_literal)
 }
 
 /// `COMMENT ON CONSTRAINT`, with `None` clearing the comment.
@@ -806,7 +804,9 @@ pub fn comment_on_constraint(
     text: Option<&str>,
 ) -> String {
     format!(
-        "COMMENT ON CONSTRAINT \"{constraint}\" ON \"{schema}\".\"{table}\" IS {};",
+        "COMMENT ON CONSTRAINT {} ON {} IS {};",
+        quote_ident(constraint),
+        quote_qualified(schema, table),
         comment_value(text)
     )
 }
@@ -814,7 +814,8 @@ pub fn comment_on_constraint(
 /// `COMMENT ON TABLE`, with `None` clearing the comment.
 pub fn comment_on_table(schema: &str, table: &str, text: Option<&str>) -> String {
     format!(
-        "COMMENT ON TABLE \"{schema}\".\"{table}\" IS {};",
+        "COMMENT ON TABLE {} IS {};",
+        quote_qualified(schema, table),
         comment_value(text)
     )
 }
@@ -822,7 +823,8 @@ pub fn comment_on_table(schema: &str, table: &str, text: Option<&str>) -> String
 /// `COMMENT ON INDEX`, with `None` clearing the comment.
 pub fn comment_on_index(schema: &str, index: &str, text: Option<&str>) -> String {
     format!(
-        "COMMENT ON INDEX \"{schema}\".\"{index}\" IS {};",
+        "COMMENT ON INDEX {} IS {};",
+        quote_qualified(schema, index),
         comment_value(text)
     )
 }

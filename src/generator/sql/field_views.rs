@@ -2,7 +2,7 @@
 //! `supatype_mask`.
 //!
 //! Tier 1 rewrites references to the base table in the planner, which needs an extension in
-//! `shared_preload_libraries` — a server-level setting and a restart, so not something a managed
+//! `shared_preload_libraries`: a server-level setting and a restart, so not something a managed
 //! provider will do. Tier 2 puts the same masking expression in a view definition instead, and
 //! PostgREST is pointed at the `api` schema rather than the managed one.
 //!
@@ -16,25 +16,26 @@
 //!   a projection than inside `sum()`. Tier 1 raises `column … is masked for this role and cannot be
 //!   aggregated`; tier 2 returns the sum of what the caller may see. **Decided (2026-08-12):** accept
 //!   it. PostgREST ships `db-aggregates-enabled = false` and Supatype never sets it, so no API caller
-//!   can reach the divergence — only direct SQL against these views. The contract test asserts the
+//!   can reach the divergence; only direct SQL against these views. The contract test asserts the
 //!   difference per tier so it cannot drift silently.
 //!
 //! * **No whole-row references.** The `can_*` affordance functions take the row as a composite, and
 //!   with `supatype_mask` loaded a whole-row reference to a masked table is rejected outright
 //!   (`whole-row reference to "t" is not supported because the table has masked columns`). So the
-//!   predicate is inlined over individual columns — which also lets both tiers coexist in one
+//!   predicate is inlined over individual columns, which also lets both tiers coexist in one
 //!   database, as the contract test requires.
 //!
 //! * **`security_invoker`.** Without it a view executes as its owner, and row-level security on the
-//!   base table would not apply to the caller at all — masking a column while exposing every row.
+//!   base table would not apply to the caller at all, masking a column while exposing every row.
 //!   PG15+; Supatype's baseline is PG17.
 //!
-//! * **`IS NOT TRUE`, never `NOT`.** A write predicate returning NULL — an unset `current_setting`,
-//!   a null column — makes `NOT predicate` NULL, and `IF NULL THEN RAISE` does not raise. Measured on
+//! * **`IS NOT TRUE`, never `NOT`.** A write predicate returning NULL (an unset `current_setting`,
+//!   a null column) makes `NOT predicate` NULL, and `IF NULL THEN RAISE` does not raise. Measured on
 //!   a prototype: an unauthorised write succeeded silently.
 
 use crate::parser::accessors::{db_table_name, platform_access};
 use crate::parser::ast::{ModelAst, SchemaAst};
+use crate::sql_quote::{comment_text, quote_ident, raise_message};
 use crate::state::database_state::DatabaseState;
 
 /// Schema the views live in. PostgREST is pointed here instead of the managed schema.
@@ -43,7 +44,7 @@ pub const VIEW_SCHEMA: &str = "api";
 /// Roles the API switches between; the views need the same reach as the tables behind them.
 const API_ROLES: &str = "anon, authenticated, service_role";
 
-/// True when this schema needs tier 2 at all — that is, when any model masks a column.
+/// True when this schema needs tier 2 at all, that is, when any model masks a column.
 pub fn has_field_rules(ast: &SchemaAst) -> bool {
     ast.models
         .iter()
@@ -52,9 +53,10 @@ pub fn has_field_rules(ast: &SchemaAst) -> bool {
 
 /// `CREATE SCHEMA` and grants for the view schema.
 fn preamble() -> String {
+    let schema = quote_ident(VIEW_SCHEMA);
     format!(
-        "CREATE SCHEMA IF NOT EXISTS \"{VIEW_SCHEMA}\";\n\
-         GRANT USAGE ON SCHEMA \"{VIEW_SCHEMA}\" TO {API_ROLES};\n\n"
+        "CREATE SCHEMA IF NOT EXISTS {schema};\n\
+         GRANT USAGE ON SCHEMA {schema} TO {API_ROLES};\n\n"
     )
 }
 
@@ -89,10 +91,6 @@ fn write_predicate(
     })
 }
 
-fn quoted(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
 /// The primary key a model declares, for a table that does not exist yet.
 ///
 /// Read from the serialised field rather than through an accessor: `primaryKey` lives on the payload
@@ -116,12 +114,12 @@ fn ast_primary_key(model: &ModelAst) -> Vec<String> {
 ///
 /// Row identity for the write trigger. `ctid` was the first attempt and it silently does not work: a
 /// view row has no `ctid`, so `WHERE {key_match}` matched nothing, the stored row came back all
-/// NULLs, and every masked write was permitted and written as NULL. Nothing failed loudly — the
+/// NULLs, and every masked write was permitted and written as NULL. Nothing failed loudly: the
 /// contract's requirement 5 kept passing for an unrelated reason.
 fn primary_key_columns(db: &DatabaseState, table: &str) -> Vec<String> {
     // From the backing index. When this was written the constraint reader emitted only foreign
     // keys, so reading `db.constraints` returned "no key" for every table, which skipped the
-    // trigger and left the view read-only — failing with `cannot update column "salary" of view`
+    // trigger and left the view read-only, failing with `cannot update column "salary" of view`
     // rather than anything about keys. The reader reports primary keys now; the index is kept as
     // the source because it is what identifies the row, and is read the same way either way.
     db.indexes
@@ -134,7 +132,7 @@ fn primary_key_columns(db: &DatabaseState, table: &str) -> Vec<String> {
 /// The columns a model declares, in declaration order.
 ///
 /// Used for a table that does not exist *yet*: on a first push the diff is computed against an empty
-/// database, so there are no introspected columns — but the `CREATE TABLE` runs earlier in the same
+/// database, so there are no introspected columns, but the `CREATE TABLE` runs earlier in the same
 /// migration, so by the time the view is created the table is there. Without this the first push
 /// emitted an empty view layer and then granted on `api.<table>`, failing with `relation
 /// "api.tier_employee" does not exist`.
@@ -147,7 +145,7 @@ fn ast_columns(model: &ModelAst) -> Vec<String> {
             }
         }
     }
-    // Option-driven columns, mirroring `column_diff` — a model can ask for these without declaring a
+    // Option-driven columns, mirroring `column_diff`: a model can ask for these without declaring a
     // field for them.
     if model.options.timestamps && !model.fields.contains_key("timestamps") {
         for column in ["created_at", "updated_at"] {
@@ -168,19 +166,19 @@ fn ast_columns(model: &ModelAst) -> Vec<String> {
 /// SQL for the whole `api` view layer, plus the triggers that carry the write contract.
 ///
 /// **Every** model gets a view, not only the ones that mask a column. Under tier 2 the managed schema
-/// is not exposed to PostgREST at all — it cannot be, because a client picks its schema per request
+/// is not exposed to PostgREST at all. It cannot be, because a client picks its schema per request
 /// with `Accept-Profile`, so leaving `public` on the list lets any caller read the unmasked table and
 /// makes the mask opt-out. With only `api` exposed, a model without a view simply disappears from the
 /// API, so the unmasked ones are passed through verbatim.
 ///
 /// Driven by the **database's** columns rather than the AST's, so a table carrying columns the schema
-/// does not declare — an adopted table, say — keeps serving them instead of losing them from the API
+/// does not declare (an adopted table, say) keeps serving them instead of losing them from the API
 /// the moment tier 2 is switched on.
 /// One table's shape, as the view generator needs it.
 ///
 /// Carried in the diff so the renderer can build the SQL with the schema *it* was given. Generating
 /// the SQL in the differ instead meant reaching for `db.schema`, which is empty on a
-/// `DatabaseState::default()` — and every view came out as `FROM ""."users"`, a zero-length
+/// `DatabaseState::default()`, and every view came out as `FROM ""."users"`, a zero-length
 /// identifier that Postgres rejects. Data here, SQL in the renderer.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -199,8 +197,8 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
         let table = db_table_name(model);
         let db_table = db.tables.iter().find(|t| t.name == table);
 
-        // The database's columns when the table exists — so a table carrying columns the schema does
-        // not declare keeps serving them — and the schema's own when it is being created by this very
+        // The database's columns when the table exists, so a table carrying columns the schema does
+        // not declare keeps serving them, and the schema's own when it is being created by this very
         // migration.
         let columns: Vec<String> = match db_table {
             Some(t) => t.columns.iter().map(|c| c.name.clone()).collect(),
@@ -242,13 +240,13 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
         let masked: Vec<&String> = platform_access(model).fields.keys().collect();
         let mut projections: Vec<String> = Vec::new();
         for column in columns {
-            let qualified = format!("{}.{}", quoted(table), quoted(column));
+            let qualified = format!("{}.{}", quote_ident(table), quote_ident(column));
             match read_predicate(ast, model, schema, column) {
                 Some(predicate) => projections.push(format!(
-                    // NULL rather than an error, so `SELECT *` — what PostgREST sends by default —
+                    // NULL rather than an error, so `SELECT *` (what PostgREST sends by default)
                     // keeps working for a caller who may not read one column.
                     "    CASE WHEN {predicate} THEN {qualified} ELSE NULL END AS {}",
-                    quoted(column)
+                    quote_ident(column)
                 )),
                 None => projections.push(format!("    {qualified}")),
             }
@@ -256,24 +254,24 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
 
         // Dropped and recreated, not `CREATE OR REPLACE`: replace refuses anything but appending
         // columns at the end, so a renamed or removed column would break every later push. The `api`
-        // schema is generated in full by Supatype, so there is nothing of the operator's to lose —
+        // schema is generated in full by Supatype, so there is nothing of the operator's to lose,
         // and the trigger, which belongs to the view, is recreated below.
         out.push_str(&format!(
             "DROP VIEW IF EXISTS {}.{};\n\
              CREATE VIEW {}.{} WITH (security_invoker = true) AS\n\
              SELECT\n{}\n  FROM {}.{};\n",
-            quoted(VIEW_SCHEMA),
-            quoted(table),
-            quoted(VIEW_SCHEMA),
-            quoted(table),
+            quote_ident(VIEW_SCHEMA),
+            quote_ident(table),
+            quote_ident(VIEW_SCHEMA),
+            quote_ident(table),
             projections.join(",\n"),
-            quoted(schema),
-            quoted(table),
+            quote_ident(schema),
+            quote_ident(table),
         ));
         out.push_str(&format!(
             "GRANT SELECT, INSERT, UPDATE, DELETE ON {}.{} TO {API_ROLES};\n\n",
-            quoted(VIEW_SCHEMA),
-            quoted(table),
+            quote_ident(VIEW_SCHEMA),
+            quote_ident(table),
         ));
 
         if !masked.is_empty() {
@@ -299,7 +297,7 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
 /// The `INSTEAD OF` triggers that make a masked view writable, and enforce the write rules.
 ///
 /// A view containing a `CASE` expression is not auto-updatable, so without these the API would lose
-/// every write verb on any table that masks a column — a far worse regression than the masking is an
+/// every write verb on any table that masks a column, a far worse regression than the masking is an
 /// improvement.
 fn render_write_trigger(
     names: &crate::managed::ObjectNames,
@@ -319,14 +317,14 @@ fn render_write_trigger(
         if !columns.contains(&column.as_str()) {
             continue;
         }
-        let col = quoted(column);
+        let col = quote_ident(column);
 
-        // A predicate from the rule compiler names columns **unqualified** — `"author_id" = …` —
+        // A predicate from the rule compiler names columns **unqualified** (`"author_id" = …`)
         // because a policy is evaluated with its table already in scope. Inside a trigger nothing is
         // in scope, so each predicate is evaluated against a one-row relation aliased to the table's
         // name, which is the same device `can_*` functions use (`FROM (SELECT ($1).*) AS "t"`).
         // Rewriting the SQL string instead was the first attempt and it silently did nothing.
-        let row = format!("(SELECT stored.*) AS {}", quoted(table));
+        let row = format!("(SELECT stored.*) AS {}", quote_ident(table));
 
         let readable = match read_predicate(ast, model, schema, column) {
             Some(predicate) => format!("(SELECT ({predicate}) FROM {row})"),
@@ -338,10 +336,14 @@ fn render_write_trigger(
             None => "TRUE".into(),
         };
 
+        let label = comment_text(column);
+        let denied = raise_message(&format!(
+            "permission denied for column {column} of relation {table}"
+        ));
         guards.push_str(&format!(
-            "    -- {column}
-                 -- Three cases, in the order tier 1 handles them — measured against the
-                 -- extension, not inferred from its documentation:
+            "    -- {label}
+                 -- Three cases, in the order tier 1 handles them, measured against the
+                 -- extension rather than inferred from its documentation:
                  --
                  -- 1. The caller cannot read the column. Their write is silently discarded rather
                  --    than refused: the extension reports the UPDATE as applied and leaves the
@@ -356,7 +358,7 @@ fn render_write_trigger(
                  ELSIF NEW.{col} IS NOT DISTINCT FROM stored.{col} THEN
                    NEW.{col} := stored.{col};
                  ELSIF {write} IS NOT TRUE THEN
-                   RAISE EXCEPTION 'permission denied for column {column} of relation {table}'
+                   RAISE EXCEPTION {denied}
                      USING ERRCODE = '42501';
                  END IF;
 
@@ -378,17 +380,17 @@ fn render_write_trigger(
         .collect();
     let assignments = columns
         .iter()
-        .map(|c| format!("{} = NEW.{}", quoted(c), quoted(c)))
+        .map(|c| format!("{} = NEW.{}", quote_ident(c), quote_ident(c)))
         .collect::<Vec<_>>()
         .join(",\n           ");
     let insert_cols = columns
         .iter()
-        .map(|c| quoted(c))
+        .map(|c| quote_ident(c))
         .collect::<Vec<_>>()
         .join(", ");
     let insert_vals = columns
         .iter()
-        .map(|c| format!("NEW.{}", quoted(c)))
+        .map(|c| format!("NEW.{}", quote_ident(c)))
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -423,14 +425,14 @@ fn render_write_trigger(
          CREATE TRIGGER {trigger_name}\n\
          \x20 INSTEAD OF INSERT OR UPDATE OR DELETE ON {view_schema}.{table_quoted}\n\
          \x20 FOR EACH ROW EXECUTE FUNCTION {view_schema}.{fn_quoted}();\n\n",
-        view_schema = quoted(VIEW_SCHEMA),
-        fn_quoted = quoted(&fn_name),
-        schema_quoted = quoted(schema),
-        table_quoted = quoted(table),
-        trigger_name = quoted(&names.write_trigger(table)),
+        view_schema = quote_ident(VIEW_SCHEMA),
+        fn_quoted = quote_ident(&fn_name),
+        schema_quoted = quote_ident(schema),
+        table_quoted = quote_ident(table),
+        trigger_name = quote_ident(&names.write_trigger(table)),
         key_match = key
             .iter()
-            .map(|c| format!("{q} = OLD.{q}", q = quoted(c)))
+            .map(|c| format!("{q} = OLD.{q}", q = quote_ident(c)))
             .collect::<Vec<_>>()
             .join(" AND "),
     )
