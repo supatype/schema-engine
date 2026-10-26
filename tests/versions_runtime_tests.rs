@@ -13,25 +13,20 @@
 //!   never published keeps that status for ever, quite correctly, so a second publish found it and
 //!   put stale content live: not a refusal but a silent revert.
 //!
-//! **Everything runs in one transaction.** `request.jwt.claims` is a session setting, and a pool
-//! hands successive queries to different connections, so a caller set on one and read on another is
-//! no caller at all. That cost an hour of a false failure; a transaction is one connection by
-//! construction, and rolling back leaves the database clean for the next test.
+//! **Everything after the push runs on one connection.** `request.jwt.claims` is a session
+//! setting, and a pool hands successive queries to different connections, so a caller set on one
+//! and read on another is no caller at all. That cost an hour of a false failure.
 
 mod common;
 
 use std::future::Future;
 
 use sqlx::{Executor, PgConnection};
-use supatype_engine::{parser, push};
+use supatype_engine::parser::{self, ast::SchemaAst};
 
-/// The migration for the versioned fixture, as a push to an empty database applies it: the
-/// differ's operations and the reconcile's creations, the grants among them.
-fn forward_migration() -> String {
-    let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
-    push::fresh_migration(&ast, "public", false)
-        .unwrap()
-        .up_script()
+/// The versioned fixture every test here pushes.
+fn versioned_ast() -> SchemaAst {
+    parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap()
 }
 
 const EDITOR: &str = "11111111-1111-1111-1111-111111111111";
@@ -40,11 +35,11 @@ const LEDGER: &str = "33333333-3333-3333-3333-333333333333";
 
 /// Impersonate a caller the way PostgREST does, for the rest of the connection's session.
 ///
-/// Session scope, not transaction scope, and that is not a shortcut. The generated migration carries
-/// its own `BEGIN`/`COMMIT`, so applying it inside a transaction ends that transaction: a
-/// transaction-local setting made afterwards is discarded by the very next statement, and every
-/// `created_by` assertion then failed against a NULL that looked like a product bug. One connection
-/// plus a session setting is the shape that actually holds.
+/// Session scope, not transaction scope, and that is not a shortcut. The tests run their statements
+/// on one connection with no transaction around them, so a transaction-local setting is discarded
+/// by the very next statement, and every `created_by` assertion then failed against a NULL that
+/// looked like a product bug. One connection plus a session setting is the shape that actually
+/// holds.
 async fn become_caller(db: &mut PgConnection, subject: Option<&str>) {
     let claims = match subject {
         Some(sub) => {
@@ -59,15 +54,15 @@ async fn become_caller(db: &mut PgConnection, subject: Option<&str>) {
         .expect("set claims");
 }
 
-/// Apply the migration, become an editor, and seed one post.
+/// Push the versioned fixture, then become an editor on `db` and seed one post.
 ///
 /// The fixture rows are cleared first. With `DATABASE_URL` set each test gets its own database, but
 /// under testcontainers they share one, and a seed that assumed an empty table would fail on the
 /// second test for a reason that had nothing to do with the feature.
-async fn apply_and_seed(db: &mut PgConnection) {
-    db.execute(sqlx::raw_sql(&forward_migration()))
+async fn apply_and_seed(pool: &sqlx::PgPool, db: &mut PgConnection) {
+    common::push(pool, &versioned_ast())
         .await
-        .expect("the whole forward migration must apply to a real database");
+        .expect("the versioned fixture must push to a real database");
     become_caller(db, Some(EDITOR)).await;
     for (table, id) in [("posts", POST), ("ledger", LEDGER)] {
         sqlx::query(&format!("DELETE FROM public.{table} WHERE id = $1::uuid"))
@@ -137,7 +132,7 @@ where
         // hands successive queries to different connections, so a caller set on one and read on
         // another is no caller at all.
         let mut conn = pool.acquire().await.expect("acquire one connection");
-        apply_and_seed(&mut conn).await;
+        apply_and_seed(&pool, &mut conn).await;
         f(&mut conn).await;
     })
     .await;
@@ -917,7 +912,7 @@ async fn the_scheduler_is_wired_up_when_the_database_has_one() {
         }
 
         let _guard = FIXTURE_LOCK.lock().await;
-        apply_and_seed(&mut conn).await;
+        apply_and_seed(&pool, &mut conn).await;
 
         let jobs: Vec<String> = sqlx::query_scalar(
             "SELECT jobname FROM cron.job WHERE jobname LIKE 'supatype-%' ORDER BY jobname",
@@ -933,7 +928,7 @@ async fn the_scheduler_is_wired_up_when_the_database_has_one() {
 
         // Re-emitted on every push by the versions layer, and it has to converge rather than stack
         // a second copy.
-        let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
+        let ast = versioned_ast();
         let layer =
             supatype_engine::generator::sql::versions::render_versions_layer(&ast, "public")
                 .expect("the layer renders");
@@ -1469,7 +1464,7 @@ async fn a_blanket_grant_does_not_survive_the_next_push() {
 
             // Pushing again takes it back, so the exposure lasts until the next deploy rather than
             // for ever: the versions layer, which every push re-asserts, revokes it.
-            let ast = parser::parse(include_str!("fixtures/versioned_blog.json")).unwrap();
+            let ast = versioned_ast();
             let layer =
                 supatype_engine::generator::sql::versions::render_versions_layer(&ast, "public")
                     .expect("the layer renders");
@@ -1500,7 +1495,7 @@ async fn a_blanket_grant_does_not_survive_the_next_push() {
 /// The versioned fixture with three columns on `posts` that the database fills: `number`, a
 /// `GENERATED ALWAYS` identity column that is not the key, `ticket`, a `BY DEFAULT` one, and
 /// `title_lower`, a stored generated column.
-fn numbered_forward_migration() -> String {
+fn numbered_ast() -> SchemaAst {
     let mut doc: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/versioned_blog.json")).unwrap();
     let fields = &mut doc["models"][0]["fields"];
@@ -1514,10 +1509,7 @@ fn numbered_forward_migration() -> String {
         "kind": "text", "required": false,
         "generated": { "expression": "lower(title)", "stored": true },
         "annotations": { "db": { "pgType": "TEXT", "serverGenerated": true } } });
-    let ast = parser::parse(&doc.to_string()).unwrap();
-    push::fresh_migration(&ast, "public", false)
-        .unwrap()
-        .up_script()
+    parser::parse(&doc.to_string()).unwrap()
 }
 
 /// `posts`'s `(number, ticket, title_lower)`, the columns the database fills.
@@ -1536,11 +1528,11 @@ async fn filled_in(db: &mut PgConnection) -> (i32, i64, Option<String>) {
 async fn publishing_leaves_the_columns_the_database_fills_alone() {
     common::with_integration_pool(|pool| async move {
         let _guard = FIXTURE_LOCK.lock().await;
+        common::push(&pool, &numbered_ast())
+            .await
+            .expect("the numbered fixture pushes");
         let mut conn = pool.acquire().await.expect("acquire one connection");
         let db = &mut *conn;
-        db.execute(sqlx::raw_sql(&numbered_forward_migration()))
-            .await
-            .expect("the forward migration applies");
         become_caller(db, Some(EDITOR)).await;
         sqlx::query("INSERT INTO public.posts (id, title) VALUES ($1::uuid, 'First cut')")
             .bind(POST)

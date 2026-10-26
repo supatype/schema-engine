@@ -5911,109 +5911,127 @@
         "schema": "_supatype",
         "table": "preview_links",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "_supatype",
         "table": "publishing_settings",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "_supatype",
         "table": "versioned_models",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "auth",
         "table": "users",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "_global_site_settings",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "attendee",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "chat_message",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "page",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "page_versions",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "room",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "speaker",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "speaker_versions",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "sponsor",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "talk",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "talk_versions",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "ticket",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "storage",
         "table": "buckets",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "storage",
         "table": "objects",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       }
     ],
     "policies": [

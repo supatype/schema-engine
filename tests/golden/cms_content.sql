@@ -542,5 +542,9 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."article_tags" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."articles" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."authors" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."tags" REPLICA IDENTITY FULL;
 
 COMMIT;

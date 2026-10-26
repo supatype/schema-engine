@@ -981,5 +981,13 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."composites" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."every" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."every_defaulted" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."every_localised" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."every_read_only" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."every_required" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."relations" REPLICA IDENTITY FULL;
+ALTER TABLE "public"."relations_every" REPLICA IDENTITY FULL;
 
 COMMIT;

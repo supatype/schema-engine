@@ -13,7 +13,7 @@
 use anyhow::{Context, Result};
 use sqlx::PgConnection;
 
-use super::{key_columns, ObjectKey, SCHEMA};
+use super::{key_columns, table_of, ObjectKey, SCHEMA};
 use crate::desired::statements;
 use crate::introspector::fingerprint::ObjectKind;
 
@@ -126,14 +126,22 @@ pub async fn restore(conn: &mut PgConnection, migration_id: i32) -> Result<()> {
     Ok(())
 }
 
+/// An object a rollback must leave as it is, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftAlone {
+    pub key: ObjectKey,
+    /// Taken back by `adopt --release`; otherwise its row was recorded again since the push.
+    pub released: bool,
+}
+
 /// The objects a rollback of `migration_id` must leave as they are: every released object, which a
 /// push never touches, and every object the push wrote whose row has been written again since
 /// (`adopt --release`, `doctor --rebaseline`). [`restore`] already leaves those rows; their objects
 /// stay with them, or a rollback would drop a column the user took back after the push, with its
 /// data, and leave a row for a column that is gone.
-pub async fn rewritten_since(conn: &mut PgConnection, migration_id: i32) -> Result<Vec<ObjectKey>> {
-    let rows: Vec<(String, String, String, String)> = sqlx::query_as(&format!(
-        "SELECT m.kind, m.schema_name, m.parent, m.name
+pub async fn rewritten_since(conn: &mut PgConnection, migration_id: i32) -> Result<Vec<LeftAlone>> {
+    let rows: Vec<(String, String, String, String, bool)> = sqlx::query_as(&format!(
+        "SELECT m.kind, m.schema_name, m.parent, m.name, m.status = 'released'
            FROM {SCHEMA}.managed_objects m
           WHERE m.status = 'released'
              OR (m.updated_at > (SELECT applied_at FROM {SCHEMA}.migrations WHERE id = $1)
@@ -149,15 +157,104 @@ pub async fn rewritten_since(conn: &mut PgConnection, migration_id: i32) -> Resu
     .context("read the objects released or recorded again since the push")?;
     Ok(rows
         .into_iter()
-        .filter_map(|(kind, schema, parent, name)| {
-            Some(ObjectKey {
-                kind: ObjectKind::parse(&kind)?,
-                schema,
-                parent,
-                name,
+        .filter_map(|(kind, schema, parent, name, released)| {
+            Some(LeftAlone {
+                key: ObjectKey {
+                    kind: ObjectKind::parse(&kind)?,
+                    schema,
+                    parent,
+                    name,
+                },
+                released,
             })
         })
         .collect())
+}
+
+/// The objects of `leave` that `sql_down` would drop with their table: one on a table the script
+/// drops, when the table itself is not left alone. Leaving out the object's own statement does
+/// not spare it, since the table takes it along, with a column's data.
+pub fn dropped_with_their_table<'a>(
+    sql_down: &str,
+    schema: &str,
+    leave: &'a [LeftAlone],
+) -> Vec<&'a LeftAlone> {
+    let dropped: Vec<statements::TableTarget> = statements::split_statements(sql_down)
+        .iter()
+        .filter(|sql| statements::head(sql).starts_with("DROP TABLE "))
+        .filter_map(|sql| statements::table_target(schema, sql))
+        .collect();
+    let table_left = |s: &str, t: &str| {
+        leave
+            .iter()
+            .any(|l| l.key.kind == ObjectKind::Table && l.key.schema == s && l.key.name == t)
+    };
+    leave
+        .iter()
+        .filter(|l| {
+            table_of(&l.key).is_some_and(|table| {
+                !table_left(&l.key.schema, table)
+                    && dropped
+                        .iter()
+                        .any(|d| d.schema == l.key.schema && d.table == table)
+            })
+        })
+        .collect()
+}
+
+/// What a rollback does about the objects released or recorded again since its push.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Sparing {
+    /// Left as they are: their statements are left out of `sql_down` ([`leaving_alone`]).
+    pub leave: Vec<ObjectKey>,
+    /// Recorded again since the push but still Supatype's, on a table the rollback drops: they go
+    /// with the table, and their rows with them.
+    pub with_their_table: Vec<ObjectKey>,
+}
+
+/// Decides [`Sparing`] for rolling back `migration`, or refuses: a released object is the user's,
+/// and one on a table the rollback drops would go with the table, with its data. The refusal
+/// names each, with the `adopt --reclaim` that hands it back.
+pub fn sparing(
+    migration: &str,
+    sql_down: &str,
+    schema: &str,
+    leave: &[LeftAlone],
+) -> Result<Sparing> {
+    let on_dropped = dropped_with_their_table(sql_down, schema, leave);
+    let released: Vec<&ObjectKey> = on_dropped
+        .iter()
+        .filter(|l| l.released)
+        .map(|l| &l.key)
+        .collect();
+    if !released.is_empty() {
+        anyhow::bail!(refusal(migration, &released));
+    }
+    let with_their_table: Vec<ObjectKey> = on_dropped.iter().map(|l| l.key.clone()).collect();
+    Ok(Sparing {
+        leave: leave
+            .iter()
+            .map(|l| l.key.clone())
+            .filter(|k| !with_their_table.contains(k))
+            .collect(),
+        with_their_table,
+    })
+}
+
+fn refusal(migration: &str, released: &[&ObjectKey]) -> String {
+    let named: Vec<String> = released.iter().map(ToString::to_string).collect();
+    let reclaim: Vec<String> = released
+        .iter()
+        .map(|k| format!("--reclaim {}:{}.{}", k.kind.as_str(), k.parent, k.name))
+        .collect();
+    format!(
+        "rollback_refused: Rolling back migration {migration} would drop the table that holds {}, \
+         released since the push, and its data with it. Nothing was rolled back. To roll back \
+         anyway, hand it back first with `supatype adopt {}`, or move what you need out of the \
+         table.",
+        named.join(", "),
+        reclaim.join(" ")
+    )
 }
 
 /// `sql_down` without the statements that act on any of `leave`: on the object itself, on a column
@@ -282,6 +379,61 @@ mod tests {
         assert!(!sql.contains("DROP TABLE"), "{sql}");
         assert!(!sql.contains("DROP INDEX"), "{sql}");
         assert_eq!(left.len(), 5);
+    }
+
+    fn left(kind: ObjectKind, parent: &str, name: &str, released: bool) -> LeftAlone {
+        LeftAlone {
+            key: key(kind, parent, name),
+            released,
+        }
+    }
+
+    #[test]
+    fn a_released_column_on_a_dropped_table_blocks_the_rollback() {
+        let leave = [
+            left(ObjectKind::Column, "tags", "c", true),
+            left(ObjectKind::SecurityLabel, "tags.a", "supatype", false),
+            left(ObjectKind::Column, "order_item", "note", true),
+        ];
+        let blocked = dropped_with_their_table(DOWN, "public", &leave);
+        assert_eq!(blocked, [&leave[0], &leave[1]]);
+        let message = sparing("create_tags", DOWN, "public", &leave)
+            .expect_err("a released column would go with its table")
+            .to_string();
+        assert!(
+            message.contains("column public.tags.c, released"),
+            "{message}"
+        );
+        assert!(
+            message.contains("adopt --reclaim column:tags.c`"),
+            "{message}"
+        );
+        assert!(!message.contains("security_label"), "{message}");
+    }
+
+    #[test]
+    fn what_was_recorded_again_on_a_dropped_table_goes_with_it() {
+        let leave = [
+            left(ObjectKind::SecurityLabel, "tags.a", "supatype", false),
+            left(ObjectKind::Column, "order_item", "note", true),
+        ];
+        assert_eq!(
+            sparing("create_tags", DOWN, "public", &leave).unwrap(),
+            Sparing {
+                leave: vec![leave[1].key.clone()],
+                with_their_table: vec![leave[0].key.clone()],
+            }
+        );
+    }
+
+    #[test]
+    fn a_dropped_table_that_is_itself_left_alone_blocks_nothing() {
+        let leave = [
+            left(ObjectKind::Table, "", "tags", true),
+            left(ObjectKind::Column, "tags", "c", true),
+            left(ObjectKind::Function, "", "slugify(text)", true),
+        ];
+        assert!(dropped_with_their_table(DOWN, "public", &leave).is_empty());
     }
 
     #[test]

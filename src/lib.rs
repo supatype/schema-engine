@@ -32,6 +32,8 @@ pub mod ledger;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod legacy_names;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod migrate_file;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod push;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod state;

@@ -19,8 +19,8 @@ mod common;
 
 use sqlx::Row;
 use supatype_engine::{
-    generator::sql::{grants, migration, rls, triggers},
-    parser,
+    generator::sql::{grants, rls, triggers},
+    parser, push,
 };
 
 const MANAGED: &str = "app";
@@ -240,15 +240,14 @@ async fn a_push_into_a_non_public_schema_leaves_public_untouched() {
         let grants_before = public_api_grants(&pool).await;
 
         let ast = ast_without_field_rules();
-        // The migration a push applies, triggers included (the reconcile's since Phase 4.2):
-        // triggers are one of the things that used to attach to `public`.
-        let body = supatype_engine::push::fresh_migration(&ast, MANAGED, false)
-            .expect("script renders")
-            .apply_body();
-        sqlx::raw_sql(&migration::batch_sql(&body))
-            .execute(&pool)
+        // A real push into the managed schema, triggers included (the reconcile's since Phase
+        // 4.2): triggers are one of the things that used to attach to `public`.
+        let plan = push::prepare(&pool, &ast, MANAGED)
             .await
-            .expect("migration applies");
+            .expect("the push plans");
+        push::apply(&pool, plan, push::ApplyOptions::default())
+            .await
+            .expect("the push applies");
 
         // Policies on the managed table, none on theirs.
         let managed_policies: i64 = sqlx::query_scalar(

@@ -2422,55 +2422,64 @@
         "schema": "_supatype",
         "table": "preview_links",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "_supatype",
         "table": "publishing_settings",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "_supatype",
         "table": "versioned_models",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "auth",
         "table": "users",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "ledger",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "ledger_versions",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "posts",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "posts_versions",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "tags",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       }
     ],
     "policies": [

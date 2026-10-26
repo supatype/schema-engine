@@ -1066,7 +1066,7 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
             anyhow::anyhow!("no_rollback_sql: Migration has no rollback SQL (metadata-only push?)")
         })?;
     let prior = load_prior_applied_migration(&mut tx, latest.id).await?;
-    let left = undo_migration(&mut tx, latest.id, &sql_down, schema).await?;
+    let left = undo_migration(&mut tx, &latest, &sql_down, schema).await?;
     restore_studio_metadata(&mut tx, prior.as_ref()).await?;
     let new_state = crate::introspector::introspect_connection(&mut tx, schema).await?;
     save_schema_state(&mut *tx, &new_state).await?;
@@ -1074,15 +1074,16 @@ pub async fn apply_rollback(pool: &PgPool, schema: &str) -> Result<RollbackResul
     Ok(rolled_back(&latest.name, prior, &left))
 }
 
-/// Run `sql_down` for migration `id`, put the ledger back as it was before it and mark it rolled
+/// Run `sql_down` for `migration`, put the ledger back as it was before it and mark it rolled
 /// back. Returns the objects left as they are: released or recorded again since the push, so no
 /// longer the push's to undo.
 async fn undo_migration(
     tx: &mut PgConnection,
-    id: i32,
+    migration: &LatestMigrationRow,
     sql_down: &str,
     schema: &str,
 ) -> Result<Vec<crate::desired::ObjectKey>> {
+    let id = migration.id;
     // Both tables exist on any database a push bootstrapped since; asserted here for one
     // bootstrapped before the undo table was.
     for sql in [
@@ -1091,13 +1092,19 @@ async fn undo_migration(
     ] {
         (&mut *tx).execute(sqlx::raw_sql(&sql)).await?;
     }
+    // What was released or recorded again since the push is no longer the push's to undo: its
+    // statements are left out, as `restore` leaves its row. A released one on a table the rollback
+    // drops would go with the table whatever is left out, so that rollback is refused before
+    // anything runs; one recorded again but still Supatype's goes with its table, row and all.
     let leave = crate::ledger::undo::rewritten_since(tx, id).await?;
-    let (sql_down, left) = crate::ledger::undo::leaving_alone(sql_down, schema, &leave);
+    let sparing = crate::ledger::undo::sparing(&migration.name, sql_down, schema, &leave)?;
+    let (sql_down, left) = crate::ledger::undo::leaving_alone(sql_down, schema, &sparing.leave);
     (&mut *tx)
         .execute(sqlx::raw_sql(&without_transaction_control(&sql_down)))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to apply rollback SQL: {e}"))?;
     crate::ledger::undo::restore(tx, id).await?;
+    crate::ledger::delete(tx, &sparing.with_their_table).await?;
     let mark_sql = format!(
         "UPDATE {SCHEMA}.migrations SET rolled_back = true, rolled_back_at = NOW() WHERE id = $1"
     );
@@ -1192,28 +1199,36 @@ pub async fn load_migration_sources(
 /// when there is no `auth` schema (a plain Postgres target), rather than failing a
 /// push that has nothing to do with auth; the result says whether they were applied.
 pub async fn reapply_auth_helpers(conn: &mut PgConnection, auth_schema: &str) -> Result<bool> {
+    let statements = auth_helper_statements(conn, auth_schema).await?;
+    for sql in &statements {
+        (&mut *conn).execute(sqlx::raw_sql(sql)).await?;
+    }
+    Ok(statements.len() > 1)
+}
+
+/// What [`reapply_auth_helpers`] runs on this database: the claim readers, then the `auth.*`
+/// aliases when it has `auth_schema`. A `migrate` file carries the same statements, so applying it
+/// by hand installs what a push would.
+pub async fn auth_helper_statements(
+    conn: &mut PgConnection,
+    auth_schema: &str,
+) -> Result<Vec<String>> {
     use crate::generator::sql::auth_functions;
 
-    (&mut *conn)
-        .execute(sqlx::raw_sql(&auth_functions::generate_claim_readers()))
-        .await?;
-
+    let mut statements = vec![auth_functions::generate_claim_readers()];
     let exists: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM information_schema.schemata WHERE schema_name = $1")
             .bind(auth_schema)
             .fetch_optional(&mut *conn)
             .await?;
-    if exists.is_none() {
-        return Ok(false);
+    if exists.is_some() {
+        let config = auth_functions::AuthFunctionConfig {
+            project_ref: String::new(),
+            auth_schema: auth_schema.to_string(),
+        };
+        statements.push(auth_functions::generate_auth_aliases(&config));
     }
-
-    let config = auth_functions::AuthFunctionConfig {
-        project_ref: String::new(),
-        auth_schema: auth_schema.to_string(),
-    };
-    let aliases = auth_functions::generate_auth_aliases(&config);
-    (&mut *conn).execute(sqlx::raw_sql(&aliases)).await?;
-    Ok(true)
+    Ok(statements)
 }
 
 /// Which bootstrap a database has had: the [`bootstrap_version`] of the engine that last ran it.
@@ -1332,7 +1347,9 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     Ok(())
 }
 
-async fn run_bootstrap(tx: &mut PgConnection, version: &str) -> Result<()> {
+/// The bootstrap, run in `tx`, recorded as `version`. `migrate_file` runs it too, in the
+/// transaction it rehearses the push in.
+pub(crate) async fn run_bootstrap(tx: &mut PgConnection, version: &str) -> Result<()> {
     for (what, sql) in bootstrap_statements() {
         (&mut *tx)
             .execute(sqlx::raw_sql(&sql))
@@ -1340,17 +1357,37 @@ async fn run_bootstrap(tx: &mut PgConnection, version: &str) -> Result<()> {
             .with_context(|| format!("Failed to bootstrap the {what}"))?;
     }
     seed_studio_members(tx).await?;
-    sqlx::query(&format!(
-        "INSERT INTO {SCHEMA}.engine_bootstrap (id, version, engine_version) VALUES (1, $1, $2)
-         ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version,
-             engine_version = EXCLUDED.engine_version, applied_at = NOW()"
-    ))
-    .bind(version)
-    .bind(env!("ENGINE_VERSION"))
-    .execute(&mut *tx)
-    .await
-    .context("record the bootstrap version")?;
+    (&mut *tx)
+        .execute(sqlx::raw_sql(&record_bootstrap_sql(version)))
+        .await
+        .context("record the bootstrap version")?;
     Ok(())
+}
+
+/// Records that this database has had bootstrap `version`, from this engine.
+fn record_bootstrap_sql(version: &str) -> String {
+    use crate::sql_quote::quote_literal;
+    format!(
+        "INSERT INTO {SCHEMA}.engine_bootstrap (id, version, engine_version) VALUES (1, {}, {})
+         ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version,
+             engine_version = EXCLUDED.engine_version, applied_at = NOW()",
+        quote_literal(version),
+        quote_literal(env!("ENGINE_VERSION"))
+    )
+}
+
+/// The bootstrap as a `migrate` file carries it: what [`bootstrap_internal_state`] runs on a
+/// database with no bootstrap version, the version row included, so a file applied by hand leaves
+/// the next push nothing to bootstrap. The Studio seed is one statement here, where a push runs it
+/// best effort in a savepoint: it does nothing unless `auth.users` exists and no member does.
+pub fn bootstrap_file_statements() -> Vec<String> {
+    let mut statements: Vec<String> = bootstrap_statements()
+        .into_iter()
+        .map(|(_, sql)| sql)
+        .collect();
+    statements.push(seed_studio_members_from_claims_sql());
+    statements.push(record_bootstrap_sql(&bootstrap_version()));
+    statements
 }
 
 /// Migrating an existing project: carry forward the admins who only have the old

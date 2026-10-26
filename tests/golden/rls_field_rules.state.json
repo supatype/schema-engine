@@ -2772,37 +2772,43 @@
         "schema": "auth",
         "table": "users",
         "enabled": false,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "d"
       },
       {
         "schema": "public",
         "table": "categories",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "comments",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "posts",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "tags",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       },
       {
         "schema": "public",
         "table": "users",
         "enabled": true,
-        "forced": false
+        "forced": false,
+        "replicaIdentity": "f"
       }
     ],
     "policies": [

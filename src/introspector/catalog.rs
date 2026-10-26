@@ -271,6 +271,8 @@ pub struct DbCronJob {
     pub active: bool,
 }
 
+/// A table's row-level security attributes, and its replica identity, read in the same pass over
+/// `pg_class`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DbRlsAttributes {
@@ -278,6 +280,9 @@ pub struct DbRlsAttributes {
     pub table: String,
     pub enabled: bool,
     pub forced: bool,
+    /// `pg_class.relreplident`: `d`efault, `f`ull, `n`othing or `i`ndex.
+    #[serde(default)]
+    pub replica_identity: String,
 }
 
 fn swept_schemas(schema: &str) -> Vec<String> {
@@ -818,8 +823,9 @@ async fn read_rls_attributes(
     conn: &mut PgConnection,
     schemas: &[String],
 ) -> Result<Vec<DbRlsAttributes>> {
-    let rows: Vec<(String, String, bool, bool)> = sqlx::query_as(
-        "SELECT n.nspname::text, c.relname::text, c.relrowsecurity, c.relforcerowsecurity
+    let rows: Vec<(String, String, bool, bool, String)> = sqlx::query_as(
+        "SELECT n.nspname::text, c.relname::text, c.relrowsecurity, c.relforcerowsecurity,
+                c.relreplident::text
          FROM pg_class c
          JOIN pg_namespace n ON n.oid = c.relnamespace
          LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e'
@@ -831,12 +837,15 @@ async fn read_rls_attributes(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(schema, table, enabled, forced)| DbRlsAttributes {
-            schema,
-            table,
-            enabled,
-            forced,
-        })
+        .map(
+            |(schema, table, enabled, forced, replica_identity)| DbRlsAttributes {
+                schema,
+                table,
+                enabled,
+                forced,
+                replica_identity,
+            },
+        )
         .collect())
 }
 

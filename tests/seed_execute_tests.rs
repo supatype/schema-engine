@@ -69,20 +69,16 @@ fn ir(operations: &str) -> SeedIr {
     serde_json::from_str(&document).expect("the IR fixture parses")
 }
 
-/// Apply the schema, then run a seed against it.
+/// Push the schema, then run the body (which seeds) against it.
 macro_rules! with_seeded_schema {
     (|$pool:ident, $ast:ident| $body:block) => {
         common::with_integration_pool(|$pool| async move {
             let $ast = parser::parse(SCHEMA).expect("the schema fixture parses");
-            // The migration a push applies, foreign keys included: a seed that breaks one has
-            // to have one to break.
-            let sql = supatype_engine::push::fresh_migration(&$ast, "public", false)
-                .expect("renders")
-                .up_script();
-            sqlx::raw_sql(&sql)
-                .execute(&$pool)
+            // A real push, foreign keys included: a seed that breaks one has to have one to
+            // break.
+            common::push(&$pool, &$ast)
                 .await
-                .expect("the schema applies");
+                .expect("the schema pushes");
             $body
         })
         .await;

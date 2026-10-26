@@ -27,8 +27,9 @@ pub(super) struct Moved {
     pub(super) to: BTreeSet<ObjectKey>,
 }
 
-/// The kinds named after their table that a table rename carries along: the keys, checks, indexes
-/// and triggers on it.
+/// The kinds keyed by their table that a table rename carries along: the keys, checks, indexes and
+/// triggers on it, renamed to the new table's names, and its replica identity, which keeps its
+/// name and needs no statement: Postgres keeps it on the renamed table, and only its row moves.
 fn moves_with_its_table(kind: ObjectKind) -> bool {
     matches!(
         kind,
@@ -38,6 +39,7 @@ fn moves_with_its_table(kind: ObjectKind) -> bool {
             | ObjectKind::Check
             | ObjectKind::Index
             | ObjectKind::Trigger
+            | ObjectKind::ReplicaIdentity
     )
 }
 
