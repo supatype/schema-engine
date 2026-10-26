@@ -68,7 +68,12 @@ fn expected(ast: &SchemaAst, schema: &str) -> Result<Expected> {
         uniques: Vec::new(),
         indexes: Vec::new(),
     };
-    for object in desired_objects(ast, schema)? {
+    // The project schema only: doctor reads `DatabaseState`, which stops there, and the engine's
+    // own tables and indexes are the ledger's to account for.
+    for object in desired_objects(ast, schema)?
+        .into_iter()
+        .filter(|o| o.key.schema == schema)
+    {
         let ObjectKey {
             kind, parent, name, ..
         } = object.key;

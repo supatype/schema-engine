@@ -154,7 +154,13 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'draft') THEN
     EXECUTE 'DROP VIEW IF EXISTS "draft"."page"';
     EXECUTE 'DROP VIEW IF EXISTS "draft"."speaker"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."room"';
     EXECUTE 'DROP VIEW IF EXISTS "draft"."talk"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."sponsor"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."attendee"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."ticket"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."chat_message"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."_global_site_settings"';
   END IF;
 END $$;
 

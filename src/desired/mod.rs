@@ -15,6 +15,7 @@
 //! (defaults, check expressions, policy quals) are not in `structure`: Postgres rewrites them on
 //! the way in, so the ledger compares them live against recorded-live, never against our text.
 
+pub mod attributed;
 pub mod identity;
 pub mod statements;
 
@@ -133,14 +134,17 @@ impl ObjectKey {
                 let (ident, args) = name.split_once('(').unwrap_or((name, ")"));
                 format!("DROP FUNCTION IF EXISTS \"{schema}\".\"{ident}\"({args};")
             }
+            // Guarded as the schedule is: a database without `pg_cron` has no job to unschedule.
+            ObjectKind::CronJob => format!(
+                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}';\n  END IF;\nEND;\n$cron$;"
+            ),
             ObjectKind::Schema
             | ObjectKind::RlsAttributes
             | ObjectKind::EnumType
             | ObjectKind::Sequence
             | ObjectKind::TableGrant
             | ObjectKind::ColumnGrant
-            | ObjectKind::SecurityLabel
-            | ObjectKind::CronJob => return None,
+            | ObjectKind::SecurityLabel => return None,
         })
     }
 
@@ -222,6 +226,8 @@ pub fn desired_objects(ast: &SchemaAst, schema: &str) -> Result<Vec<DesiredObjec
             b.versions_table(model)?;
         }
     }
+    b.versions_layer()?;
+    b.affordance_functions();
     for junction in &ast.junction_tables {
         b.junction(junction)?;
     }
@@ -654,6 +660,31 @@ impl<'a> Builder<'a> {
             );
         }
         Ok(())
+    }
+
+    /// The drafts, history and publishing layer (Phase 4.4): its functions, triggers, policies,
+    /// views, tables and cron jobs, read off the rendered layer statement by statement
+    /// (`attributed`), since the layer is one script and every object in it is the engine's.
+    fn versions_layer(&mut self) -> Result<()> {
+        let sql = crate::generator::sql::versions::render_versions_layer(self.ast, self.schema)?;
+        for object in attributed::objects(&sql, self.schema) {
+            if !self.out.iter().any(|o| o.key == object.key) {
+                self.out.push(object);
+            }
+        }
+        Ok(())
+    }
+
+    /// The `can_*` affordance functions (Phase 4.4), one per model and verb, each taking its
+    /// table's row type: read off the rendered script like the versions layer. Owned so a model's
+    /// removal drops them before its table, which they depend on.
+    fn affordance_functions(&mut self) {
+        let sql = crate::generator::sql::rls::generate_can_functions(self.ast, self.schema);
+        for object in attributed::objects(&sql, self.schema) {
+            if !self.out.iter().any(|o| o.key == object.key) {
+                self.out.push(object);
+            }
+        }
     }
 
     /// The `_platform` functions every push has (Phase 4.2).

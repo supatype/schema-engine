@@ -89,7 +89,12 @@ async fn rows_of(pool: &PgPool, kind: ObjectKind) -> Vec<LedgerRow> {
         .await
         .unwrap()
         .into_iter()
-        .filter(|r| r.key.kind == kind)
+        // This suite is about the trigger layer: the `_platform` functions and the triggers on
+        // model tables. The affordance functions (`can_*`, Phase 4.4) are recorded beside them
+        // and are another suite's.
+        .filter(|r| {
+            r.key.kind == kind && (kind != ObjectKind::Function || r.key.schema == "_platform")
+        })
         .collect()
 }
 

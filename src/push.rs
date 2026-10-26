@@ -25,7 +25,7 @@ use crate::desired::{desired_objects, statements, ObjectKey};
 use crate::differ::{self, DiffOutput, Operation};
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
-use crate::generator::sql::{storage, versions};
+use crate::generator::sql::{rls, storage, versions};
 use crate::generator::typescript::admin;
 use crate::introspector::fingerprint::{fingerprints, ObjectFingerprint, ObjectKind};
 use crate::introspector::{self, catalog, catalog::CatalogState};
@@ -36,13 +36,14 @@ use crate::state::{migration_history, studio_state};
 
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
-/// triggers and their `_platform` functions since 4.2, indexes since 4.3.
+/// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
     ObjectKind::Function,
     ObjectKind::Trigger,
     ObjectKind::Index,
+    ObjectKind::CronJob,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,
@@ -182,7 +183,14 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     migration::assert_no_unmanaged_model_tables(&diff)?;
 
     let ledger = ledger::load_if_present(&mut conn).await?;
-    let mut reconcile = reconcile_with(&diff, &ledger, &live.fingerprints, schema, ast)?;
+    let mut reconcile = reconcile_with(
+        &diff,
+        &ledger,
+        &live.fingerprints,
+        live.catalog.cron_available,
+        schema,
+        ast,
+    )?;
     let proven = probe::equivalent(&mut conn, &reconcile).await?;
     reconcile.adopt_equivalent(&proven);
 
@@ -195,15 +203,20 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
 }
 
 /// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
-/// objects the migration's own statements create and which tables it drops.
+/// objects the migration's own statements create and which tables it drops. Without `pg_cron`
+/// the cron jobs are not desired: the layer says so at apply time and there is nothing to record.
 fn reconcile_with(
     diff: &DiffOutput,
     ledger: &[LedgerRow],
     live: &[ObjectFingerprint],
+    cron_available: bool,
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<reconcile::Plan> {
-    let desired = desired_objects(ast, schema)?;
+    let mut desired = desired_objects(ast, schema)?;
+    if !cron_available {
+        desired.retain(|d| d.key.kind != ObjectKind::CronJob);
+    }
     let created_by_parent = created_by_parent(diff, schema, ast)?;
     let dropped_tables = dropped_tables(diff, schema);
     Ok(reconcile::reconcile(reconcile::Inputs {
@@ -222,24 +235,32 @@ fn reconcile_with(
 /// database refuses; everything else goes through [`plan`].
 pub fn fresh_migration(ast: &SchemaAst, schema: &str, force: bool) -> Result<Migration> {
     let diff = differ::diff(ast, &DatabaseState::default())?;
-    let reconcile = reconcile_with(&diff, &[], &[], schema, ast)?;
+    let reconcile = reconcile_with(&diff, &[], &[], true, schema, ast)?;
     Migration::render(&diff, &reconcile.actions, force, schema, ast)
 }
 
 /// The objects of a moved kind that the migration's own statements create: a check declared
-/// inline in a `CREATE TABLE` or an `ADD COLUMN`. Read off the rendered statements by the same
-/// attribution Phase 2c proved against every fixture, so the reconcile asks nothing of the AST and
-/// is right about whatever the renderer actually writes inline.
+/// inline in a `CREATE TABLE` or an `ADD COLUMN`, and everything the versions layer writes, which
+/// the migration re-asserts as one script because its policies name the functions it defines a
+/// line earlier and both need the tables the operations make. Read off the rendered statements by
+/// the same attribution Phase 2c proved against every fixture, so the reconcile asks nothing of
+/// the AST and is right about whatever the renderer actually writes inline.
 fn created_by_parent(
     diff: &DiffOutput,
     schema: &str,
     ast: &SchemaAst,
 ) -> Result<BTreeSet<ObjectKey>> {
-    let mut keys = BTreeSet::new();
+    let mut rendered = Vec::new();
     for op in &diff.operations {
         // Every operation, not only the obvious parents: a versions table is created by its own
         // operation with its status check inline, and the attribution is what knows that.
-        let sql = migration::render_operation(op, schema, ast)?;
+        rendered.push(migration::render_operation(op, schema, ast)?);
+    }
+    rendered.push(versions::render_versions_layer(ast, schema)?);
+    rendered.push(rls::generate_can_functions(ast, schema));
+
+    let mut keys = BTreeSet::new();
+    for sql in rendered {
         for statement in statements::attribute_all(schema, statements::split_statements(&sql)) {
             keys.extend(
                 statement

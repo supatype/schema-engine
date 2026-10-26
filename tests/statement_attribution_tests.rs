@@ -25,7 +25,6 @@ use supatype_engine::{
         fingerprint::{fingerprints, ObjectKind},
     },
     parser,
-    parser::accessors::versions_table_name,
     parser::ast::SchemaAst,
     push,
 };
@@ -152,17 +151,8 @@ fn kinds_in_set() -> &'static [ObjectKind] {
     ]
 }
 
-/// The versions layer's policies are not in the desired set yet (its tables' keys and indexes
-/// are), so they are the one thing the statements name that the set does not.
-fn versions_layer_policy(ast: &SchemaAst, key: &ObjectKey) -> bool {
-    key.kind == ObjectKind::Policy
-        && (key.name.ends_with("_draft_select")
-            || ast
-                .models
-                .iter()
-                .any(|m| versions_table_name(m.table_name()) == key.parent))
-}
-
+/// Both sides read in the project schema: the engine's own schemas hold objects the set lists
+/// (the layer's tables, their indexes and policies) that the scan does not look for.
 #[test]
 fn the_desired_set_and_the_statements_name_the_same_objects() {
     for name in RENDERABLE {
@@ -171,16 +161,12 @@ fn the_desired_set_and_the_statements_name_the_same_objects() {
             .unwrap()
             .into_iter()
             .map(|o| o.key)
-            .filter(|k| kinds_in_set().contains(&k.kind))
+            .filter(|k| kinds_in_set().contains(&k.kind) && k.schema == "public")
             .collect();
         let in_statements: BTreeSet<ObjectKey> = attributed(&ast)
             .iter()
             .flat_map(keys_of)
-            .filter(|k| {
-                kinds_in_set().contains(&k.kind)
-                    && k.schema == "public"
-                    && !versions_layer_policy(&ast, k)
-            })
+            .filter(|k| kinds_in_set().contains(&k.kind) && k.schema == "public")
             .cloned()
             .collect();
         let only_set: Vec<_> = in_set.difference(&in_statements).collect();
