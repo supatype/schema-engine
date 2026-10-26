@@ -4,7 +4,6 @@ pub mod doctor;
 pub mod field_access_diff;
 pub mod integrity;
 pub mod ordering;
-pub mod risk_analyser;
 pub mod rls_diff;
 pub mod table_diff;
 
