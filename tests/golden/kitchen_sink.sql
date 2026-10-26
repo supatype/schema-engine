@@ -220,6 +220,8 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_kitchen_sink"("kitchen_sink" "pu
   $can$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
+CREATE SCHEMA IF NOT EXISTS "supatype";
 CREATE OR REPLACE FUNCTION _platform.normalise_kitchen_sink_rich_text()
 RETURNS TRIGGER AS $$
 BEGIN

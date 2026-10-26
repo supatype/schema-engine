@@ -1171,6 +1171,7 @@ END;
 $cron$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
 CREATE OR REPLACE FUNCTION _platform.normalise_posts_rich_text()
 RETURNS TRIGGER AS $$
 BEGIN

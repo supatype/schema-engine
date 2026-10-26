@@ -197,6 +197,8 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_documents"("documents" "public".
   $can$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
+CREATE SCHEMA IF NOT EXISTS "supatype";
 CREATE OR REPLACE FUNCTION _platform.set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN

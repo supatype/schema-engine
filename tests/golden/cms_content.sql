@@ -321,6 +321,8 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_articles"("articles" "public"."a
   $can$;
 
 -- reconciled objects
+CREATE SCHEMA IF NOT EXISTS "_platform";
+CREATE SCHEMA IF NOT EXISTS "supatype";
 ALTER TABLE "public"."articles" ADD CONSTRAINT "articles_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."authors" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 CREATE OR REPLACE FUNCTION _platform.normalise_articles_rich_text()
 RETURNS TRIGGER AS $$
