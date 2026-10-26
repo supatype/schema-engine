@@ -271,4 +271,5 @@ jobs:
             --test graphql_affordance_tests \
             --test api_owner_role_tests \
             --test doctor_notes_tests \
-            --test sequence_grant_tests
+            --test sequence_grant_tests \
+            --test database_owner_tests

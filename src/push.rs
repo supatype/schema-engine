@@ -1429,6 +1429,8 @@ impl crate::online::Attempt for Refresh<'_> {
             plan.inputs.assert_current(&now)?;
             reassert_auth_helpers(tx).await?;
             restate_rows(tx, &plan.reconcile, &now.fingerprints).await?;
+            // A project an older engine pushed is handed to its owner by any push, changes or not.
+            crate::database_owner::hand_to_owner(tx, &plan.schema).await?;
             (&mut *tx)
                 .execute(sqlx::raw_sql(&self.storage_sql))
                 .await
@@ -1786,7 +1788,8 @@ async fn apply_statements(
         }
         return Err(anyhow::anyhow!(msg).context("Failed to apply migration"));
     }
-    Ok(())
+    // Before the push reads back what it made, so the ledger records the owner it will keep.
+    crate::database_owner::hand_to_owner(tx, &plan.schema).await
 }
 
 /// An attempt that gave up waiting for a lock, said as the migration error it was.

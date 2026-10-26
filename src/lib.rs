@@ -17,6 +17,8 @@ pub mod sql_quote;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod adopt;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod database_owner;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod db;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desired;
