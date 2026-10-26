@@ -1,4 +1,4 @@
-use super::doctor::{has_strict_issues, report, DoctorReport};
+use super::doctor::{report, DoctorReport};
 use crate::introspector::catalog::CatalogState;
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
@@ -47,8 +47,11 @@ pub fn post_push_ok(
     let Ok(doctor) = post_push_report(ast, db, catalog) else {
         return false;
     };
+    // Missing and stale only. The report runs with no ledger, before this push records its rows,
+    // so an unstamped check the push just created reads as conflicting and a hand edit cannot have
+    // happened yet: neither means the push failed.
     if strict {
-        !has_strict_issues(&doctor)
+        doctor.missing.is_empty() && doctor.stale_managed.is_empty()
     } else {
         doctor.missing.is_empty()
     }

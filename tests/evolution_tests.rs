@@ -6503,7 +6503,7 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
     let checks: Vec<_> = report
         .unmanaged_drift
         .iter()
-        .filter(|item| item.kind == "check_constraint")
+        .filter(|item| item.kind == "check")
         .collect();
 
     assert_eq!(
@@ -6515,19 +6515,25 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
     let item = checks[0];
     assert_eq!(item.name, "posts_excerpt_len");
     assert!(
-        item.message.contains("will not be adopted"),
-        "the message must say it is not adopted: {}",
+        item.message.contains("leaves it in place"),
+        "the message must say a push does not take it over: {}",
         item.message
     );
     assert!(
-        item.message.contains("adds 1 constraint(s) of its own"),
-        "and that a duplicate is coming, so the operator can decide: {}",
-        item.message
+        item.live
+            .as_deref()
+            .is_some_and(|live| live.contains("length(excerpt) <= 80")),
+        "and show the expression, since the names will not match: {item:?}"
     );
+    // The schema's own bound is reported missing beside it, so the operator sees both rules and
+    // can tell whether they enforce the same thing.
     assert!(
-        item.message.contains("length(excerpt) <= 80"),
-        "and show the expression, since the names will not match: {}",
-        item.message
+        report
+            .missing
+            .iter()
+            .any(|m| m.kind == "check" && m.table == "posts"),
+        "{:?}",
+        report.missing
     );
 }
 
