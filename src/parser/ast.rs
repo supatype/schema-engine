@@ -1041,6 +1041,43 @@ pub struct IndexAst {
     pub fields: Vec<String>,
     pub unique: bool,
     pub using: IndexMethod,
+    /// For an `hnsw` index on a vector: the distance its searches order by. `None` is cosine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance: Option<VectorDistance>,
+}
+
+impl IndexAst {
+    /// The operator class each key is indexed with, when the method needs one named: pgvector has
+    /// no default class for `hnsw`, so its index names the class of the distance it serves.
+    pub fn operator_class(&self) -> Option<&'static str> {
+        match self.using {
+            IndexMethod::Hnsw => Some(self.distance.unwrap_or_default().operator_class()),
+            _ => None,
+        }
+    }
+}
+
+/// How a vector index measures how near two vectors are: pgvector's three operator classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum VectorDistance {
+    /// `<=>`, the usual choice for text embeddings.
+    #[default]
+    Cosine,
+    /// `<->`, Euclidean distance.
+    L2,
+    /// `<#>`, negative inner product, for vectors normalised to length one.
+    InnerProduct,
+}
+
+impl VectorDistance {
+    pub fn operator_class(self) -> &'static str {
+        match self {
+            VectorDistance::Cosine => "vector_cosine_ops",
+            VectorDistance::L2 => "vector_l2_ops",
+            VectorDistance::InnerProduct => "vector_ip_ops",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

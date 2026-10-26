@@ -171,35 +171,40 @@ fn needs_postgis(diff: &DiffOutput) -> bool {
     })
 }
 
-// Optional extensions before inner `BEGIN`: pgcrypto (uuid gen_random_uuid), vector (pgvector),
-// postgis (GEOGRAPHY). `FieldAst::Custom` is not analysed here.
+/// The extensions this diff needs, in the order they are created: pgcrypto (`gen_random_uuid()`
+/// defaults), vector (pgvector) and postgis (`GEOGRAPHY`) when a column asks for one, and always
+/// `unaccent`, which `slugify` reads and the shared functions always include. `FieldAst::Custom` is
+/// not analysed here.
+fn needed_extensions(diff: &DiffOutput) -> Vec<&'static str> {
+    let wanted = [
+        ("pgcrypto", needs_pgcrypto(diff)),
+        ("vector", needs_vector(diff)),
+        ("postgis", needs_postgis(diff)),
+        ("unaccent", true),
+    ];
+    wanted
+        .into_iter()
+        .filter_map(|(name, needed)| needed.then_some(name))
+        .collect()
+}
+
+// Extensions go before the inner `BEGIN`, in their own schema and never in `public`
+// (`super::extensions`), which is created first.
 fn render_forward_preamble(diff: &DiffOutput) -> Vec<String> {
     let mut lines = vec![
         "-- ============================================================".into(),
         "-- FORWARD MIGRATION".into(),
         "-- ============================================================".into(),
         String::new(),
+        super::extensions::schema_sql(),
+        String::new(),
     ];
-
-    if needs_pgcrypto(diff) {
-        lines.push("CREATE EXTENSION IF NOT EXISTS \"pgcrypto\";".into());
+    for name in needed_extensions(diff) {
+        lines.push(super::extensions::create_sql(name));
         lines.push(String::new());
     }
 
-    if needs_vector(diff) {
-        lines.push("CREATE EXTENSION IF NOT EXISTS \"vector\";".into());
-        lines.push(String::new());
-    }
-
-    if needs_postgis(diff) {
-        lines.push("CREATE EXTENSION IF NOT EXISTS \"postgis\";".into());
-        lines.push(String::new());
-    }
-
-    // The trigger functions' schema and the extension `slugify` reads, before the reconcile
-    // creates the functions (Phase 4.2). Unconditional: the shared functions always exist.
-    lines.push("CREATE EXTENSION IF NOT EXISTS \"unaccent\";".into());
-    lines.push(String::new());
+    // The trigger functions' schema, before the reconcile creates the functions (Phase 4.2).
     lines.push(super::triggers::platform_schema_sql().trim_end().into());
     lines.push(String::new());
 
@@ -387,7 +392,8 @@ fn render_forward_operation_lines(f: &Forward<'_>, after: &mut AfterCommit) -> R
             | Operation::CreateRlsPolicy { risk, .. }
             | Operation::CreateJunctionTable { risk, .. }
             | Operation::CreateVersionsTable { risk, .. }
-            | Operation::EnableExtension { risk, .. } => match risk {
+            | Operation::EnableExtension { risk, .. }
+            | Operation::RelocateExtension { risk, .. } => match risk {
                 Risk::Safe => "safe",
                 Risk::Cautious => "cautious",
                 Risk::Destructive => "destructive",
@@ -443,6 +449,13 @@ fn render_forward_core(f: &Forward<'_>, after: &mut AfterCommit) -> Result<Vec<S
     lines.extend(render_versions_lines(ast, schema, settled)?);
     lines.extend(render_owner_reach_lines(diff, schema));
     Ok(lines)
+}
+
+/// The body's first statement: an extension's types resolve wherever it is installed, `extensions`
+/// or, for a PostGIS an older engine left there, `public`. Inside the transaction, so it holds for
+/// the statements a file runs after its `BEGIN` as it does for a push.
+fn search_path_section() -> Vec<String> {
+    vec![super::extensions::search_path_sql(), String::new()]
 }
 
 /// The reconcile's statements under their own heading, or nothing when it has none.
@@ -585,7 +598,8 @@ impl Migration {
         };
         let removals: Vec<String> = early.iter().filter_map(removal).collect();
         let late_removals: Vec<String> = late.iter().filter_map(removal).collect();
-        let mut body = reconciled_section(removals.clone());
+        let mut body = search_path_section();
+        body.extend(reconciled_section(removals.clone()));
         let forward = Forward {
             diff,
             schema,
@@ -846,6 +860,9 @@ fn op_description(op: &Operation) -> String {
             format!("Create versions table: {versions_table}")
         }
         Operation::EnableExtension { name, .. } => format!("Enable extension: {name}"),
+        Operation::RelocateExtension { name, from, to, .. } => {
+            format!("Move extension: {name} from {from} to {to}")
+        }
     }
 }
 
@@ -1105,10 +1122,10 @@ fn render_operation_reconciled(
             record_id_type,
             primary_key,
         )),
-        Operation::EnableExtension { name, .. } => Ok(format!(
-            "CREATE EXTENSION IF NOT EXISTS {};",
-            quote_ident(name)
-        )),
+        Operation::EnableExtension { name, .. } => Ok(super::extensions::create_sql(name)),
+        Operation::RelocateExtension { name, to, .. } => {
+            Ok(super::extensions::relocate_sql(name, to))
+        }
     }
 }
 
@@ -2104,7 +2121,17 @@ fn create_index_sql(
 ) -> Result<String> {
     let unique = if index.unique { "UNIQUE " } else { "" };
     let method = index.using.as_sql();
-    let cols = quote_ident_list(&index.fields);
+    // Each key with its operator class where the method names one; resolved through the push's
+    // search path, so wherever the extension that defines it is installed.
+    let cols = match index.operator_class() {
+        Some(class) => index
+            .fields
+            .iter()
+            .map(|f| format!("{} {class}", quote_ident(f)))
+            .collect::<Vec<_>>()
+            .join(", "),
+        None => quote_ident_list(&index.fields),
+    };
     // The name the desired set records: the one chosen for the whole schema, never the full
     // `{table}_{fields}_idx`, which Postgres would cut to 63 bytes behind our back.
     let idx_name = quote_ident(&names.index(table, index));

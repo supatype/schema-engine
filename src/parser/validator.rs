@@ -33,6 +33,7 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
         }
 
         validate_operands(model)?;
+        validate_vector_indexes(model)?;
     }
 
     // Over the whole schema at once: an `Owner` inside a membership filter is checked against
@@ -40,6 +41,39 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
     super::owner_rules::validate(&mut ast)?;
 
     Ok(ast)
+}
+
+/// A `distance` belongs to an `hnsw` index, and an `hnsw` index to vector fields: pgvector's
+/// operator classes are for its own type, and Postgres would otherwise refuse the index at push
+/// time with a message that names no field.
+fn validate_vector_indexes(model: &super::ast::ModelAst) -> Result<()> {
+    use super::ast::IndexMethod;
+    for index in model.indexes() {
+        let hnsw = matches!(index.using, IndexMethod::Hnsw);
+        if index.distance.is_some() && !hnsw {
+            bail!(
+                "Model '{}': the index on ({}) sets `distance`, which only an `hnsw` index uses.",
+                model.name,
+                index.fields.join(", ")
+            );
+        }
+        // A key that names no field is left to the push, as for every other index: index keys
+        // are not checked against the model anywhere yet (golden_tests.rs, `kitchen_sink`).
+        let not_vector = index.fields.iter().find(|f| {
+            model
+                .fields
+                .get(*f)
+                .is_some_and(|field| !matches!(field, FieldAst::Vector(_)))
+        });
+        if let (true, Some(field)) = (hnsw, not_vector) {
+            bail!(
+                "Model '{}': the `hnsw` index on ({}) includes '{field}', which is not a Vector field.",
+                model.name,
+                index.fields.join(", ")
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Collect relation FK column names for a model (db layer).

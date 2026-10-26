@@ -11,6 +11,8 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
     // Rough priority order without full graph
     let priority = |op: &Operation| match op {
         Operation::EnableExtension { .. } => 0,
+        // First, so every statement after it finds the extension where it now lives.
+        Operation::RelocateExtension { .. } => 0,
         Operation::RenameTable { .. } => 4,
         Operation::CreateTable { .. } => 4,
         Operation::CreateJunctionTable { .. } => 5,

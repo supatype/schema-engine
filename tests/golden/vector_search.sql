@@ -2,11 +2,32 @@
 -- FORWARD MIGRATION
 -- ============================================================
 
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+DO $extensions_schema$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'extensions') THEN
+    CREATE SCHEMA extensions;
+  END IF;
+END
+$extensions_schema$;
+DO $extensions_schema_usage$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA extensions TO anon';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA extensions TO authenticated';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA extensions TO service_role';
+  END IF;
+END
+$extensions_schema_usage$;
 
-CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto" WITH SCHEMA extensions;
 
-CREATE EXTENSION IF NOT EXISTS "unaccent";
+CREATE EXTENSION IF NOT EXISTS "vector" WITH SCHEMA extensions;
+
+CREATE EXTENSION IF NOT EXISTS "unaccent" WITH SCHEMA extensions;
 
 CREATE SCHEMA IF NOT EXISTS _platform;
 GRANT USAGE ON SCHEMA _platform TO PUBLIC;
@@ -137,6 +158,9 @@ CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
 
 BEGIN;
 
+SELECT pg_catalog.set_config('search_path', pg_catalog.current_setting('search_path') || ', extensions, public', true)
+  WHERE NOT ARRAY['extensions', 'public']::name[] <@ pg_catalog.current_schemas(false);
+
 -- Constraint helper functions (idempotent)
 CREATE SCHEMA IF NOT EXISTS _supatype;
 
@@ -218,7 +242,7 @@ CREATE TABLE IF NOT EXISTS "public"."documents" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding");
+CREATE INDEX IF NOT EXISTS "documents_embedding_idx" ON "public"."documents" USING hnsw ("embedding" vector_cosine_ops);
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_documents"("documents" "public"."documents", "not_in_graphql" boolean DEFAULT NULL)
@@ -277,7 +301,7 @@ BEGIN
     )
   );
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+$$ LANGUAGE plpgsql IMMUTABLE SET search_path = pg_catalog, extensions, public;
 
 CREATE OR REPLACE TRIGGER "documents_updated_at_trigger"
 BEFORE UPDATE ON "public"."documents"

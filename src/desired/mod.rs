@@ -59,7 +59,7 @@ use crate::managed::{
 use crate::parser::accessors::{
     column_names_for, db_foreign_key, default_foreign_key_column, versions_of, versions_table_name,
 };
-use crate::parser::ast::{AccessAst, FieldAst, ModelAst, RelationCardinality, SchemaAst};
+use crate::parser::ast::{AccessAst, FieldAst, IndexAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
 use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
 
@@ -780,12 +780,13 @@ impl<'a> Builder<'a> {
                 index: Box::new(index.clone()),
                 risk: Risk::Safe,
             })?;
-            self.index(
+            self.index_with_options(
                 table,
                 &name,
                 &index.fields,
                 index.using.as_sql(),
                 index.unique,
+                &operator_class_options(&index),
                 create,
             );
         }
@@ -1228,6 +1229,21 @@ impl<'a> Builder<'a> {
 /// predicted, the empty ones included: a same-named index with a `WHERE`, an expression, an
 /// `INCLUDE` or a `DESC` the engine never asked for is not the one it would create, and must not
 /// be adopted as it (D2 compares only the labels the desired object has).
+/// The `options` the catalog reports for `index`'s keys (`DbIndex::options`): for each key, the
+/// operator class its method names, schema-qualified as the catalog qualifies a non-default class.
+/// The class is pgvector's, so it is predicted where a push installs pgvector; empty for an index
+/// whose method uses its keys' default classes.
+fn operator_class_options(index: &IndexAst) -> String {
+    let Some(class) = index.operator_class() else {
+        return String::new();
+    };
+    let schema = crate::generator::sql::extensions::EXTENSIONS_SCHEMA;
+    (1..=index.fields.len())
+        .map(|key| format!("{key} {schema}.{class}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn index_structure(
     columns: &[String],
     method: &str,

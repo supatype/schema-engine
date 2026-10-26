@@ -153,6 +153,10 @@ fn rollback_op(
             "Rollback of CREATE EXTENSION {} would DROP it. Remove manually if safe to do so.",
             quote_ident(name)
         )),
+        // RelocateExtension → moved back where it was: no object holding data goes with it.
+        Operation::RelocateExtension { name, from, .. } => {
+            super::extensions::relocate_sql(name, from)
+        }
     };
     Ok(Some(sql))
 }
@@ -372,5 +376,6 @@ fn forward_description(op: &Operation) -> String {
             format!("create versions table {versions_table}")
         }
         Operation::EnableExtension { name, .. } => format!("enable extension {name}"),
+        Operation::RelocateExtension { name, to, .. } => format!("move extension {name} to {to}"),
     }
 }

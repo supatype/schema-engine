@@ -17,6 +17,10 @@ pub struct DatabaseState {
     pub rls_policies: Vec<DbRlsPolicy>,
     pub triggers: Vec<DbTrigger>,
     pub extensions: Vec<String>,
+    /// The same extensions with the schema each is installed in, which decides whether a push
+    /// moves one out of the API's reach. Defaulted for snapshots written before this was recorded.
+    #[serde(default)]
+    pub installed_extensions: Vec<crate::introspector::extensions::InstalledExtension>,
     /// Postgres enum types discovered in this schema.
     #[serde(default)]
     pub enums: Vec<DbEnum>,
