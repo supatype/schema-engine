@@ -18,6 +18,19 @@ use testcontainers::{GenericImage, ImageExt};
 
 pub static EPHEMERAL_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// A database name no other test binary can collide with. The process id alone was not enough:
+/// Windows reuses pids, and a suite that panicked before dropping its database left one behind
+/// under the name the next binary with that pid chose first (`CREATE DATABASE ... already
+/// exists`), so the name also carries the moment it was made.
+pub fn ephemeral_name(prefix: &str) -> String {
+    let n = EPHEMERAL_SEQ.fetch_add(1, Ordering::SeqCst);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{prefix}_{}_{n}_{nanos}", std::process::id())
+}
+
 const PG_USER: &str = "supatype_admin";
 const PG_PASSWORD: &str = "postgres";
 const PG_DB: &str = "postgres";
@@ -180,8 +193,7 @@ where
         let admin = sqlx::PgPool::connect(&admin_url)
             .await
             .expect("DATABASE_URL: connect admin pool");
-        let n = EPHEMERAL_SEQ.fetch_add(1, Ordering::SeqCst);
-        let db_name = format!("st_engine_url_{}_{}", std::process::id(), n);
+        let db_name = ephemeral_name("st_engine_url");
         sqlx::raw_sql(&format!(r#"CREATE DATABASE "{db_name}""#))
             .execute(&admin)
             .await
@@ -215,8 +227,7 @@ where
     let admin = sqlx::PgPool::connect(&admin_url)
         .await
         .expect("DATABASE_URL: connect admin pool");
-    let n = EPHEMERAL_SEQ.fetch_add(1, Ordering::SeqCst);
-    let db_name = format!("st_engine_it_{}_{}", std::process::id(), n);
+    let db_name = ephemeral_name("st_engine_it");
     assert!(
         db_name
             .chars()

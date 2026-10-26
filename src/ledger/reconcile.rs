@@ -162,22 +162,36 @@ impl Action {
         }
     }
 
-    /// The statements this action runs, in order. Empty for the bookkeeping-only actions.
-    pub fn sql(&self) -> Vec<String> {
+    /// The statement that takes the live object out of the way: the drop of an object being
+    /// dropped, replaced, or put back after drift. The migration runs every removal before its
+    /// own operations, so a drop they depend on has happened (plan 3.3: nothing cascades).
+    pub fn removal_sql(&self) -> Option<String> {
+        match self {
+            Action::Replace { key, .. } | Action::Drift { key, .. } | Action::Drop { key, .. } => {
+                Some(drop_for(key))
+            }
+            Action::Create { .. }
+            | Action::Adopt { .. }
+            | Action::Conflict { .. }
+            | Action::Recreate { .. }
+            | Action::Keep { .. }
+            | Action::Forget { .. }
+            | Action::Released { .. } => None,
+        }
+    }
+
+    /// The statements that put the desired object in place. The migration runs every addition
+    /// after its own operations, which may create the table or column the object needs.
+    pub fn addition_sql(&self) -> Vec<String> {
         match self {
             Action::Create {
                 create_sql,
                 inline: false,
                 ..
             }
-            | Action::Recreate { create_sql, .. } => vec![create_sql.clone()],
-            Action::Replace {
-                key, create_sql, ..
-            }
-            | Action::Drift {
-                key, create_sql, ..
-            } => vec![drop_for(key), create_sql.clone()],
-            Action::Drop { key, .. } => vec![drop_for(key)],
+            | Action::Recreate { create_sql, .. }
+            | Action::Replace { create_sql, .. }
+            | Action::Drift { create_sql, .. } => vec![create_sql.clone()],
             Action::Adopt {
                 key,
                 reason: AdoptReason::Stamped,
@@ -190,31 +204,62 @@ impl Action {
             Action::Create { inline: true, .. }
             | Action::Adopt { .. }
             | Action::Conflict { .. }
+            | Action::Drop { .. }
             | Action::Keep { .. }
             | Action::Forget { .. }
             | Action::Released { .. } => Vec::new(),
         }
     }
 
-    /// The statements that undo this action, in order, for the migration's `sql_down`.
-    pub fn rollback_sql(&self) -> Vec<String> {
+    /// Every statement this action runs, removal then addition. Empty for the bookkeeping-only
+    /// actions.
+    pub fn sql(&self) -> Vec<String> {
+        let mut statements: Vec<String> = self.removal_sql().into_iter().collect();
+        statements.extend(self.addition_sql());
+        statements
+    }
+
+    /// Undoes the addition: drops what this action created. An inline `Create` has one too; its
+    /// parent's rollback covers it, and the explicit drop is `IF EXISTS`.
+    pub fn undo_addition(&self) -> Option<String> {
         match self {
-            Action::Create { key, .. } | Action::Recreate { key, .. } => vec![drop_for(key)],
-            Action::Replace {
-                key, previous_sql, ..
-            } => vec![drop_for(key), previous_sql.clone()],
-            // Rolling back a drift replacement restores Supatype's previous definition, which is
-            // this same `CREATE`; the hand edit is not recoverable (plan 3.5).
-            Action::Drift {
-                key, create_sql, ..
-            } => vec![drop_for(key), create_sql.clone()],
-            Action::Drop { recorded_sql, .. } => recorded_sql.iter().cloned().collect(),
+            Action::Create { key, .. }
+            | Action::Recreate { key, .. }
+            | Action::Replace { key, .. }
+            | Action::Drift { key, .. } => Some(drop_for(key)),
             Action::Adopt { .. }
             | Action::Conflict { .. }
             | Action::Keep { .. }
+            | Action::Drop { .. }
             | Action::Forget { .. }
-            | Action::Released { .. } => Vec::new(),
+            | Action::Released { .. } => None,
         }
+    }
+
+    /// Undoes the removal: re-creates what this action dropped. Rolling back a drift replacement
+    /// restores Supatype's previous definition, which is this same `CREATE`; the hand edit is not
+    /// recoverable (plan 3.5). `None` for a stamped drop nothing recorded.
+    pub fn undo_removal(&self) -> Option<String> {
+        match self {
+            Action::Replace { previous_sql, .. } => Some(previous_sql.clone()),
+            Action::Drift { create_sql, .. } => Some(create_sql.clone()),
+            Action::Drop { recorded_sql, .. } => recorded_sql.clone(),
+            Action::Create { .. }
+            | Action::Adopt { .. }
+            | Action::Conflict { .. }
+            | Action::Recreate { .. }
+            | Action::Keep { .. }
+            | Action::Forget { .. }
+            | Action::Released { .. } => None,
+        }
+    }
+
+    /// Every statement that undoes this action, in order, for the migration's `sql_down`.
+    pub fn rollback_sql(&self) -> Vec<String> {
+        self.undo_addition()
+            .into_iter()
+            .chain(self.undo_removal())
+            .collect()
     }
 
     /// Whether the action changes the database or the ledger.

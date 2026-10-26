@@ -1,6 +1,5 @@
 use super::ast::{
-    AccessAst, FieldAst, JunctionTableAst, RelationCardinality, SchemaAst, StorageAccessMode,
-    StorageBucketAst,
+    FieldAst, JunctionTableAst, RelationCardinality, SchemaAst, StorageAccessMode, StorageBucketAst,
 };
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -207,13 +206,17 @@ fn bucket_to_field_access_mode(bucket: &StorageBucketAst) -> StorageAccessMode {
     })
 }
 
-fn bucket_has_explicit_storage_access(access: &AccessAst) -> bool {
+// Used by the storage generator, which the wasm build does not compile.
+#[cfg(not(target_arch = "wasm32"))]
+fn bucket_has_explicit_storage_access(access: &crate::parser::ast::AccessAst) -> bool {
     access.read.is_some()
         || access.create.is_some()
         || access.update.is_some()
         || access.delete.is_some()
 }
 
+// Used by the storage generator, which the wasm build does not compile.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn bucket_uses_declared_storage_rls(bucket: &StorageBucketAst) -> bool {
     bucket
         .access
@@ -221,6 +224,8 @@ pub(crate) fn bucket_uses_declared_storage_rls(bucket: &StorageBucketAst) -> boo
         .is_some_and(bucket_has_explicit_storage_access)
 }
 
+// Used by the storage generator, which the wasm build does not compile.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn storage_policy_label(bucket_id: &str) -> String {
     bucket_id
         .chars()

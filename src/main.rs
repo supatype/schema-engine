@@ -842,9 +842,6 @@ fn destructive_op_summary(op: &supatype_engine::differ::Operation) -> String {
         Operation::DropColumn { table, column, .. } => {
             format!("Drop column '{}.{}'", table, column)
         }
-        Operation::DropForeignKey {
-            table, constraint, ..
-        } => format!("Drop foreign key '{}.{}'", table, constraint),
         Operation::DropEnum { name, .. } => format!("Drop enum type '{}'", name),
         Operation::RemoveEnumValue {
             enum_name, value, ..

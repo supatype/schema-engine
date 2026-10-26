@@ -19,8 +19,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use supatype_engine::{
     desired::{desired_objects, DesiredObject},
-    differ,
-    generator::sql::{migration, triggers},
     introspector::{
         self,
         fingerprint::{fingerprints, ObjectKind},
@@ -28,6 +26,7 @@ use supatype_engine::{
     parser,
     parser::accessors::versions_table_name,
     parser::ast::SchemaAst,
+    push,
 };
 
 /// The fixtures a real database accepts (see `golden_tests.rs` for the ones it does not).
@@ -111,22 +110,31 @@ fn names_in_set(set: &[DesiredObject]) -> BTreeSet<String> {
         .collect()
 }
 
-#[test]
-fn the_set_and_the_migration_name_the_same_objects() {
-    for name in PUSHABLE {
-        let ast = fixture(name);
-        let diff = differ::diff(&ast, &Default::default()).unwrap();
-        let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
-        let set = desired_objects(&ast, "public").unwrap();
+/// The migration a push of `ast` would apply to an empty database: the differ's operations and
+/// the reconcile's creations, as one body.
+async fn first_push_sql(pool: &sqlx::PgPool, ast: &SchemaAst) -> String {
+    let plan = push::prepare(pool, ast, "public").await.unwrap();
+    plan.migration(false).unwrap().up()
+}
 
-        let in_sql = names_in_sql(&sql, &ast);
-        let in_set = names_in_set(&set);
-        let only_sql: Vec<_> = in_sql.difference(&in_set).collect();
-        let only_set: Vec<_> = in_set.difference(&in_sql).collect();
-        assert!(
-            only_sql.is_empty() && only_set.is_empty(),
-            "{name}: the generator and the set disagree.\n  emitted but not desired: {only_sql:?}\n  desired but not emitted: {only_set:?}"
-        );
+#[tokio::test]
+async fn the_set_and_the_migration_name_the_same_objects() {
+    for name in PUSHABLE {
+        common::with_integration_pool(|pool| async move {
+            let ast = fixture(name);
+            let sql = first_push_sql(&pool, &ast).await;
+            let set = desired_objects(&ast, "public").unwrap();
+
+            let in_sql = names_in_sql(&sql, &ast);
+            let in_set = names_in_set(&set);
+            let only_sql: Vec<_> = in_sql.difference(&in_set).collect();
+            let only_set: Vec<_> = in_set.difference(&in_sql).collect();
+            assert!(
+                only_sql.is_empty() && only_set.is_empty(),
+                "{name}: the generator and the set disagree.\n  emitted but not desired: {only_sql:?}\n  desired but not emitted: {only_set:?}"
+            );
+        })
+        .await;
     }
 }
 
@@ -172,16 +180,9 @@ async fn after_a_push_every_desired_object_exists_with_the_structure_it_predicte
             .execute(&pool)
             .await
             .unwrap();
-            let empty = introspector::introspect(&pool, "public").await.unwrap();
-            let diff = differ::diff(&ast, &empty).unwrap();
-            sqlx::raw_sql(&migration::forward_sql(&diff, false, "public", &ast).unwrap())
-                .execute(&pool)
+            common::push(&pool, &ast)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: applies: {e}"));
-            sqlx::raw_sql(&triggers::generate(&ast, "public").unwrap())
-                .execute(&pool)
-                .await
-                .unwrap();
 
             let db = introspector::introspect(&pool, "public").await.unwrap();
             let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();

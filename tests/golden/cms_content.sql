@@ -211,9 +211,6 @@ CREATE TABLE IF NOT EXISTS "public"."article_tags" (
 
 COMMENT ON TABLE "public"."article_tags" IS 'supatype:managed;kind=table;table=article_tags;fields=;v=1';
 
--- [safe] Add FK: articles -> Author
-ALTER TABLE "public"."articles" ADD CONSTRAINT "articles_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."authors" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
 -- [safe] Add index on: articles(search_vector)
 DROP INDEX IF EXISTS "public"."articles_search_vector_idx";
 CREATE INDEX IF NOT EXISTS "articles_search_vector_idx" ON "public"."articles" USING gin ("search_vector");
@@ -491,6 +488,9 @@ BEGIN
   END LOOP;
 END
 $mask_clear$;
+
+-- reconciled objects
+ALTER TABLE "public"."articles" ADD CONSTRAINT "articles_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."authors" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 COMMIT;
 

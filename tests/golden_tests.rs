@@ -18,9 +18,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use supatype_engine::{
-    differ,
-    generator::sql::{migration, triggers},
-    introspector, parser,
+    generator::sql::triggers,
+    introspector, parser, push,
+    state::{migration_history, studio_state},
 };
 
 /// Every fixture that is a schema the current parser accepts. `seed_golden_ir.json` is seed IR,
@@ -155,12 +155,94 @@ async fn create_auth_users(pool: &sqlx::PgPool) {
     .expect("auth.users fixture applies");
 }
 
-async fn state_json(pool: &sqlx::PgPool) -> String {
+/// `DatabaseState` plus `CatalogState` for the project schema, as one document.
+async fn state_value(pool: &sqlx::PgPool) -> serde_json::Value {
     let db = introspector::introspect(pool, "public").await.unwrap();
     let catalog = introspector::introspect_catalog(pool, "public")
         .await
         .unwrap();
-    let value = serde_json::json!({ "database": db, "catalog": catalog });
+    serde_json::json!({ "database": db, "catalog": catalog })
+}
+
+/// The engine's own objects, before any migration: what `push::prepare` bootstraps (`_supatype`,
+/// Studio's tables and stats functions in `supatype`). They exist after any push and are the same
+/// for every fixture: the engine's state, not the schema's, with tests of their own.
+async fn engine_baseline(pool: &sqlx::PgPool) -> serde_json::Value {
+    migration_history::bootstrap_internal_state(pool)
+        .await
+        .unwrap();
+    studio_state::bootstrap(pool).await.unwrap();
+    state_value(pool).await
+}
+
+/// Whether an entry is the engine's own: in one of its schemas, or the schema entry itself.
+fn in_engine_schema(item: &serde_json::Value) -> bool {
+    const ENGINE_SCHEMAS: &[&str] = &["_supatype", "supatype"];
+    let named = |key: &str| {
+        item.get(key)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| ENGINE_SCHEMAS.contains(&s))
+    };
+    // A `schemas` entry has no `schema` of its own, only a name and a comment.
+    named("schema")
+        || (item.get("schema").is_none() && item.get("comment").is_some() && named("name"))
+}
+
+/// What names an entry: the keys that identify it rather than describe it, so an engine table
+/// whose grants a push touched is still the same engine table.
+fn identity(item: &serde_json::Value) -> Vec<(&str, &serde_json::Value)> {
+    const KEYS: &[&str] = &["schema", "table", "name", "role", "grantee", "provider"];
+    KEYS.iter()
+        .filter_map(|k| item.get(*k).map(|v| (*k, v)))
+        .collect()
+}
+
+/// `state` without the engine's own entries that `baseline` already had, array by array: what
+/// the push itself left behind. Only entries in the engine's schemas are subtracted, so the auth
+/// helpers and extensions the migration's preamble asserts stay, as they always have.
+fn without_baseline(state: &mut serde_json::Value, baseline: &serde_json::Value, engine: bool) {
+    match (state, baseline) {
+        (serde_json::Value::Array(items), serde_json::Value::Array(before)) => {
+            items.retain_mut(|item| {
+                // Inside an engine entry everything is the engine's: a column names no schema.
+                if !(engine || in_engine_schema(item)) {
+                    return true;
+                }
+                let Some(b) = before.iter().find(|b| identity(b) == identity(item)) else {
+                    return true;
+                };
+                // The same entry the bootstrap made: subtract within it (the `_supatype` group of
+                // engine tables also holds the versions layer's own tables) and keep whatever of
+                // the fixture's remains.
+                without_baseline(item, b, true);
+                has_entries(item)
+            });
+        }
+        (serde_json::Value::Object(map), serde_json::Value::Object(before)) => {
+            for (key, value) in map.iter_mut() {
+                if let Some(b) = before.get(key) {
+                    without_baseline(value, b, engine);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether any list inside `value` still holds an entry of its own (an object: a table, a column,
+/// a constraint). A list of plain values, such as a grant's privileges, describes its entry and
+/// is not one.
+fn has_entries(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(items) => items.iter().any(serde_json::Value::is_object),
+        serde_json::Value::Object(map) => map.values().any(has_entries),
+        _ => false,
+    }
+}
+
+async fn state_json(pool: &sqlx::PgPool, baseline: &serde_json::Value) -> String {
+    let mut value = state_value(pool).await;
+    without_baseline(&mut value, baseline, false);
     let mut text = serde_json::to_string_pretty(&value).unwrap();
     text.push('\n');
     text
@@ -169,16 +251,22 @@ async fn state_json(pool: &sqlx::PgPool) -> String {
 async fn run_fixture(pool: &sqlx::PgPool, name: &str) {
     let ast = parser::parse(&fixture(name)).unwrap_or_else(|e| panic!("{name} parses: {e}"));
     create_auth_users(pool).await;
+    let baseline = engine_baseline(pool).await;
 
-    let empty = introspector::introspect(pool, "public").await.unwrap();
-    let diff = differ::diff(&ast, &empty).unwrap();
-    let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+    // The plan a push applies against an empty database: the differ's operations and the
+    // reconcile's creations for the kinds on the ledger, rendered as one migration.
+    let plan = push::prepare(pool, &ast, "public")
+        .await
+        .unwrap_or_else(|e| panic!("{name} plans: {e}"));
+    let migration = plan
+        .migration(false)
+        .unwrap_or_else(|e| panic!("{name} renders: {e}"));
     let trigger_sql = triggers::generate(&ast, "public").unwrap();
 
     // A fixture that cannot be applied still asserts what it generates.
     let not_pushable = NOT_PUSHABLE.iter().find(|(n, _)| *n == name);
     if SQL_GOLDEN_FIXTURES.contains(&name) || not_pushable.is_some() {
-        let full = format!("{sql}\n\n-- triggers\n{trigger_sql}");
+        let full = format!("{}\n\n-- triggers\n{trigger_sql}", migration.up_script());
         check_golden(
             &golden_dir().join(format!("{name}.sql")),
             &full,
@@ -191,16 +279,11 @@ async fn run_fixture(pool: &sqlx::PgPool, name: &str) {
         return;
     }
 
-    sqlx::raw_sql(&sql)
-        .execute(pool)
+    push::apply(pool, plan, push::ApplyOptions::default())
         .await
         .unwrap_or_else(|e| panic!("{name}: migration applies: {e}"));
-    sqlx::raw_sql(&trigger_sql)
-        .execute(pool)
-        .await
-        .unwrap_or_else(|e| panic!("{name}: triggers apply: {e}"));
 
-    let state = state_json(pool).await;
+    let state = state_json(pool, &baseline).await;
     check_golden(
         &golden_dir().join(format!("{name}.state.json")),
         &state,
@@ -229,11 +312,12 @@ async fn run_fixture(pool: &sqlx::PgPool, name: &str) {
         "{name}: constraint names Postgres had to disambiguate: {suffixed:?}"
     );
 
-    let second = differ::diff(&ast, &db).unwrap();
+    let second = push::plan(pool, &ast, "public").await.unwrap();
     assert!(
-        second.operations.is_empty(),
-        "{name}: a second push must plan nothing, planned {:?}",
-        second.operations
+        second.diff.operations.is_empty() && !second.reconcile.has_changes(),
+        "{name}: a second push must plan nothing, planned {:?} and {:?}",
+        second.diff.operations,
+        second.reconcile.actions
     );
 }
 

@@ -40,7 +40,6 @@ pub fn topological_sort(ops: Vec<Operation>) -> Result<Vec<Operation>> {
         Operation::CreateRlsPolicy { .. } => 12,
         Operation::CreateTrigger { .. } => 13,
         Operation::DropTrigger { .. } => 14,
-        Operation::DropForeignKey { .. } => 15,
         Operation::DropUniqueConstraint { .. } => 15,
         Operation::DropIndex { .. } => 16,
         Operation::DropColumn { .. } => 17,

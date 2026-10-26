@@ -419,9 +419,6 @@ CREATE TABLE IF NOT EXISTS "public"."relations_every" (
 
 COMMENT ON TABLE "public"."relations_every" IS 'supatype:managed;kind=table;table=relations_every;fields=;v=1';
 
--- [safe] Add FK: relations -> Every
-ALTER TABLE "public"."relations" ADD CONSTRAINT "relations_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "public"."every" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
 -- [safe] Enable RLS: every
 ALTER TABLE "public"."every" ENABLE ROW LEVEL SECURITY;
 
@@ -794,6 +791,9 @@ BEGIN
   END LOOP;
 END
 $mask_clear$;
+
+-- reconciled objects
+ALTER TABLE "public"."relations" ADD CONSTRAINT "relations_owner_id_fkey" FOREIGN KEY ("owner_id") REFERENCES "public"."every" ("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 COMMIT;
 

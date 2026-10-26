@@ -8,13 +8,11 @@
 mod common;
 
 use std::collections::HashMap;
-use supatype_engine::generator::sql::migration;
 use supatype_engine::parser;
 use supatype_engine::seed::errors::{constraint_index_for, SeedFailure};
 use supatype_engine::seed::execute::execute;
 use supatype_engine::seed::plan::plan;
 use supatype_engine::seed::SeedIr;
-use supatype_engine::state::database_state::DatabaseState;
 
 /// Two models with the shapes the failures need: a unique natural key, a required column,
 /// a foreign key, and a check constraint.
@@ -76,9 +74,11 @@ macro_rules! with_seeded_schema {
     (|$pool:ident, $ast:ident| $body:block) => {
         common::with_integration_pool(|$pool| async move {
             let $ast = parser::parse(SCHEMA).expect("the schema fixture parses");
-            let empty = DatabaseState::default();
-            let diff = supatype_engine::differ::diff(&$ast, &empty).expect("diffs");
-            let sql = migration::forward_sql(&diff, false, "public", &$ast).expect("renders");
+            // The migration a push applies, foreign keys included: a seed that breaks one has
+            // to have one to break.
+            let sql = supatype_engine::push::fresh_migration(&$ast, "public", false)
+                .expect("renders")
+                .up_script();
             sqlx::raw_sql(&sql)
                 .execute(&$pool)
                 .await

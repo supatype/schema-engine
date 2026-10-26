@@ -20,8 +20,7 @@ use supatype_engine::{
         statements::{attribute_all, head, split_statements, Attribution, Statement},
         ObjectKey,
     },
-    differ,
-    generator::sql::{migration, triggers},
+    generator::sql::triggers,
     introspector::{
         self,
         fingerprint::{fingerprints, ObjectKind},
@@ -29,6 +28,7 @@ use supatype_engine::{
     parser,
     parser::accessors::versions_table_name,
     parser::ast::SchemaAst,
+    push,
 };
 
 /// Every fixture the parser accepts. The ones a database refuses still render, and the split and
@@ -70,10 +70,12 @@ fn fixture(name: &str) -> SchemaAst {
     parser::parse(&std::fs::read_to_string(&path).unwrap()).unwrap()
 }
 
-/// The whole push against an empty database, assembled as the golden harness assembles it.
+/// The whole push against an empty database, assembled as the golden harness assembles it: the
+/// migration (the differ's operations and the reconcile's creations), then the trigger functions.
 fn push_sql(ast: &SchemaAst) -> String {
-    let diff = differ::diff(ast, &Default::default()).unwrap();
-    let sql = migration::forward_sql(&diff, false, "public", ast).unwrap();
+    let sql = push::fresh_migration(ast, "public", false)
+        .unwrap()
+        .up_script();
     let trigger_sql = triggers::generate(ast, "public").unwrap();
     format!("{sql}\n\n-- triggers\n{trigger_sql}")
 }
@@ -223,15 +225,13 @@ async fn after_a_push_every_created_object_exists_under_its_key() {
             .execute(&pool)
             .await
             .unwrap();
-            let empty = introspector::introspect(&pool, "public").await.unwrap();
-            let diff = differ::diff(&ast, &empty).unwrap();
-            let sql = migration::forward_sql(&diff, false, "public", &ast).unwrap();
+            // The push a user gets, and the statements it ran.
+            let plan = push::prepare(&pool, &ast, "public").await.unwrap();
+            let sql = plan.migration(false).unwrap().up_script();
             let trigger_sql = triggers::generate(&ast, "public").unwrap();
-            sqlx::raw_sql(&sql)
-                .execute(&pool)
+            push::apply(&pool, plan, push::ApplyOptions::default())
                 .await
                 .unwrap_or_else(|e| panic!("{name}: applies: {e}"));
-            sqlx::raw_sql(&trigger_sql).execute(&pool).await.unwrap();
 
             let db = introspector::introspect(&pool, "public").await.unwrap();
             let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
