@@ -10,6 +10,10 @@ pub struct DbConstraint {
     pub constraint_type: DbConstraintType,
     pub columns: Vec<String>,
     pub foreign_table: Option<String>,
+    /// The schema of `foreign_table`. A relation to `supatype:user` points at `auth.users`, and
+    /// without this it reads the same as one pointing at a `users` table in the project schema.
+    #[serde(default)]
+    pub foreign_schema: Option<String>,
     pub foreign_columns: Option<Vec<String>>,
     pub check_expression: Option<String>,
     pub on_delete: Option<String>,
@@ -27,136 +31,75 @@ pub enum DbConstraintType {
     Check,
 }
 
+type ConstraintRow = (
+    String,
+    String,
+    String,
+    Option<Vec<String>>,
+    Option<String>,
+    Option<String>,
+    Option<Vec<String>>,
+    Option<String>,
+    String,
+    Option<String>,
+);
+
+/// The `ON DELETE` action as `information_schema.referential_constraints.delete_rule` spelled it,
+/// which is the spelling the generator splices back into `ALTER TABLE ... ADD CONSTRAINT`.
+fn delete_rule(confdeltype: &str) -> Option<String> {
+    let rule = match confdeltype {
+        "a" => "NO ACTION",
+        "r" => "RESTRICT",
+        "c" => "CASCADE",
+        "n" => "SET NULL",
+        "d" => "SET DEFAULT",
+        _ => return None,
+    };
+    Some(rule.to_string())
+}
+
+/// Every primary key, unique, foreign key and check constraint on a table in `schema`.
+///
+/// One query over `pg_constraint`, where the previous three were split across
+/// `information_schema` and `pg_constraint` and disagreed about what they could see:
+///
+/// - primary keys were never read, so nothing downstream could reason about them;
+/// - foreign keys came from `information_schema`, which has no OID and so no comment, and the
+///   comment was hard-coded to `None`;
+/// - unique constraints were joined to `pg_constraint` on `conname` alone, so a constraint of the
+///   same name on another table could supply the comment.
+///
+/// Output for unique, foreign key and check constraints is unchanged in shape and spelling. Check
+/// constraints keep an empty `columns` list, as before: their consumers fingerprint the expression,
+/// and the doctor report prints `columns` as the item's fields, so filling it would change that
+/// output in a change meant to be read-only.
 pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstraint>> {
-    // Read all FK constraints
-    let fk_rows: Vec<(String, String, String, String, String, Option<String>)> = sqlx::query_as(
+    let rows: Vec<ConstraintRow> = sqlx::query_as(
         r#"
         SELECT
-            tc.table_name,
-            tc.constraint_name,
-            kcu.column_name,
-            ccu.table_name  AS foreign_table,
-            ccu.column_name AS foreign_column,
-            rc.delete_rule
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-           AND tc.table_schema    = kcu.table_schema
-        JOIN information_schema.referential_constraints rc
-            ON tc.constraint_name   = rc.constraint_name
-           AND tc.constraint_schema = rc.constraint_schema
-        JOIN information_schema.constraint_column_usage ccu
-            ON rc.unique_constraint_name   = ccu.constraint_name
-           AND rc.unique_constraint_schema = ccu.constraint_schema
-        WHERE tc.table_schema = $1
-          AND tc.constraint_type = 'FOREIGN KEY'
-        ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position
-        "#,
-    )
-    .bind(schema)
-    .fetch_all(&mut *conn)
-    .await?;
-
-    // Group FK rows by (table, constraint_name)
-    #[allow(clippy::type_complexity)]
-    let mut fk_map: std::collections::HashMap<
-        (String, String),
-        (Vec<String>, String, Vec<String>, Option<String>),
-    > = std::collections::HashMap::new();
-    for (table, constraint, col, ftable, fcol, on_delete) in fk_rows {
-        let entry = fk_map
-            .entry((table.clone(), constraint.clone()))
-            .or_insert_with(|| (vec![], ftable, vec![], on_delete));
-        entry.0.push(col);
-        entry.2.push(fcol);
-    }
-
-    let mut constraints: Vec<DbConstraint> = fk_map
-        .into_iter()
-        .map(
-            |((table, name), (columns, foreign_table, foreign_columns, on_delete))| DbConstraint {
-                table,
-                name,
-                constraint_type: DbConstraintType::ForeignKey,
-                columns,
-                foreign_table: Some(foreign_table),
-                foreign_columns: Some(foreign_columns),
-                check_expression: None,
-                on_delete,
-                comment: None,
-            },
-        )
-        .collect();
-
-    // Read UNIQUE constraints (with optional comment)
-    let unique_rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT
-            tc.table_name,
-            tc.constraint_name,
-            kcu.column_name,
-            pg_catalog.obj_description(c.oid, 'pg_constraint')
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name
-           AND tc.table_schema    = kcu.table_schema
-        JOIN pg_catalog.pg_constraint c
-            ON c.conname = tc.constraint_name
-        JOIN pg_catalog.pg_class cl
-            ON cl.oid = c.conrelid
-        JOIN pg_catalog.pg_namespace n
-            ON n.oid = cl.relnamespace AND n.nspname = tc.table_schema
-        WHERE tc.table_schema    = $1
-          AND tc.constraint_type = 'UNIQUE'
-        ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position
-        "#,
-    )
-    .bind(schema)
-    .fetch_all(&mut *conn)
-    .await?;
-
-    let mut unique_map: std::collections::HashMap<(String, String), (Vec<String>, Option<String>)> =
-        std::collections::HashMap::new();
-    for (table, constraint, col, comment) in unique_rows {
-        let entry = unique_map
-            .entry((table.clone(), constraint.clone()))
-            .or_insert_with(|| (vec![], comment));
-        entry.0.push(col);
-    }
-    for ((table, name), (columns, comment)) in unique_map {
-        constraints.push(DbConstraint {
-            table,
-            name,
-            constraint_type: DbConstraintType::Unique,
-            columns,
-            foreign_table: None,
-            foreign_columns: None,
-            check_expression: None,
-            on_delete: None,
-            comment,
-        });
-    }
-
-    // Read CHECK constraints from `pg_constraint` rather than `information_schema`, which exposes
-    // neither the constraint's OID nor its comment. The comment is what makes a bound diffable: it
-    // carries a fingerprint of the declared bound, so a tightened `MaxLength` is detected without
-    // comparing SQL text that `pg_get_constraintdef` has already rewritten.
-    let check_rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT
-            rel.relname::text                                AS table_name,
-            con.conname::text                                AS constraint_name,
-            pg_get_constraintdef(con.oid)                    AS definition,
-            obj_description(con.oid, 'pg_constraint')        AS comment
+            rel.relname::text,
+            con.conname::text,
+            con.contype::text,
+            (SELECT array_agg(a.attname::text ORDER BY k.ord)
+               FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+               JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum),
+            frel.relname::text,
+            fns.nspname::text,
+            (SELECT array_agg(a.attname::text ORDER BY k.ord)
+               FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+               JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum),
+            NULLIF(con.confdeltype::text, ' '),
+            pg_get_constraintdef(con.oid),
+            obj_description(con.oid, 'pg_constraint')
         FROM pg_constraint con
-        JOIN pg_class rel      ON rel.oid = con.conrelid
-        JOIN pg_namespace ns   ON ns.oid  = rel.relnamespace
-        -- `contype = 'c'` is the whole filter. A column's NOT NULL never lands here: PG17 keeps it
-        -- off `pg_constraint` entirely, and PG18 catalogues it as `contype = 'n'` reading `NOT NULL
-        -- a`. Excluding definitions that merely mention `IS NOT NULL` would instead drop real
-        -- bounds, since a model constraint may name a column as non-null inside a larger rule.
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+        LEFT JOIN pg_class frel ON frel.oid = con.confrelid
+        LEFT JOIN pg_namespace fns ON fns.oid = frel.relnamespace
+        -- `contype` is the whole filter. A column's NOT NULL never lands here: PG17 keeps it off
+        -- `pg_constraint` entirely, and PG18 catalogues it as `contype = 'n'`.
         WHERE ns.nspname = $1
-          AND con.contype = 'c'
+          AND con.contype IN ('p', 'u', 'f', 'c')
         ORDER BY rel.relname, con.conname
         "#,
     )
@@ -164,18 +107,71 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbConstra
     .fetch_all(&mut *conn)
     .await?;
 
-    for (table, name, definition, comment) in check_rows {
-        constraints.push(DbConstraint {
-            table,
-            name,
-            constraint_type: DbConstraintType::Check,
-            columns: vec![],
-            foreign_table: None,
-            foreign_columns: None,
-            check_expression: Some(definition),
-            on_delete: None,
-            comment,
-        });
+    let mut constraints = Vec::with_capacity(rows.len());
+    for (
+        table,
+        name,
+        contype,
+        columns,
+        foreign_table,
+        foreign_schema,
+        foreign_columns,
+        confdeltype,
+        definition,
+        comment,
+    ) in rows
+    {
+        let constraint = match contype.as_str() {
+            "p" => DbConstraint {
+                table,
+                name,
+                constraint_type: DbConstraintType::PrimaryKey,
+                columns: columns.unwrap_or_default(),
+                foreign_table: None,
+                foreign_schema: None,
+                foreign_columns: None,
+                check_expression: None,
+                on_delete: None,
+                comment,
+            },
+            "u" => DbConstraint {
+                table,
+                name,
+                constraint_type: DbConstraintType::Unique,
+                columns: columns.unwrap_or_default(),
+                foreign_table: None,
+                foreign_schema: None,
+                foreign_columns: None,
+                check_expression: None,
+                on_delete: None,
+                comment,
+            },
+            "f" => DbConstraint {
+                table,
+                name,
+                constraint_type: DbConstraintType::ForeignKey,
+                columns: columns.unwrap_or_default(),
+                foreign_table,
+                foreign_schema,
+                foreign_columns: Some(foreign_columns.unwrap_or_default()),
+                check_expression: None,
+                on_delete: confdeltype.as_deref().and_then(delete_rule),
+                comment,
+            },
+            _ => DbConstraint {
+                table,
+                name,
+                constraint_type: DbConstraintType::Check,
+                columns: Vec::new(),
+                foreign_table: None,
+                foreign_schema: None,
+                foreign_columns: None,
+                check_expression: Some(definition),
+                on_delete: None,
+                comment,
+            },
+        };
+        constraints.push(constraint);
     }
 
     Ok(constraints)

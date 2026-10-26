@@ -174,6 +174,9 @@ fn test_existing_index_not_regenerated_when_name_matches() {
             unique: false,
             method: "btree".into(),
             is_primary: false,
+            expressions: None,
+            predicate: None,
+            definition: None,
             comment: None,
         }],
         ..DatabaseState::default()
@@ -224,6 +227,9 @@ fn test_index_rebuilt_when_uniqueness_changes() {
             unique: true,
             method: "btree".into(),
             is_primary: false,
+            expressions: None,
+            predicate: None,
+            definition: None,
             comment: None,
         }],
         ..DatabaseState::default()
@@ -280,6 +286,9 @@ fn test_index_rebuilt_when_columns_change() {
             unique: false,
             method: "btree".into(),
             is_primary: false,
+            expressions: None,
+            predicate: None,
+            definition: None,
             comment: None,
         }],
         ..DatabaseState::default()

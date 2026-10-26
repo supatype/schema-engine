@@ -178,4 +178,5 @@ jobs:
             --test field_masking_tier_selection_tests \
             --test field_bounds_enforcement_tests \
             --test versions_runtime_tests \
-            --test ownership_evidence_tests
+            --test ownership_evidence_tests \
+            --test introspection_coverage_tests
