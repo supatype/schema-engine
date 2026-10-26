@@ -4,7 +4,7 @@
 //! section 4). `main.rs` and `server/routes.rs` once carried their own copies of the push and the
 //! tests pushed a third way; this is the one implementation.
 //!
-//! Three steps, because the CLI confirms renames and risky operations before anything is written
+//! Three steps, because the CLI confirms risky operations before anything is written
 //! and `diff` wants the plan without the bootstrap:
 //!
 //! 1. [`plan`]: everything that reads. Introspect, diff against the live catalog and the previous
@@ -111,7 +111,10 @@ impl std::error::Error for EngineBusy {}
 pub struct Plan<'a> {
     pub ast: &'a SchemaAst,
     pub schema: String,
-    /// The CLI may edit this between `prepare` and `apply` (rename confirmations).
+    /// Decided together with `reconcile`, so not to be edited between `prepare` and `apply`: a
+    /// change to what is pushed is a change to the schema, planned again. (Declining a guessed
+    /// rename once edited this after the reconcile was computed, and the push built functions for
+    /// a table that was never created; renames are declared now, D1.)
     pub diff: DiffOutput,
     pub reconcile: reconcile::Plan,
     /// What `reconcile` was decided from, checked again inside the apply's transaction.

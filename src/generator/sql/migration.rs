@@ -2183,6 +2183,7 @@ mod tests {
             unmanaged_model_tables: Vec::new(),
             field_masking: Default::default(),
             field_view_plan: Vec::new(),
+            rename_candidates: Vec::new(),
         };
         let function = crate::desired::ObjectKey {
             kind: crate::introspector::fingerprint::ObjectKind::Function,

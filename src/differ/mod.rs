@@ -4,6 +4,7 @@ pub mod doctor;
 pub mod field_access_diff;
 pub mod integrity;
 pub mod ordering;
+pub mod renames;
 pub mod rls_diff;
 pub mod table_diff;
 
@@ -40,6 +41,10 @@ pub struct DiffOutput {
     /// place that knows which schema the push was given.
     #[serde(default)]
     pub field_view_plan: Vec<crate::generator::sql::field_views::FieldViewTable>,
+    /// Drops and adds in `operations` a person may have meant as renames, for the CLI to offer
+    /// (it writes the declaration on a yes). Never applied: a rename is declared (D1).
+    #[serde(default)]
+    pub rename_candidates: Vec<renames::RenameCandidate>,
 }
 
 /// How a database enforces per-column rules.
@@ -262,6 +267,7 @@ pub fn diff_with_previous(
 
     Ok(DiffOutput {
         summary: DiffSummary::of(&ordered_ops),
+        rename_candidates: renames::rename_candidates(&ordered_ops, db),
         operations: ordered_ops,
         unmanaged_model_tables,
         field_masking,
@@ -285,6 +291,22 @@ impl DiffSummary {
 }
 
 impl DiffOutput {
+    /// The summary and the rename candidates again, after operations were withheld: a candidate
+    /// whose drop is no longer in the push is not offered.
+    fn refresh(&mut self) {
+        self.summary = DiffSummary::of(&self.operations);
+        let operations = &self.operations;
+        self.rename_candidates.retain(|c| {
+            operations.iter().any(|op| match op {
+                Operation::DropColumn { table, column, .. } => {
+                    c.kind == "column" && *table == c.table && *column == c.from
+                }
+                Operation::DropTable { table, .. } => c.kind == "table" && *table == c.from,
+                _ => false,
+            })
+        });
+    }
+
     /// Withholds every column drop for a column `owned` does not say is ours (D4): a column someone
     /// added to a managed table is never the engine's to drop. Each is reported instead.
     pub fn keep_columns_not_ours(&mut self, owned: impl Fn(&str, &str) -> bool) {
@@ -305,7 +327,7 @@ impl DiffOutput {
             kept.len(),
             kept.join(", ")
         ));
-        self.summary = DiffSummary::of(&self.operations);
+        self.refresh();
     }
 
     /// Without the operations that would change a column the user took back with
@@ -339,7 +361,7 @@ impl DiffOutput {
             left.len(),
             left.join(", ")
         ));
-        self.summary = DiffSummary::of(&self.operations);
+        self.refresh();
     }
 }
 

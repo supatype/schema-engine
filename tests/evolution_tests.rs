@@ -219,8 +219,9 @@ fn test_drop_column() {
 
 // ─── Scenario 3: rename_column ───────────────────────────────────────────────
 
+/// A rename is declared (`renamedFrom`), never guessed from similar names (D1).
 #[test]
-fn test_rename_column_detected() {
+fn test_declared_rename_column() {
     let ast_json = r#"{
   "astVersion": 2,
   "models": [
@@ -247,7 +248,8 @@ fn test_rename_column_detected() {
           "annotations": {
             "db": {
               "pgType": "TEXT",
-              "unique": false
+              "unique": false,
+              "renamedFrom": "body_text"
             }
           }
         }
@@ -291,11 +293,7 @@ fn test_rename_column_detected() {
             if from == "body_text" && to == "body_content")
         })
         .collect();
-    assert_eq!(
-        rename_ops.len(),
-        1,
-        "should detect rename via string similarity"
-    );
+    assert_eq!(rename_ops.len(), 1, "should apply the declared rename");
 
     let drop_of_old: Vec<_> = diff
         .operations
@@ -318,24 +316,30 @@ fn test_rename_column_detected() {
 }
 
 /// A column the ledger does not record is someone else's (D4), so it is never the source of a
-/// rename: `subtitel`, added by hand, is not renamed into the declared `subtitle`, which is added.
-/// With no ledger row at all (an upgraded database), the last push's schema declaring the column
-/// is what makes it ours.
+/// rename: a declaration naming `subtitel`, added by hand, is refused, and without one the similar
+/// name is never taken for a rename (D1). With no ledger row at all (an upgraded database), the
+/// last push's schema declaring the column is what makes it ours.
 #[test]
 fn test_rename_column_needs_a_column_that_is_ours() {
-    let ast = |field: &str| {
+    let parse = |field: &str, renamed_from: &str| {
         parser::parse(&format!(
             r#"{{ "astVersion": 2, "models": [{{ "name": "Post",
                  "fields": {{
                    "id": {{ "kind": "uuid", "primaryKey": true, "required": true,
                             "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }} }},
                    "{field}": {{ "kind": "text",
-                            "annotations": {{ "db": {{ "pgType": "TEXT", "unique": false }} }} }} }},
+                            "annotations": {{ "db": {{ "pgType": "TEXT", "unique": false
+                                                      {renamed_from} }} }} }} }},
                  "options": {{ "timestamps": false, "softDelete": false }},
                  "annotations": {{ "db": {{ "tableName": "posts", "indexes": [] }},
                                    "platform": {{ "access": {{}} }} }} }}] }}"#
         ))
         .unwrap()
+    };
+    let ast = |field: &str| parse(field, r#", "renamedFrom": "subtitel""#);
+    let refused = |result: anyhow::Result<differ::DiffOutput>| {
+        let message = format!("{:#}", result.expect_err("not ours to rename"));
+        assert!(message.contains("is not Supatype's"), "{message}");
     };
     let mut db = DatabaseState {
         tables: vec![DbTable {
@@ -358,20 +362,25 @@ fn test_rename_column_needs_a_column_that_is_ours() {
             .any(|op| matches!(op, Operation::AddColumn { column, .. } if column == "subtitle"))
     };
 
-    let unowned = differ::diff(&ast("subtitle"), &db).unwrap();
-    assert_eq!(renames(&unowned), 0, "{:?}", unowned.operations);
-    assert!(adds_subtitle(&unowned), "{:?}", unowned.operations);
+    refused(differ::diff(&ast("subtitle"), &db));
+    // Undeclared, the similar name is not a rename: `subtitle` is added beside it.
+    let undeclared = differ::diff(&parse("subtitle", ""), &db).unwrap();
+    assert_eq!(renames(&undeclared), 0, "{:?}", undeclared.operations);
+    assert!(adds_subtitle(&undeclared), "{:?}", undeclared.operations);
 
     // An upgraded database: no row, but the last push declared it.
-    let previous = ast("subtitel");
+    let previous = parse("subtitel", "");
     let upgraded = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
     assert_eq!(renames(&upgraded), 1, "{:?}", upgraded.operations);
+    assert!(!adds_subtitle(&upgraded), "{:?}", upgraded.operations);
 
     // A row decides over the previous schema: released means not ours.
     db.column_ownership = [(("posts".to_string(), "subtitel".to_string()), false)].into();
-    let released = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
-    assert_eq!(renames(&released), 0, "{:?}", released.operations);
-    assert!(adds_subtitle(&released), "{:?}", released.operations);
+    refused(differ::diff_with_previous(
+        &ast("subtitle"),
+        &db,
+        Some(&previous),
+    ));
 
     // Adopted while undeclared (`adopt --key column:posts.subtitel`): recorded, but someone
     // else's column Supatype was told about, never the source of a rename.
@@ -379,9 +388,11 @@ fn test_rename_column_needs_a_column_that_is_ours() {
     let managed = differ::diff(&ast("subtitle"), &db).unwrap();
     assert_eq!(renames(&managed), 1, "{:?}", managed.operations);
     db.adopted_columns = [("posts".to_string(), "subtitel".to_string())].into();
-    let adopted = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
-    assert_eq!(renames(&adopted), 0, "{:?}", adopted.operations);
-    assert!(adds_subtitle(&adopted), "{:?}", adopted.operations);
+    refused(differ::diff_with_previous(
+        &ast("subtitle"),
+        &db,
+        Some(&previous),
+    ));
 }
 
 // ─── Scenario 5: FK already exists, a no-op ───────────────────────────────────

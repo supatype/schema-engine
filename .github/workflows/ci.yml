@@ -215,6 +215,7 @@ jobs:
             --test grant_ledger_tests \
             --test rls_ledger_tests \
             --test column_ledger_tests \
+            --test declared_rename_tests \
             --test key_schema_sequence_ledger_tests \
             --test doctor_ledger_tests \
             --test identity_generated_db_tests \
