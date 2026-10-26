@@ -17,7 +17,7 @@ use sqlx::PgPool;
 
 use crate::desired::DesiredObject;
 use crate::differ::doctor::{self, DoctorItem, DoctorReport};
-use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKey, ObjectKind};
+use crate::introspector::fingerprint::{holding_nothing, ObjectFingerprint, ObjectKey, ObjectKind};
 use crate::ledger::{self, desired_fingerprint, reconcile, LedgerRow, Status};
 use crate::parser::ast::SchemaAst;
 use crate::push::{self, Decision, State};
@@ -293,9 +293,16 @@ fn adopted_rows(
             chosen
         }
     };
+    // A grant of nothing has no catalog row, and is adopted as the nothing it holds.
     Ok(chosen
         .iter()
-        .filter_map(|key| live.get(key).map(|l| as_found(l, Status::Adopted)))
+        .filter_map(|key| match live.get(key) {
+            Some(l) => Some(as_found(l, Status::Adopted)),
+            None if key.kind == ObjectKind::TableGrant => {
+                Some(as_found(&holding_nothing(key), Status::Adopted))
+            }
+            None => None,
+        })
         .collect())
 }
 

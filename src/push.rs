@@ -24,7 +24,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
-use crate::desired::{desired_objects_for, statements, FieldEnforcement, ObjectKey};
+use crate::desired::{
+    desired_objects_for, security_relevant, statements, FieldEnforcement, ObjectKey,
+};
 use crate::differ::{self, DiffOutput, FieldMaskingTier, Operation};
 use crate::generator::sql::migration::{self, Migration};
 use crate::generator::sql::migration_errors::{self, CheckSite};
@@ -34,9 +36,8 @@ use crate::introspector::fingerprint::{
     fingerprints, holding_nothing, ObjectFingerprint, ObjectKind,
 };
 use crate::introspector::{self, catalog, catalog::CatalogState};
-use crate::ledger::{self, drift, probe, reconcile, LedgerRow};
+use crate::ledger::{self, drift, probe, reconcile, unrecorded, LedgerRow};
 use crate::parser::ast::SchemaAst;
-use crate::sql_quote::{quote_literal, quote_qualified};
 use crate::state::database_state::DatabaseState;
 use crate::state::migration_history;
 
@@ -460,6 +461,19 @@ pub fn with_recorded_names<'a>(
 /// would deparse to ours is still a conflict here. `previous` is the schema of the last push, for
 /// telling a renamed table or column from a dropped and added one.
 pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> Result<Decision> {
+    decide_naming(ast, state, previous, false)
+}
+
+/// [`decide`]; with `previous_unknown`, where pushes were applied and their schema cannot be read,
+/// the access functions are also known by the names this schema gives them (`can_*`), since an
+/// older engine named them the same way. They are then Supatype's, compared with nothing, and so
+/// replaced only with consent (`ledger::unrecorded`), rather than refused as someone else's.
+fn decide_naming(
+    ast: &SchemaAst,
+    state: &State,
+    previous: Option<&SchemaAst>,
+    previous_unknown: bool,
+) -> Result<Decision> {
     let schema = project_schema(state);
     let recorded = with_recorded_names(ast, &state.ledger, schema);
     let kept = serials_kept(&recorded, &state.db);
@@ -512,8 +526,24 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     diff.warnings.extend(narrowed.warnings());
     let mut desired = desired_here(&diff, &state.catalog, schema, ast)?;
     narrowed.grant_adopted(&mut desired, ast, &diff, schema);
-    let live = with_grants_of_nothing(&state.fingerprints, state.ledger.iter().map(|r| &r.key));
-    let named = named_by_the_engine(previous, &state.db, schema);
+    // `PUBLIC`'s grant of nothing on a table that exists already holds what it asks for, as a
+    // recorded one does: on a table an older engine made, it is not missing. An API role holding
+    // nothing where the schema grants it something is still missing, and granted.
+    let on_live_tables = desired.iter().map(|d| &d.key).filter(|k| {
+        k.kind == ObjectKind::TableGrant
+            && k.name == grants::PUBLIC
+            && k.schema == schema
+            && state.db.tables.iter().any(|t| t.name == k.parent)
+    });
+    let live = with_grants_of_nothing(
+        &state.fingerprints,
+        state.ledger.iter().map(|r| &r.key).chain(on_live_tables),
+    );
+    let mut named = named_by_the_engine(previous, &state.db, schema);
+    if previous_unknown {
+        let by_this_schema = named_by_the_engine(Some(ast), &state.db, schema);
+        named.extend(by_this_schema.into_iter().filter(security_relevant));
+    }
     let mut reconcile =
         reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast, &named)?;
     reconcile.actions.extend(previously_declared_columns(
@@ -657,23 +687,29 @@ pub async fn read_and_decide(
     schema: &str,
 ) -> Result<(State, Decision)> {
     let state = read_state(conn, schema).await?;
-    let previous = migration_history::load_latest_schema_ast(conn).await?;
-    let decision = decide_probed(conn, ast, &state, previous.as_ref()).await?;
+    let previous = migration_history::load_previous_schema(conn).await?;
+    let decision = decide_probed(conn, ast, &state, &previous).await?;
     Ok((state, decision))
 }
 
-/// [`decide`], then asking the database to settle what it can (`ledger::probe`): a same-named
-/// object it proves equivalent to ours is adopted rather than refused. A probe the database cannot
+/// [`decide`], then asking the database to settle what it can. A same-named check it proves
+/// equivalent to ours is adopted rather than refused (`ledger::probe`); a probe the database cannot
 /// run (a read-only role or a standby, which cannot make the temporary table; a declared check on a
 /// column the table does not have yet) proves nothing, so those objects stay conflicts: `doctor`
-/// must still report, and a push still refuses them by name rather than failing on the probe.
+/// must still report, and a push still refuses them by name rather than failing on the probe. Then
+/// every access object no row records is compared with what made it (`ledger::unrecorded`), and
+/// one that cannot be compared counts as changed.
 pub async fn decide_probed(
     conn: &mut PgConnection,
     ast: &SchemaAst,
     state: &State,
-    previous: Option<&SchemaAst>,
+    previous: &unrecorded::Previous,
 ) -> Result<Decision> {
-    let mut decision = decide(ast, state, previous)?;
+    let unknown = matches!(
+        previous,
+        unrecorded::Previous::Missing | unrecorded::Previous::Unreadable(_)
+    );
+    let mut decision = decide_naming(ast, state, previous.ast(), unknown)?;
     let proven = match probe::equivalent(conn, &decision.reconcile).await {
         Ok(proven) => proven,
         Err(e) => {
@@ -682,236 +718,13 @@ pub async fn decide_probed(
         }
     };
     decision.reconcile.adopt_equivalent(&proven);
-    upgrade_hand_edits(conn, state, &mut decision, previous).await;
+    let inputs = unrecorded::Inputs {
+        ast,
+        state,
+        previous,
+    };
+    unrecorded::settle(conn, inputs, &mut decision).await;
     Ok(decision)
-}
-
-/// The first push after an upgrade finds every policy, grant, label and RLS attribute an older
-/// engine made with no ledger row, and replaces each with the schema's definition, as its name or
-/// location makes it ours. One edited by hand under the older engine would be overwritten silently,
-/// where the same edit made after the upgrade needs consent (plan 3.5). So each is compared with
-/// what the last push's schema makes of it: that schema's statements are run in a transaction that
-/// is always rolled back, each object read back, and one whose live fingerprint differs is a hand
-/// edit: its `Replace` carries it, so the push asks before overwriting it and doctor reports it as
-/// drift. One the last schema did not declare was not that engine's, and is taken over as before.
-/// Without a last schema there is nothing to compare with, and the push says so.
-///
-/// Grants are compared with what that engine left rather than with the exact set (D7) the last
-/// schema renders today. An older engine granted and revoked only the four privileges the rules
-/// govern, on top of the database's default privileges, so on the supatype image every API role it
-/// left also holds `REFERENCES`, `TRIGGER`, `TRUNCATE` (and `MAINTAIN`) from them. What it made is
-/// therefore the rendered set plus whatever else the defaults give that role on that table
-/// ([`older_engine_grant_sql`]); a clean upgrade matches it, and a privilege beyond it, or one
-/// taken away, is a hand edit and asks first.
-async fn upgrade_hand_edits(
-    conn: &mut PgConnection,
-    state: &State,
-    decision: &mut Decision,
-    previous: Option<&SchemaAst>,
-) {
-    let recorded: BTreeSet<&ObjectKey> = state.ledger.iter().map(|r| &r.key).collect();
-    let candidates: Vec<usize> = decision
-        .reconcile
-        .actions
-        .iter()
-        .enumerate()
-        .filter(|(_, a)| {
-            matches!(a, reconcile::Action::Replace { key, drifted: None, .. }
-                if crate::desired::security_relevant(key.kind)
-                    && !recorded.contains(key))
-        })
-        .map(|(i, _)| i)
-        .collect();
-    if candidates.is_empty() {
-        return;
-    }
-    let keys = |indices: &[usize]| {
-        indices
-            .iter()
-            .map(|&i| decision.reconcile.actions[i].key().to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let Some(previous) = previous else {
-        let warning = format!(
-            "{} object(s) that decide who may read or write have no record and there is no \
-             earlier schema to compare them with, so they are replaced with the schema's \
-             definition without checking for changes made by hand: {}",
-            candidates.len(),
-            keys(&candidates)
-        );
-        decision.diff.warnings.push(warning);
-        return;
-    };
-    let schema = project_schema(state);
-    let plan = field_views::field_view_plan(previous, &state.db);
-    let fields = match decision.diff.field_masking {
-        FieldMaskingTier::Views => FieldEnforcement::Views(&plan),
-        FieldMaskingTier::None | FieldMaskingTier::Extension => FieldEnforcement::Labels,
-    };
-    let before: BTreeMap<ObjectKey, String> = match desired_objects_for(previous, schema, fields) {
-        Ok(objects) => objects.into_iter().map(|d| (d.key, d.create_sql)).collect(),
-        Err(e) => {
-            decision.diff.warnings.push(format!(
-                "the last push's schema could not be rendered ({e:#}), so {} are replaced \
-                 without checking for changes made by hand",
-                keys(&candidates)
-            ));
-            return;
-        }
-    };
-    let probes: Vec<(ObjectKey, String)> = candidates
-        .iter()
-        .filter_map(|&i| {
-            let key = decision.reconcile.actions[i].key();
-            let sql = before.get(key)?;
-            let mut probe = format!("{}\n{sql}", reset_sql(key));
-            // Under tier 2 that engine took every privilege off the base table, defaults included.
-            if key.kind == ObjectKind::TableGrant
-                && decision.diff.field_masking != FieldMaskingTier::Views
-            {
-                probe.push('\n');
-                probe.push_str(&older_engine_grant_sql(&key.schema, &key.parent, &key.name));
-            }
-            Some((key.clone(), probe))
-        })
-        .collect();
-    let (made, failed) = match made_by(conn, schema, &probes).await {
-        Ok(made) => made,
-        Err(e) => {
-            decision.diff.warnings.push(format!(
-                "{} could not be compared with the last push's schema ({e:#}): they are replaced \
-                 without checking for changes made by hand",
-                keys(&candidates)
-            ));
-            return;
-        }
-    };
-    let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
-        state.fingerprints.iter().map(|f| (f.key(), f)).collect();
-    let mut unchecked = Vec::new();
-    for i in candidates {
-        let reconcile::Action::Replace { key, drifted, .. } = &mut decision.reconcile.actions[i]
-        else {
-            continue;
-        };
-        let Some(l) = live.get(key) else { continue };
-        // One the last push's schema did not declare is not an older engine's (a table adopted
-        // since, say, whose RLS the schema now asks for): taken over as before.
-        if !before.contains_key(key) {
-            continue;
-        }
-        if failed.contains(key) {
-            unchecked.push(key.to_string());
-            continue;
-        }
-        let expected = made.get(key).cloned();
-        let differs = expected
-            .as_ref()
-            .is_none_or(|e| e.fingerprint != l.fingerprint);
-        if differs {
-            *drifted = Some(reconcile::HandEdit {
-                recorded_def: expected.map(|e| e.definition).unwrap_or_else(|| {
-                    "(nothing: the schema of the last push makes no such object)".to_string()
-                }),
-                live_def: l.definition.clone(),
-                live_fp: l.fingerprint.clone(),
-            });
-        }
-    }
-    if !unchecked.is_empty() {
-        decision.diff.warnings.push(format!(
-            "{} could not be compared with the last push's schema: they are replaced without \
-             checking for changes made by hand",
-            unchecked.join(", ")
-        ));
-    }
-}
-
-/// What an older engine's grant to `role` on a table held beyond the four privileges the rules
-/// govern: what the database's default privileges give that role on a table its owner creates in
-/// its schema (`ALTER DEFAULT PRIVILEGES`, global and per schema), read from `pg_default_acl` as
-/// the table's `CREATE` applied them. That engine granted and revoked only `SELECT`, `INSERT`,
-/// `UPDATE` and `DELETE`, so everything else the defaults gave stayed. Granted after the last
-/// schema's statement, which revokes everything first; guarded on the role and the table, as the
-/// grant itself is.
-fn older_engine_grant_sql(schema: &str, table: &str, role: &str) -> String {
-    let role_lit = quote_literal(role);
-    let target_lit = quote_literal(&quote_qualified(schema, table));
-    format!(
-        "DO $defaults$\nDECLARE\n  privileges text;\nBEGIN\n  \
-         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {role_lit}) AND to_regclass({target_lit}) IS NOT NULL THEN\n    \
-         SELECT string_agg(DISTINCT a.privilege_type, ', ')\n      INTO privileges\n      \
-         FROM pg_class c\n      \
-         JOIN pg_default_acl d ON d.defaclrole = c.relowner AND d.defaclobjtype = 'r'\n                           \
-         AND d.defaclnamespace IN (0, c.relnamespace)\n      \
-         CROSS JOIN LATERAL aclexplode(d.defaclacl) a\n     \
-         WHERE c.oid = to_regclass({target_lit})\n       \
-         AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = {role_lit})\n       \
-         AND a.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE');\n    \
-         IF privileges IS NOT NULL THEN\n      \
-         EXECUTE format('GRANT %s ON %s TO %I', privileges, {target_lit}, {role_lit});\n    \
-         END IF;\n  \
-         END IF;\nEND\n$defaults$;"
-    )
-}
-
-/// What clears an object before the last schema's statement for it runs: its drop, or for row-level
-/// security, both attributes off, since that statement only turns on what it asks for.
-fn reset_sql(key: &ObjectKey) -> String {
-    match key.kind {
-        ObjectKind::RlsAttributes => {
-            let target = quote_qualified(&key.schema, &key.parent);
-            format!(
-                "ALTER TABLE {target} NO FORCE ROW LEVEL SECURITY;\n\
-                 ALTER TABLE {target} DISABLE ROW LEVEL SECURITY;"
-            )
-        }
-        _ => key.drop_sql().unwrap_or_default(),
-    }
-}
-
-/// Each probe's statements run in a transaction that is always rolled back, every one in a
-/// savepoint of its own, and the objects read back as a push reads them: the fingerprints found,
-/// and the keys whose statements the database refused.
-async fn made_by(
-    conn: &mut PgConnection,
-    schema: &str,
-    probes: &[(ObjectKey, String)],
-) -> Result<(BTreeMap<ObjectKey, ObjectFingerprint>, BTreeSet<ObjectKey>)> {
-    use sqlx::Connection;
-    let mut tx = conn.begin().await.context("begin the upgrade comparison")?;
-    let result = async {
-        // Never wait on a table someone is using: a comparison that cannot lock is skipped.
-        sqlx::query("SET LOCAL lock_timeout = '2s'")
-            .execute(&mut *tx)
-            .await?;
-        let mut failed = BTreeSet::new();
-        for (key, sql) in probes {
-            let mut one = (*tx).begin().await?;
-            match (&mut *one).execute(sqlx::raw_sql(sql)).await {
-                Ok(_) => one.commit().await?,
-                Err(e) => {
-                    tracing::debug!("{key} not compared with the last push's schema: {e}");
-                    one.rollback().await?;
-                    failed.insert(key.clone());
-                }
-            }
-        }
-        let after = live(&mut tx, schema).await?;
-        let made = after
-            .fingerprints
-            .into_iter()
-            .map(|f| (f.key(), f))
-            .filter(|(k, _)| probes.iter().any(|(p, _)| p == k))
-            .collect();
-        anyhow::Ok((made, failed))
-    }
-    .await;
-    tx.rollback()
-        .await
-        .context("roll the upgrade comparison back")?;
-    result
 }
 
 /// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
@@ -932,7 +745,7 @@ fn reconcile_with(
 /// What a push of `ast` desires on this database. What the database can hold decides it (plan
 /// section 10): without `pg_cron` the cron jobs are not desired, as the layer says so at apply time
 /// and there is nothing to record; a grant to an API role this database does not have is desired
-/// nowhere.
+/// nowhere. `PUBLIC` is everywhere.
 fn desired_here(
     diff: &DiffOutput,
     catalog: &CatalogState,
@@ -947,9 +760,11 @@ fn desired_here(
     desired.retain(|d| match d.key.kind {
         ObjectKind::CronJob => catalog.cron_available,
         // The views' owner is made by the very push that grants to it, so it is desired wherever
-        // tier 2 asks for it.
+        // tier 2 asks for it; `PUBLIC` is everywhere.
         ObjectKind::TableGrant => {
-            catalog.granted_roles.contains(&d.key.name) || d.key.name == field_views::API_OWNER
+            d.key.name == grants::PUBLIC
+                || catalog.granted_roles.contains(&d.key.name)
+                || d.key.name == field_views::API_OWNER
         }
         _ => true,
     });
@@ -1234,8 +1049,10 @@ fn renamed_tables(diff: &DiffOutput, schema: &str) -> BTreeMap<ObjectKey, String
 /// Legacy ownership by engine naming (section 7): an older engine stamped nothing and the ledger
 /// has no row, so an object it made is known only by its name. The functions, triggers and views
 /// a push of the last push's schema would create, under either field enforcement, in the engine's
-/// own schemas; and in the project schema, the triggers and the `can_*` affordance functions,
-/// whose names the engine derives from a model's table. The last push's schema, not this one's:
+/// own schemas; in the project schema, the triggers and the `can_*` affordance functions, whose
+/// names the engine derives from a model's table; and the masking labels that schema's field
+/// rules set, the only labels under the masking provider an engine can be said to have made
+/// (F15 (b)): one someone set by hand is theirs. The last push's schema, not this one's:
 /// the engine made what that schema asked for, while a name only this schema asks for may be a
 /// user's object, which still refuses the push. A user's object under any other name
 /// (`can_do_things`, a `_platform` helper of their own) is never among them.
@@ -1252,6 +1069,7 @@ fn named_by_the_engine(
         }
         ObjectKind::Trigger => key.schema == schema,
         ObjectKind::Function => key.schema == schema && key.name.starts_with("can_"),
+        ObjectKind::SecurityLabel => key.name == rls::MASK_PROVIDER,
         _ => false,
     };
     let mut named = BTreeSet::new();
@@ -1272,35 +1090,43 @@ fn named_by_the_engine(
 
 /// `live`, plus a fingerprint of "holds nothing" for every grant among `keys` the catalog has no
 /// row for. A role with no privilege on a table has no `aclexplode` row, so without this a grant
-/// of nothing the ledger recorded would read as dropped by hand on every push.
+/// of nothing the ledger recorded would read as dropped by hand on every push. Not on a relation
+/// that is gone from a schema the catalog read: that grant is gone with it, and reading it as
+/// "holds nothing" would make dropping it a hand edit to ask about, though nothing is left to drop.
 fn with_grants_of_nothing<'k>(
     live: &[ObjectFingerprint],
     keys: impl Iterator<Item = &'k ObjectKey>,
 ) -> Vec<ObjectFingerprint> {
     let present: BTreeSet<ObjectKey> = live.iter().map(ObjectFingerprint::key).collect();
+    let relations: BTreeSet<(&str, &str)> = live
+        .iter()
+        .filter(|f| matches!(f.kind, ObjectKind::Table | ObjectKind::View))
+        .map(|f| (f.schema.as_str(), f.name.as_str()))
+        .collect();
+    let gone = |k: &ObjectKey| {
+        relations.iter().any(|(schema, _)| *schema == k.schema)
+            && !relations.contains(&(k.schema.as_str(), k.parent.as_str()))
+    };
     let mut out = live.to_vec();
     out.extend(
-        keys.filter(|k| k.kind == ObjectKind::TableGrant && !present.contains(k))
+        keys.filter(|k| k.kind == ObjectKind::TableGrant && !present.contains(k) && !gone(k))
             .map(holding_nothing),
     );
     out
 }
 
 /// What a live object's location says about whose it is when the ledger has no row (plan 3.4 and
-/// section 5). Only the engine writes labels under its provider or names bucket policies
-/// `storage_<label>_sel|ins|del`, so those are ours outright; the engine's own schemas hold only
-/// what an engine put there. Not `api` (F12): it is the schema the API serves, where a project may
-/// keep views and functions of its own, so an object there is ours only when the ledger or the
-/// last push's schema records it ([`named_by_the_engine`]), and anything else under one of our
-/// names is a conflict the push refuses until it is adopted.
+/// section 5). Only the engine names bucket policies `storage_<label>_sel|ins|del`, so those are
+/// ours outright; the engine's own schemas hold only what an engine put there. Not a label under
+/// the masking provider: anyone with the extension can set one, and taking a person's mask off a
+/// column because of where it sits would unmask it (F15 (b), E23). A label is ours by its row, or
+/// by the last push's schema having set it ([`named_by_the_engine`]). Not `api` (F12) either: it is
+/// the schema the API serves, where a project may keep views and functions of its own, so an object
+/// there is ours only when the ledger or the last push's schema records it, and anything else under
+/// one of our names is a conflict the push refuses until it is adopted.
 fn location(key: &ObjectKey) -> reconcile::Location {
-    let exclusive = match key.kind {
-        ObjectKind::SecurityLabel => key.name == rls::MASK_PROVIDER,
-        ObjectKind::Policy => {
-            storage::is_unmarked_bucket_policy(&key.schema, &key.parent, &key.name)
-        }
-        _ => false,
-    };
+    let exclusive = key.kind == ObjectKind::Policy
+        && storage::is_unmarked_bucket_policy(&key.schema, &key.parent, &key.name);
     let schema = key.schema.as_str();
     if exclusive {
         reconcile::Location::Exclusive

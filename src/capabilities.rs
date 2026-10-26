@@ -17,6 +17,10 @@ pub const FEATURES: &[&str] = &[
     "rebaseline",
     // `doctor --rebaseline` with `accept_access_drift` / `--accept-access-drift`.
     "accept_access_drift",
+    // `doctor --rebaseline` with `keys` / `--key`: record only the drift the preview listed, or
+    // refuse with HTTP 409 `drift_changed` (the binary's `{"status":"refused","reason":
+    // "drift_changed"}` line) naming what is `unseen` and what is `gone`.
+    "rebaseline_keys",
     // `push` with `overwrite_drift` / `--overwrite-drift`.
     "overwrite_drift",
     // A writer refused while another holds the engine's lock: HTTP 409 `engine_busy`, and the
@@ -39,7 +43,7 @@ mod tests {
     fn the_document_lists_every_feature_this_engine_supports() {
         assert_eq!(
             super::capabilities().to_string(),
-            r#"{"features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","overwrite_drift","engine_busy","identity_columns"]}"#
+            r#"{"features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns"]}"#
         );
     }
 }

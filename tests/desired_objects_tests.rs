@@ -297,9 +297,10 @@ async fn every_function_and_foreign_key_a_push_creates_matches_its_prediction() 
 }
 
 /// With no record that the engine made it (no row, no previous schema naming it), a function in
-/// the project schema is ours only if it is exactly what we would create. Ours, untouched, is
-/// adopted; the same function with a `SET search_path` of its own is the user's, and the push
-/// refuses and names it.
+/// the project schema that is exactly what we would create is adopted. The same function with a
+/// `SET search_path` of its own is not: pushes were applied here and their schema is gone, so
+/// nothing says whether it was changed by hand, and the push refuses and names it (F16, fail
+/// closed) until it is overwritten with consent.
 #[tokio::test]
 async fn a_function_differing_from_ours_only_in_its_search_path_refuses_the_push() {
     common::with_integration_pool(|pool| async move {
@@ -326,7 +327,7 @@ async fn a_function_differing_from_ours_only_in_its_search_path_refuses_the_push
             .expect_err("a function with a search_path of its own is not adopted");
         let message = format!("{refused:#}");
         assert!(
-            message.contains("can_read_posts") && message.contains("supatype adopt"),
+            message.contains("can_read_posts") && message.contains("not checked"),
             "{message}"
         );
     })

@@ -178,6 +178,12 @@ enum Command {
         /// otherwise refused and listed (plan 3.5).
         #[arg(long, requires = "rebaseline")]
         accept_access_drift: bool,
+        /// With `--rebaseline`: a drifted object the preview listed, as doctor names it
+        /// (`kind:table.name`). Repeatable. Given, the rebaseline records only if the drift it finds
+        /// is exactly these objects, and otherwise writes nothing and says what changed (reason
+        /// `drift_changed`); not given, it records whatever drift there is.
+        #[arg(long = "key", requires = "rebaseline")]
+        keys: Vec<String>,
         /// A push option, refused here with a pointer to `--accept-access-drift`: accepted by the
         /// parser only so the refusal can say so.
         #[arg(long, hide = true)]
@@ -280,6 +286,19 @@ async fn main() -> Result<()> {
                     "status": "refused",
                     "reason": supatype_engine::push::ENGINE_BUSY,
                     "message": busy.to_string(),
+                })
+            );
+        }
+        use supatype_engine::inspect::{DriftChangedSincePreview, DRIFT_CHANGED};
+        if let Some(changed) = e.downcast_ref::<DriftChangedSincePreview>() {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "refused",
+                    "reason": DRIFT_CHANGED,
+                    "unseen": changed.unseen,
+                    "gone": changed.gone,
+                    "message": changed.to_string(),
                 })
             );
         }
@@ -591,6 +610,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             strict,
             rebaseline,
             accept_access_drift,
+            keys,
             overwrite_drift,
         } => {
             if let Some(refusal) = supatype_engine::inspect::doctor_flags_refusal(
@@ -603,8 +623,15 @@ async fn run(command: Command, input: String) -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = supatype_engine::db::connect_for_preview(&database_url).await?;
             let report = if rebaseline {
-                supatype_engine::inspect::rebaseline(&pool, &ast, &schema, accept_access_drift)
-                    .await?
+                let previewed = (!keys.is_empty()).then_some(keys.as_slice());
+                supatype_engine::inspect::rebaseline_previewed(
+                    &pool,
+                    &ast,
+                    &schema,
+                    accept_access_drift,
+                    previewed,
+                )
+                .await?
             } else {
                 supatype_engine::inspect::doctor(&pool, &ast, &schema, false).await?
             };

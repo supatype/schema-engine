@@ -337,6 +337,7 @@ BEFORE UPDATE ON "public"."kitchen_sink"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
 ALTER TABLE "public"."kitchen_sink" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."kitchen_sink" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

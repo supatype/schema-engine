@@ -883,6 +883,7 @@ ALTER TABLE "public"."every_read_only" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."every_required" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."relations" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."relations_every" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."composites" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -897,6 +898,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."every" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -911,6 +913,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."every_defaulted" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -925,6 +928,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."every_localised" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -939,6 +943,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."every_read_only" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -953,6 +958,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."every_required" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -967,6 +973,7 @@ BEGIN
   END IF;
 END
 $grants$;
+REVOKE ALL PRIVILEGES ON "public"."relations" FROM PUBLIC;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -978,6 +985,21 @@ DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
     EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."relations" FROM authenticated';
+  END IF;
+END
+$grants$;
+REVOKE ALL PRIVILEGES ON "public"."relations_every" FROM PUBLIC;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."relations_every" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."relations_every" FROM authenticated';
   END IF;
 END
 $grants$;

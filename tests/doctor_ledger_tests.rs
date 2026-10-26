@@ -361,7 +361,8 @@ async fn a_privilege_the_defaults_never_gave_is_drift() {
     .await;
 }
 
-/// With no earlier schema to compare with, the push replaces them as before, and says so.
+/// With no earlier schema to compare with, nothing says whether they were changed by hand, so the
+/// push does not replace them without consent and names each as not checked (F16, fail closed).
 #[tokio::test]
 async fn without_an_earlier_schema_the_push_says_it_could_not_check() {
     common::with_integration_pool(|pool| async move {
@@ -378,16 +379,19 @@ async fn without_an_earlier_schema_the_push_says_it_could_not_check() {
         )
         .await
         .unwrap();
-        let outcome = push(&pool, &ast).await.expect("replaced as before");
-        let supatype_engine::push::Outcome::Applied { warnings, .. } = outcome else {
-            panic!("{outcome:?}");
-        };
-        assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("no earlier schema to compare") && w.contains("posts_select")),
-            "{warnings:?}"
-        );
+        let refused = push(&pool, &ast)
+            .await
+            .expect_err("replaced what it could not check without consent");
+        let drift = refused
+            .downcast_ref::<supatype_engine::ledger::drift::SecurityDrift>()
+            .unwrap_or_else(|| panic!("refused as something else: {refused:#}"));
+        let select = drift
+            .objects
+            .iter()
+            .find(|o| o.key.name == "posts_select")
+            .unwrap_or_else(|| panic!("{drift}"));
+        assert!(select.unchecked.is_some(), "{select:?}");
+        assert!(drift.to_string().contains("not checked"), "{drift}");
     })
     .await;
 }

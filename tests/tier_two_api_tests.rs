@@ -1169,3 +1169,99 @@ async fn graphql_serves_the_views_masked_and_its_mutations_disclose_nothing() {
     })
     .await;
 }
+
+// ---------------------------------------------------------------------------------------------
+// A rule that reads a junction table as its membership source
+// ---------------------------------------------------------------------------------------------
+
+/// `Member` and `Project` joined many-to-many through `t2_project_members`, both readable by any
+/// signed-in user, so the junction is too; and `Task`, readable by the members of its project.
+fn membership_fixture() -> SchemaAst {
+    let uuid = || column("uuid", "UUID", true);
+    let member = model(
+        "Member",
+        "t2_members",
+        json!({ "id": uuid_key(false), "name": column("text", "TEXT", false) }),
+        json!({ "read": logged_in() }),
+    );
+    let project = model(
+        "Project",
+        "t2_projects",
+        json!({
+            "id": uuid_key(false),
+            "members": { "kind": "relation", "cardinality": "manyToMany", "target": "Member",
+                         "through": "t2_project_members" }
+        }),
+        json!({ "read": logged_in() }),
+    );
+    let in_my_projects = json!({
+        "type": "in", "column": "project_id",
+        "source": { "kind": "rows", "table": "t2_project_members", "column": "project_id",
+                    "where": { "type": "compare", "op": "eq",
+                               "left": { "kind": "column", "name": "member_id" },
+                               "right": { "kind": "authUid" } } }
+    });
+    let task = model(
+        "Task",
+        "t2_tasks",
+        json!({ "id": uuid_key(false), "project_id": uuid(),
+                "title": column("text", "TEXT", false),
+                "estimate": column("integer", "INTEGER", false) }),
+        json!({ "read": in_my_projects, "fields": { "estimate": { "read": admin() } } }),
+    );
+    let doc = json!({ "astVersion": 2, "models": [member, project, task] }).to_string();
+    parser::parse(&doc).expect("the membership fixture parses")
+}
+
+/// Under tier 2 a view reads a membership source with its owner's rights, so the owner needs on a
+/// junction what an API role has there. Without it a member's read of `api.t2_tasks` failed with
+/// permission denied on the junction, where tier 1 returns the member's own tasks.
+#[tokio::test]
+async fn a_rule_reading_a_junction_works_through_the_views() {
+    common::with_integration_pool(|pool| async move {
+        prepare(&pool).await;
+        let ast = membership_fixture();
+        push_fixture(&pool, &ast).await;
+        let p1 = "22222222-2222-2222-2222-222222222222";
+        let p2 = "33333333-3333-3333-3333-333333333333";
+        sqlx::raw_sql(&format!(
+            "INSERT INTO public.t2_members (id, name) VALUES ('{A}', 'Alice'), ('{B}', 'Bob');
+             INSERT INTO public.t2_projects (id) VALUES ('{p1}'), ('{p2}');
+             INSERT INTO public.t2_project_members (project_id, member_id) VALUES ('{p1}', '{A}');
+             INSERT INTO public.t2_tasks (id, project_id, title, estimate) VALUES
+               (gen_random_uuid(), '{p1}', 'mine', 3), (gen_random_uuid(), '{p2}', 'theirs', 8);"
+        ))
+        .execute(&pool)
+        .await
+        .expect("seed");
+
+        assert_eq!(task_titles(&pool, Caller::A).await.unwrap(), ["mine"]);
+        assert_eq!(
+            task_titles(&pool, Caller::B).await.unwrap(),
+            Vec::<String>::new()
+        );
+        let again = push_fixture(&pool, &ast).await;
+        assert!(matches!(again, push::Outcome::UpToDate { .. }), "{again:?}");
+    })
+    .await;
+}
+
+/// The task titles `caller` reads through `api.t2_tasks`, as PostgREST would ask, or the error.
+async fn task_titles(pool: &sqlx::PgPool, caller: Caller) -> Result<Vec<String>, String> {
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::query("SELECT set_config('request.jwt.claims', $1, true)")
+        .bind(caller.claims().to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("set the claims");
+    sqlx::raw_sql(&format!("SET LOCAL ROLE {}", caller.role()))
+        .execute(&mut *tx)
+        .await
+        .expect("assume the API role");
+    let titles = sqlx::query_scalar("SELECT title FROM api.t2_tasks ORDER BY title")
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| e.to_string());
+    let _ = tx.rollback().await;
+    titles
+}
