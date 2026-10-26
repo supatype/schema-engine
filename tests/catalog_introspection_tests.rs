@@ -68,7 +68,10 @@ async fn functions_carry_their_identity_body_and_properties() {
                AS $$ SELECT n * 2 $$;
              CREATE FUNCTION public.whoami() RETURNS text LANGUAGE sql SECURITY DEFINER
                AS $$ SELECT current_user::text $$;
-             COMMENT ON FUNCTION public.whoami() IS 'definer';",
+             COMMENT ON FUNCTION public.whoami() IS 'definer';
+             CREATE TABLE public.things (id int);
+             CREATE FUNCTION public.describe(t public.things, at timestamptz, tags text[])
+               RETURNS text LANGUAGE sql AS $$ SELECT '' $$;",
         )
         .await;
 
@@ -88,6 +91,30 @@ async fn functions_carry_their_identity_body_and_properties() {
         assert!(
             args.contains(&"n integer") && args.contains(&"n bigint"),
             "{args:?}"
+        );
+        let types: Vec<&str> = twice.iter().map(|f| f.identity_types.as_str()).collect();
+        assert!(
+            types.contains(&"integer") && types.contains(&"bigint"),
+            "identity types carry no argument names: {types:?}"
+        );
+        // The row type is qualified even though `public` is on the search_path, the alias is
+        // written out, and the array keeps its brackets: the same string `desired::identity`
+        // builds from the declaration.
+        let describe = catalog
+            .functions
+            .iter()
+            .find(|f| f.name == "describe")
+            .unwrap();
+        assert_eq!(
+            describe.identity_types,
+            "public.things, timestamp with time zone, text[]"
+        );
+        assert_eq!(
+            supatype_engine::desired::identity::function_key(
+                "describe",
+                "t public.things, at timestamptz, tags text[]"
+            ),
+            format!("describe({})", describe.identity_types)
         );
         assert!(twice
             .iter()
@@ -331,6 +358,49 @@ async fn a_push_of_a_versioned_schema_is_visible_in_every_kind() {
                 .iter()
                 .any(|g| g.table == "posts" && g.grantee == "anon"),
             "the grants the push makes"
+        );
+
+        // The engine's own tables, with the constraints and indexes the push declared on them.
+        let supatype = catalog
+            .engine_tables
+            .iter()
+            .find(|e| e.schema == "_supatype")
+            .expect("the _supatype schema has tables after a versioned push");
+        for table in ["preview_links", "publishing_settings", "versioned_models"] {
+            assert!(
+                supatype.tables.iter().any(|t| t.name == table),
+                "_supatype.{table} is read"
+            );
+        }
+        assert!(
+            supatype
+                .constraints
+                .iter()
+                .any(|c| c.name == "preview_links_record_is_named"),
+            "the check on preview_links is read with its explicit name"
+        );
+        assert!(
+            supatype
+                .indexes
+                .iter()
+                .any(|i| i.name == "preview_links_live_for_record"),
+            "the partial index on preview_links is read"
+        );
+        // `auth` and `storage` are swept for functions and policies, never for tables.
+        exec(
+            &pool,
+            "CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY)",
+        )
+        .await;
+        let catalog = introspector::introspect_catalog(&pool, "public")
+            .await
+            .unwrap();
+        assert!(
+            !catalog
+                .engine_tables
+                .iter()
+                .any(|e| e.schema == "auth" || e.schema == "storage"),
+            "server-owned tables are not the engine's"
         );
     })
     .await;

@@ -268,8 +268,8 @@ fn roles_after(s: &str, word: &str) -> Vec<String> {
         .collect()
 }
 
-/// A function's key name: `name(args)` with the declared argument list whitespace-normalised.
-/// Phase 3 canonicalises the argument types to what `pg_get_function_identity_arguments` reports.
+/// A function's key name: `name(types)`, the declared argument list canonicalised by
+/// [`super::identity::function_key`] to what the catalog reports as `identity_types`.
 fn function_key_name(after_name: &str, name: &str) -> String {
     let args = after_name
         .strip_prefix('(')
@@ -286,8 +286,7 @@ fn function_key_name(after_name: &str, name: &str) -> String {
             None
         })
         .unwrap_or("");
-    let normalised = args.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!("{name}({normalised})")
+    super::identity::function_key(name, args)
 }
 
 fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
@@ -704,7 +703,7 @@ mod tests {
             ("COMMENT ON INDEX \"public\".\"posts_x_idx\" IS 'm';", ObjectKind::Index, "public", "posts", "posts_x_idx"),
             ("ALTER TABLE \"public\".\"posts\" ADD CONSTRAINT \"posts_a_fkey\" FOREIGN KEY (\"a\") REFERENCES \"public\".\"u\" (\"id\");", ObjectKind::ForeignKey, "public", "posts", "posts_a_fkey"),
             ("ALTER TABLE \"public\".\"posts\" ENABLE ROW LEVEL SECURITY;", ObjectKind::RlsAttributes, "public", "posts", "rls"),
-            ("CREATE OR REPLACE FUNCTION \"public\".\"can_read_posts\"(\"posts\" \"public\".\"posts\") RETURNS boolean LANGUAGE sql STABLE AS $can$ SELECT TRUE $can$;", ObjectKind::Function, "public", "", "can_read_posts(\"posts\" \"public\".\"posts\")"),
+            ("CREATE OR REPLACE FUNCTION \"public\".\"can_read_posts\"(\"posts\" \"public\".\"posts\") RETURNS boolean LANGUAGE sql STABLE AS $can$ SELECT TRUE $can$;", ObjectKind::Function, "public", "", "can_read_posts(public.posts)"),
             ("GRANT EXECUTE ON FUNCTION _supatype.\"publish\"(text, text) TO authenticated, service_role;", ObjectKind::Function, "_supatype", "", "publish(text, text)"),
             ("CREATE OR REPLACE TRIGGER \"posts_updated_at_trigger\" BEFORE UPDATE ON \"public\".\"posts\" FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();", ObjectKind::Trigger, "public", "posts", "posts_updated_at_trigger"),
             ("DROP POLICY IF EXISTS \"posts_select\" ON \"public\".\"posts\";", ObjectKind::Policy, "public", "posts", "posts_select"),

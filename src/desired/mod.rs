@@ -15,6 +15,7 @@
 //! (defaults, check expressions, policy quals) are not in `structure`: Postgres rewrites them on
 //! the way in, so the ledger compares them live against recorded-live, never against our text.
 
+pub mod identity;
 pub mod statements;
 
 use std::collections::BTreeMap;
@@ -46,15 +47,7 @@ use crate::parser::accessors::{
 use crate::parser::ast::{AccessAst, FieldAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
 
-/// What identifies an object, the same four things the live fingerprint is keyed by.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectKey {
-    pub kind: ObjectKind,
-    pub schema: String,
-    /// The table for table-scoped kinds, `table.column` for column-scoped, empty otherwise.
-    pub parent: String,
-    pub name: String,
-}
+pub use crate::introspector::fingerprint::ObjectKey;
 
 #[derive(Debug, Clone)]
 pub struct DesiredObject {

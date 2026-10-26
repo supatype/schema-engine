@@ -20,7 +20,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::catalog::CatalogState;
-use super::constraints::DbConstraintType;
+use super::constraints::{DbConstraint, DbConstraintType};
+use super::indexes::DbIndex;
+use super::tables::DbTable;
 use crate::state::database_state::DatabaseState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -73,6 +75,18 @@ impl ObjectKind {
     }
 }
 
+/// What identifies an object: the four things both the desired set and the live fingerprints are
+/// keyed by, and the ledger's primary key.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectKey {
+    pub kind: ObjectKind,
+    pub schema: String,
+    /// The table for table-scoped kinds, `table.column` for column-scoped ones, empty otherwise.
+    pub parent: String,
+    pub name: String,
+}
+
 /// One object's identity and the hash of what it does.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +100,17 @@ pub struct ObjectFingerprint {
     /// What was hashed, one `label=value` line per part, so a ledger can show a drifted object's
     /// recorded definition against its live one without a renderer per kind.
     pub definition: String,
+}
+
+impl ObjectFingerprint {
+    pub fn key(&self) -> ObjectKey {
+        ObjectKey {
+            kind: self.kind,
+            schema: self.schema.clone(),
+            parent: self.parent.clone(),
+            name: self.name.clone(),
+        }
+    }
 }
 
 /// Whitespace collapsed to single spaces, trimmed, no trailing semicolon. Case is kept: deparsed
@@ -209,7 +234,35 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
         out.push(entry(ObjectKind::Schema, &s.name, "", &s.name, &[]));
     }
 
-    for table in &db.tables {
+    // Columnar indexes from the differ's state, expression-only ones from the catalog: the same
+    // type, kept in two lists only until the ledger owns indexes.
+    relation_entries(
+        schema,
+        &db.tables,
+        &db.constraints,
+        db.indexes.iter().chain(&catalog.expression_indexes),
+        &mut out,
+    );
+    for e in &catalog.engine_tables {
+        relation_entries(&e.schema, &e.tables, &e.constraints, &e.indexes, &mut out);
+    }
+
+    policy_and_catalog_entries(db, catalog, &mut out);
+
+    out.sort();
+    out
+}
+
+/// Tables with their columns, constraints and indexes, for the project schema and for each engine
+/// schema alike.
+fn relation_entries<'a>(
+    schema: &str,
+    tables: &[DbTable],
+    constraints: &[DbConstraint],
+    indexes: impl IntoIterator<Item = &'a DbIndex>,
+    out: &mut Vec<ObjectFingerprint>,
+) {
+    for table in tables {
         let mut column_parts: Vec<String> = Vec::with_capacity(table.columns.len());
         for col in &table.columns {
             let default = col
@@ -252,7 +305,7 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
         ));
     }
 
-    for c in &db.constraints {
+    for c in constraints {
         let columns = c.columns.join(",");
         match c.constraint_type {
             DbConstraintType::PrimaryKey => out.push(entry(
@@ -305,9 +358,7 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
         }
     }
 
-    // Columnar indexes from the differ's state, expression-only ones from the catalog: the same
-    // type, kept in two lists only until the ledger owns indexes.
-    for i in db.indexes.iter().chain(catalog.expression_indexes.iter()) {
+    for i in indexes {
         let columns = i.columns.join(",");
         let expressions = i
             .expressions
@@ -334,7 +385,15 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
             ],
         ));
     }
+}
 
+/// Policies from the differ's state and every kind the catalog sweep reads.
+fn policy_and_catalog_entries(
+    db: &DatabaseState,
+    catalog: &CatalogState,
+    out: &mut Vec<ObjectFingerprint>,
+) {
+    let schema = db.schema.as_str();
     let roles_of: HashMap<(&str, &str), &Vec<String>> = catalog
         .policy_roles
         .iter()
@@ -402,7 +461,7 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
     }
 
     for f in &catalog.functions {
-        let name = format!("{}({})", f.name, f.identity_arguments);
+        let name = format!("{}({})", f.name, f.identity_types);
         let body = normalise_sql(&f.body);
         out.push(entry(
             ObjectKind::Function,
@@ -509,9 +568,6 @@ pub fn fingerprints(db: &DatabaseState, catalog: &CatalogState) -> Vec<ObjectFin
             &[j.schedule.as_str(), j.command.as_str(), flag(j.active)],
         ));
     }
-
-    out.sort();
-    out
 }
 
 #[cfg(test)]

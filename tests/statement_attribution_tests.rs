@@ -24,7 +24,6 @@ use supatype_engine::{
     generator::sql::{migration, triggers},
     introspector::{
         self,
-        catalog::ENGINE_SCHEMAS,
         fingerprint::{fingerprints, ObjectKind},
     },
     parser,
@@ -205,38 +204,10 @@ fn creates(statement: &Statement) -> bool {
         || u.starts_with("GRANT ")
 }
 
-/// Tables, their constraints and their indexes are read from the project schema only
-/// (`introspector::introspect`); the catalog sweep covers the engine schemas for every other
-/// kind. So the engine's own tables (`_supatype.preview_links` and friends) have no live row yet,
-/// and the ledger cannot record them until that sweep widens. Named here so the gap is visible,
-/// not quietly passed over.
-fn outside_live_coverage(key: &ObjectKey) -> bool {
-    matches!(
-        key.kind,
-        ObjectKind::Table
-            | ObjectKind::PrimaryKey
-            | ObjectKind::ForeignKey
-            | ObjectKind::Unique
-            | ObjectKind::Check
-            | ObjectKind::Index
-    ) && ENGINE_SCHEMAS.contains(&key.schema.as_str())
-}
-
-/// Function keys carry the declared argument list; the live key carries what
-/// `pg_get_function_identity_arguments` reports. Phase 3 canonicalises the declared side, so
-/// until then a function is matched on schema and name.
+/// Exact key equality, every kind, every schema: the engine's own tables are introspected like a
+/// model's, and a function's declared signature is canonicalised to the catalog's
+/// `identity_types`, so there is no kind matched loosely.
 fn exists_live(key: &ObjectKey, live: &BTreeSet<ObjectKey>) -> bool {
-    if outside_live_coverage(key) {
-        return true;
-    }
-    if key.kind == ObjectKind::Function {
-        let bare = key.name.split('(').next().unwrap_or("");
-        return live.iter().any(|l| {
-            l.kind == ObjectKind::Function
-                && l.schema == key.schema
-                && l.name.split('(').next() == Some(bare)
-        });
-    }
     live.contains(key)
 }
 
@@ -266,12 +237,7 @@ async fn after_a_push_every_created_object_exists_under_its_key() {
             let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
             let live: BTreeSet<ObjectKey> = fingerprints(&db, &catalog)
                 .into_iter()
-                .map(|f| ObjectKey {
-                    kind: f.kind,
-                    schema: f.schema,
-                    parent: f.parent,
-                    name: f.name,
-                })
+                .map(|f| f.key())
                 .collect();
 
             let statements =

@@ -50,7 +50,28 @@ pub struct CatalogState {
     pub rls_attributes: Vec<DbRlsAttributes>,
     /// The roles each policy applies to, which `DatabaseState::rls_policies` does not carry.
     pub policy_roles: Vec<DbPolicyRoles>,
+    /// The engine's own tables, with their constraints and indexes, one entry per engine schema
+    /// that has any. `DatabaseState` reads the project schema only; without this the registry and
+    /// the preview links have no live fingerprint and the ledger could not record them.
+    #[serde(default)]
+    pub engine_tables: Vec<EngineSchemaTables>,
 }
+
+/// The tables of one engine schema, read with the same readers as the project schema so an engine
+/// table gets the same fingerprints as a model table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineSchemaTables {
+    pub schema: String,
+    pub tables: Vec<super::tables::DbTable>,
+    /// Columnar and expression-only indexes together: the ledger keys them the same way.
+    pub indexes: Vec<DbIndex>,
+    pub constraints: Vec<super::constraints::DbConstraint>,
+}
+
+/// The engine schemas swept for the functions and policies the engine adds to them but never for
+/// tables: those belong to the server and the image. Every other engine schema's tables are ours.
+const HELPER_ONLY_SCHEMAS: &[&str] = &["auth", "storage"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +112,13 @@ pub struct DbFunction {
     pub name: String,
     /// `pg_get_function_identity_arguments`: what, with the name, identifies an overload.
     pub identity_arguments: String,
+    /// The argument types alone, built-ins as `format_type` writes them and everything else
+    /// schema-qualified: `text, timestamp with time zone, public.posts`. Unlike
+    /// `identity_arguments` this does not depend on the session's `search_path` and carries no
+    /// argument names, so the declared side (`crate::desired::identity`) can produce the same
+    /// string without a database. The ledger keys a function by name plus this.
+    #[serde(default)]
+    pub identity_types: String,
     pub return_type: String,
     pub language: String,
     /// `i`, `s` or `v`.
@@ -212,7 +240,36 @@ pub async fn read(conn: &mut PgConnection, schema: &str) -> Result<CatalogState>
         cron_jobs: read_cron_jobs(conn).await?,
         rls_attributes: read_rls_attributes(conn, &schemas).await?,
         policy_roles: read_policy_roles(conn, schema).await?,
+        engine_tables: read_engine_tables(conn, schema).await?,
     })
+}
+
+async fn read_engine_tables(
+    conn: &mut PgConnection,
+    project_schema: &str,
+) -> Result<Vec<EngineSchemaTables>> {
+    let mut out = Vec::new();
+    for s in ENGINE_SCHEMAS
+        .iter()
+        .filter(|s| **s != project_schema && !HELPER_ONLY_SCHEMAS.contains(s))
+    {
+        let tables = super::tables::read(conn, s).await?;
+        if tables.is_empty() {
+            continue;
+        }
+        let indexes = indexes::read_all(conn, s).await?;
+        out.push(EngineSchemaTables {
+            schema: (*s).to_string(),
+            tables,
+            indexes: indexes
+                .columnar
+                .into_iter()
+                .chain(indexes.expression_only)
+                .collect(),
+            constraints: super::constraints::read(conn, s).await?,
+        });
+    }
+    Ok(out)
 }
 
 async fn read_policy_roles(conn: &mut PgConnection, schema: &str) -> Result<Vec<DbPolicyRoles>> {
@@ -336,15 +393,28 @@ type FunctionRow = (
     String,
     String,
     String,
+    String,
     bool,
     String,
     Option<String>,
 );
 
 async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<Vec<DbFunction>> {
+    // `identity_types`: `proargtypes` holds the input argument types in order. A `pg_catalog`
+    // type is written by `format_type` (`timestamp with time zone`, `text[]`); any other type is
+    // schema-qualified by hand, because `format_type` would leave it bare when its schema is on
+    // the `search_path`, and the key must not change with the session.
     let rows: Vec<FunctionRow> = sqlx::query_as(
         "SELECT n.nspname::text, p.proname::text,
                 pg_get_function_identity_arguments(p.oid),
+                COALESCE((SELECT string_agg(
+                            CASE WHEN tn.nspname = 'pg_catalog'
+                                 THEN pg_catalog.format_type(a.oid, NULL)
+                                 ELSE quote_ident(tn.nspname) || '.' || quote_ident(t.typname) END,
+                            ', ' ORDER BY a.ord)
+                          FROM unnest(p.proargtypes) WITH ORDINALITY AS a(oid, ord)
+                          JOIN pg_type t ON t.oid = a.oid
+                          JOIN pg_namespace tn ON tn.oid = t.typnamespace), ''),
                 pg_get_function_result(p.oid),
                 l.lanname::text, p.provolatile::text, p.prosecdef, p.prosrc,
                 obj_description(p.oid, 'pg_proc')
@@ -366,6 +436,7 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
                 schema,
                 name,
                 identity_arguments,
+                identity_types,
                 return_type,
                 language,
                 volatility,
@@ -376,6 +447,7 @@ async fn read_functions(conn: &mut PgConnection, schemas: &[String]) -> Result<V
                 schema,
                 name,
                 identity_arguments,
+                identity_types,
                 return_type,
                 language,
                 volatility,
