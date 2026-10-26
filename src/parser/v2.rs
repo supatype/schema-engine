@@ -54,6 +54,7 @@ pub fn deserialize_schema(value: &Value) -> Result<SchemaAst> {
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?,
         warnings: deserialize_optional_string_vec(value, "warnings"),
+        recorded_names: Default::default(),
     })
 }
 

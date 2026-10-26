@@ -196,6 +196,7 @@ mod tests {
                 dropped_tables: &BTreeSet::new(),
                 location: no_location,
                 named_by_the_engine: &BTreeSet::new(),
+                renamed_tables: &BTreeMap::new(),
                 kinds: &[ObjectKind::Policy],
             })
         }
