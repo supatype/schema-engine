@@ -47,7 +47,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=profile;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -94,7 +94,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=team;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [
@@ -198,7 +198,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=team;fields=slug;v=1"
+        "comment": null
       }
     ],
     "rlsPolicies": [

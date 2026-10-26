@@ -291,3 +291,35 @@ async fn a_renamed_table_keeps_its_rows_and_its_records_follow_it() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_unique_an_older_engine_recorded_with_its_stamp_is_not_rebuilt() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &schema(true, false)).await.unwrap();
+        let oid = || async {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT oid::bigint FROM pg_constraint WHERE conname = 'posts_slug_key'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        };
+        let before = oid().await;
+        // How an engine before Phase 6 recorded it: the statement it ran, stamp and all, and a
+        // fingerprint taken over that statement.
+        exec(
+            &pool,
+            "UPDATE _supatype.managed_objects
+                SET desired_sql = desired_sql || E'\nCOMMENT ON CONSTRAINT \"posts_slug_key\" ON \"public\".\"posts\" IS ''supatype:managed;kind=unique_constraint;table=posts;fields=slug;v=1'';',
+                    desired_fp = 'from-an-older-engine'
+              WHERE kind = 'unique' AND name = 'posts_slug_key'",
+        )
+        .await
+        .unwrap();
+
+        let outcome = push(&pool, &schema(true, false)).await.unwrap();
+        assert!(up_to_date(&outcome), "the constraint was replaced: {outcome:?}");
+        assert_eq!(oid().await, before, "the constraint was dropped and added again");
+    })
+    .await;
+}

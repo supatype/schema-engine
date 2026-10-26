@@ -259,10 +259,10 @@ async fn a_layer_function_an_older_engine_wrote_is_taken_over_and_brought_up_to_
 
         // No rows, and a body from before: what an upgrade finds. The layer's own schemas are
         // the engine's, so this is ours by location, not a conflict.
+        common::as_an_older_engine_left_it(&pool).await.unwrap();
         exec(
             &pool,
-            "DELETE FROM _supatype.managed_objects WHERE true;
-             CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts() RETURNS boolean
+            "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts() RETURNS boolean
              LANGUAGE sql AS $$ SELECT TRUE $$",
         )
         .await

@@ -97,7 +97,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=customers;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -154,7 +154,7 @@
             "numericScale": 2
           }
         ],
-        "comment": "supatype:managed;kind=table;table=order_items;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -231,7 +231,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=orders;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -338,7 +338,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=products;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [
@@ -509,7 +509,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=customers;fields=email;v=1"
+        "comment": null
       },
       {
         "table": "customers",
@@ -537,7 +537,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=customers;fields=stripeId;v=1"
+        "comment": null
       },
       {
         "table": "order_items",
@@ -653,7 +653,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=products;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "products",

@@ -38,7 +38,7 @@ pub fn diff(
     // "removed table" pass does not drop live M2M tables as orphans (and then
     // skip recreate because they still appear in the initial db snapshot).
     //
-    // Snapshot tables likewise, and there the stakes are higher: they carry the managed marker, so
+    // Snapshot tables likewise, and there the stakes are higher: they are Supatype's by the ledger, so
     // the ownership gate below is no protection at all, and dropping one takes every version of
     // every record with it. A model that *stops* declaring `versions` does fall out of this set, so
     // its history is dropped, destructively, which needs `--force`, the right ceremony for

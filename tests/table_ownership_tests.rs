@@ -170,10 +170,10 @@ async fn a_column_is_not_dropped_from_an_unmanaged_table() {
 }
 
 #[tokio::test]
-async fn a_table_the_engine_creates_is_stamped() {
+async fn a_table_the_engine_creates_is_recorded_and_its_comment_left_alone() {
     common::with_integration_pool(|pool| async move {
-        // The gate is only safe if the engine marks what it makes. Otherwise every table becomes
-        // permanently undroppable and the differ can never converge.
+        // The gate is only safe if the engine knows what it made. Since Phase 6 that is the
+        // ledger's row, not a stamp: the comment is the user's and the engine writes none.
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
         common::push(&pool, &ast).await.expect("migration applies");
 
@@ -182,27 +182,27 @@ async fn a_table_the_engine_creates_is_stamped() {
                 .fetch_one(&pool)
                 .await
                 .expect("the table exists");
-
-        assert!(
-            comment
-                .as_deref()
-                .unwrap_or("")
-                .starts_with("supatype:managed"),
-            "a table the engine created carries no ownership marker, so it could never be dropped \
-             again; comment was {comment:?}"
+        assert_eq!(
+            comment, None,
+            "the engine wrote a comment on a table it created"
         );
+        let recorded: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM _supatype.managed_objects
+                             WHERE kind = 'table' AND name = 'widget' AND status = 'managed')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(recorded, "a table the engine created is not in the ledger");
 
-        // And the round trip: with the stamp in place, removing it from the schema drops it.
+        // And the round trip: recorded as ours, removing it from the schema drops it.
         let empty = parser::parse(NO_MODELS).expect("empty schema parses");
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-        let second = differ::diff(&empty, &db).unwrap();
-        assert!(
-            op_names(&second.operations)
-                .iter()
-                .any(|o| o.contains("DropTable") && o.contains("widget")),
-            "the gate must not make our own tables undroppable; ops: {:?}",
-            op_names(&second.operations)
-        );
+        common::push_with(&pool, &empty, forced()).await.unwrap();
+        let gone: bool = sqlx::query_scalar("SELECT to_regclass('public.widget') IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(gone, "the gate must not make our own tables undroppable");
     })
     .await;
 }

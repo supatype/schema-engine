@@ -163,10 +163,6 @@ CREATE TABLE IF NOT EXISTS "public"."students" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "students_email_key" ON "public"."students" IS 'supatype:managed;kind=unique_constraint;table=students;fields=email;v=1';
-
-COMMENT ON TABLE "public"."students" IS 'supatype:managed;kind=table;table=students;fields=;v=1';
-
 -- [safe] Create table: courses
 CREATE TABLE IF NOT EXISTS "public"."courses" (
     "id" UUID CONSTRAINT "courses_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -177,19 +173,11 @@ CREATE TABLE IF NOT EXISTS "public"."courses" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "courses_slug_key" ON "public"."courses" IS 'supatype:managed;kind=unique_constraint;table=courses;fields=slug;v=1';
-
-COMMENT ON TABLE "public"."courses" IS 'supatype:managed;kind=table;table=courses;fields=;v=1';
-
 -- [safe] Create table: tags
 CREATE TABLE IF NOT EXISTS "public"."tags" (
     "id" UUID CONSTRAINT "tags_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
     "name" TEXT NOT NULL CONSTRAINT "tags_name_key" UNIQUE
 );
-
-COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;kind=unique_constraint;table=tags;fields=name;v=1';
-
-COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fields=;v=1';
 
 -- [safe] Create junction table: enrollments
 CREATE TABLE IF NOT EXISTS "public"."enrollments" (
@@ -198,16 +186,12 @@ CREATE TABLE IF NOT EXISTS "public"."enrollments" (
     CONSTRAINT "enrollments_pkey" PRIMARY KEY ("student_id", "course_id")
 );
 
-COMMENT ON TABLE "public"."enrollments" IS 'supatype:managed;kind=table;table=enrollments;fields=;v=1';
-
 -- [safe] Create junction table: course_tags
 CREATE TABLE IF NOT EXISTS "public"."course_tags" (
     "tag_id" UUID NOT NULL CONSTRAINT "course_tags_tag_id_fkey" REFERENCES "public"."tags" ("id") ON DELETE CASCADE,
     "course_id" UUID NOT NULL CONSTRAINT "course_tags_course_id_fkey" REFERENCES "public"."courses" ("id") ON DELETE CASCADE,
     CONSTRAINT "course_tags_pkey" PRIMARY KEY ("tag_id", "course_id")
 );
-
-COMMENT ON TABLE "public"."course_tags" IS 'supatype:managed;kind=table;table=course_tags;fields=;v=1';
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_students"("students" "public"."students")

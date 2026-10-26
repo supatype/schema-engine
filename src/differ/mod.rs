@@ -25,7 +25,7 @@ pub struct DiffOutput {
     /// row level security on it can stop another application reading its own data, and it is the same
     /// argument that would license dropping its columns.
     ///
-    /// Computed here because the generators see only the AST, and the marker lives in the database.
+    /// Computed here because the generators see only the AST, and ownership lives in the database.
     #[serde(default)]
     pub unmanaged_model_tables: Vec<String>,
     /// How field rules will be enforced on *this* database.

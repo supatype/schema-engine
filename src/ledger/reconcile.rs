@@ -24,7 +24,7 @@ use serde::Serialize;
 use crate::desired::{never_removed, DesiredObject, ObjectKey};
 use crate::introspector::fingerprint::{ObjectFingerprint, ObjectKind};
 
-use super::{desired_fingerprint, LedgerRow, Status};
+use super::{LedgerRow, Status};
 
 pub struct Inputs<'a> {
     pub desired: &'a [DesiredObject],
@@ -633,7 +633,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                 status,
             }),
             (Some(d), Some(l)) => {
-                if desired_fingerprint(key.kind, &d.create_sql) != row.desired_fp {
+                if !row.intends(&d.create_sql) {
                     changes.push(Action::Replace {
                         key,
                         create_sql: d.create_sql.clone(),
@@ -726,6 +726,7 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
 mod tests {
     use super::*;
     use crate::introspector::fingerprint::hash;
+    use crate::ledger::desired_fingerprint;
 
     fn key(name: &str) -> ObjectKey {
         ObjectKey {

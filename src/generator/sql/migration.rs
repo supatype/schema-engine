@@ -6,11 +6,9 @@ use crate::generator::sql::column_conversion::{
 };
 use crate::ledger::reconcile;
 use crate::managed::{
-    comment_on_constraint_sql, expected_check_constraint_name, expected_model_constraint_name,
-    expected_unique_constraint_name, foreign_key_name, managed_comment, primary_key_name,
-    type_check_name,
+    expected_check_constraint_name, expected_model_constraint_name,
+    expected_unique_constraint_name, foreign_key_name, primary_key_name, type_check_name,
 };
-use crate::parser::accessors::{column_names_for, db_unique};
 use crate::parser::ast::{
     scalar_of, AccessRule, DefaultValueAst, FieldAst, IndexAst, IndexMethod, ModelAst,
     RelationCardinality, RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
@@ -789,10 +787,8 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
         } => {
             let (ref_table_a, pk_a, type_a) = junction_ref_for_model(ast, table_a);
             let (ref_table_b, pk_b, type_b) = junction_ref_for_model(ast, table_b);
-            // Stamped like any other table Supatype creates. A junction table is *entirely* ours
-            // (it has no model of its own), so without the marker the ownership gate would refuse to
-            // drop it ever, and a removed many-to-many would leave its junction behind for good.
-            let marker = managed_comment("table", table, &[]);
+            // Ours by its ledger row, like any table Supatype creates (Phase 4.11), so a removed
+            // many-to-many takes its junction with it.
             let fk_a_name = foreign_key_name(table, fk_a);
             let fk_b_name = foreign_key_name(table, fk_b);
             let pk_name = primary_key_name(table);
@@ -801,8 +797,7 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
                  \"{fk_a}\" {type_a} NOT NULL CONSTRAINT \"{fk_a_name}\" REFERENCES \"{schema}\".\"{ref_table_a}\" (\"{pk_a}\") ON DELETE CASCADE,\n    \
                  \"{fk_b}\" {type_b} NOT NULL CONSTRAINT \"{fk_b_name}\" REFERENCES \"{schema}\".\"{ref_table_b}\" (\"{pk_b}\") ON DELETE CASCADE,\n    \
                  CONSTRAINT \"{pk_name}\" PRIMARY KEY (\"{fk_a}\", \"{fk_b}\")\n\
-                 );\n\n\
-                 COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{marker}';"
+                 );"
             ))
         }
         Operation::CreateVersionsTable {
@@ -919,26 +914,6 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         col_defs.join(",\n")
     )];
 
-    // Stamp inline UNIQUE constraints created by CREATE TABLE.
-    for (field_name, field) in &model.fields {
-        if !db_unique(field) || matches!(field, FieldAst::Relation(_)) {
-            continue;
-        }
-        for col in column_names_for(field_name, field) {
-            if col.is_empty() {
-                continue;
-            }
-            let constraint = expected_unique_constraint_name(table, &col);
-            let comment = managed_comment("unique_constraint", table, &[col.as_str()]);
-            statements.push(comment_on_constraint_sql(
-                table,
-                &constraint,
-                &comment,
-                schema,
-            ));
-        }
-    }
-
     // Model-level constraints, as named table constraints. Checks carry no stamp: the ledger
     // records them (plan 3.2) and their comments are the user's.
     for (index, rule) in model.annotations.db.constraints.iter().enumerate() {
@@ -954,9 +929,9 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         statements.push(create_index_sql(table, index, schema)?);
     }
 
-    // And the ones nobody declares. Shared with the differ rather than written twice: these
-    // carry a managed comment, so an index the differ cannot account for is one it proposes
-    // dropping, and every push then dropped it and proposed dropping it again.
+    // And the ones nobody declares. Shared with the reconcile rather than written twice: these
+    // are Supatype's by the ledger, so an index the desired set cannot account for is one a push
+    // drops, and every push would then drop it and create it again.
     for index in implicit_model_indexes(model) {
         statements.push(create_index_sql(table, &index, schema)?);
     }
@@ -971,16 +946,8 @@ fn create_table_sql(model: &ModelAst, schema: &str, ast: &SchemaAst) -> Result<S
         ));
     }
 
-    // Stamp ownership, exactly as indexes, constraints and RLS policies already do.
-    //
-    // This is what lets the differ destroy this table later and refuse to destroy one it merely
-    // found. Without it, every table in the managed schema was a drop candidate, which on a
-    // database Supatype did not create is someone else's data.
-    let table_marker = managed_comment("table", table, &[]);
-    statements.push(format!(
-        "COMMENT ON TABLE \"{schema}\".\"{table}\" IS '{table_marker}';"
-    ));
-
+    // No ownership stamp (Phase 6): the push records the table in the ledger, which is what lets
+    // the differ drop it later and refuse to drop one it merely found. The comment is the user's.
     Ok(statements.join("\n\n"))
 }
 
@@ -1749,10 +1716,8 @@ fn add_unique_constraint_sql(
     constraint: &str,
     schema: &str,
 ) -> Result<String> {
-    let comment = managed_comment("unique_constraint", table, &[column]);
-    let comment_sql = comment_on_constraint_sql(table, constraint, &comment, schema);
     Ok(format!(
-        "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" UNIQUE (\"{column}\");\n{comment_sql}"
+        "ALTER TABLE \"{schema}\".\"{table}\" ADD CONSTRAINT \"{constraint}\" UNIQUE (\"{column}\");"
     ))
 }
 

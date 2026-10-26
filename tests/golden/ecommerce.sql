@@ -168,13 +168,7 @@ CREATE TABLE IF NOT EXISTS "public"."customers" (
     "deleted_at" TIMESTAMPTZ
 );
 
-COMMENT ON CONSTRAINT "customers_email_key" ON "public"."customers" IS 'supatype:managed;kind=unique_constraint;table=customers;fields=email;v=1';
-
-COMMENT ON CONSTRAINT "customers_stripeId_key" ON "public"."customers" IS 'supatype:managed;kind=unique_constraint;table=customers;fields=stripeId;v=1';
-
 CREATE INDEX IF NOT EXISTS "customers_deleted_at_idx" ON "public"."customers" USING btree ("deleted_at");
-
-COMMENT ON TABLE "public"."customers" IS 'supatype:managed;kind=table;table=customers;fields=;v=1';
 
 -- [safe] Create table: products
 CREATE TABLE IF NOT EXISTS "public"."products" (
@@ -190,11 +184,7 @@ CREATE TABLE IF NOT EXISTS "public"."products" (
     "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON CONSTRAINT "products_slug_key" ON "public"."products" IS 'supatype:managed;kind=unique_constraint;table=products;fields=slug;v=1';
-
 CREATE INDEX IF NOT EXISTS "products_status_idx" ON "public"."products" USING btree ("status");
-
-COMMENT ON TABLE "public"."products" IS 'supatype:managed;kind=table;table=products;fields=;v=1';
 
 -- [safe] Create table: orders
 CREATE TABLE IF NOT EXISTS "public"."orders" (
@@ -209,8 +199,6 @@ CREATE TABLE IF NOT EXISTS "public"."orders" (
 
 CREATE INDEX IF NOT EXISTS "orders_customer_id_status_idx" ON "public"."orders" USING btree ("customer_id", "status");
 
-COMMENT ON TABLE "public"."orders" IS 'supatype:managed;kind=table;table=orders;fields=;v=1';
-
 -- [safe] Create table: order_items
 CREATE TABLE IF NOT EXISTS "public"."order_items" (
     "id" UUID CONSTRAINT "order_items_pkey" PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -219,8 +207,6 @@ CREATE TABLE IF NOT EXISTS "public"."order_items" (
     "quantity" INTEGER NOT NULL,
     "unitPrice" NUMERIC(10, 2) NOT NULL
 );
-
-COMMENT ON TABLE "public"."order_items" IS 'supatype:managed;kind=table;table=order_items;fields=;v=1';
 
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_customers"("customers" "public"."customers")

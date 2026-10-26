@@ -77,7 +77,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=_global_site_settings;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -134,7 +134,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=attendee;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -201,7 +201,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=chat_message;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -288,7 +288,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=page;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -385,7 +385,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=page_versions;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -452,7 +452,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=room;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -559,7 +559,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=speaker;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -656,7 +656,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=speaker_versions;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -773,7 +773,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=sponsor;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -920,7 +920,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=talk;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -1017,7 +1017,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=talk_versions;fields=;v=1"
+        "comment": null
       },
       {
         "schema": "public",
@@ -1114,7 +1114,7 @@
             "numericScale": null
           }
         ],
-        "comment": "supatype:managed;kind=table;table=ticket;fields=;v=1"
+        "comment": null
       }
     ],
     "indexes": [
@@ -1663,7 +1663,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=page;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "page",
@@ -1824,7 +1824,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=speaker;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "speaker_versions",
@@ -1895,7 +1895,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=sponsor;fields=name;v=1"
+        "comment": null
       },
       {
         "table": "sponsor",
@@ -1989,7 +1989,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=talk;fields=slug;v=1"
+        "comment": null
       },
       {
         "table": "talk",
@@ -2122,7 +2122,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
-        "comment": "supatype:managed;kind=unique_constraint;table=ticket;fields=reference;v=1"
+        "comment": null
       }
     ],
     "rlsPolicies": [

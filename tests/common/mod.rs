@@ -298,6 +298,24 @@ pub async fn exec(pool: &sqlx::PgPool, sql: &str) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(sql).execute(pool).await.map(|_| ())
 }
 
+/// The database as an engine from before the ledger left it: no ledger rows, and every table in
+/// `public` carrying the `supatype:managed` stamp that engine wrote on the tables it created (the
+/// engine has written none since Phase 6, so a test has to put them there).
+#[allow(dead_code)]
+pub async fn as_an_older_engine_left_it(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    exec(
+        pool,
+        "DELETE FROM _supatype.managed_objects WHERE true;
+         DO $stamp$ DECLARE t text; BEGIN
+           FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+             EXECUTE format('COMMENT ON TABLE public.%I IS %L', t,
+                            'supatype:managed;kind=table;table=' || t || ';fields=;v=1');
+           END LOOP;
+         END $stamp$;",
+    )
+    .await
+}
+
 /// Plan 3.5: a push that would put back access changed outside Supatype refuses without consent,
 /// before anything is applied; with `overwrite_drift` it puts it back. Asserts the first, then
 /// plans again and does the second.
