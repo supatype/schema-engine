@@ -32,6 +32,9 @@ pub struct Inputs<'a> {
     /// Desired objects this push already creates as part of another statement (a constraint
     /// declared inline in `CREATE TABLE` or `ADD COLUMN`). Their `Create` runs no SQL of its own.
     pub created_by_parent: &'a BTreeSet<ObjectKey>,
+    /// Tables this push drops. An owned object on one goes with it (plan 3.3): its row is removed
+    /// and no drop of its own is emitted, since the table will not be there to alter.
+    pub dropped_tables: &'a BTreeSet<ObjectKey>,
     pub kinds: &'a [ObjectKind],
 }
 
@@ -335,6 +338,15 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
         .map(|f| (f.key(), f))
         .collect();
 
+    let goes_with_its_table = |key: &ObjectKey| {
+        inputs.dropped_tables.contains(&ObjectKey {
+            kind: ObjectKind::Table,
+            schema: key.schema.clone(),
+            parent: String::new(),
+            name: key.parent.clone(),
+        })
+    };
+
     let mut removals = Vec::new();
     let mut changes = Vec::new();
 
@@ -376,11 +388,11 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
                     });
                 }
             }
-            (None, Some(_)) => removals.push(Action::Drop {
+            (None, Some(_)) if !goes_with_its_table(&key) => removals.push(Action::Drop {
                 key,
                 recorded_sql: Some(row.desired_sql.clone()),
             }),
-            (None, None) => removals.push(Action::Forget { key }),
+            (None, _) => removals.push(Action::Forget { key }),
         }
     }
 
@@ -428,7 +440,11 @@ pub fn reconcile(inputs: Inputs<'_>) -> Plan {
     // Stamped objects of a moved kind that nothing declares any more (section 7, last paragraph):
     // ours by their own record, so they are dropped, as the stamp-reading differ dropped them.
     for (key, l) in &live {
-        if !l.stamped() || ledger.contains_key(key) || desired.contains_key(key) {
+        if !l.stamped()
+            || ledger.contains_key(key)
+            || desired.contains_key(key)
+            || goes_with_its_table(key)
+        {
             continue;
         }
         removals.push(Action::Drop {
@@ -511,6 +527,7 @@ mod tests {
             ledger,
             live,
             created_by_parent: &created_by_parent.iter().cloned().collect(),
+            dropped_tables: &BTreeSet::new(),
             kinds: &[ObjectKind::Check],
         })
         .actions
@@ -617,6 +634,7 @@ mod tests {
             ledger: &[],
             live: std::slice::from_ref(&l),
             created_by_parent: &none,
+            dropped_tables: &none,
             kinds: &kinds,
         });
         assert!(
@@ -637,6 +655,7 @@ mod tests {
             ledger: &[],
             live: std::slice::from_ref(&l),
             created_by_parent: &none,
+            dropped_tables: &none,
             kinds: &kinds,
         });
         assert!(
@@ -803,5 +822,31 @@ mod tests {
             "{actions:?}"
         );
         assert!(actions.iter().all(|a| a.key().kind == ObjectKind::Check));
+    }
+
+    #[test]
+    fn an_owned_object_on_a_table_the_push_drops_goes_with_it() {
+        let d = desired("posts_title_check", "length(title) > 0");
+        let l = live("posts_title_check", "length(title) > 0");
+        let r = row(&d, &l, Status::Managed);
+        let table = ObjectKey {
+            kind: ObjectKind::Table,
+            schema: "public".into(),
+            parent: String::new(),
+            name: "posts".into(),
+        };
+        let dropped: BTreeSet<ObjectKey> = [table].into_iter().collect();
+        let none = BTreeSet::new();
+        let plan = reconcile(Inputs {
+            desired: &[],
+            ledger: std::slice::from_ref(&r),
+            live: &[stamped(l.clone())],
+            created_by_parent: &none,
+            dropped_tables: &dropped,
+            kinds: &[ObjectKind::Check],
+        });
+        // The row goes; no `ALTER TABLE` is emitted against a table that will not be there.
+        assert_eq!(plan.actions, [Action::Forget { key: d.key.clone() }]);
+        assert!(plan.actions.iter().all(|a| a.sql().is_empty()));
     }
 }

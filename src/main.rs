@@ -528,9 +528,11 @@ async fn main() -> Result<()> {
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
             let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
+            let catalog = supatype_engine::introspector::introspect_catalog(&pool, &schema).await?;
             let ledger =
                 supatype_engine::ledger::load_if_present(&mut *pool.acquire().await?).await?;
-            let report = supatype_engine::differ::doctor::report(&ast, &db_state, &ledger);
+            let report =
+                supatype_engine::differ::doctor::report(&ast, &db_state, &catalog, &ledger)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             if strict && supatype_engine::differ::doctor::has_strict_issues(&report) {
                 std::process::exit(1);
@@ -559,12 +561,15 @@ async fn main() -> Result<()> {
             // last push's snapshot, it found nothing to stamp for a table that had since lost its
             // marker, while push refused it: no way forward through the CLI.
             let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
+            let catalog = supatype_engine::introspector::introspect_catalog(&pool, &schema).await?;
 
-            let stamp_sql =
-                supatype_engine::differ::doctor::adopt_stamp_sql(&ast, &db_state, &schema);
+            let stamp_sql = supatype_engine::differ::doctor::adopt_stamp_sql(
+                &ast, &db_state, &catalog, &schema,
+            )?;
             let ledger =
                 supatype_engine::ledger::load_if_present(&mut *pool.acquire().await?).await?;
-            let doctor_report = supatype_engine::differ::doctor::report(&ast, &db_state, &ledger);
+            let doctor_report =
+                supatype_engine::differ::doctor::report(&ast, &db_state, &catalog, &ledger)?;
 
             if !yes {
                 println!(

@@ -340,8 +340,12 @@ pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Va
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
+    let catalog = crate::introspector::introspect_catalog(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
     let ledger = ledger_rows(&pool).await?;
-    let report = crate::differ::doctor::report(&ast, &db_state, &ledger);
+    let report =
+        crate::differ::doctor::report(&ast, &db_state, &catalog, &ledger).map_err(engine_error)?;
     Ok(Json(serde_json::to_value(&report).unwrap()))
 }
 
@@ -369,10 +373,15 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
     let db_state = crate::introspector::introspect(&pool, &req.schema)
         .await
         .map_err(engine_error)?;
+    let catalog = crate::introspector::introspect_catalog(&pool, &req.schema)
+        .await
+        .map_err(engine_error)?;
 
-    let stamp_sql = crate::differ::doctor::adopt_stamp_sql(&ast, &db_state, &req.schema);
+    let stamp_sql = crate::differ::doctor::adopt_stamp_sql(&ast, &db_state, &catalog, &req.schema)
+        .map_err(engine_error)?;
     let ledger = ledger_rows(&pool).await?;
-    let doctor_report = crate::differ::doctor::report(&ast, &db_state, &ledger);
+    let doctor_report =
+        crate::differ::doctor::report(&ast, &db_state, &catalog, &ledger).map_err(engine_error)?;
 
     if !req.yes {
         return Ok(Json(serde_json::json!({

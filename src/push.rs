@@ -22,12 +22,12 @@ use anyhow::{bail, Context, Result};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
 use crate::desired::{desired_objects, statements, ObjectKey};
-use crate::differ::{self, DiffOutput};
+use crate::differ::{self, DiffOutput, Operation};
 use crate::generator::sql::migration_errors::{self, CheckSite};
 use crate::generator::sql::{migration, rollback, storage, triggers, versions};
 use crate::generator::typescript::admin;
 use crate::introspector::fingerprint::{fingerprints, ObjectFingerprint, ObjectKind};
-use crate::introspector::{self, catalog};
+use crate::introspector::{self, catalog, catalog::CatalogState};
 use crate::ledger::{self, probe, reconcile, LedgerRow};
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
@@ -113,6 +113,7 @@ impl Outcome {
 /// after apply, to record.
 struct Live {
     db: DatabaseState,
+    catalog: CatalogState,
     fingerprints: Vec<ObjectFingerprint>,
 }
 
@@ -120,7 +121,28 @@ async fn live(conn: &mut PgConnection, schema: &str) -> Result<Live> {
     let db = introspector::introspect_connection(conn, schema).await?;
     let catalog = catalog::read(conn, schema).await?;
     let fingerprints = fingerprints(&db, &catalog);
-    Ok(Live { db, fingerprints })
+    Ok(Live {
+        db,
+        catalog,
+        fingerprints,
+    })
+}
+
+/// The tables the migration drops, as keys, so the reconcile lets their owned objects go with
+/// them instead of altering a table that will be gone.
+fn dropped_tables(diff: &DiffOutput, schema: &str) -> BTreeSet<ObjectKey> {
+    diff.operations
+        .iter()
+        .filter_map(|op| match op {
+            Operation::DropTable { table, .. } => Some(ObjectKey {
+                kind: ObjectKind::Table,
+                schema: schema.to_string(),
+                parent: String::new(),
+                name: table.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Reads and decides, writing nothing. For a database no push has touched the ledger is simply
@@ -142,11 +164,13 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     let desired = desired_objects(ast, schema)?;
     let ledger = ledger::load_if_present(&mut conn).await?;
     let created_by_parent = created_by_parent(&diff, schema, ast)?;
+    let dropped_tables = dropped_tables(&diff, schema);
     let mut reconcile = reconcile::reconcile(reconcile::Inputs {
         desired: &desired,
         ledger: &ledger,
         live: &live.fingerprints,
         created_by_parent: &created_by_parent,
+        dropped_tables: &dropped_tables,
         kinds: MOVED_KINDS,
     });
     let proven = probe::equivalent(&mut conn, &reconcile).await?;
@@ -412,8 +436,8 @@ async fn within_transaction(
         .await
         .context("Failed to introspect after migration")?;
 
-    let drift_warnings = differ::integrity::post_push_warnings(plan.ast, &after.db);
-    if strict && !differ::integrity::post_push_ok(plan.ast, &after.db, true) {
+    let drift_warnings = differ::integrity::post_push_warnings(plan.ast, &after.db, &after.catalog);
+    if strict && !differ::integrity::post_push_ok(plan.ast, &after.db, &after.catalog, true) {
         bail!(
             "Push rolled back: post-apply schema drift in strict mode ({})",
             drift_warnings.join("; ")

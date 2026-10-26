@@ -6926,7 +6926,13 @@ fn test_unmanaged_slug_unique_never_auto_dropped() {
         "unmanaged constraint must not be auto-dropped"
     );
 
-    let report = supatype_engine::differ::doctor::report(&ast, &db, &[]);
+    let report = supatype_engine::differ::doctor::report(
+        &ast,
+        &db,
+        &supatype_engine::introspector::catalog::CatalogState::default(),
+        &[],
+    )
+    .unwrap();
     assert!(
         report
             .unmanaged_drift
@@ -7930,7 +7936,13 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
         ..DatabaseState::default()
     };
 
-    let report = doctor::report(&ast, &db, &[]);
+    let report = doctor::report(
+        &ast,
+        &db,
+        &supatype_engine::introspector::catalog::CatalogState::default(),
+        &[],
+    )
+    .unwrap();
     let checks: Vec<_> = report
         .unmanaged_drift
         .iter()
@@ -8006,7 +8018,13 @@ fn test_doctor_leaves_supatype_owned_checks_alone() {
         ..DatabaseState::default()
     };
 
-    let report = doctor::report(&ast, &db, &[]);
+    let report = doctor::report(
+        &ast,
+        &db,
+        &supatype_engine::introspector::catalog::CatalogState::default(),
+        &[],
+    )
+    .unwrap();
     assert!(
         !report
             .unmanaged_drift

@@ -62,7 +62,7 @@ async fn doctor_reports_an_unmanaged_table_absent_from_the_schema() {
 
         let ast = parser::parse(ONE_MODEL).expect("fixture parses");
         let db = introspector::introspect(&pool, "public").await.expect("introspect");
-        let report = doctor::report(&ast, &db, &[]);
+        let report = doctor::report(&ast, &db, &supatype_engine::introspector::catalog::CatalogState::default(), &[]).unwrap();
 
         // Not ours, not in the schema: push will leave it, and the report says so in the same words
         // the index and constraint cases use.
@@ -112,7 +112,13 @@ async fn doctor_explains_why_columns_survive_on_an_unstamped_model_table() {
         let db = introspector::introspect(&pool, "public")
             .await
             .expect("introspect");
-        let report = doctor::report(&ast, &db, &[]);
+        let report = doctor::report(
+            &ast,
+            &db,
+            &supatype_engine::introspector::catalog::CatalogState::default(),
+            &[],
+        )
+        .unwrap();
 
         let unmanaged = messages(&report.unmanaged_drift);
         assert!(
@@ -149,7 +155,13 @@ async fn adopting_a_table_makes_push_manage_it_thereafter() {
         );
 
         // Adopt it.
-        let stamps = doctor::adopt_stamp_sql(&ast, &before, "public");
+        let stamps = doctor::adopt_stamp_sql(
+            &ast,
+            &before,
+            &supatype_engine::introspector::catalog::CatalogState::default(),
+            "public",
+        )
+        .unwrap();
         assert!(
             stamps
                 .iter()
@@ -201,7 +213,13 @@ async fn adopting_a_table_makes_push_manage_it_thereafter() {
         );
 
         // And doctor stops complaining about it.
-        let report = doctor::report(&ast, &after, &[]);
+        let report = doctor::report(
+            &ast,
+            &after,
+            &supatype_engine::introspector::catalog::CatalogState::default(),
+            &[],
+        )
+        .unwrap();
         assert!(
             !messages(&report.unmanaged_drift)
                 .iter()
@@ -232,7 +250,13 @@ async fn adoption_never_stamps_a_table_the_schema_does_not_declare() {
         let db = introspector::introspect(&pool, "public")
             .await
             .expect("introspect");
-        let stamps = doctor::adopt_stamp_sql(&ast, &db, "public");
+        let stamps = doctor::adopt_stamp_sql(
+            &ast,
+            &db,
+            &supatype_engine::introspector::catalog::CatalogState::default(),
+            "public",
+        )
+        .unwrap();
 
         assert!(
             !stamps.iter().any(|s| s.contains("theirs")),
@@ -270,7 +294,14 @@ async fn adoption_is_idempotent() {
         let db = introspector::introspect(&pool, "public")
             .await
             .expect("introspect");
-        for statement in doctor::adopt_stamp_sql(&ast, &db, "public") {
+        for statement in doctor::adopt_stamp_sql(
+            &ast,
+            &db,
+            &supatype_engine::introspector::catalog::CatalogState::default(),
+            "public",
+        )
+        .unwrap()
+        {
             sqlx::raw_sql(&statement)
                 .execute(&pool)
                 .await
@@ -282,7 +313,13 @@ async fn adoption_is_idempotent() {
         let after = introspector::introspect(&pool, "public")
             .await
             .expect("re-introspect");
-        let second = doctor::adopt_stamp_sql(&ast, &after, "public");
+        let second = doctor::adopt_stamp_sql(
+            &ast,
+            &after,
+            &supatype_engine::introspector::catalog::CatalogState::default(),
+            "public",
+        )
+        .unwrap();
         assert!(
             second.iter().all(|s| !s.contains("COMMENT ON TABLE")),
             "adoption re-stamps an already-managed table: {second:?}"
