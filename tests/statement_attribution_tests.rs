@@ -32,6 +32,7 @@ use supatype_engine::{
 /// Every fixture the parser accepts. The ones a database refuses still render, and the split and
 /// attribution must hold for what they render.
 const RENDERABLE: &[&str] = &[
+    "awkward_names",
     "basic_blog",
     "cms_content",
     "conformance_matrix",
@@ -51,6 +52,7 @@ const RENDERABLE: &[&str] = &[
 
 /// The fixtures a real database accepts (see `golden_tests.rs` for why the rest do not).
 const PUSHABLE: &[&str] = &[
+    "awkward_names",
     "ecommerce",
     "five_model_blog",
     "geospatial",
