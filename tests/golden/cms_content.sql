@@ -223,21 +223,6 @@ CREATE TABLE IF NOT EXISTS "public"."article_tags" (
 
 COMMENT ON TABLE "public"."article_tags" IS 'supatype:managed;kind=table;table=article_tags;fields=;v=1';
 
--- [safe] Enable RLS: authors
-ALTER TABLE "public"."authors" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: articles
-ALTER TABLE "public"."articles" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: tags
-ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: articles
-ALTER TABLE "public"."articles" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: article_tags
-ALTER TABLE "public"."article_tags" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_authors"("authors" "public"."authors")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -442,6 +427,10 @@ FOR UPDATE USING (
   ) WITH CHECK (
     (SELECT auth.role()) = ANY(ARRAY['editor', 'admin'])
   );
+ALTER TABLE "public"."article_tags" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."articles" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."authors" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

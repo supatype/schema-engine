@@ -1926,14 +1926,15 @@ fn test_rls_fresh_model_authenticated() {
 
     let diff = differ::diff(&ast, &db).unwrap();
 
-    let enable_rls = diff
-        .operations
-        .iter()
-        .any(|op| matches!(op, Operation::EnableRls { table, .. } if table == "posts"));
-    assert!(enable_rls, "should emit EnableRls for posts");
-
-    // The policy itself is a desired object the reconcile creates (Phase 4.7b).
+    // RLS (Phase 4.8) and the policy (Phase 4.7b) are desired objects the reconcile creates.
     let desired = supatype_engine::desired::desired_objects(&ast, "public").unwrap();
+    assert!(
+        desired.iter().any(|o| {
+            o.key.kind == supatype_engine::introspector::fingerprint::ObjectKind::RlsAttributes
+                && o.key.parent == "posts"
+        }),
+        "RLS must be desired on posts"
+    );
     let select = desired.iter().find(|o| {
         o.key.kind == supatype_engine::introspector::fingerprint::ObjectKind::Policy
             && o.key.parent == "posts"

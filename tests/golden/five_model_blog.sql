@@ -224,21 +224,6 @@ COMMENT ON CONSTRAINT "tags_name_key" ON "public"."tags" IS 'supatype:managed;ki
 
 COMMENT ON TABLE "public"."tags" IS 'supatype:managed;kind=table;table=tags;fields=;v=1';
 
--- [safe] Enable RLS: users
-ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: categories
-ALTER TABLE "public"."categories" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: posts
-ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: comments
-ALTER TABLE "public"."comments" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: tags
-ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_users"("users" "public"."users")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -460,6 +445,11 @@ CREATE OR REPLACE TRIGGER "users_updated_at_trigger"
 BEFORE UPDATE ON "public"."users"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+ALTER TABLE "public"."categories" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."comments" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."users" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

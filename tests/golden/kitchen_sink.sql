@@ -194,9 +194,6 @@ CREATE INDEX IF NOT EXISTS "kitchen_sink_deleted_at_idx" ON "public"."kitchen_si
 
 COMMENT ON TABLE "public"."kitchen_sink" IS 'supatype:managed;kind=table;table=kitchen_sink;fields=;v=1';
 
--- [safe] Enable RLS: kitchen_sink
-ALTER TABLE "public"."kitchen_sink" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_kitchen_sink"("kitchen_sink" "public"."kitchen_sink")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -284,6 +281,7 @@ CREATE OR REPLACE TRIGGER "kitchen_sink_updated_at_trigger"
 BEFORE UPDATE ON "public"."kitchen_sink"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+ALTER TABLE "public"."kitchen_sink" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

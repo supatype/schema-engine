@@ -209,21 +209,6 @@ CREATE TABLE IF NOT EXISTS "public"."course_tags" (
 
 COMMENT ON TABLE "public"."course_tags" IS 'supatype:managed;kind=table;table=course_tags;fields=;v=1';
 
--- [safe] Enable RLS: students
-ALTER TABLE "public"."students" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: courses
-ALTER TABLE "public"."courses" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: tags
-ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: enrollments
-ALTER TABLE "public"."enrollments" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: course_tags
-ALTER TABLE "public"."course_tags" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_students"("students" "public"."students")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -351,6 +336,11 @@ CREATE OR REPLACE TRIGGER "students_updated_at_trigger"
 BEFORE UPDATE ON "public"."students"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+ALTER TABLE "public"."course_tags" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."courses" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."enrollments" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."students" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

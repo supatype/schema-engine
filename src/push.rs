@@ -39,7 +39,8 @@ use crate::state::{migration_history, studio_state};
 /// The kinds the reconcile owns. A kind joins this list in the PR that moves it, and from that PR
 /// on the reconcile is its differ: check constraints since Phase 3d, foreign keys since 4.1,
 /// triggers and their `_platform` functions since 4.2, indexes since 4.3, cron jobs since 4.4,
-/// views since 4.6, security labels since 4.7a, policies since 4.7b, grants since 4.7c.
+/// views since 4.6, security labels since 4.7a, policies since 4.7b, grants since 4.7c, RLS
+/// enablement since 4.8.
 pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::Check,
     ObjectKind::ForeignKey,
@@ -51,6 +52,7 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
     ObjectKind::SecurityLabel,
     ObjectKind::Policy,
     ObjectKind::TableGrant,
+    ObjectKind::RlsAttributes,
 ];
 
 /// Advisory lock keys shared with the CLI and the realtime worker (`packages/cli`,

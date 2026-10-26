@@ -1,14 +1,11 @@
-//! Row-level security on the model and junction tables, and the warnings about access the schema
-//! does not describe.
+//! The warnings about access the schema does not describe: deny-all tables, hand-written policies
+//! on managed tables, junction operations no rule can grant, and tables the engine does not own.
 //!
-//! Policies are ledger objects since Phase 4.7b: the desired set holds every policy a push makes,
-//! the reconcile creates, replaces and drops them, and this differ no longer compares policy text
-//! with Postgres's deparse of it. What stays here is turning row-level security on (a kind of its
-//! own in Phase 4.8) and saying which tables are deny-all and which carry hand-written policies.
+//! Policies are ledger objects since Phase 4.7b and row-level security since 4.8 (D9): the
+//! desired set holds them and the reconcile makes them, so this module emits no operation.
 
 use std::collections::{HashMap, HashSet};
 
-use super::{Operation, Risk};
 use crate::introspector::rls::DbRlsPolicy;
 use crate::parser::ast::{AccessAst, AccessRule, SchemaAst};
 use crate::state::database_state::DatabaseState;
@@ -42,12 +39,7 @@ fn engine_policy_names(model: &crate::parser::ast::ModelAst) -> HashSet<String> 
     names
 }
 
-pub fn diff(
-    ast: &SchemaAst,
-    db: &DatabaseState,
-    ops: &mut Vec<Operation>,
-    warnings: &mut Vec<String>,
-) -> Result<()> {
+pub fn diff(ast: &SchemaAst, db: &DatabaseState, warnings: &mut Vec<String>) -> Result<()> {
     let mut db_policies_by_table: HashMap<&str, Vec<&DbRlsPolicy>> = HashMap::new();
     for policy in &db.rls_policies {
         db_policies_by_table
@@ -55,12 +47,6 @@ pub fn diff(
             .or_default()
             .push(policy);
     }
-
-    // Introspected `relrowsecurity`, NOT "has at least one policy": a deny-all table (RLS on, zero
-    // policies) is the default for a model without access rules, and guessing from the policy list
-    // would report it disabled and re-emit ENABLE ROW LEVEL SECURITY on every push.
-    let rls_enabled_tables: HashSet<&str> =
-        db.rls_enabled_tables.iter().map(String::as_str).collect();
 
     // Models with no access rules at all, collected so the deny-all is visible.
     let mut unrestricted: Vec<String> = Vec::new();
@@ -91,15 +77,9 @@ pub fn diff(
             }
         }
 
-        // RLS is on whether or not the model declares rules: with no policies it denies anon and
-        // authenticated outright, while service_role is BYPASSRLS, so server-side code and seeds
-        // are unaffected.
-        if !rls_enabled_tables.contains(table) {
-            ops.push(Operation::EnableRls {
-                table: table.to_string(),
-                risk: Risk::Safe,
-            });
-        }
+        // RLS is on whether or not the model declares rules (the reconcile's, D9): with no
+        // policies it denies anon and authenticated outright, while service_role is BYPASSRLS, so
+        // server-side code and seeds are unaffected.
         let has_access_rules = !expected_policies(model.access()).is_empty();
         if !has_access_rules {
             unrestricted.push(table.to_string());
@@ -131,7 +111,7 @@ pub fn diff(
         ));
     }
 
-    junction_diff(ast, &rls_enabled_tables, ops, warnings);
+    junction_diff(ast, warnings);
     Ok(())
 }
 
@@ -148,23 +128,10 @@ pub fn diff(
 /// rules. Where a parent rule depends on row data (Owner, comparisons, membership) the
 /// expression references parent columns that do not exist on the junction table,
 /// so it cannot be applied directly; those fall back to deny-all with a warning
-/// rather than guessing. The policies themselves are the desired set's.
-fn junction_diff(
-    ast: &SchemaAst,
-    rls_enabled_tables: &HashSet<&str>,
-    ops: &mut Vec<Operation>,
-    warnings: &mut Vec<String>,
-) {
+/// rather than guessing. The policies and RLS itself are the desired set's.
+fn junction_diff(ast: &SchemaAst, warnings: &mut Vec<String>) {
     for junction in &ast.junction_tables {
         let table = junction.name.as_str();
-
-        if !rls_enabled_tables.contains(table) {
-            ops.push(Operation::EnableRls {
-                table: table.to_string(),
-                risk: Risk::Safe,
-            });
-        }
-
         let parent_a = ast.models.iter().find(|m| m.name == junction.model_a);
         let parent_b = ast.models.iter().find(|m| m.name == junction.model_b);
         let (Some(parent_a), Some(parent_b)) = (parent_a, parent_b) else {

@@ -1,6 +1,9 @@
 use supatype_engine::{
     differ,
-    introspector::tables::{DbColumn, DbTable},
+    introspector::{
+        fingerprint::ObjectKind,
+        tables::{DbColumn, DbTable},
+    },
     parser,
     state::database_state::DatabaseState,
 };
@@ -167,63 +170,34 @@ fn test_models_without_access_get_rls_enabled_by_default() {
         "access rules should have been stripped for this test",
     );
 
-    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-
-    let enabled: Vec<&str> = diff
-        .operations
-        .iter()
-        .filter_map(|op| match op {
-            differ::Operation::EnableRls { table, .. } => Some(table.as_str()),
-            _ => None,
-        })
-        .collect();
-
+    // RLS on and no policy, both the desired set's since Phase 4.8 (D9). Convergence is the
+    // ledger's: `rls_ledger_tests` proves a second push leaves it alone.
+    let desired = supatype_engine::desired::desired_objects(&ast, "public").unwrap();
     for model in &ast.models {
-        assert!(
-            enabled.contains(&model.table_name()),
+        let on_table = |kind: ObjectKind| {
+            desired
+                .iter()
+                .filter(|o| o.key.kind == kind && o.key.parent == model.table_name())
+                .count()
+        };
+        assert_eq!(
+            on_table(ObjectKind::RlsAttributes),
+            1,
             "expected RLS to be enabled for {}",
             model.table_name(),
         );
+        assert_eq!(
+            on_table(ObjectKind::Policy),
+            0,
+            "a model without access rules must not get policies"
+        );
     }
 
-    // No policies may be created for them: RLS with zero policies is the deny.
-    assert!(
-        !diff
-            .operations
-            .iter()
-            .any(|op| matches!(op, differ::Operation::CreateRlsPolicy { .. })),
-        "a model without access rules must not get policies",
-    );
-
+    let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
     assert!(
         diff.warnings.iter().any(|w| w.contains("no access rules")),
         "the deny-all must be reported, got: {:?}",
         diff.warnings,
-    );
-}
-
-// Convergence: RLS-enabled state is introspected, so an already-denied table
-// must not be re-enabled on every push.
-#[test]
-fn test_rls_not_re_enabled_when_already_on() {
-    let ast = parser::parse(&blog_ast_without_access()).unwrap();
-
-    let db = DatabaseState {
-        rls_enabled_tables: ast
-            .models
-            .iter()
-            .map(|m| m.table_name().to_string())
-            .collect(),
-        ..DatabaseState::default()
-    };
-
-    let diff = differ::diff(&ast, &db).unwrap();
-    assert!(
-        !diff
-            .operations
-            .iter()
-            .any(|op| matches!(op, differ::Operation::EnableRls { .. })),
-        "RLS was already enabled; expected no EnableRls operations",
     );
 }
 

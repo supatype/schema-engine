@@ -222,18 +222,6 @@ CREATE TABLE IF NOT EXISTS "public"."order_items" (
 
 COMMENT ON TABLE "public"."order_items" IS 'supatype:managed;kind=table;table=order_items;fields=;v=1';
 
--- [safe] Enable RLS: customers
-ALTER TABLE "public"."customers" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: products
-ALTER TABLE "public"."products" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: orders
-ALTER TABLE "public"."orders" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: order_items
-ALTER TABLE "public"."order_items" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_customers"("customers" "public"."customers")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -458,6 +446,10 @@ FOR UPDATE USING (
   ) WITH CHECK (
     (SELECT auth.role()) = 'admin'
   );
+ALTER TABLE "public"."customers" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."order_items" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."orders" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."products" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN

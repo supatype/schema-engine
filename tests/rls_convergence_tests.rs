@@ -11,7 +11,7 @@
 
 mod common;
 
-use supatype_engine::{differ, parser};
+use supatype_engine::{introspector::fingerprint::ObjectKind, parser};
 
 // Five models with access rules covering owner, role and multi-role shapes, and
 // the same fixture the main integration suite applies cleanly.
@@ -27,28 +27,21 @@ async fn policies_converge_after_the_first_push() {
             .await
             .expect("first migration applies");
 
-        // Second plan against the database that push produced: nothing to enable, and every
-        // policy kept as recorded.
+        // Second plan against the database that push produced: RLS and every policy kept as
+        // recorded.
         let plan = supatype_engine::push::prepare(&pool, &ast, "public")
             .await
             .unwrap();
-        let mut churn: Vec<String> = plan
-            .diff
-            .operations
+        let churn: Vec<String> = plan
+            .reconcile
+            .actions
             .iter()
-            .filter(|op| matches!(op, differ::Operation::EnableRls { .. }))
-            .map(|op| format!("{op:?}"))
+            .filter(|a| {
+                matches!(a.key().kind, ObjectKind::Policy | ObjectKind::RlsAttributes)
+                    && a.is_change()
+            })
+            .map(|a| format!("{a:?}"))
             .collect();
-        churn.extend(
-            plan.reconcile
-                .actions
-                .iter()
-                .filter(|a| {
-                    a.key().kind == supatype_engine::introspector::fingerprint::ObjectKind::Policy
-                        && a.is_change()
-                })
-                .map(|a| format!("{a:?}")),
-        );
         assert!(
             churn.is_empty(),
             "a no-op push must not touch policies, got: {churn:#?}"

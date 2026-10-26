@@ -311,7 +311,6 @@ fn render_forward_operation_lines(
             | Operation::AddForeignKey { risk, .. }
             | Operation::AddUniqueConstraint { risk, .. }
             | Operation::DropUniqueConstraint { risk, .. }
-            | Operation::EnableRls { risk, .. }
             | Operation::CreateRlsPolicy { risk, .. }
             | Operation::CreateJunctionTable { risk, .. }
             | Operation::CreateVersionsTable { risk, .. }
@@ -556,7 +555,6 @@ fn op_description(op: &Operation) -> String {
         Operation::DropUniqueConstraint {
             table, constraint, ..
         } => format!("Drop unique constraint: {table}.{constraint}"),
-        Operation::EnableRls { table, .. } => format!("Enable RLS: {table}"),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             format!("Create RLS policy: {table}.{policy}")
         }
@@ -786,9 +784,6 @@ pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) ->
             table, constraint, ..
         } => Ok(format!(
             "ALTER TABLE \"{schema}\".\"{table}\" DROP CONSTRAINT IF EXISTS \"{constraint}\";"
-        )),
-        Operation::EnableRls { table, .. } => Ok(format!(
-            "ALTER TABLE \"{schema}\".\"{table}\" ENABLE ROW LEVEL SECURITY;"
         )),
         Operation::CreateRlsPolicy { table, policy, .. } => {
             render_create_rls_policy_sql(table, policy, schema, ast)

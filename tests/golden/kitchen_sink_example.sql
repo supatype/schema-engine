@@ -396,33 +396,6 @@ COMMENT ON TABLE "public"."talk_versions" IS 'supatype:managed;kind=table;table=
 
 CREATE INDEX IF NOT EXISTS "talk_versions_record_idx" ON "public"."talk_versions" ("record_id", "version" DESC);
 
--- [safe] Enable RLS: page
-ALTER TABLE "public"."page" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: speaker
-ALTER TABLE "public"."speaker" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: room
-ALTER TABLE "public"."room" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: talk
-ALTER TABLE "public"."talk" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: sponsor
-ALTER TABLE "public"."sponsor" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: attendee
-ALTER TABLE "public"."attendee" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: ticket
-ALTER TABLE "public"."ticket" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: chat_message
-ALTER TABLE "public"."chat_message" ENABLE ROW LEVEL SECURITY;
-
--- [safe] Enable RLS: _global_site_settings
-ALTER TABLE "public"."_global_site_settings" ENABLE ROW LEVEL SECURITY;
-
 -- Row-level affordance functions (PostgREST computed columns)
 CREATE OR REPLACE FUNCTION "public"."can_read_page"("page" "public"."page")
   RETURNS boolean LANGUAGE sql STABLE AS $can$
@@ -2038,6 +2011,15 @@ CREATE POLICY "storage_ticket_files_upd" ON "storage"."objects"
   ) WITH CHECK (
     bucket_id = 'ticket-files' AND (auth.uid() = owner)
   );
+ALTER TABLE "public"."_global_site_settings" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."attendee" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."chat_message" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."page" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."room" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."speaker" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."sponsor" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."talk" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "public"."ticket" ENABLE ROW LEVEL SECURITY;
 DO $grants$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
