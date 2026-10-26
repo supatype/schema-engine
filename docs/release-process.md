@@ -19,6 +19,10 @@ Date" four years after the day the PR was last updated. The Business Source Lice
 version its own Change Date and requires it to be stated (covenant 3). The PR merges a few days later
 at most, and an earlier Change Date only frees the code sooner.
 
+Between releases `LICENSE` names the last release, and a sentence under "Licensed Work" says that
+commits made after it are part of the next release and take its Change Date. `set` rewrites only
+the "Licensed Work" and "Change Date" lines, so that sentence carries from one release to the next.
+
 The tag push then runs `release.yml` exactly as a hand-made tag did.
 
 ### Why it is not a checklist any more

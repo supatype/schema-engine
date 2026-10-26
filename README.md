@@ -475,7 +475,9 @@ See `docs/release-process.md` for the checklist and minisign key handling.
 ## Licence
 
 The engine is source-available under the [Business Source License 1.1](LICENSE) (SPDX
-`BUSL-1.1`). `supatype-engine licence` prints the exact terms for the version you have.
+`BUSL-1.1`), and its source is at
+[github.com/supatype/schema-engine](https://github.com/supatype/schema-engine).
+`supatype-engine licence` prints the exact terms for the version you have.
 
 - **You can always** read, change and redistribute the engine, and run it in production: build and
   run your own applications on it, commercial ones included, self-host Supatype, and build and host
@@ -484,9 +486,11 @@ The engine is source-available under the [Business Source License 1.1](LICENSE) 
   product whose primary value is the engine. The Additional Use Grant in [LICENSE](LICENSE) defines
   both.
 - **Each version becomes Apache 2.0** on its Change Date, four years after that version's release.
+- **Commits on `main` between releases** are part of the next release and take its Change Date.
 
-Versions 0.1.5 to 0.6.0 are made available under the same terms, with the same Additional Use Grant
-and the same Change Date as 0.7.0.
+All earlier versions and commits are made available under the same terms, with the same Additional
+Use Grant and the same Change Date as 0.7.0. That includes 0.1.5 to 0.6.0, which shipped as
+binaries without a licence, and commits from before the repository had a `LICENSE` file.
 
 For a commercial licence or anything the grant does not cover, contact
 [licensing@supatype.com](mailto:licensing@supatype.com).
