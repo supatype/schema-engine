@@ -199,14 +199,19 @@ enum Command {
         )]
         status: bool,
     },
-    /// Stamp managed comments on DB objects matching the AST (adoption ceremony)
+    /// Hand objects a push refuses (their names are taken) to Supatype, or take objects back with
+    /// `--release`. Writes ledger rows only; never edits an object.
     Adopt {
         #[arg(long, env = "DATABASE_URL")]
         database_url: String,
         #[arg(long, default_value = "public")]
         schema: String,
-        #[arg(long, help = "Apply stamp SQL without interactive confirmation")]
+        #[arg(long, help = "Write the ledger rows instead of previewing them")]
         yes: bool,
+        /// An object every push should leave alone, as doctor names it: `kind:table.name`, or
+        /// `kind:name` for a table-level object. Repeatable.
+        #[arg(long)]
+        release: Vec<String>,
         /// No longer does anything: the database is always read live. Accepted for one release so
         /// scripts that pass it keep working, and says so.
         #[arg(long, hide = true)]
@@ -566,76 +571,18 @@ async fn main() -> Result<()> {
             database_url,
             schema,
             yes,
+            release,
             no_cache,
         } => {
             use supatype_engine::state::migration_history;
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-
-            // Internal bookkeeping + auth helpers (shared with the server push path).
-            migration_history::bootstrap_internal_state(&pool)
-                .await
-                .context("Failed to bootstrap _supatype internal state")?;
             migration_history::assert_project_schema(&pool, &schema).await?;
-
             if no_cache {
                 eprintln!("{}", migration_history::NO_CACHE_NOTICE);
             }
-            // Live, as push reads it, so adopt stamps exactly what push would refuse. Reading the
-            // last push's snapshot, it found nothing to stamp for a table that had since lost its
-            // marker, while push refused it: no way forward through the CLI.
-            let db_state = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            let catalog = supatype_engine::introspector::introspect_catalog(&pool, &schema).await?;
-
-            let stamp_sql = supatype_engine::differ::doctor::adopt_stamp_sql(
-                &ast, &db_state, &catalog, &schema,
-            )?;
-            let ledger =
-                supatype_engine::ledger::load_if_present(&mut *pool.acquire().await?).await?;
-            let doctor_report =
-                supatype_engine::differ::doctor::report(&ast, &db_state, &catalog, &ledger)?;
-
-            if !yes {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "status": "preview",
-                        "stampStatements": stamp_sql,
-                        "doctor": doctor_report,
-                    }))?
-                );
-                return Ok(());
-            }
-
-            if stamp_sql.is_empty() {
-                println!("{{\"status\":\"nothing_to_stamp\"}}");
-                return Ok(());
-            }
-
-            let batch = stamp_sql.join("\n");
-            sqlx::raw_sql(&batch).execute(&pool).await?;
-
-            let fresh = supatype_engine::introspector::introspect(&pool, &schema).await?;
-            migration_history::save_schema_state(&pool, &fresh).await?;
-
-            let migration_name = format!("adopt_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
-            let admin_cfg = supatype_engine::generator::typescript::admin::generate(&ast).ok();
-            migration_history::insert_applied_migration(
-                &pool,
-                &migration_name,
-                "adopt",
-                serde_json::to_value(&ast).ok(),
-                admin_cfg,
-                &batch,
-                &migration_history::AppliedMigrationSources::default(),
-            )
-            .await?;
-
-            println!(
-                "{{\"status\":\"adopted\",\"stamped\":{},\"name\":\"{}\"}}",
-                stamp_sql.len(),
-                migration_name
-            );
+            let outcome = supatype_engine::adopt::run(&pool, &ast, &schema, &release, yes).await?;
+            println!("{}", serde_json::to_string_pretty(&outcome)?);
         }
     }
 

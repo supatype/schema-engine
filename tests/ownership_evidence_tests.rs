@@ -13,7 +13,7 @@ mod common;
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use supatype_engine::{differ::doctor, introspector, parser, parser::ast::SchemaAst, push};
+use supatype_engine::{parser, parser::ast::SchemaAst, push};
 
 // ---------------------------------------------------------------------------------------------
 // Fixtures
@@ -674,25 +674,21 @@ async fn adopting_a_table_keeps_the_comment_its_owner_wrote() {
             json!({ "id": int_pk() }),
             plain_options(),
         )]);
-        let db = introspector::introspect(&pool, "public").await.unwrap();
-
-        for statement in doctor::adopt_stamp_sql(
-            &ast,
-            &db,
-            &supatype_engine::introspector::catalog::CatalogState::default(),
-            "public",
-        )
-        .unwrap()
-        {
-            exec(&pool, &statement)
-                .await
-                .expect("adopt statement applies");
-        }
-
+        supatype_engine::adopt::run(&pool, &ast, "public", &[], true)
+            .await
+            .expect("adopt applies");
         let comment = table_comment(&pool, "widgets").await.unwrap_or_default();
         assert!(
             comment.contains("Widgets we sell."),
             "adopt replaced the owner's comment instead of keeping it; now: {comment:?}"
+        );
+
+        // Nor does the push that then manages it.
+        let _ = push(&pool, &ast, false).await;
+        let comment = table_comment(&pool, "widgets").await.unwrap_or_default();
+        assert!(
+            comment.contains("Widgets we sell."),
+            "the push after adoption replaced the owner's comment; now: {comment:?}"
         );
     })
     .await;

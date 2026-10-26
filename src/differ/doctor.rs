@@ -6,7 +6,7 @@
 //! schema no longer asks for is **stale**, a desired name taken by someone else's object is
 //! **conflicting**, and one the user took back is **released**. Objects on a model table that
 //! Supatype did not create, columns included (D4), are **unmanaged**: a push leaves them in place.
-//! Tables are still classified by their ownership stamp, until tables move onto the ledger.
+//! A table the schema no longer declares is stale when it is ours and unmanaged when it is not.
 
 use anyhow::Result;
 
@@ -16,7 +16,6 @@ use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::fingerprint::{fingerprints, ObjectKind};
 use crate::ledger::reconcile::{Action, Plan};
 use crate::ledger::LedgerRow;
-use crate::managed::{is_managed_comment, managed_comment};
 use crate::parser::ast::SchemaAst;
 use crate::state::database_state::DatabaseState;
 use serde::{Deserialize, Serialize};
@@ -73,7 +72,7 @@ impl DoctorItem {
     }
 
     /// An item about one ledger key: its table is its parent, or itself for a table-level object.
-    fn for_key(key: &ObjectKey, message: String) -> DoctorItem {
+    pub(crate) fn for_key(key: &ObjectKey, message: String) -> DoctorItem {
         let table = if key.parent.is_empty() {
             &key.name
         } else {
@@ -85,7 +84,7 @@ impl DoctorItem {
 
 /// The kind, then `table.name` or the name alone for a table-level object. Every message opens
 /// with it, so it reads as the start of a sentence: "Table widget", "RLS attributes posts.rls".
-fn label(key: &ObjectKey) -> String {
+pub(crate) fn label(key: &ObjectKey) -> String {
     let words = key.kind.as_str().replace('_', " ").replace("rls", "RLS");
     let mut chars = words.chars();
     let kind: String = chars
@@ -99,77 +98,36 @@ fn label(key: &ObjectKey) -> String {
     }
 }
 
-/// The tables, unique constraints and indexes a push of `ast` creates, read off the desired set.
-struct Expected {
-    /// Every table a push owns: models, junction tables and versions tables.
-    tables: HashSet<String>,
-    uniques: Vec<ExpectedConstraint>,
-    indexes: Vec<ExpectedIndex>,
-}
-
-struct ExpectedConstraint {
-    table: String,
-    columns: Vec<String>,
-}
-
-struct ExpectedIndex {
-    table: String,
-    name: String,
-    fields: Vec<String>,
-    unique: bool,
-}
-
-fn expected(ast: &SchemaAst, schema: &str) -> Result<Expected> {
-    let mut out = Expected {
-        tables: HashSet::new(),
-        uniques: Vec::new(),
-        indexes: Vec::new(),
-    };
-    // The project schema only: doctor reads `DatabaseState`, which stops there, and the engine's
-    // own tables and indexes are the ledger's to account for.
-    for object in desired_objects(ast, schema)?
+/// Every table a push of `ast` owns in the project schema (models, junction tables and versions
+/// tables), read off the desired set. The project schema only: doctor reads `DatabaseState`, which
+/// stops there, and the engine's own tables are the ledger's to account for.
+fn declared_tables(ast: &SchemaAst, schema: &str) -> Result<HashSet<String>> {
+    Ok(desired_objects(ast, schema)?
         .into_iter()
-        .filter(|o| o.key.schema == schema)
-    {
-        let ObjectKey {
-            kind, parent, name, ..
-        } = object.key;
-        let columns = |label: &str| -> Vec<String> {
-            object
-                .structure
-                .get(label)
-                .map(|c| c.split(',').map(str::to_string).collect())
-                .unwrap_or_default()
-        };
-        match kind {
-            ObjectKind::Table => {
-                out.tables.insert(name);
-            }
-            ObjectKind::Unique => out.uniques.push(ExpectedConstraint {
-                table: parent,
-                columns: columns("columns"),
-            }),
-            ObjectKind::Index => out.indexes.push(ExpectedIndex {
-                table: parent,
-                name,
-                fields: columns("columns"),
-                unique: object.structure.get("unique").map(String::as_str) == Some("t"),
-            }),
-            _ => {}
-        }
-    }
-    Ok(out)
+        .filter(|o| o.key.kind == ObjectKind::Table && o.key.schema == schema)
+        .map(|o| o.key.name)
+        .collect())
 }
 
-/// `ledger` is what the push ledger owns (`_supatype.managed_objects`); a kind that has moved onto
-/// it is classified from these rows rather than from comment stamps. Empty for a database no push
-/// has bootstrapped.
+/// `ledger` is what the push ledger owns (`_supatype.managed_objects`). Empty for a database no
+/// push has bootstrapped.
 pub fn report(
     ast: &SchemaAst,
     db: &DatabaseState,
     catalog: &CatalogState,
     ledger: &[LedgerRow],
 ) -> Result<DoctorReport> {
+    Ok(plan_and_report(ast, db, catalog, ledger)?.1)
+}
+
+/// The reconcile a push would run, and the report made from it, for a caller that acts on the
+/// plan's actions (`supatype adopt`).
+pub fn plan_and_report(
+    ast: &SchemaAst,
+    db: &DatabaseState,
+    catalog: &CatalogState,
+    ledger: &[LedgerRow],
+) -> Result<(Plan, DoctorReport)> {
     // The push reads table ownership from the ledger before it diffs (Phase 4.11), so doctor does.
     let mut db = db.clone();
     db.set_table_ownership(ledger);
@@ -180,9 +138,8 @@ pub fn report(
     }
     out.unmanaged_drift
         .extend(unmanaged_objects(ast, &db, catalog, ledger, &plan));
-    let expected = expected(ast, &db.schema)?;
-    undeclared_tables(&db, &expected.tables, &mut out);
-    Ok(out)
+    undeclared_tables(&db, &declared_tables(ast, &db.schema)?, &mut out);
+    Ok((plan, out))
 }
 
 /// One reconcile action as the report's category, or nothing for what needs no attention: a
@@ -373,77 +330,4 @@ pub fn has_strict_issues(report: &DoctorReport) -> bool {
         || !report.stale_managed.is_empty()
         || !report.drifted.is_empty()
         || !report.conflicting.is_empty()
-}
-
-/// SQL statements to stamp matching tables/constraints/indexes during adoption (comments only).
-///
-/// Tables are stamped **first**: the ownership gate is what makes an unmarked table safe from
-/// `DropTable` and its columns safe from `DropColumn`, and until a table carries the marker, adopting
-/// only its indexes leaves the confusing half-state where push manages the indexes on a table it
-/// will not otherwise touch.
-///
-/// Only objects a push of this schema would create are stamped. Adoption is an opt-in ceremony for
-/// objects the operator has decided belong to Supatype; stamping anything found in the schema
-/// would make the gate meaningless on its first run, which is the one case it exists for.
-pub fn adopt_stamp_sql(
-    ast: &SchemaAst,
-    db: &DatabaseState,
-    catalog: &CatalogState,
-    schema: &str,
-) -> Result<Vec<String>> {
-    let expected = expected(ast, schema)?;
-    let mut lines = Vec::new();
-
-    for db_table in &db.tables {
-        if !expected.tables.contains(&db_table.name)
-            || is_managed_comment(db_table.comment.as_deref())
-        {
-            continue;
-        }
-        // The same marker `CREATE TABLE` writes. A different shape would leave the table
-        // permanently undroppable and the differ unable to converge.
-        let comment = managed_comment("table", &db_table.name, &[]);
-        lines.push(crate::managed::comment_on_table_sql(
-            &db_table.name,
-            &comment,
-            schema,
-        ));
-    }
-
-    for exp in &expected.uniques {
-        let constraint = db.constraints.iter().find(|c| {
-            c.constraint_type == DbConstraintType::Unique
-                && c.table == exp.table
-                && c.columns == exp.columns
-        });
-        if let Some(c) = constraint {
-            if !is_managed_comment(c.comment.as_deref()) {
-                let fields: Vec<&str> = exp.columns.iter().map(String::as_str).collect();
-                let comment = managed_comment("unique_constraint", &exp.table, &fields);
-                lines.push(crate::managed::comment_on_constraint_sql(
-                    &exp.table, &c.name, &comment, schema,
-                ));
-            }
-        }
-    }
-
-    for exp in &expected.indexes {
-        let idx = db
-            .indexes
-            .iter()
-            .chain(&catalog.expression_indexes)
-            .find(|i| i.table == exp.table && i.name == exp.name);
-        if let Some(i) = idx {
-            if !is_managed_comment(i.comment.as_deref()) {
-                let kind = if exp.unique { "unique_index" } else { "index" };
-                let field_refs: Vec<&str> = exp.fields.iter().map(String::as_str).collect();
-                let comment = managed_comment(kind, &exp.table, &field_refs);
-                lines.push(crate::managed::comment_on_index_sql(
-                    &exp.name, &comment, schema,
-                ));
-            }
-        }
-    }
-
-    Ok(lines)
 }
