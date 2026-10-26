@@ -24,11 +24,8 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 
 use crate::differ::{
-    column_diff::{expected_udt, field_is_primary_key},
-    constraint_diff::expected_column_uniques,
-    rls_diff::expected_policies,
-    table_diff::versions_record_id,
-    Operation, Risk,
+    column_diff::expected_udt, constraint_diff::expected_column_uniques,
+    rls_diff::expected_policies, table_diff::versions_record_id, Operation, Risk,
 };
 use crate::generator::sql::triggers::{self, PLATFORM_SCHEMA};
 use crate::generator::sql::{
@@ -58,11 +55,15 @@ use crate::managed::{
     membership_index_name, policy_name, ObjectNames,
 };
 use crate::parser::accessors::{
-    column_names_for, db_foreign_key, default_foreign_key_column, versions_of, versions_table_name,
+    auth_user_link, column_names_for, db_foreign_key, default_foreign_key_column,
+    primary_key_columns, versions_of, versions_table_name,
 };
 use crate::parser::ast::{AccessAst, FieldAst, IndexAst, ModelAst, RelationCardinality, SchemaAst};
 use crate::parser::resolver::resolve_system_ref;
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified};
+use crate::sql_quote::{do_block, quote_ident, quote_literal, quote_qualified};
+
+/// Where a `SupatypeAuthUserId<{ onDelete }>` field's key points: Supatype's own users.
+pub(crate) const AUTH_USERS: (&str, &str) = ("auth", "users");
 
 /// A check constraint the schema declares on a model: a field's bounds or a model-level rule.
 pub(crate) struct ExpectedCheck {
@@ -155,10 +156,13 @@ impl ObjectKey {
             // Guarded as the schedule is: a database without `pg_cron` has no job to unschedule.
             // Only this database's job, found as introspection finds them
             // ([`crate::generator::sql::versions::cron_job_database`]): `cron.job` is the cluster's.
-            ObjectKind::CronJob => format!(
-                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = {} AND database = {};\n  END IF;\nEND;\n$cron$;",
-                quote_literal(name),
-                crate::generator::sql::versions::cron_job_database()
+            ObjectKind::CronJob => do_block(
+                "cron",
+                &format!(
+                    "\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = {} AND database = {};\n  END IF;\nEND;\n",
+                    quote_literal(name),
+                    crate::generator::sql::versions::cron_job_database()
+                ),
             ),
             // The parent is `table.column`, or the table for a label on the table itself; only our
             // own provider's labels are ever desired or dropped.
@@ -291,7 +295,8 @@ pub fn never_removed(kind: ObjectKind) -> bool {
 /// drafts layer's (E19); and the functions access is decided by: the `can_*` predicates, which the
 /// field masking labels, the tier 2 views and every caller asking "may I" run, and the claim
 /// readers in the engine's helper schema that every generated rule reads the caller through
-/// (F15 (f)). A hand edit to `can_read_note__secret` is as much a change to who may read a column
+/// (F15 (f)), and the tier 2 set helpers (`rule_set_*`) a field rule reads another table
+/// through. A hand edit to `can_read_note__secret` is as much a change to who may read a column
 /// as an edit to its label. Any other function's callers are security relevant too when they
 /// change (`ledger::reconcile`, F14), though its body is not. A table's replica identity is not:
 /// it decides what the WAL carries, not who may read it.
@@ -306,6 +311,8 @@ pub fn security_relevant(key: &ObjectKey) -> bool {
             key.name.starts_with("can_")
                 || (key.schema == crate::generator::sql::auth_functions::CLAIMS_SCHEMA
                     && key.name.starts_with("jwt_"))
+                || (key.schema == crate::generator::sql::field_rules::RULE_SCHEMA
+                    && key.name.starts_with("rule_set_"))
         }
         _ => false,
     }
@@ -358,14 +365,17 @@ pub fn desired_objects_for(
         b.model_primary_key(model);
         b.model_uniques(model)?;
         b.model_foreign_keys(model)?;
+        b.model_auth_user_keys(model);
         b.model_checks(model);
         b.model_indexes(model)?;
         b.model_policies(model)?;
+        b.studio_policies(model.table_name());
         b.rls_enabled(model.table_name());
         b.replica_identity_full(model.table_name());
         b.model_triggers(model);
         if versions_of(model).is_some() {
             b.versions_table(model)?;
+            b.studio_policies(&versions_table_name(model.table_name()));
         }
     }
     b.versions_layer()?;
@@ -374,6 +384,7 @@ pub fn desired_objects_for(
     b.bucket_policies()?;
     for junction in &ast.junction_tables {
         b.junction(junction)?;
+        b.studio_policies(&junction.name);
         b.rls_enabled(&junction.name);
         b.replica_identity_full(&junction.name);
     }
@@ -528,12 +539,7 @@ impl<'a> Builder<'a> {
     }
 
     fn model_primary_key(&mut self, model: &ModelAst) {
-        let columns: Vec<String> = model
-            .fields
-            .iter()
-            .filter(|(_, field)| field_is_primary_key(field))
-            .flat_map(|(name, field)| column_names_for(name, field))
-            .collect();
+        let columns = primary_key_columns(model);
         if !columns.is_empty() {
             self.primary_key(model.table_name(), &columns);
         }
@@ -663,6 +669,35 @@ impl<'a> Builder<'a> {
             );
         }
         Ok(())
+    }
+
+    /// The key each `SupatypeAuthUserId<{ onDelete }>` field opts in to. A plain auth user id has
+    /// none: the user it names lives in `auth.users`, which a project need not have.
+    fn model_auth_user_keys(&mut self, model: &ModelAst) {
+        let table = model.table_name();
+        for (column, field) in &model.fields {
+            let Some(on_delete) = auth_user_link(field) else {
+                continue;
+            };
+            let name = self.names.foreign_key(table, column);
+            let create = format!(
+                "{} ADD CONSTRAINT {} FOREIGN KEY ({}) REFERENCES {} ({}) ON DELETE {};",
+                self.alter(table),
+                quote_ident(&name),
+                quote_ident(column),
+                quote_qualified(AUTH_USERS.0, AUTH_USERS.1),
+                quote_ident("id"),
+                on_delete.sql()
+            );
+            let target = ForeignKeyRef {
+                column,
+                ref_schema: AUTH_USERS.0,
+                ref_table: AUTH_USERS.1,
+                ref_column: "id",
+                on_delete: on_delete.sql(),
+            };
+            self.foreign_key(table, &name, target, create);
+        }
     }
 
     fn check(&mut self, table: &str, name: &str, create: String) {
@@ -901,20 +936,36 @@ impl<'a> Builder<'a> {
         let sql = render_field_views(self.ast, self.field_views, self.schema);
         self.attributed_script(&sql);
         for entry in self.field_views {
-            let name = policy_name(&entry.table, rls::SERVICE_ROLE_POLICY);
-            let structure = BTreeMap::from([
-                ("command", "*".to_string()),
-                ("permissive", flag(true)),
-                ("roles", "public".to_string()),
-            ]);
             let create = rls::service_role_policy_sql(self.schema, &entry.table);
-            self.push(
-                self.key(ObjectKind::Policy, &entry.table, &name),
-                structure,
-                create,
-                vec![self.table_key(&entry.table)],
-            );
+            self.engine_policy(&entry.table, rls::SERVICE_ROLE_POLICY, "*", create);
         }
+    }
+
+    /// The policies that admit a Studio user's request to every row of `table`
+    /// (`rls::studio_policy_sql`), on each table the engine manages: models, their versions tables
+    /// and junctions. Without them a Studio editor saving a draft was refused by the versions
+    /// table's own rules, which are the app's rules, not Studio's.
+    fn studio_policies(&mut self, table: &str) {
+        for (suffix, command) in rls::STUDIO_POLICIES {
+            let create = rls::studio_policy_sql(self.schema, table, suffix);
+            self.engine_policy(table, suffix, command, create);
+        }
+    }
+
+    /// One permissive policy on `table` that no access rule declares, named by `suffix`.
+    fn engine_policy(&mut self, table: &str, suffix: &str, command: &str, create: String) {
+        let name = policy_name(table, suffix);
+        let structure = BTreeMap::from([
+            ("command", command.to_string()),
+            ("permissive", flag(true)),
+            ("roles", "public".to_string()),
+        ]);
+        self.push(
+            self.key(ObjectKind::Policy, table, &name),
+            structure,
+            create,
+            vec![self.table_key(table)],
+        );
     }
 
     /// Row-level security on for a model or junction table (Phase 4.8, D9): enablement only, never

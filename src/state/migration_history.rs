@@ -221,6 +221,98 @@ END $$"#
     )
 }
 
+/// Index for "what was the newest change to this member", which Studio's members list asks of
+/// every member it shows. Partial, so the elevated request rows, which have no target and make up
+/// most of the table, cost it nothing.
+pub fn create_studio_audit_membership_index_sql() -> String {
+    format!(
+        r#"CREATE INDEX IF NOT EXISTS studio_audit_membership_changes_idx
+    ON {SCHEMA}.studio_audit (target_id, id DESC)
+    WHERE action = 'membership_changed_in_db'"#
+    )
+}
+
+/// Records every change to `studio_members` in `studio_audit`, whoever made it.
+///
+/// The membership API is not the only way in: a developer with database access can promote
+/// anyone, themselves included, with one `UPDATE`. That access is theirs to keep, so this does not
+/// prevent the change; it makes it visible. Each row names the operation, the old and new holder and
+/// role, the database role that did it (the `SET ROLE` in force, else the login role), the caller's
+/// JWT `sub` when the change came through the data API, and `via_api`: whether the membership API
+/// flagged the transaction (`supatype.membership_api`, set transaction-locally by the auth server's
+/// store). `source` is that setting as it was: `on` for the membership API, `cli` for the CLI's
+/// `admin create-user` and `admin set-role`, `seed` for the first push carrying forward admins the
+/// project already had ([`SEED_MEMBERSHIP_SOURCE`]), and absent for a change made around all of
+/// them, which is the one Studio flags.
+///
+/// SECURITY DEFINER with a pinned `search_path`, so a role that may write `studio_members` but not
+/// `studio_audit` still leaves a record, and nothing on that role's path can stand in for the
+/// tables or functions it calls. `current_user` inside it is the owner, which is why the acting
+/// role comes from the `role` setting instead. A missing audit table warns rather than blocking
+/// the change, as the API's own audit does: refusing to revoke a compromised admin because the
+/// trail is broken would be the worse failure. The flag and the trigger are detection, not a
+/// control: whoever can drop the trigger or set the flag can hide a change from it.
+pub fn create_studio_membership_audit_function_sql() -> String {
+    format!(
+        r#"CREATE OR REPLACE FUNCTION {SCHEMA}.audit_studio_membership_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, {SCHEMA}
+AS $fn$
+DECLARE
+    claims  jsonb;
+    subject text;
+    db_role text;
+BEGIN
+    IF to_regclass('{SCHEMA}.studio_audit') IS NULL THEN
+        RAISE WARNING 'Studio membership changed with no {SCHEMA}.studio_audit to record it';
+        RETURN NULL;
+    END IF;
+    BEGIN
+        claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb;
+    EXCEPTION WHEN others THEN
+        claims := NULL;
+    END;
+    subject := coalesce(claims ->> 'sub',
+                        nullif(current_setting('request.jwt.claim.sub', true), ''));
+    db_role := coalesce(nullif(current_setting('role', true), 'none'), session_user::text);
+    INSERT INTO {SCHEMA}.studio_audit (actor_id, target_id, action, role, detail)
+    VALUES (
+        NULL,
+        coalesce(NEW.user_id, NEW.platform_user_id, OLD.user_id, OLD.platform_user_id),
+        'membership_changed_in_db',
+        coalesce(NEW.role, OLD.role),
+        jsonb_build_object(
+            'operation',    TG_OP,
+            'old_user_id',  coalesce(OLD.user_id, OLD.platform_user_id),
+            'old_role',     OLD.role,
+            'new_user_id',  coalesce(NEW.user_id, NEW.platform_user_id),
+            'new_role',     NEW.role,
+            'db_role',      db_role,
+            'session_user', session_user::text,
+            'jwt_sub',      subject,
+            'via_api',      coalesce(current_setting('supatype.membership_api', true), '') = 'on',
+            'source',       nullif(current_setting('supatype.membership_api', true), '')
+        )
+    );
+    RETURN NULL;
+END
+$fn$"#
+    )
+}
+
+/// Attaches [`create_studio_membership_audit_function_sql`] to `studio_members`. Dropped and
+/// created rather than created if missing, so a changed definition replaces the old one.
+pub fn create_studio_membership_audit_trigger_sql() -> String {
+    format!(
+        r#"DROP TRIGGER IF EXISTS studio_members_audit ON {SCHEMA}.studio_members;
+CREATE TRIGGER studio_members_audit
+    AFTER INSERT OR UPDATE OR DELETE ON {SCHEMA}.studio_members
+    FOR EACH ROW EXECUTE FUNCTION {SCHEMA}.audit_studio_membership_change()"#
+    )
+}
+
 /// Migrate a `studio_members` table created before cloud accounts could hold a
 /// membership: `user_id` was the primary key and the only identity.
 ///
@@ -315,8 +407,12 @@ END $$"#
 /// Studio access moved out of JWT claims and into this table. Without a seed,
 /// the first push after that change locks every existing admin out of their own
 /// Studio: their claim no longer grants anything and they have no membership
-/// row. Runs only while the table is empty, so it cannot resurrect access that
-/// was deliberately revoked later.
+/// row. Runs once per database, recorded in [`STUDIO_SEED_TABLE`], so revoking
+/// every member and then changing the bootstrap cannot hand the claims' admins
+/// their access back. A database that already has members, or an audit trail
+/// showing it once had them, is recorded as seeded without carrying anything
+/// forward: its membership is already somebody's decision. Until `auth.users`
+/// exists there is nobody to carry forward, and nothing is recorded.
 ///
 /// Only the roles that actually admitted anyone are carried over, and they all
 /// become the Studio role `admin`:
@@ -332,25 +428,73 @@ END $$"#
 /// A deployment that customised `STUDIO_ADMIN_ROLES` seeds nobody and falls
 /// through to the CLI's first-admin prompt, which is the right recovery, better
 /// than guessing which app roles were meant to be administrators.
+///
+/// The insert is marked [`SEED_MEMBERSHIP_SOURCE`], so the audit trail records it
+/// as the seed and Studio does not flag it as a change made around Studio. The
+/// record keeps the newest audit row at that moment, and Studio trusts the mark
+/// on no row after it: anyone with SQL access can set the mark, but not on a row
+/// the seed already wrote.
 pub fn seed_studio_members_from_claims_sql() -> String {
     format!(
         r#"DO $$
+DECLARE
+    prior   text := coalesce(current_setting('{MEMBERSHIP_SOURCE_SETTING}', true), '');
+    audited boolean := to_regclass('{SCHEMA}.studio_audit') IS NOT NULL;
+    had_members boolean := false;
+    through bigint;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM {SCHEMA}.studio_members) THEN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'auth' AND table_name = 'users'
-        ) THEN
-            INSERT INTO {SCHEMA}.studio_members (user_id, platform_user_id, role)
-            SELECT id, NULL, 'admin'
-              FROM auth.users
-             WHERE raw_app_meta_data->>'role' IN ('admin', 'supatype_admin')
-            ON CONFLICT (user_id) DO NOTHING;
-        END IF;
+    {create_table};
+    IF EXISTS (SELECT 1 FROM {STUDIO_SEED_TABLE}) THEN
+        RETURN;
     END IF;
-END $$"#
+    IF audited THEN
+        had_members := EXISTS (SELECT 1 FROM {SCHEMA}.studio_audit WHERE target_id IS NOT NULL);
+    END IF;
+    IF had_members OR EXISTS (SELECT 1 FROM {SCHEMA}.studio_members) THEN
+        INSERT INTO {STUDIO_SEED_TABLE} (audit_through) VALUES (NULL);
+        RETURN;
+    END IF;
+    IF to_regclass('auth.users') IS NULL THEN
+        RETURN;
+    END IF;
+    PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', '{SEED_MEMBERSHIP_SOURCE}', true);
+    INSERT INTO {SCHEMA}.studio_members (user_id, platform_user_id, role)
+    SELECT id, NULL, 'admin'
+      FROM auth.users
+     WHERE raw_app_meta_data->>'role' IN ('admin', 'supatype_admin')
+    ON CONFLICT (user_id) DO NOTHING;
+    PERFORM set_config('{MEMBERSHIP_SOURCE_SETTING}', prior, true);
+    IF audited THEN
+        SELECT max(id) INTO through FROM {SCHEMA}.studio_audit;
+    END IF;
+    INSERT INTO {STUDIO_SEED_TABLE} (audit_through) VALUES (through);
+END $$"#,
+        create_table = create_studio_seed_table_sql(),
     )
 }
+
+/// Where the one membership seed a database ever gets is recorded.
+pub const STUDIO_SEED_TABLE: &str = "_supatype.studio_seed";
+
+/// [`STUDIO_SEED_TABLE`]: one row, once the seed has run. `audit_through` is the newest
+/// `studio_audit` row when it ran, the last that may carry its mark.
+pub fn create_studio_seed_table_sql() -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {STUDIO_SEED_TABLE} (
+        id            INT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+        seeded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        audit_through BIGINT
+    )"
+    )
+}
+
+/// The transaction-local setting naming who changed Studio membership, which the membership audit
+/// trigger records as `source` ([`create_studio_membership_audit_function_sql`]).
+pub const MEMBERSHIP_SOURCE_SETTING: &str = "supatype.membership_api";
+
+/// The `source` the first push's seed gives the memberships it carries forward. Set for its own
+/// insert only, and put back after it, so nothing later in the push's transaction is taken for it.
+pub const SEED_MEMBERSHIP_SOURCE: &str = "seed";
 
 pub fn ensure_migrations_admin_config_column_sql() -> String {
     format!("ALTER TABLE {SCHEMA}.migrations ADD COLUMN IF NOT EXISTS admin_config JSONB")
@@ -1504,6 +1648,19 @@ fn bootstrap_statements() -> Vec<(&'static str, String)> {
         ),
         ("studio_audit table", create_studio_audit_table_sql()),
         ("studio_audit columns", ensure_studio_audit_columns_sql()),
+        (
+            "studio_audit membership index",
+            create_studio_audit_membership_index_sql(),
+        ),
+        // After both tables are in their current shape, which the function writes and reads.
+        (
+            "studio_members audit function",
+            create_studio_membership_audit_function_sql(),
+        ),
+        (
+            "studio_members audit trigger",
+            create_studio_membership_audit_trigger_sql(),
+        ),
         (
             "studio_identity_links table",
             create_studio_identity_links_table_sql(),

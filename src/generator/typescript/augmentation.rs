@@ -13,7 +13,7 @@
 //! imported.
 
 use super::relationships::quote_key;
-use super::types::{emit_fields, emit_shared_types, Mode};
+use super::types::{emit_drafts_mark, emit_fields, emit_shared_types, Mode};
 use crate::parser::ast::{ModelAst, SchemaAst};
 use anyhow::Result;
 
@@ -57,6 +57,7 @@ fn emit_model(ast: &SchemaAst, model: &ModelAst, out: &mut String) {
         emit_fields(model, mode, out, indent);
         out.push_str("      }\n");
     }
+    emit_drafts_mark(model, out, "      ");
     let relationships = super::relationships::of_model(ast, model);
     super::relationships::emit(&relationships, out, "      ");
 

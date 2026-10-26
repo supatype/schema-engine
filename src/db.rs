@@ -51,3 +51,13 @@ async fn pool(url: &str, session: String) -> Result<PgPool> {
         .await
         .context("Failed to connect to database")
 }
+
+/// Whether `relation` (a qualified, quoted name) exists, asked of the catalog. Asking rather than
+/// reading it and catching the error matters inside a transaction: a failed read aborts it.
+pub async fn relation_exists(conn: &mut sqlx::PgConnection, relation: &str) -> Result<bool> {
+    sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(relation)
+        .fetch_one(&mut *conn)
+        .await
+        .with_context(|| format!("Failed to look up {relation}"))
+}

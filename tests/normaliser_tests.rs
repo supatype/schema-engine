@@ -521,3 +521,88 @@ fn test_rename_column_comment_uses_ascii_arrow() {
         }
     }
 }
+
+// ── Column names past Postgres's identifier limit ─────────────────────────────
+
+/// `posts` with `fields` besides its id, and `rule` as its read rule.
+fn posts_doc(fields: serde_json::Value, rule: serde_json::Value) -> String {
+    let mut all = serde_json::json!({ "id": { "kind": "uuid", "primaryKey": true,
+                                              "required": true } });
+    all.as_object_mut()
+        .unwrap()
+        .extend(fields.as_object().unwrap().clone());
+    serde_json::json!({
+        "astVersion": 2,
+        "models": [{
+            "name": "Post",
+            "fields": all,
+            "options": { "timestamps": false, "softDelete": false },
+            "annotations": { "db": { "tableName": "posts", "indexes": [] },
+                             "platform": { "access": { "read": rule } } }
+        }]
+    })
+    .to_string()
+}
+
+/// A field named past 63 bytes is the column Postgres keeps, its first 63 bytes, and a rule that
+/// names it names that column.
+#[test]
+fn a_column_name_past_the_identifier_limit_is_kept_as_postgres_keeps_it() {
+    let long = "registration_dietary_requirements_and_preferences_free_text_notes";
+    assert!(long.len() > 63);
+    let rule = serde_json::json!({ "type": "nullCheck", "isNull": false,
+                                   "operand": { "kind": "column", "name": long } });
+    let doc = posts_doc(serde_json::json!({ long: { "kind": "text" } }), rule);
+    let ast = parser::parse(&doc).expect("parses");
+    let model = &ast.models[0];
+    assert!(
+        model.fields.contains_key(&long[..63]),
+        "{:?}",
+        model.fields.keys()
+    );
+    let read = format!("{:?}", model.access().read);
+    assert!(read.contains(&format!("\"{}\"", &long[..63])), "{read}");
+}
+
+/// Two columns whose names agree for their first 63 bytes would be one column to Postgres: the
+/// schema is refused, naming both, rather than one silently taking the other's place.
+#[test]
+fn two_column_names_postgres_would_cut_to_one_are_refused() {
+    let stem = "registration_dietary_requirements_and_preferences_free_text_not";
+    assert_eq!(stem.len(), 63);
+    let (a, b) = (format!("{stem}es_a"), format!("{stem}es_b"));
+    let doc = posts_doc(
+        serde_json::json!({ &a: { "kind": "text" }, &b: { "kind": "text" } }),
+        serde_json::json!({ "type": "public" }),
+    );
+    let refused = parser::parse(&doc).expect_err("refused").to_string();
+    assert!(refused.contains(&a) && refused.contains(&b), "{refused}");
+    assert!(refused.contains("63"), "{refused}");
+}
+
+/// A relation's key column derived from a long field name is written out as Postgres keeps it.
+#[test]
+fn a_derived_foreign_key_column_past_the_limit_is_kept_as_postgres_keeps_it() {
+    let field = "conference_attendee_registration_preferences_and_requirements";
+    let doc = serde_json::json!({
+        "astVersion": 2,
+        "models": [{
+            "name": "Prefs", "fields": { "id": { "kind": "uuid", "primaryKey": true } },
+            "annotations": { "db": { "tableName": "prefs" } }
+        }, {
+            "name": "Diet",
+            "fields": {
+                "id": { "kind": "uuid", "primaryKey": true },
+                field: { "kind": "relation", "cardinality": "belongsTo", "target": "Prefs" }
+            },
+            "annotations": { "db": { "tableName": "diets" } }
+        }]
+    });
+    let ast = parser::parse(&doc.to_string()).expect("parses");
+    let diet = ast.models.iter().find(|m| m.name == "Diet").unwrap();
+    let Some(supatype_engine::parser::ast::FieldAst::Relation(rel)) = diet.fields.get(field) else {
+        panic!("the relation");
+    };
+    let derived = format!("{field}_id");
+    assert_eq!(rel.foreign_key.as_deref(), Some(&derived[..63]));
+}

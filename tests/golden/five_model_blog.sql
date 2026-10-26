@@ -458,10 +458,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_categories_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."name"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."name"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."name" IS DISTINCT FROM OLD."name" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."name"::TEXT) THEN
@@ -476,10 +474,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_posts_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."title"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."title"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."title" IS DISTINCT FROM OLD."title" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."title"::TEXT) THEN
@@ -542,6 +538,71 @@ CREATE OR REPLACE TRIGGER "users_updated_at_trigger"
 BEFORE UPDATE ON "public"."users"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_updated_at();
 
+CREATE POLICY "categories_studio_read" ON "public"."categories"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "categories_studio_write" ON "public"."categories"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "comments_studio_read" ON "public"."comments"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "comments_studio_write" ON "public"."comments"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "posts_studio_read" ON "public"."posts"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "posts_studio_write" ON "public"."posts"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "tags_studio_read" ON "public"."tags"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "tags_studio_write" ON "public"."tags"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "users_studio_read" ON "public"."users"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "users_studio_write" ON "public"."users"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 ALTER TABLE "public"."categories" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."comments" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."posts" ENABLE ROW LEVEL SECURITY;
@@ -627,5 +688,34 @@ ALTER TABLE "public"."comments" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."posts" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."tags" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."users" REPLICA IDENTITY FULL;
+
+-- GraphQL relation names, as the schema declares them
+DO $graphql_names$
+DECLARE
+  k record;
+  wanted text;
+BEGIN
+  FOR k IN
+    SELECT c.conname, c.conrelid::regclass AS rel,
+           obj_description(c.oid, 'pg_constraint') AS old, d.directive
+    FROM (VALUES
+      ('"public"."posts"', 'author_id', '@graphql({"foreign_name":"authorId"})'),
+      ('"public"."posts"', 'category_id', '@graphql({"foreign_name":"categoryId"})'),
+      ('"public"."comments"', 'post_id', '@graphql({"foreign_name":"postId"})'),
+      ('"public"."comments"', 'author_id', '@graphql({"foreign_name":"authorId"})')
+    ) AS d(rel, col, directive)
+    JOIN pg_constraint c ON c.conrelid = to_regclass(d.rel) AND c.contype = 'f'
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = d.col
+     AND c.conkey = ARRAY[a.attnum]
+  LOOP
+    SELECT concat_ws(E'\n', string_agg(l.line, E'\n' ORDER BY l.n), k.directive) INTO wanted
+      FROM regexp_split_to_table(k.old, E'\n') WITH ORDINALITY AS l(line, n)
+     WHERE l.line NOT LIKE '@graphql(%';
+    IF wanted IS DISTINCT FROM k.old THEN
+      EXECUTE format('COMMENT ON CONSTRAINT %I ON %s IS %L', k.conname, k.rel, wanted);
+    END IF;
+  END LOOP;
+END
+$graphql_names$;
 
 COMMIT;

@@ -245,6 +245,45 @@ async fn a_plain_key_becomes_an_identity_numbered_past_its_rows_and_back() {
     .await;
 }
 
+/// An identity column that stops being one and becomes optional: the identity goes before the
+/// `NOT NULL`, which Postgres will not take off an identity column, and the numbers the rows have
+/// stay.
+#[tokio::test]
+async fn an_identity_column_made_optional_drops_identity_before_not_null() {
+    common::with_integration_pool(|pool| async move {
+        let with_seq = |seq: Value| {
+            posts(json!({ "id": int(json!({ "primaryKey": true })),
+                          "title": text(json!({})), "seq": seq }))
+        };
+        converges(
+            &pool,
+            &with_seq(int(json!({ "required": false, "identity": "always" }))),
+        )
+        .await;
+        exec(
+            &pool,
+            "INSERT INTO public.posts (id, title) VALUES (1, 'a'), (2, 'b')",
+        )
+        .await
+        .unwrap();
+
+        converges_only_forced(&pool, &with_seq(int(json!({ "required": false })))).await;
+        assert_eq!(how_filled(&pool, "seq").await.0, "NO");
+        exec(
+            &pool,
+            "INSERT INTO public.posts (id, title, seq) VALUES (3, 'c', NULL)",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            one::<i64>(&pool, "SELECT sum(seq)::bigint FROM public.posts").await,
+            3,
+            "the numbers the rows had stay"
+        );
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_changed_expression_computes_every_row_again() {
     common::with_integration_pool(|pool| async move {

@@ -37,23 +37,31 @@
 //!   can reach the divergence; only direct SQL against these views. The contract test asserts the
 //!   difference per tier so it cannot drift silently.
 //!
-//! * **No whole-row references.** The `can_*` affordance functions take the row as a composite, and
-//!   with `supatype_mask` loaded a whole-row reference to a masked table is rejected outright
-//!   (`whole-row reference to "t" is not supported because the table has masked columns`). So the
-//!   predicate is inlined over individual columns, which also lets both tiers coexist in one
-//!   database, as the contract test requires.
+//! * **Each rule runs in a helper, not inline.** The view and its write trigger call a rule helper
+//!   per masked column ([`RuleHelpers`]) with the base row, so the rule runs with the setting that
+//!   keeps the Studio policies out of it. Inlined, a rule asking which rows of another table the
+//!   caller may read (`Rows<teams, id>`) was answered by Studio's read-everything policy. An older
+//!   `supatype_mask` refused a whole-row reference to a masked table, which is why the rule was
+//!   once inlined; a tier 2 table carries no mask label, and the current extension masks such a
+//!   reference instead of refusing it, so both tiers still coexist in one database, as the
+//!   contract test requires.
 //!
 //! * **`IS NOT TRUE`, never `NOT`.** A write predicate returning NULL (an unset `current_setting`,
 //!   a null column) makes `NOT predicate` NULL, and `IF NULL THEN RAISE` does not raise. Measured on
 //!   a prototype: an unauthorised write succeeded silently.
 
+use std::collections::BTreeMap;
+
 use crate::generator::sql::auth_functions::CLAIMS_SCHEMA;
-use crate::generator::sql::rls::AUTH_ROLE;
-use crate::parser::accessors::{
-    db_foreign_key, db_table_name, default_foreign_key_column, platform_access,
+use crate::generator::sql::field_rules::{FieldRules, RuleSet};
+use crate::generator::sql::graphql_names::model_relation_names;
+use crate::generator::sql::rls::{studio_writer_sql, AUTH_ROLE};
+use crate::parser::accessors::{db_table_name, platform_access};
+use crate::parser::ast::{JunctionTableAst, ModelAst, SchemaAst};
+use crate::sql_quote::{
+    comment_text, do_block, dollar_quote, quote_ident, quote_literal, quote_qualified,
+    raise_message,
 };
-use crate::parser::ast::{FieldAst, JunctionTableAst, ModelAst, RelationCardinality, SchemaAst};
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
 use crate::state::database_state::DatabaseState;
 
 /// Schema the views live in. PostgREST is pointed here instead of the managed schema.
@@ -143,8 +151,8 @@ fn owner_block(schema: &str, owner_name: &str) -> String {
         "The api views and their write triggers run as this role. As a superuser: ALTER ROLE \
          {owner_name} NOLOGIN NOBYPASSRLS NOSUPERUSER;"
     ));
-    format!(
-        "DO ${OWNER_TAG}$\nBEGIN\n\
+    let body = format!(
+        "\nBEGIN\n\
          \x20 IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {owner_lit}) THEN\n\
          \x20   BEGIN\n\
          \x20     CREATE ROLE {owner} NOLOGIN NOBYPASSRLS NOINHERIT;\n\
@@ -161,17 +169,19 @@ fn owner_block(schema: &str, owner_name: &str) -> String {
          \x20 END IF;\n\
          \x20 GRANT USAGE, CREATE ON SCHEMA {api} TO {owner};\n\
          \x20 GRANT USAGE ON SCHEMA {project} TO {owner};\n\
-         \x20 GRANT USAGE ON SCHEMA {claims} TO {owner};\n\
+         \x20 -- CREATE so a pushing role that is not a superuser may give it the rule helpers.\n\
+         \x20 GRANT USAGE, CREATE ON SCHEMA {claims} TO {owner};\n\
          \x20 GRANT EXECUTE ON FUNCTION {readers} TO {owner};\n\
          \x20 IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'auth') THEN\n\
          \x20   GRANT USAGE ON SCHEMA \"auth\" TO {owner};\n\
          \x20 END IF;\n\
          {shared}\
-         END\n${OWNER_TAG}$;",
+         END\n",
         api = quote_ident(VIEW_SCHEMA),
         project = quote_ident(schema),
         shared = from_shared_owner(owner_name),
-    )
+    );
+    do_block(OWNER_TAG, &body)
 }
 
 /// The upgrade from the shared [`API_OWNER`] (TI2), inside [`owner_block`]: what it owns in this
@@ -203,8 +213,8 @@ fn from_shared_owner(owner: &str) -> String {
 /// caller could use: nobody connects as it, and it only runs the triggers' own statements.
 pub fn owner_reach_sql(schema: &str, owner: &str) -> String {
     let owner_lit = quote_literal(owner);
-    format!(
-        "DO ${OWNER_REACH_TAG}$\nDECLARE\n  f regprocedure;\nBEGIN\n\
+    let body = format!(
+        "\nDECLARE\n  f regprocedure;\nBEGIN\n\
          \x20 FOR f IN\n\
          \x20   SELECT p.oid::regprocedure FROM pg_proc p\n\
          \x20    WHERE p.pronamespace IN ({claims}::regnamespace, {project}::regnamespace)\n\
@@ -216,41 +226,52 @@ pub fn owner_reach_sql(schema: &str, owner: &str) -> String {
          \x20 LOOP\n\
          \x20   EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO %I', f, {owner_lit});\n\
          \x20 END LOOP;\n\
-         END\n${OWNER_REACH_TAG}$;\n",
+         END\n",
         claims = quote_literal(&quote_ident(CLAIMS_SCHEMA)),
         project = quote_literal(&quote_ident(schema)),
-    )
+    );
+    format!("{}\n", do_block(OWNER_REACH_TAG, &body))
 }
 
-/// The read predicate for a column, as SQL over the base table's own columns.
+/// One model's field rules as tier 2 evaluates them ([`FieldRules`]): per masked column, the read
+/// rule, and the write rule conjoined with it, as SQL over the base table's own columns.
 ///
-/// `None` when the column has no read rule: it is then as readable as the table itself, and wrapping
-/// it in `CASE WHEN TRUE` would only make the view harder to read.
-fn read_predicate(ast: &SchemaAst, model: &ModelAst, schema: &str, column: &str) -> Option<String> {
-    let rules = platform_access(model).fields.get(column)?;
-    let rule = rules.read.as_ref()?;
-    Some(crate::generator::sql::rls::access_rule_to_expr(
-        ast, model, rule, schema,
-    ))
+/// A column with no read rule is as readable as the table itself, and wrapping it in `CASE WHEN
+/// TRUE` would only make the view harder to read. Writing a column you cannot read is not a right
+/// the schema can express, and allowing it would let a caller discover the old value by trial:
+/// attempt a write, observe whether it was refused.
+#[derive(Default)]
+struct ColumnRules {
+    read: BTreeMap<String, String>,
+    write: BTreeMap<String, String>,
 }
 
-/// The write predicate, conjoined with the read predicate.
-///
-/// Writing a column you cannot read is not a right the schema can express, and allowing it would let
-/// a caller discover the old value by trial: attempt a write, observe whether it was refused.
-fn write_predicate(
-    ast: &SchemaAst,
-    model: &ModelAst,
-    schema: &str,
-    column: &str,
-) -> Option<String> {
-    let rules = platform_access(model).fields.get(column)?;
-    let write = rules.write.as_ref()?;
-    let write_expr = crate::generator::sql::rls::access_rule_to_expr(ast, model, write, schema);
-    Some(match read_predicate(ast, model, schema, column) {
-        Some(read) => format!("({write_expr}) AND ({read})"),
-        None => write_expr,
-    })
+impl ColumnRules {
+    /// `model`'s rules, with the set helpers they call added to `sets`.
+    fn of(
+        ast: &SchemaAst,
+        model: &ModelAst,
+        schema: &str,
+        sets: &mut BTreeMap<String, RuleSet>,
+    ) -> Self {
+        let mut rules = FieldRules::new(ast, model, schema);
+        let mut out = ColumnRules::default();
+        for (column, field) in &platform_access(model).fields {
+            let read = field.read.as_ref().map(|rule| rules.expr(rule));
+            if let Some(write) = field.write.as_ref().map(|rule| rules.expr(rule)) {
+                let write = match &read {
+                    Some(read) => format!("({write}) AND ({read})"),
+                    None => write,
+                };
+                out.write.insert(column.clone(), write);
+            }
+            if let Some(read) = read {
+                out.read.insert(column.clone(), read);
+            }
+        }
+        sets.extend(rules.into_sets());
+        out
+    }
 }
 
 /// The primary key a model declares, for a table that does not exist yet.
@@ -384,6 +405,56 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
     plan
 }
 
+/// `plan` with each table's columns as they are once `operations` have run, in the order Postgres
+/// keeps them: a dropped column is gone, a renamed one has its new name in its place (in the key
+/// too), and an added one, or one dropped and added again, is last. The views are made after the
+/// operations, so a view read off the columns from before them would lag a push behind, and the
+/// next push make it again.
+pub fn after_operations(
+    mut plan: Vec<FieldViewTable>,
+    operations: &[crate::differ::Operation],
+) -> Vec<FieldViewTable> {
+    for op in operations {
+        for entry in plan.iter_mut().filter(|e| op_table(op) == Some(&e.table)) {
+            apply_column_operation(entry, op);
+        }
+    }
+    plan
+}
+
+/// The table a column operation changes.
+fn op_table(op: &crate::differ::Operation) -> Option<&String> {
+    use crate::differ::Operation;
+    match op {
+        Operation::AddColumn { table, .. }
+        | Operation::DropColumn { table, .. }
+        | Operation::RecreateColumn { table, .. }
+        | Operation::RenameColumn { table, .. } => Some(table),
+        _ => None,
+    }
+}
+
+/// What the column operation `op` does to the view of its table.
+fn apply_column_operation(entry: &mut FieldViewTable, op: &crate::differ::Operation) {
+    use crate::differ::Operation;
+    let columns = &mut entry.columns;
+    match op {
+        Operation::RenameColumn { from, to, .. } => {
+            for c in columns.iter_mut().chain(entry.key.iter_mut()) {
+                if c == from {
+                    *c = to.clone();
+                }
+            }
+        }
+        Operation::AddColumn { column, .. } | Operation::RecreateColumn { column, .. } => {
+            columns.retain(|c| c != column);
+            columns.push(column.clone());
+        }
+        Operation::DropColumn { column, .. } => columns.retain(|c| c != column),
+        _ => {}
+    }
+}
+
 /// A many-to-many junction's view: its two key columns, which are also its primary key. Without
 /// one, tier 2 would serve no many-to-many relation at all, over REST or GraphQL, where tier 1
 /// serves the junction table.
@@ -425,9 +496,20 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
     if plan.is_empty() {
         return String::new();
     }
-    let mut out = preamble(schema, plan_owner(plan));
+    let owner = plan_owner(plan);
     let names = crate::managed::ObjectNames::for_schema(ast);
+    let mut sets = BTreeMap::new();
+    let mut rules = BTreeMap::new();
+    for model in &ast.models {
+        rules.insert(
+            db_table_name(model),
+            ColumnRules::of(ast, model, schema, &mut sets),
+        );
+    }
 
+    let mut out = preamble(schema, owner);
+    // The set helpers first: the views and their triggers call them.
+    out.extend(sets.values().map(|set| set.create_sql(owner)));
     for entry in plan {
         let Some(model) = ast.models.iter().find(|m| db_table_name(m) == entry.table) else {
             if let Some(junction) = ast.junction_tables.iter().find(|j| j.name == entry.table) {
@@ -435,49 +517,76 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
             }
             continue;
         };
-        out.push_str(&render_view(ast, model, entry, plan, schema));
-        if platform_access(model).fields.is_empty() {
+        let view = ModelView {
+            names: &names,
+            ast,
+            model,
+            schema,
+            entry,
+            rules: &rules[db_table_name(model)],
+        };
+        out.push_str(&view.render(plan));
+    }
+    out
+}
+
+/// One model's view and what it needs, under tier 2.
+struct ModelView<'a> {
+    names: &'a crate::managed::ObjectNames,
+    ast: &'a SchemaAst,
+    model: &'a ModelAst,
+    schema: &'a str,
+    entry: &'a FieldViewTable,
+    rules: &'a ColumnRules,
+}
+
+impl ModelView<'_> {
+    /// The view, then its write trigger where it masks a column and has a key to write by.
+    fn render(&self, plan: &[FieldViewTable]) -> String {
+        let mut out = render_view(self, plan);
+        if platform_access(self.model).fields.is_empty() {
             // Nothing masked: the view is a plain projection, which Postgres updates by itself.
-            continue;
+            return out;
         }
-        if entry.key.is_empty() {
+        if self.entry.key.is_empty() {
             // Without a key there is no way to say *which* row an INSTEAD OF trigger should
             // write, so the view is left read-only rather than given a trigger that guesses.
             // PostgREST cannot update a keyless relation either, so nothing is lost that worked.
             out.push_str(&format!(
                 "-- No primary key on {}.{}: its masked view is read-only, because an INSTEAD OF\n\
                  -- trigger has no way to identify the row being written.\n\n",
-                comment_text(schema),
-                comment_text(&entry.table)
+                comment_text(self.schema),
+                comment_text(&self.entry.table)
             ));
-            continue;
+            return out;
         }
         let trigger = WriteTrigger {
-            names: &names,
-            ast,
-            model,
-            schema,
-            entry,
+            names: self.names,
+            model: self.model,
+            schema: self.schema,
+            entry: self.entry,
+            rules: self.rules,
         };
         out.push_str(&trigger.render());
+        out
     }
-
-    out
 }
 
 /// One model's view: the masked projection, owned by [`API_OWNER`], with the base table's
 /// defaults, its GraphQL identity and relations, and its privileges.
-fn render_view(
-    ast: &SchemaAst,
-    model: &ModelAst,
-    entry: &FieldViewTable,
-    plan: &[FieldViewTable],
-    schema: &str,
-) -> String {
+fn render_view(view: &ModelView<'_>, plan: &[FieldViewTable]) -> String {
+    let ModelView {
+        ast,
+        model,
+        schema,
+        entry,
+        rules,
+        ..
+    } = *view;
     let projections: Vec<String> = entry
         .columns
         .iter()
-        .map(|column| projection(ast, model, schema, &entry.table, column))
+        .map(|column| projection(rules, &entry.table, column))
         .collect();
     let mut out = view_head(entry, &projections, schema, &masked_columns(model, entry));
     out.push_str(&graphql_comment_sql(
@@ -570,15 +679,9 @@ fn view_tail(entry: &FieldViewTable, schema: &str) -> String {
 
 /// One column of the view: the base column, or NULL for a caller its read rule refuses.
 /// `service_role` reads everything, as tier 1 lets it.
-fn projection(
-    ast: &SchemaAst,
-    model: &ModelAst,
-    schema: &str,
-    table: &str,
-    column: &str,
-) -> String {
+fn projection(rules: &ColumnRules, table: &str, column: &str) -> String {
     let qualified = format!("{}.{}", quote_ident(table), quote_ident(column));
-    match read_predicate(ast, model, schema, column) {
+    match rules.read.get(column) {
         // NULL rather than an error, so `SELECT *` (what PostgREST sends by default) keeps working
         // for a caller who may not read one column.
         Some(predicate) => format!(
@@ -606,8 +709,8 @@ fn projection(
 fn view_setup(schema: &str, entry: &FieldViewTable, masked: &[&String]) -> String {
     let base = quote_literal(&quote_qualified(schema, &entry.table));
     let view = quote_literal(&quote_qualified(VIEW_SCHEMA, &entry.table));
-    format!(
-        "DO ${VIEW_SETUP_TAG}$\nDECLARE\n  d record;\nBEGIN\n\
+    let body = format!(
+        "\nDECLARE\n  d record;\nBEGIN\n\
          \x20 FOR d IN\n\
          \x20   SELECT a.attname, pg_get_expr(ad.adbin, ad.adrelid) AS expr\n\
          \x20     FROM pg_attrdef ad\n\
@@ -628,10 +731,11 @@ fn view_setup(schema: &str, entry: &FieldViewTable, masked: &[&String]) -> Strin
          \x20 LOOP\n\
          \x20   EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO %I', d.seq, {owner});\n\
          \x20 END LOOP;\n\
-         END\n${VIEW_SETUP_TAG}$;\n",
+         END\n",
         owner = quote_literal(&entry.owner),
         unmasked = unmasked_clause(masked),
-    )
+    );
+    format!("{}\n", do_block(VIEW_SETUP_TAG, &body))
 }
 
 /// The condition in [`view_setup`] that passes over the masked columns' defaults.
@@ -680,27 +784,36 @@ fn graphql_comment_sql(
 /// One foreign key between two `api` views, in pg_graphql's comment directive for views.
 ///
 /// Read from the schema rather than the catalog, so the first push, which creates the tables a few
-/// statements earlier, writes them too. pg_graphql names it as it names the same key between
-/// tables, so a tier 2 query is a tier 1 query: the to-one field after the table it points at, the
-/// reverse collection after the referencing table. One shape differs, and no directive can change
-/// it: a one-to-one key's reverse. pg_graphql makes it a single row only when it finds a unique
-/// index on the key, and a view has no index, so under tier 2 it is a collection (`badgeCollection`
-/// where tier 1 has `badge`). Naming the collection as tier 1 names the row would not make the
-/// query the same, only the error less clear.
+/// statements earlier, writes them too. Each end carries the name the schema gave it, as the same
+/// key between tables does (`graphql_names`), so a tier 2 query is a tier 1 query; an end the
+/// schema does not name keeps pg_graphql's own name, as it does under tier 1. One shape differs,
+/// and no directive can change it: a one-to-one key's reverse. pg_graphql makes it a single row
+/// only when it finds a unique index on the key, and a view has no index, so under tier 2 it is a
+/// collection (`badgeCollection` where tier 1 has `badge`), and keeps pg_graphql's name. Naming
+/// the collection as tier 1 names the row would not make the query the same, only the error less
+/// clear.
 struct ViewForeignKey {
     local_columns: Vec<String>,
     foreign_table: String,
     foreign_columns: Vec<String>,
+    /// `foreign_name` and `local_name`, for the ends the schema names.
+    names: Option<serde_json::Value>,
 }
 
 impl ViewForeignKey {
     fn directive(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut directive = serde_json::json!({
             "local_columns": self.local_columns,
             "foreign_schema": VIEW_SCHEMA,
             "foreign_table": self.foreign_table,
             "foreign_columns": self.foreign_columns,
-        })
+        });
+        if let Some(serde_json::Value::Object(names)) = &self.names {
+            for (key, name) in names {
+                directive[key] = name.clone();
+            }
+        }
+        directive
     }
 
     fn is_served(&self, entry: &FieldViewTable, plan: &[FieldViewTable]) -> bool {
@@ -719,24 +832,13 @@ impl ViewForeignKey {
 /// The foreign keys a model's table holds, one per `belongsTo` relation to another model, a
 /// self-reference included. A key into a system table (`auth.users`) has no view to point at.
 fn model_foreign_keys(ast: &SchemaAst, model: &ModelAst) -> Vec<ViewForeignKey> {
-    model
-        .fields
-        .iter()
-        .filter_map(|(field_name, field)| {
-            let FieldAst::Relation(rel) = field else {
-                return None;
-            };
-            if !matches!(rel.cardinality, RelationCardinality::BelongsTo) {
-                return None;
-            }
-            let target = ast.models.iter().find(|m| m.name == rel.target)?;
-            let column = db_foreign_key(field, field_name)
-                .unwrap_or_else(|| default_foreign_key_column(field_name));
-            Some(ViewForeignKey {
-                local_columns: vec![column],
-                foreign_table: db_table_name(target).to_string(),
-                foreign_columns: vec![rel.references.clone().unwrap_or_else(|| "id".into())],
-            })
+    model_relation_names(ast, model)
+        .into_iter()
+        .map(|key| ViewForeignKey {
+            names: key.view_directive(),
+            local_columns: vec![key.column],
+            foreign_table: key.foreign_table,
+            foreign_columns: vec![key.foreign_column],
         })
         .collect()
 }
@@ -755,6 +857,7 @@ fn junction_foreign_keys(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<Vi
             local_columns: vec![column.clone()],
             foreign_table: db_table_name(parent).to_string(),
             foreign_columns: vec![key],
+            names: None,
         })
     })
     .collect()
@@ -771,10 +874,10 @@ fn junction_foreign_keys(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<Vi
 /// refused it (T2-N2), so a refused write reports no row rather than echoing one.
 struct WriteTrigger<'a> {
     names: &'a crate::managed::ObjectNames,
-    ast: &'a SchemaAst,
     model: &'a ModelAst,
     schema: &'a str,
     entry: &'a FieldViewTable,
+    rules: &'a ColumnRules,
 }
 
 impl WriteTrigger<'_> {
@@ -862,7 +965,23 @@ impl WriteTrigger<'_> {
         let owner = quote_ident(&self.entry.owner);
         format!(
             "CREATE OR REPLACE FUNCTION {function}() RETURNS trigger\n\
-             LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $trg$\n\
+             LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS {body};\n\
+             ALTER FUNCTION {function}() OWNER TO {owner};\n\
+             REVOKE ALL ON FUNCTION {function}() FROM PUBLIC;\n\
+             \n\
+             CREATE TRIGGER {trigger}\n\
+             \x20 INSTEAD OF INSERT OR UPDATE OR DELETE ON {view}\n\
+             \x20 FOR EACH ROW EXECUTE FUNCTION {function}();\n\n",
+            body = dollar_quote(&self.trigger_body(), "trg"),
+            trigger = quote_ident(&self.names.write_trigger(&self.entry.table)),
+            view = self.view(),
+        )
+    }
+
+    /// The trigger function's body, which the rules it writes can put any text in.
+    fn trigger_body(&self) -> String {
+        format!(
+            "\n\
              DECLARE\n\
              \x20 stored {base};\n\
              \x20 touched bigint;\n\
@@ -872,21 +991,15 @@ impl WriteTrigger<'_> {
              \x20 sent jsonb;\n\
              \x20 dflt jsonb;\n\
              \x20 exempt boolean := {exempt};\n\
+             \x20 creates boolean := COALESCE({creates}, false);\n\
              BEGIN\n\
-             {delete}{insert}{update}END $trg$;\n\
-             ALTER FUNCTION {function}() OWNER TO {owner};\n\
-             REVOKE ALL ON FUNCTION {function}() FROM PUBLIC;\n\
-             \n\
-             CREATE TRIGGER {trigger}\n\
-             \x20 INSTEAD OF INSERT OR UPDATE OR DELETE ON {view}\n\
-             \x20 FOR EACH ROW EXECUTE FUNCTION {function}();\n\n",
+             {delete}{insert}{update}END ",
             base = self.base(),
             exempt = service_role_exempt(),
+            creates = studio_writer_sql(),
             delete = self.delete_branch(),
             insert = self.insert_branch(),
             update = self.update_branch(),
-            trigger = quote_ident(&self.names.write_trigger(&self.entry.table)),
-            view = self.view(),
         )
     }
 
@@ -1053,19 +1166,25 @@ impl WriteTrigger<'_> {
     }
 
     /// Each masked column the caller wrote, judged against the completed `NEW`, `service_role`
-    /// exempt. `IS NOT TRUE`, so a rule answering NULL refuses.
+    /// exempt. `IS NOT TRUE`, so a rule answering NULL refuses. A Studio editor is exempt too
+    /// (`creates`): a new record shows them only what they typed, so they may give the fields
+    /// masked from them, as tier 1 lets them (`rls::studio_creates_sql`). Only the insert branch
+    /// reads it, so a stored record is judged as before.
     fn insert_checks(&self, masked: &[&String]) -> String {
         masked
             .iter()
             .filter_map(|column| {
-                let test = write_predicate(self.ast, self.model, self.schema, column)
-                    .or_else(|| read_predicate(self.ast, self.model, self.schema, column))?;
+                let test = self
+                    .rules
+                    .write
+                    .get(*column)
+                    .or_else(|| self.rules.read.get(*column))?;
+                let judged = self.against(test, "NEW");
                 Some(format!(
-                    "\x20   IF NOT exempt AND {name} = ANY (wrote) AND {judged} IS NOT TRUE THEN\n\
+                    "\x20   IF NOT exempt AND NOT creates AND {name} = ANY (wrote) AND {judged} IS NOT TRUE THEN\n\
                      \x20     RAISE EXCEPTION {denied} USING ERRCODE = '42501';\n\
                      \x20   END IF;\n",
                     name = quote_literal(column),
-                    judged = self.against(&test, "NEW"),
                     denied = self.denied(column),
                 ))
             })
@@ -1114,10 +1233,12 @@ impl WriteTrigger<'_> {
         masked_columns(self.model, self.entry)
             .into_iter()
             .map(|column| {
-                let readable = read_predicate(self.ast, self.model, self.schema, column)
-                    .map_or("TRUE".to_string(), |p| self.against(&p, "stored"));
-                let writable = write_predicate(self.ast, self.model, self.schema, column)
-                    .map_or("TRUE".to_string(), |p| self.against(&p, "stored"));
+                let judged = |rules: &BTreeMap<String, String>| {
+                    rules
+                        .get(column)
+                        .map_or("TRUE".to_string(), |p| self.against(p, "stored"))
+                };
+                let (readable, writable) = (judged(&self.rules.read), judged(&self.rules.write));
                 let col = quote_ident(column);
                 format!(
                     "\x20   -- {label}\n\

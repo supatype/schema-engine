@@ -1,9 +1,11 @@
 pub mod accessors;
 pub mod annotations;
 pub mod ast;
+pub mod column_names;
 pub mod normaliser;
 pub mod owner_rules;
 pub mod resolver;
+pub mod table_names;
 pub mod v2;
 pub mod validator;
 
@@ -16,5 +18,5 @@ pub fn parse(input: &str) -> Result<SchemaAst> {
     let raw = v2::deserialize_schema(&value)?;
     let validated = validator::validate(raw)?;
     let resolved = resolver::resolve(validated)?;
-    Ok(normaliser::normalise(resolved))
+    table_names::keep_as_postgres_does(normaliser::normalise(resolved))
 }

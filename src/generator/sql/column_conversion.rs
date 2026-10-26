@@ -2,7 +2,7 @@
 
 use crate::differ::Risk;
 use crate::parser::ast::{BlocksFieldAst, DefaultValueAst, FieldAst, ScalarFieldAst};
-use crate::sql_quote::{quote_ident, quote_literal, quote_qualified, raise_message};
+use crate::sql_quote::{do_block, quote_ident, quote_literal, quote_qualified, raise_message};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -230,16 +230,17 @@ fn blocks_refusal_sql(target: &str, col: &str, table: &str, column: &str) -> Str
          fields in an object, so every value must be an object or an array of objects. Change or \
          remove the values that are not, then push again."
     ));
-    format!(
-        "DO $$ BEGIN\n  \
+    let body = format!(
+        " BEGIN\n  \
          IF EXISTS (SELECT 1 FROM {target} t \
            WHERE jsonb_typeof(t.{col}) NOT IN ('object', 'array', 'null') \
               OR (jsonb_typeof(t.{col}) = 'array' AND EXISTS (\
                 SELECT 1 FROM jsonb_array_elements(t.{col}) e WHERE jsonb_typeof(e) <> 'object'))) THEN\n    \
          RAISE EXCEPTION {refused};\n  \
          END IF;\n\
-         END $$;"
-    )
+         END "
+    );
+    do_block("", &body)
 }
 
 fn first_block_name(field: &FieldAst) -> Option<String> {

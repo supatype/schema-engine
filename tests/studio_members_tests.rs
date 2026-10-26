@@ -56,13 +56,17 @@ fn seed_only_promotes_roles_that_granted_access() {
     assert!(!sql.contains("'authenticated'"), "got: {sql}");
 }
 
-// Runs only while the table is empty, so it cannot resurrect access that was
-// deliberately revoked after the migration.
+// Runs once per database, by its own record rather than an empty table, so it
+// cannot resurrect access that was deliberately revoked after the migration.
 #[test]
-fn seed_is_skipped_once_membership_exists() {
+fn seed_is_skipped_once_it_has_run_or_membership_exists() {
     let sql = migration_history::seed_studio_members_from_claims_sql();
     assert!(
-        sql.contains("IF NOT EXISTS (SELECT 1 FROM _supatype.studio_members)"),
+        sql.contains("IF EXISTS (SELECT 1 FROM _supatype.studio_seed) THEN"),
+        "got: {sql}"
+    );
+    assert!(
+        sql.contains("IF had_members OR EXISTS (SELECT 1 FROM _supatype.studio_members) THEN"),
         "got: {sql}"
     );
 }
@@ -72,8 +76,10 @@ fn seed_is_skipped_once_membership_exists() {
 #[test]
 fn seed_tolerates_a_missing_auth_schema() {
     let sql = migration_history::seed_studio_members_from_claims_sql();
-    assert!(sql.contains("table_schema = 'auth'"), "got: {sql}");
-    assert!(sql.contains("table_name = 'users'"), "got: {sql}");
+    assert!(
+        sql.contains("IF to_regclass('auth.users') IS NULL THEN"),
+        "got: {sql}"
+    );
 }
 
 // "Who gave this person admin, and when" has to be answerable months later, so
@@ -156,6 +162,142 @@ async fn audit_migration_tolerates_a_missing_table() {
             .execute(&pool)
             .await
             .expect("audit migration is a no-op with no table");
+    })
+    .await;
+}
+
+// A developer with database access can change Studio membership without the membership API. The
+// trigger cannot stop that, by design, but it has to leave a record naming the database role, even
+// when that role may not write the audit table itself, and it has to install twice over.
+#[tokio::test]
+async fn a_membership_change_outside_the_api_is_audited() {
+    common::with_integration_pool(|pool| async move {
+        let setup = [
+            migration_history::create_internal_schema_sql().to_string(),
+            migration_history::create_studio_members_table_sql(),
+            migration_history::create_studio_audit_table_sql(),
+            migration_history::create_studio_audit_membership_index_sql(),
+        ];
+        for sql in setup {
+            sqlx::raw_sql(&sql).execute(&pool).await.unwrap();
+        }
+        for _ in 0..2 {
+            for sql in [
+                migration_history::create_studio_membership_audit_function_sql(),
+                migration_history::create_studio_membership_audit_trigger_sql(),
+            ] {
+                sqlx::raw_sql(&sql)
+                    .execute(&pool)
+                    .await
+                    .expect("trigger installs idempotently");
+            }
+        }
+        sqlx::raw_sql(
+            r#"DO $$ BEGIN
+                 IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'studio_member_writer') THEN
+                   CREATE ROLE studio_member_writer NOLOGIN;
+                 END IF;
+               END $$;
+               GRANT USAGE ON SCHEMA _supatype TO studio_member_writer;
+               GRANT SELECT, INSERT, UPDATE ON _supatype.studio_members TO studio_member_writer;
+               INSERT INTO _supatype.studio_members (user_id, role)
+               VALUES ('11111111-2222-3333-4444-555555555555', 'viewer');"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(
+            r#"SET LOCAL ROLE studio_member_writer;
+               SELECT set_config('request.jwt.claims', '{"sub":"user-7"}', true);
+               UPDATE _supatype.studio_members SET role = 'admin' WHERE role = 'viewer';"#,
+        )
+        .execute(&mut *tx)
+        .await
+        .expect("a role without audit access can still change membership");
+        tx.commit().await.unwrap();
+
+        let (db_role, sub, via_api, new_role): (String, String, bool, String) = sqlx::query_as(
+            "SELECT detail ->> 'db_role', detail ->> 'jwt_sub', (detail ->> 'via_api')::boolean,
+                    detail ->> 'new_role'
+               FROM _supatype.studio_audit
+              WHERE action = 'membership_changed_in_db'
+              ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("the change was audited");
+        assert_eq!(db_role, "studio_member_writer");
+        assert_eq!(sub, "user-7");
+        assert!(!via_api, "a direct UPDATE is not the membership API");
+        assert_eq!(new_role, "admin");
+    })
+    .await;
+}
+
+/// The membership tables, the audit trigger, and an `auth.users` holding one admin claim.
+async fn audited_members_with_an_admin_claim(pool: &sqlx::PgPool) {
+    let setup = [
+        migration_history::create_internal_schema_sql().to_string(),
+        migration_history::create_studio_members_table_sql(),
+        migration_history::create_studio_audit_table_sql(),
+        migration_history::create_studio_membership_audit_function_sql(),
+        migration_history::create_studio_membership_audit_trigger_sql(),
+        r#"CREATE SCHEMA IF NOT EXISTS auth;
+           DROP TABLE IF EXISTS auth.users CASCADE;
+           CREATE TABLE auth.users (
+             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+             email TEXT UNIQUE,
+             raw_app_meta_data JSONB DEFAULT '{}'
+           );
+           INSERT INTO auth.users (email, raw_app_meta_data)
+           VALUES ('admin@example.com', '{"role":"admin"}');"#
+            .to_string(),
+    ];
+    for sql in setup {
+        sqlx::raw_sql(&sql).execute(pool).await.expect("setup");
+    }
+}
+
+/// `(operation, source)` of every membership change the trigger recorded, oldest first.
+async fn audited_sources(pool: &sqlx::PgPool) -> Vec<(String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT detail ->> 'operation', detail ->> 'source'
+           FROM _supatype.studio_audit
+          WHERE action = 'membership_changed_in_db'
+          ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read the trail")
+}
+
+// The first push's seed is the engine carrying forward admins the project already had: Studio
+// must not flag it as a change made around it. It marks its own insert, and only that: a raw
+// change later in the same transaction is recorded with no source, as any other direct write is.
+#[tokio::test]
+async fn the_first_push_seed_is_audited_as_the_seed_and_nothing_after_it_is() {
+    common::with_integration_pool(|pool| async move {
+        audited_members_with_an_admin_claim(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::raw_sql(&migration_history::seed_studio_members_from_claims_sql())
+            .execute(&mut *tx)
+            .await
+            .expect("seed runs");
+        sqlx::raw_sql("UPDATE _supatype.studio_members SET role = 'viewer' WHERE true")
+            .execute(&mut *tx)
+            .await
+            .expect("a raw change");
+        tx.commit().await.unwrap();
+        assert_eq!(
+            audited_sources(&pool).await,
+            [
+                ("INSERT".to_string(), Some("seed".to_string())),
+                ("UPDATE".to_string(), None),
+            ],
+            "the seed's insert is the seed's; the raw update after it is nobody's"
+        );
     })
     .await;
 }
@@ -572,6 +714,138 @@ async fn the_membership_foreign_key_is_idempotent_and_added_once_auth_exists() {
                 .await
                 .unwrap();
         assert_eq!(count, 1, "re-running adds no second constraint");
+    })
+    .await;
+}
+
+// ── The seed runs once per database ──────────────────────────────────────────
+
+const CLAIM_ADMIN: &str = "aaaaaaaa-0000-0000-0000-0000000000c1";
+
+/// `auth.users` holding one user whose `app_metadata.role` is `admin`.
+async fn auth_users_with_a_claim_admin(pool: &sqlx::PgPool) {
+    sqlx::raw_sql(&format!(
+        "CREATE SCHEMA IF NOT EXISTS auth;
+         CREATE TABLE IF NOT EXISTS auth.users (
+           id UUID PRIMARY KEY, email TEXT, raw_app_meta_data JSONB DEFAULT '{{}}'
+         );
+         INSERT INTO auth.users (id, email, raw_app_meta_data)
+         VALUES ('{CLAIM_ADMIN}', 'admin@example.com', '{{\"role\":\"admin\"}}');"
+    ))
+    .execute(pool)
+    .await
+    .expect("auth.users");
+}
+
+fn one_model() -> supatype_engine::parser::ast::SchemaAst {
+    let doc = serde_json::json!({ "astVersion": 2, "models": [{
+        "name": "SeedNote",
+        "fields": { "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                            "annotations": { "db": { "pgType": "UUID", "unique": false } } } },
+        "options": { "timestamps": false, "softDelete": false },
+        "annotations": { "db": { "tableName": "seed_note", "indexes": [] },
+                         "platform": { "access": { "read": { "type": "public" } } } }
+    }] });
+    supatype_engine::parser::parse(&doc.to_string()).expect("the model parses")
+}
+
+async fn member_count(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM _supatype.studio_members")
+        .fetch_one(pool)
+        .await
+        .expect("count members")
+}
+
+// The first push carries the claims' admin forward. Revoking every member and then changing the
+// bootstrap, as a new engine does, must not hand that access back: the seed has run, and an empty
+// table is not a database that never had one.
+#[tokio::test]
+async fn the_seed_runs_once_however_often_the_bootstrap_changes() {
+    common::with_integration_pool(|pool| async move {
+        auth_users_with_a_claim_admin(&pool).await;
+        let ast = one_model();
+        common::push(&pool, &ast).await.expect("first push");
+        assert_eq!(
+            member_count(&pool).await,
+            1,
+            "the first push seeds the claim's admin"
+        );
+
+        sqlx::raw_sql(
+            "DELETE FROM _supatype.studio_members WHERE true;
+             UPDATE _supatype.engine_bootstrap SET version = 'an older engine' WHERE true;",
+        )
+        .execute(&pool)
+        .await
+        .expect("revoke everyone and age the bootstrap");
+        common::push(&pool, &ast).await.expect("second push");
+        let version: String = sqlx::query_scalar("SELECT version FROM _supatype.engine_bootstrap")
+            .fetch_one(&pool)
+            .await
+            .expect("read the bootstrap version");
+        assert_eq!(
+            version,
+            migration_history::bootstrap_version(),
+            "the bootstrap ran again"
+        );
+        assert_eq!(
+            member_count(&pool).await,
+            0,
+            "a revoked admin was seeded back"
+        );
+    })
+    .await;
+}
+
+// A database seeded before the record existed, whose members were all revoked since, shows that
+// in its audit trail: it is recorded as seeded and nobody is carried forward. The seed of a fresh
+// database records the newest audit row, the last its mark may be trusted on.
+#[tokio::test]
+async fn a_revoked_database_from_before_the_record_is_not_seeded() {
+    common::with_integration_pool(|pool| async move {
+        audited_members_with_an_admin_claim(&pool).await;
+        sqlx::raw_sql(&format!(
+            "INSERT INTO _supatype.studio_members (user_id, role)
+               SELECT id, 'admin' FROM auth.users;
+             DELETE FROM _supatype.studio_members WHERE true;
+             {};",
+            migration_history::seed_studio_members_from_claims_sql()
+        ))
+        .execute(&pool)
+        .await
+        .expect("an old seed, a revocation, and the seed again");
+        assert_eq!(
+            member_count(&pool).await,
+            0,
+            "a revoked admin was seeded back"
+        );
+        let through: Option<i64> =
+            sqlx::query_scalar("SELECT audit_through FROM _supatype.studio_seed")
+                .fetch_one(&pool)
+                .await
+                .expect("the seed is recorded");
+        assert_eq!(through, None, "no row of an unrecorded seed is trusted");
+
+        sqlx::raw_sql("TRUNCATE _supatype.studio_seed, _supatype.studio_audit")
+            .execute(&pool)
+            .await
+            .expect("a fresh database");
+        sqlx::raw_sql(&migration_history::seed_studio_members_from_claims_sql())
+            .execute(&pool)
+            .await
+            .expect("seed");
+        let (through, newest): (Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT (SELECT audit_through FROM _supatype.studio_seed),
+                    (SELECT max(id) FROM _supatype.studio_audit)",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("read the record");
+        assert_eq!(member_count(&pool).await, 1, "a fresh database is seeded");
+        assert!(
+            newest.is_some() && through == newest,
+            "{through:?} {newest:?}"
+        );
     })
     .await;
 }

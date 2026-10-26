@@ -429,10 +429,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_products_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."name"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."name"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."name" IS DISTINCT FROM OLD."name" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."name"::TEXT) THEN
@@ -499,11 +497,37 @@ CREATE POLICY "customers_select" ON "public"."customers"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) = "id"
   );
+CREATE POLICY "customers_studio_read" ON "public"."customers"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "customers_studio_write" ON "public"."customers"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "customers_update" ON "public"."customers"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_uid()) = "id"
   ) WITH CHECK (
     (SELECT _supatype.jwt_uid()) = "id"
+  );
+CREATE POLICY "order_items_studio_read" ON "public"."order_items"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "order_items_studio_write" ON "public"."order_items"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "orders_delete" ON "public"."orders"
 FOR DELETE USING (
@@ -516,6 +540,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "orders_select" ON "public"."orders"
 FOR SELECT USING (
     (SELECT _supatype.jwt_uid()) = "customer_id"
+  );
+CREATE POLICY "orders_studio_read" ON "public"."orders"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "orders_studio_write" ON "public"."orders"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "orders_update" ON "public"."orders"
 FOR UPDATE USING (
@@ -534,6 +571,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "products_select" ON "public"."products"
 FOR SELECT USING (
     TRUE
+  );
+CREATE POLICY "products_studio_read" ON "public"."products"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "products_studio_write" ON "public"."products"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "products_update" ON "public"."products"
 FOR UPDATE USING (
@@ -614,5 +664,33 @@ ALTER TABLE "public"."customers" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."order_items" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."orders" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."products" REPLICA IDENTITY FULL;
+
+-- GraphQL relation names, as the schema declares them
+DO $graphql_names$
+DECLARE
+  k record;
+  wanted text;
+BEGIN
+  FOR k IN
+    SELECT c.conname, c.conrelid::regclass AS rel,
+           obj_description(c.oid, 'pg_constraint') AS old, d.directive
+    FROM (VALUES
+      ('"public"."orders"', 'customer_id', '@graphql({"foreign_name":"customerId"})'),
+      ('"public"."order_items"', 'order_id', '@graphql({"foreign_name":"orderId"})'),
+      ('"public"."order_items"', 'product_id', '@graphql({"foreign_name":"productId"})')
+    ) AS d(rel, col, directive)
+    JOIN pg_constraint c ON c.conrelid = to_regclass(d.rel) AND c.contype = 'f'
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = d.col
+     AND c.conkey = ARRAY[a.attnum]
+  LOOP
+    SELECT concat_ws(E'\n', string_agg(l.line, E'\n' ORDER BY l.n), k.directive) INTO wanted
+      FROM regexp_split_to_table(k.old, E'\n') WITH ORDINALITY AS l(line, n)
+     WHERE l.line NOT LIKE '@graphql(%';
+    IF wanted IS DISTINCT FROM k.old THEN
+      EXECUTE format('COMMENT ON CONSTRAINT %I ON %s IS %L', k.conname, k.rel, wanted);
+    END IF;
+  END LOOP;
+END
+$graphql_names$;
 
 COMMIT;

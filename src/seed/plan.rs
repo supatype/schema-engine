@@ -9,8 +9,8 @@
 //! conditional group's membership is fixed: an operation inside one may not run at all, so
 //! moving anything across that boundary would change the outcome rather than the schedule.
 
-use super::{Condition, DataMap, Operation, SeedIr, Value};
-use crate::generator::seed_model::{describe, RelationKind, SeedModel, SeedSchema};
+use super::{reference_parts, Condition, DataMap, Operation, SeedIr, Value};
+use crate::generator::seed_model::{describe, RelationKind, SeedModel, SeedRelation, SeedSchema};
 use crate::parser::ast::SchemaAst;
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -45,11 +45,24 @@ pub struct PlannedWrite {
     pub kind: WriteKind,
     /// The author's label, when they gave one. What a later `$ref` points at.
     pub op_id: Option<String>,
+    /// The columns later steps reference, as Postgres keeps their names, in a stable order.
+    ///
+    /// What the statement reads back with `RETURNING`. Every column a reference names, not
+    /// only `id`: reading back only the id left `alex.slug` with nothing to resolve to, and
+    /// the column it filled was written as NULL. Empty when nothing refers to this row.
+    pub returns: Vec<String>,
     /// Where this row came from in the document, for an error to name.
     pub path: String,
     pub data: DataMap,
     /// Conflict columns, for an upsert.
     pub conflict: BTreeSet<String>,
+    /// Write this row only when no row of the model already holds every value it gives.
+    ///
+    /// Set on a row nested under an `upsert`, and on every row nested under one of those.
+    /// The upsert's own row is idempotent through its conflict key, but its children have
+    /// none, so without this every run added them again. Under a plain `create` the parent
+    /// is new, so nothing can already hang off it and no match is looked for.
+    pub match_existing: bool,
     /// Columns whose bound value is a unique key to look up, not the value itself.
     ///
     /// Keyed by the foreign-key column. Empty for almost every write.
@@ -159,6 +172,8 @@ pub struct Batch {
     pub kind: WriteKind,
     pub columns: Vec<String>,
     pub conflict: BTreeSet<String>,
+    /// Every row is written only when no matching row exists. See [`PlannedWrite`].
+    pub match_existing: bool,
     /// Shared by every row in the batch, because one statement renders one expression per
     /// column. Two writes that look up different columns cannot be one statement.
     pub lookups: IndexMap<String, ConnectLookup>,
@@ -179,7 +194,28 @@ pub struct Plan {
 pub fn flatten(ir: &SeedIr, schema: &SeedSchema) -> Vec<PlannedStep> {
     let mut flattener = Flattener::new(schema);
     flattener.operations(&ir.operations, &[], "operations");
-    flattener.steps
+    let mut steps = flattener.steps;
+    attach_returns(&mut steps);
+    steps
+}
+
+/// Give each labelled write the columns later steps read from it.
+///
+/// Done once every step exists, because a reference can come from anywhere after the write:
+/// a typed write, a nested row, a `connect`, or a raw statement's params.
+fn attach_returns(steps: &mut [PlannedStep]) {
+    let mut wanted: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for (label, column) in steps.iter().flat_map(references) {
+        wanted.entry(label).or_default().insert(column);
+    }
+    for step in steps.iter_mut() {
+        if let PlannedStep::Write(write) = step {
+            let columns = write.op_id.as_ref().and_then(|label| wanted.get(label));
+            write.returns = columns
+                .map(|c| c.iter().cloned().collect())
+                .unwrap_or_default();
+        }
+    }
 }
 
 /// One row on its way into the plan, before its nesting has been taken apart.
@@ -189,6 +225,44 @@ struct Pending {
     op_id: Option<String>,
     data: DataMap,
     conflict: BTreeSet<String>,
+    match_existing: bool,
+}
+
+impl Pending {
+    /// A row that is not nested in anything.
+    fn top_level(model: &str, kind: WriteKind, op_id: Option<String>, data: DataMap) -> Self {
+        Pending {
+            model: model.to_string(),
+            kind,
+            op_id,
+            data,
+            conflict: BTreeSet::new(),
+            match_existing: false,
+        }
+    }
+
+    /// Whether the rows nested in this one look for a match before they are written.
+    ///
+    /// An upsert's parent row may already exist with its children, so they are matched; a
+    /// child of a matched row may be one that already existed, so its children are too.
+    fn children_match(&self) -> bool {
+        self.kind == WriteKind::Upsert || self.match_existing
+    }
+}
+
+/// The parent a nested relation's rows are written under.
+struct Parent<'p> {
+    model: Option<&'p SeedModel>,
+    /// The label the children's foreign key points at.
+    label: &'p str,
+    match_existing: bool,
+}
+
+/// A row's data, split into what is written to its own table and what is nested in it.
+struct Split {
+    own: DataMap,
+    nested: Vec<(String, Vec<DataMap>)>,
+    lookups: IndexMap<String, ConnectLookup>,
 }
 
 /// What flattening needs, rather than threaded through eight arguments.
@@ -241,13 +315,7 @@ impl<'a> Flattener<'a> {
     fn operation(&mut self, operation: &Operation, guards: &[usize], path: &str) {
         match operation {
             Operation::Create { model, id, data } => self.write(
-                Pending {
-                    model: model.clone(),
-                    kind: WriteKind::Insert,
-                    op_id: id.clone(),
-                    data: data.clone(),
-                    conflict: BTreeSet::new(),
-                },
+                Pending::top_level(model, WriteKind::Insert, id.clone(), data.clone()),
                 guards,
                 path,
             ),
@@ -255,13 +323,7 @@ impl<'a> Flattener<'a> {
             Operation::CreateMany { model, rows } => {
                 for (position, row) in rows.iter().enumerate() {
                     self.write(
-                        Pending {
-                            model: model.clone(),
-                            kind: WriteKind::Insert,
-                            op_id: None,
-                            data: row.clone(),
-                            conflict: BTreeSet::new(),
-                        },
+                        Pending::top_level(model, WriteKind::Insert, None, row.clone()),
                         guards,
                         &format!("{path}.rows[{position}]"),
                     );
@@ -280,11 +342,8 @@ impl<'a> Flattener<'a> {
                 }
                 self.write(
                     Pending {
-                        model: model.clone(),
-                        kind: WriteKind::Upsert,
-                        op_id: id.clone(),
-                        data: combined,
                         conflict: where_.keys().cloned().collect(),
+                        ..Pending::top_level(model, WriteKind::Upsert, id.clone(), combined)
                     },
                     guards,
                     path,
@@ -328,115 +387,145 @@ impl<'a> Flattener<'a> {
     /// generated id available to them. The ordering pass may move them further apart but
     /// never in front, because the reference is a dependency edge.
     fn write(&mut self, pending: Pending, guards: &[usize], path: &str) {
-        let model = self.model(&pending.model).cloned();
-        let mut own = DataMap::new();
-        let mut nested: Vec<(String, Vec<DataMap>)> = Vec::new();
-        let mut lookups: IndexMap<String, ConnectLookup> = IndexMap::new();
-
-        for (key, value) in pending.data {
-            match value {
-                Value::NestedCreate { create } => nested.push((key, create)),
-                Value::NestedCreateMany { create_many } => nested.push((key, create_many)),
-                Value::Connect { connect } => {
-                    match model
-                        .as_ref()
-                        .and_then(|m| lower_connect(m, &key, &connect))
-                    {
-                        Some(lowered) => {
-                            if let Some(lookup) = lowered.lookup {
-                                lookups.insert(lowered.column.clone(), lookup);
-                            }
-                            own.insert(lowered.column, lowered.value);
-                        }
-                        // Validation refuses every shape this cannot lower, so arriving
-                        // here means the document was planned without being validated.
-                        // The value is kept as it was, so the failure names the field the
-                        // author wrote rather than disappearing.
-                        None => {
-                            own.insert(key, Value::Connect { connect });
-                        }
-                    }
-                }
-                other => {
-                    // A later value for a column replaces an earlier one, and the lookup that
-                    // came with the earlier one has to go with it. An upsert keyed on a
-                    // foreign key does exactly this: `where` names the id and `data` connects
-                    // by slug, and a lookup left behind searched for a row whose slug was a
-                    // uuid, found none, and wrote NULL into a column that refuses it.
-                    lookups.shift_remove(&key);
-                    own.insert(key, other);
-                }
-            }
-        }
-
-        // A child's foreign key is a reference to its parent's id, so a parent with
-        // children needs a label for them to point at. Most writes have none: an author
-        // labels an operation only when they mean to refer to it themselves.
-        let op_id = match (&pending.op_id, nested.is_empty()) {
-            (Some(given), _) => Some(given.clone()),
-            (None, false) => Some(self.synthesise_label()),
-            (None, true) => None,
-        };
+        let model = self.model(&pending.model);
+        let children_match = pending.children_match();
+        let split = split_data(model, pending.data);
+        let op_id = self.label_for(pending.op_id, !split.nested.is_empty());
 
         self.steps.push(PlannedStep::Write(PlannedWrite {
             model: pending.model,
             kind: pending.kind,
             op_id: op_id.clone(),
+            returns: Vec::new(),
             path: path.to_string(),
-            data: own,
+            data: split.own,
             conflict: pending.conflict,
-            lookups,
+            match_existing: pending.match_existing,
+            lookups: split.lookups,
             guards: guards.to_vec(),
             sequence: self.sequence,
         }));
         self.sequence += 1;
 
         let label = op_id.unwrap_or_default();
-        for (field, rows) in nested {
-            self.nested(model.as_ref(), &field, rows, &label, guards, path);
+        let parent = Parent {
+            model,
+            label: &label,
+            match_existing: children_match,
+        };
+        for (field, rows) in split.nested {
+            self.nested(&parent, &field, rows, guards, path);
+        }
+    }
+
+    /// The label a write is known by.
+    ///
+    /// A child's foreign key is a reference to its parent's id, so a parent with children
+    /// needs a label for them to point at. Most writes have none: an author labels an
+    /// operation only when they mean to refer to it themselves.
+    fn label_for(&mut self, given: Option<String>, has_children: bool) -> Option<String> {
+        match (given, has_children) {
+            (Some(given), _) => Some(given),
+            (None, true) => Some(self.synthesise_label()),
+            (None, false) => None,
         }
     }
 
     /// The rows of one nested relation, resolved to the model they actually write.
     fn nested(
         &mut self,
-        parent: Option<&SeedModel>,
+        parent: &Parent<'_>,
         field: &str,
         rows: Vec<DataMap>,
-        label: &str,
         guards: &[usize],
         path: &str,
     ) {
-        let relation = parent.and_then(|model| model.relations.iter().find(|r| r.field == field));
+        let relation = parent
+            .model
+            .and_then(|model| model.relations.iter().find(|r| r.field == field));
 
-        for (position, mut row) in rows.into_iter().enumerate() {
-            // Validation names every relation a nested write may use, so an unresolved one
-            // is a document that skipped it. The field name is carried through unchanged
-            // so the failure still names what the author wrote.
-            let (model, key) = match relation {
-                Some(resolved) => (resolved.target.clone(), resolved.foreign_key.clone()),
-                None => (field.to_string(), None),
-            };
-
-            // `or_insert_with`, not `insert`: an author who wrote the foreign key by hand
-            // meant that value, and overwriting it would silently move the row.
-            if let Some(key) = key {
-                row.entry(key).or_insert_with(|| Value::Ref {
-                    reference: format!("{label}.id"),
-                });
-            }
-
+        for (position, row) in rows.into_iter().enumerate() {
+            let (model, row) = child_row(relation, field, row, parent.label);
             self.write(
                 Pending {
-                    model,
-                    kind: WriteKind::Insert,
-                    op_id: None,
-                    data: row,
-                    conflict: BTreeSet::new(),
+                    match_existing: parent.match_existing,
+                    ..Pending::top_level(&model, WriteKind::Insert, None, row)
                 },
                 guards,
                 &format!("{path}.{field}[{position}]"),
             );
+        }
+    }
+}
+
+/// A nested row as a row of the model its relation targets, linked to the parent `label`.
+fn child_row(
+    relation: Option<&SeedRelation>,
+    field: &str,
+    mut row: DataMap,
+    label: &str,
+) -> (String, DataMap) {
+    // Validation names every relation a nested write may use, so an unresolved one is a
+    // document that skipped it. The field name is carried through unchanged so the failure
+    // still names what the author wrote.
+    let Some(relation) = relation else {
+        return (field.to_string(), row);
+    };
+    // `or_insert_with`, not `insert`: an author who wrote the foreign key by hand meant that
+    // value, and overwriting it would silently move the row.
+    if let Some(key) = relation.foreign_key.clone() {
+        row.entry(key).or_insert_with(|| Value::Ref {
+            reference: format!("{label}.id"),
+        });
+    }
+    (relation.target.clone(), row)
+}
+
+/// Split a row's data into its own columns, its nested rows and its `connect` lookups.
+fn split_data(model: Option<&SeedModel>, data: DataMap) -> Split {
+    let mut split = Split {
+        own: DataMap::new(),
+        nested: Vec::new(),
+        lookups: IndexMap::new(),
+    };
+    for (key, value) in data {
+        match value {
+            Value::NestedCreate { create } => split.nested.push((key, create)),
+            Value::NestedCreateMany { create_many } => split.nested.push((key, create_many)),
+            Value::Connect { connect } => split_connect(&mut split, model, key, connect),
+            other => {
+                // A later value for a column replaces an earlier one, and the lookup that
+                // came with the earlier one has to go with it. An upsert keyed on a
+                // foreign key does exactly this: `where` names the id and `data` connects
+                // by slug, and a lookup left behind searched for a row whose slug was a
+                // uuid, found none, and wrote NULL into a column that refuses it.
+                split.lookups.shift_remove(&key);
+                split.own.insert(key, other);
+            }
+        }
+    }
+    split
+}
+
+/// Lower one `connect` into the column it fills, and the lookup that goes with it.
+fn split_connect(
+    split: &mut Split,
+    model: Option<&SeedModel>,
+    key: String,
+    connect: IndexMap<String, Value>,
+) {
+    match model.and_then(|m| lower_connect(m, &key, &connect)) {
+        Some(lowered) => {
+            if let Some(lookup) = lowered.lookup {
+                split.lookups.insert(lowered.column.clone(), lookup);
+            }
+            split.own.insert(lowered.column, lowered.value);
+        }
+        // Validation refuses every shape this cannot lower, so arriving here means the
+        // document was planned without being validated. The value is kept as it was, so
+        // the failure names the field the author wrote rather than disappearing.
+        None => {
+            split.own.insert(key, Value::Connect { connect });
         }
     }
 }
@@ -494,30 +583,39 @@ fn lower_connect(
     })
 }
 
-/// Every `$ref` label a write's data points at.
-fn referenced_labels(data: &DataMap) -> HashSet<String> {
-    let mut labels = HashSet::new();
-    collect_labels(data, &mut labels);
-    labels
+/// Every `$ref` label a step points at: a write's data, or a raw statement's params.
+fn referenced_labels(step: &PlannedStep) -> HashSet<String> {
+    references(step)
+        .into_iter()
+        .map(|(label, _)| label)
+        .collect()
 }
 
-fn collect_labels(data: &DataMap, labels: &mut HashSet<String>) {
-    for value in data.values() {
+/// Every `$ref` a step makes, as the label and the column it reads.
+///
+/// A condition makes none: its filter is the schema's rule tree, which has no reference.
+fn references(step: &PlannedStep) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    match step {
+        PlannedStep::Write(write) => collect_refs(write.data.values(), &mut found),
+        PlannedStep::Sql { params, .. } => collect_refs(params, &mut found),
+        PlannedStep::Condition { .. } => {}
+    }
+    found
+}
+
+fn collect_refs<'a>(
+    values: impl IntoIterator<Item = &'a Value>,
+    found: &mut Vec<(String, String)>,
+) {
+    for value in values {
         match value {
             Value::Ref { reference } => {
-                if let Some((op_id, _)) = reference.split_once('.') {
-                    labels.insert(op_id.to_string());
+                if let Some((label, column)) = reference_parts(reference) {
+                    found.push((label.to_string(), column));
                 }
             }
-            Value::Connect { connect } => {
-                for inner in connect.values() {
-                    if let Value::Ref { reference } = inner {
-                        if let Some((op_id, _)) = reference.split_once('.') {
-                            labels.insert(op_id.to_string());
-                        }
-                    }
-                }
-            }
+            Value::Connect { connect } => collect_refs(connect.values(), found),
             _ => {}
         }
     }
@@ -527,7 +625,8 @@ fn collect_labels(data: &DataMap, labels: &mut HashSet<String>) {
 ///
 /// Three kinds of edge, and the third is the one that is easy to leave out:
 ///
-/// 1. A `$ref` edge: a write using a label must follow the write that defines it.
+/// 1. A `$ref` edge: a write or raw statement using a label must follow the write that
+///    defines it.
 /// 2. A guard edge: a step inside a conditional group must follow its condition.
 /// 3. **A read edge**: a condition reads a model, so it must not be moved across a write
 ///    to that model. Without it the sort is free to float a group past such a write and
@@ -562,11 +661,9 @@ pub fn order(
 
     for (position, step) in steps.iter().enumerate() {
         // 1. references
-        if let PlannedStep::Write(write) = step {
-            for label in referenced_labels(&write.data) {
-                if let Some(&source) = defined_at.get(&label) {
-                    add_edge(source, position, &mut edges, &mut indegree);
-                }
+        for label in referenced_labels(step) {
+            if let Some(&source) = defined_at.get(&label) {
+                add_edge(source, position, &mut edges, &mut indegree);
             }
         }
 
@@ -687,6 +784,7 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 kind: WriteKind::Insert,
                 columns: Vec::new(),
                 conflict: BTreeSet::new(),
+                match_existing: false,
                 lookups: IndexMap::new(),
                 rows: Vec::new(),
                 guards: step.guards().to_vec(),
@@ -701,6 +799,7 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 && last.kind == write.kind
                 && last.columns == columns
                 && last.conflict == write.conflict
+                && last.match_existing == write.match_existing
                 && last.lookups == write.lookups
                 && last.guards == write.guards
         });
@@ -717,6 +816,7 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 kind: write.kind,
                 columns,
                 conflict: write.conflict.clone(),
+                match_existing: write.match_existing,
                 lookups: write.lookups.clone(),
                 rows: vec![write.clone()],
                 guards: write.guards.clone(),

@@ -170,26 +170,31 @@ fn test_models_without_access_get_rls_enabled_by_default() {
         "access rules should have been stripped for this test",
     );
 
-    // RLS on and no policy, both the desired set's since Phase 4.8 (D9). Convergence is the
-    // ledger's: `rls_ledger_tests` proves a second push leaves it alone.
+    // RLS on and no app policy, both the desired set's since Phase 4.8 (D9). Convergence is the
+    // ledger's: `rls_ledger_tests` proves a second push leaves it alone. The only policies are the
+    // two that admit a Studio user, whose Studio role decides rather than the app's rules (owner
+    // decision 2026-10-21); every app caller is still denied.
     let desired = supatype_engine::desired::desired_objects(&ast, "public").unwrap();
     for model in &ast.models {
         let on_table = |kind: ObjectKind| {
             desired
                 .iter()
                 .filter(|o| o.key.kind == kind && o.key.parent == model.table_name())
-                .count()
+                .map(|o| o.key.name.clone())
+                .collect::<Vec<_>>()
         };
         assert_eq!(
-            on_table(ObjectKind::RlsAttributes),
+            on_table(ObjectKind::RlsAttributes).len(),
             1,
             "expected RLS to be enabled for {}",
             model.table_name(),
         );
+        let studio = ["studio_read", "studio_write"]
+            .map(|suffix| supatype_engine::managed::policy_name(model.table_name(), suffix));
         assert_eq!(
             on_table(ObjectKind::Policy),
-            0,
-            "a model without access rules must not get policies"
+            studio.to_vec(),
+            "a model without access rules must get no policy but Studio's"
         );
     }
 

@@ -328,10 +328,8 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION _platform.set_posts_slug()
 RETURNS TRIGGER AS $$
 BEGIN
-  IF TG_OP = 'INSERT' THEN
-    IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
-      NEW."slug" = _platform.slugify(NEW."title"::TEXT);
-    END IF;
+  IF NEW."slug" IS NULL OR BTRIM(NEW."slug"::TEXT) = '' THEN
+    NEW."slug" = _platform.slugify(NEW."title"::TEXT);
   ELSIF TG_OP = 'UPDATE' THEN
     IF NEW."title" IS DISTINCT FROM OLD."title" THEN
       IF OLD."slug" IS NOT DISTINCT FROM _platform.slugify(OLD."title"::TEXT) THEN
@@ -394,6 +392,19 @@ CREATE POLICY "posts_select" ON "public"."posts"
 FOR SELECT USING (
     TRUE
   );
+CREATE POLICY "posts_studio_read" ON "public"."posts"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "posts_studio_write" ON "public"."posts"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "posts_update" ON "public"."posts"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_uid()) = "author_id"
@@ -411,6 +422,19 @@ FOR INSERT WITH CHECK (
 CREATE POLICY "users_select" ON "public"."users"
 FOR SELECT USING (
     TRUE
+  );
+CREATE POLICY "users_studio_read" ON "public"."users"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "users_studio_write" ON "public"."users"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
 CREATE POLICY "users_update" ON "public"."users"
 FOR UPDATE USING (
@@ -456,5 +480,31 @@ END
 $grants$;
 ALTER TABLE "public"."posts" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."users" REPLICA IDENTITY FULL;
+
+-- GraphQL relation names, as the schema declares them
+DO $graphql_names$
+DECLARE
+  k record;
+  wanted text;
+BEGIN
+  FOR k IN
+    SELECT c.conname, c.conrelid::regclass AS rel,
+           obj_description(c.oid, 'pg_constraint') AS old, d.directive
+    FROM (VALUES
+      ('"public"."posts"', 'author_id', '@graphql({"foreign_name":"authorId"})')
+    ) AS d(rel, col, directive)
+    JOIN pg_constraint c ON c.conrelid = to_regclass(d.rel) AND c.contype = 'f'
+    JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attname = d.col
+     AND c.conkey = ARRAY[a.attnum]
+  LOOP
+    SELECT concat_ws(E'\n', string_agg(l.line, E'\n' ORDER BY l.n), k.directive) INTO wanted
+      FROM regexp_split_to_table(k.old, E'\n') WITH ORDINALITY AS l(line, n)
+     WHERE l.line NOT LIKE '@graphql(%';
+    IF wanted IS DISTINCT FROM k.old THEN
+      EXECUTE format('COMMENT ON CONSTRAINT %I ON %s IS %L', k.conname, k.rel, wanted);
+    END IF;
+  END LOOP;
+END
+$graphql_names$;
 
 COMMIT;

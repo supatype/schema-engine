@@ -111,6 +111,51 @@ async fn an_owned_object_removed_by_hand_is_missing_and_access_changed_is_drifte
     .await;
 }
 
+/// A policy dropped by hand is put back only with consent: a push that is not interactive refuses
+/// it without `--overwrite-drift`. Doctor said "`supatype push` recreates it", which is true of an
+/// index and not of a policy, so a reader expected the next push to fix what it then refused.
+#[tokio::test]
+async fn a_policy_removed_by_hand_is_missing_and_says_the_push_asks_first() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(title_index());
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            "DROP INDEX public.posts_title_idx;
+             DROP POLICY posts_select ON public.posts;",
+        )
+        .await
+        .unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        assert_eq!(
+            names(&report.missing),
+            ["index posts.posts_title_idx", "policy posts.posts_select"],
+            "{report:#?}"
+        );
+        let message = |name: &str| {
+            report
+                .missing
+                .iter()
+                .find(|i| i.name == name)
+                .map(|i| i.message.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            message("posts_select").contains("after asking"),
+            "{}",
+            message("posts_select")
+        );
+        assert!(
+            !message("posts_title_idx").contains("after asking"),
+            "{}",
+            message("posts_title_idx")
+        );
+        assert!(report.blocking);
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_dropped_declaration_is_stale_and_a_taken_name_conflicts() {
     common::with_integration_pool(|pool| async move {

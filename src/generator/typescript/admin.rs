@@ -1,7 +1,7 @@
 use crate::parser::accessors::field_annotations;
 use crate::parser::ast::{
     scalar_of, DefaultValueAst, FieldAst, ModelAst, RelationCardinality, RelationFieldAst,
-    SchemaAst,
+    ScalarFieldAst, SchemaAst,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -105,13 +105,12 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
     let has_soft_delete = has_composite(model, "softDelete") || model.options.soft_delete;
 
     let fields = build_fields_config(model, default_locale, ast);
-    let list_columns = derive_list_columns(model, has_publishing, has_timestamps);
+    let list_columns = derive_list_columns(model);
     let search_fields = derive_search_fields(model);
-    let default_sort = if has_timestamps {
-        json!({ "field": "created_at", "direction": "desc" })
-    } else {
-        json!({ "field": "id", "direction": "desc" })
-    };
+    // Every key column, so Studio can end each list order on something unique: two rows with the
+    // same sort value otherwise trade places between pages. Studio assumed `id` before this was sent.
+    let primary_key = crate::parser::accessors::primary_key_columns(model);
+    let default_sort = default_sort(model, has_timestamps, &primary_key, &search_fields);
 
     // Model constraints travel to Studio as the node the CLI parsed, not as SQL.
     //
@@ -185,53 +184,210 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         "listColumns": list_columns,
         "searchFields": search_fields,
         "defaultSort": default_sort,
+        "primaryKey": primary_key,
         "fields": fields,
     })
+}
+
+/// The order a Studio list opens in: the first of these rules that applies.
+///
+/// 1. The model declares `timestamps`: `created_at` descending, newest first.
+/// 2. A date-time field records when the row was made: the first of [`CREATION_FIELD_NAMES`] the
+///    model has as a date-time column, else the first date-time column, in declaration order,
+///    whose default is the current time. Descending.
+/// 3. The first key column grows over time: a serial, an identity, an integer drawn from a
+///    sequence, or a UUID defaulting to a version 7 generator. Descending.
+/// 4. The key says nothing about age (a random UUID, text): the first searchable text column,
+///    ascending, so the list reads alphabetically by what a row is called. A declared search
+///    field comes first there, which makes it the model's title; the engine has no other title
+///    declaration.
+/// 5. Nothing else applies: the first key column descending. The key, not `id`: a model keyed on
+///    another column has no `id`, and sorting on it was an error from PostgREST on every list load.
+///
+/// Every rule reads declaration order, so a schema always opens in the same order. Studio ends
+/// each order with the key columns to break ties, so only the primary sort is sent.
+fn default_sort(
+    model: &ModelAst,
+    has_timestamps: bool,
+    primary_key: &[String],
+    search_fields: &[String],
+) -> Value {
+    let key = primary_key.first().map_or("id", String::as_str);
+    let (field, direction) = if has_timestamps {
+        ("created_at", "desc")
+    } else if let Some(created) = creation_field(model) {
+        (created, "desc")
+    } else if key_grows(model) {
+        (key, "desc")
+    } else if let Some(title) = title_column(model, search_fields) {
+        (title, "asc")
+    } else {
+        (key, "desc")
+    };
+    json!({ "field": field, "direction": direction })
+}
+
+/// Names a project gives the column that records when a row was made, in the order they win.
+/// `created_at` is the engine's own (`timestamps`); the rest are the common alternatives, in both
+/// casings a field name arrives in.
+const CREATION_FIELD_NAMES: [&str; 4] = ["created_at", "createdAt", "inserted_at", "insertedAt"];
+
+/// Default expressions that stamp the current time, lowercased.
+const NOW_EXPRESSIONS: [&str; 6] = [
+    "now()",
+    "current_timestamp",
+    "localtimestamp",
+    "clock_timestamp()",
+    "statement_timestamp()",
+    "transaction_timestamp()",
+];
+
+/// Calls that make a version 7 UUID, which is time ordered: Postgres 18's own and `pg_uuidv7`'s.
+const UUID_V7_GENERATORS: [&str; 2] = ["uuidv7(", "uuid_generate_v7("];
+
+/// A date-time column holding one value per row. A localized one is JSONB and does not sort by time.
+fn date_time_of(field: &FieldAst) -> Option<&ScalarFieldAst> {
+    match field {
+        FieldAst::Datetime(f) | FieldAst::Timestamp(f) if !f.localized => Some(f),
+        _ => None,
+    }
+}
+
+fn creation_field(model: &ModelAst) -> Option<&str> {
+    let named = CREATION_FIELD_NAMES
+        .into_iter()
+        .find(|name| model.fields.get(*name).and_then(date_time_of).is_some());
+    named.or_else(|| {
+        model
+            .fields
+            .iter()
+            .find(|(_, field)| {
+                date_time_of(field).is_some_and(|f| defaults_to_now(f.default.as_ref()))
+            })
+            .map(|(name, _)| name.as_str())
+    })
+}
+
+fn defaults_to_now(default: Option<&DefaultValueAst>) -> bool {
+    match default {
+        Some(DefaultValueAst::Now) => true,
+        Some(DefaultValueAst::Expression { expr }) => {
+            NOW_EXPRESSIONS.contains(&expr.trim().to_ascii_lowercase().as_str())
+        }
+        _ => false,
+    }
+}
+
+fn expression_default(field: &ScalarFieldAst) -> Option<String> {
+    match &field.default {
+        Some(DefaultValueAst::Expression { expr }) => Some(expr.trim().to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+/// Whether the model's first key column takes larger values for newer rows.
+fn key_grows(model: &ModelAst) -> bool {
+    let Some((_, key)) = model
+        .fields
+        .iter()
+        .find(|(_, field)| crate::parser::accessors::is_primary_key(field))
+    else {
+        return false;
+    };
+    let expr = scalar_of(key).and_then(expression_default);
+    match key {
+        _ if crate::parser::accessors::owns_sequence(key) => true,
+        FieldAst::Integer(_) | FieldAst::SmallInt(_) | FieldAst::BigInt(_) => {
+            expr.is_some_and(|e| e.starts_with("nextval("))
+        }
+        FieldAst::Uuid(_) => {
+            expr.is_some_and(|e| UUID_V7_GENERATORS.iter().any(|g| e.starts_with(g)))
+        }
+        _ => false,
+    }
+}
+
+/// The first search field that is plain text in its own column, which sorts the way it reads.
+fn title_column<'a>(model: &ModelAst, search_fields: &'a [String]) -> Option<&'a str> {
+    search_fields
+        .iter()
+        .find(|name| match model.fields.get(name.as_str()) {
+            Some(FieldAst::Text(f) | FieldAst::Email(f)) => !f.localized,
+            Some(FieldAst::Slug(f)) => !f.localized,
+            _ => false,
+        })
+        .map(String::as_str)
 }
 
 fn has_composite(model: &ModelAst, key: &str) -> bool {
     model.fields.contains_key(key)
 }
 
-fn derive_list_columns(
-    model: &ModelAst,
-    has_publishing: bool,
-    has_timestamps: bool,
-) -> Vec<String> {
-    let mut cols: Vec<String> = Vec::new();
+/// How many columns a Studio list shows when nothing else decides, the key included.
+const LIST_COLUMN_COUNT: usize = 3;
 
-    // First text-like field (name, title, slug, email)
-    for (name, field) in &model.fields {
-        if matches!(
-            field,
-            FieldAst::Text(_) | FieldAst::Email(_) | FieldAst::Slug(_)
-        ) {
-            cols.push(name.clone());
-            break;
-        }
-    }
-
-    if has_publishing {
-        cols.push("status".into());
-    }
-
-    for (name, field) in &model.fields {
-        if let FieldAst::Enum(e) = field {
-            if e.values.len() <= 8 && !cols.contains(name) {
-                cols.push(name.clone());
-            }
-        }
-    }
-
-    if has_timestamps {
-        cols.push("created_at".into());
-    }
-
+/// The columns a Studio list opens with: the record's key first, then the first fields, in
+/// declaration order, that read in a table cell, up to [`LIST_COLUMN_COUNT`] in all. A field that
+/// does not read in a cell is skipped and the next one taken.
+///
+/// The rule used to be the first text field, a publish status, short enums and `created_at`, which
+/// left a model of plain text columns with one column: every chat message in a room read the same.
+/// The key says which record a row is even when its other values repeat; a composite key shows its
+/// first column. Other keys (UUIDs, relation foreign keys) stay out of the remaining places. A
+/// composite field stands for the columns it adds, where it is declared, so `timestamps` last in a
+/// short model fills the list and costs a longer one nothing.
+fn derive_list_columns(model: &ModelAst) -> Vec<String> {
+    let key = crate::parser::accessors::primary_key_columns(model)
+        .into_iter()
+        .next();
+    let mut cols: Vec<String> = key.into_iter().collect();
+    let room = LIST_COLUMN_COUNT - cols.len();
+    cols.extend(
+        model
+            .fields
+            .iter()
+            .flat_map(|(name, field)| list_candidates(name, field))
+            .take(room),
+    );
     if cols.is_empty() {
         cols.push("id".into());
     }
-
     cols
+}
+
+/// The list columns one declared field contributes: none, its own, or a composite's.
+fn list_candidates(name: &str, field: &FieldAst) -> Vec<String> {
+    match field {
+        FieldAst::Timestamps => vec!["created_at".into(), "updated_at".into()],
+        FieldAst::Publishable => vec!["status".into()],
+        _ if reads_in_a_cell(field) => vec![name.to_string()],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether a field's value reads as a short line in a list cell.
+///
+/// Not rich text, JSON, blocks, binary, geometry, vectors or search documents, which come out as
+/// markup or noise; not an array of objects; and not a bare key (a UUID, a relation's foreign key),
+/// which is an identifier rather than something a person knows a row by. The primary key is left
+/// out here because [`derive_list_columns`] puts it first itself.
+fn reads_in_a_cell(field: &FieldAst) -> bool {
+    if crate::parser::accessors::is_primary_key(field) {
+        return false;
+    }
+    match field {
+        FieldAst::Array(a) => !is_object_element(&a.element_type),
+        FieldAst::Uuid(_) | FieldAst::Relation(_) => false,
+        other => field_show_in_list(other),
+    }
+}
+
+/// An array whose elements are documents, which a cell can only show as raw JSON.
+fn is_object_element(element_type: &str) -> bool {
+    matches!(
+        element_type.trim().to_ascii_uppercase().as_str(),
+        "JSON" | "JSONB"
+    )
 }
 
 /// The columns Studio's list view searches.
@@ -545,6 +701,12 @@ fn datetime_field(
 
 // ─── Field attribute helpers ──────────────────────────────────────────────────
 
+/// A point in WGS 84, the one geometry Studio edits as latitude and longitude. No SRID is WGS 84,
+/// because the migration writes `GEOGRAPHY(POINT, 4326)` when none is given.
+fn is_wgs84_point(geo: &crate::parser::ast::GeoFieldAst) -> bool {
+    geo.geo_type.eq_ignore_ascii_case("point") && geo.srid.is_none_or(|srid| srid == 4326)
+}
+
 fn field_widget(field: &FieldAst) -> &'static str {
     match field {
         FieldAst::Text(s) if !s.sources.is_empty() || s.template.is_some() => "derivedText",
@@ -569,6 +731,7 @@ fn field_widget(field: &FieldAst) -> &'static str {
         FieldAst::Button(_) => "button",
         FieldAst::Image(_) => "image",
         FieldAst::File(_) => "file",
+        FieldAst::Geo(g) if is_wgs84_point(g) => "geopoint",
         FieldAst::Geo(_) => "text",
         FieldAst::Vector(_) => "text",
         FieldAst::Blocks(_) => "blocks",
@@ -619,6 +782,8 @@ fn field_widget_named(field: &FieldAst, name: &str) -> &'static str {
     field_widget(field)
 }
 
+/// A scalar whose value reads as a short line in a list cell. The field config's `showInList` and
+/// the model's `listColumns` both read this, so the two never disagree about a kind.
 fn field_show_in_list(field: &FieldAst) -> bool {
     matches!(
         field,
@@ -636,6 +801,14 @@ fn field_show_in_list(field: &FieldAst) -> bool {
             | FieldAst::BigInt(_)
             | FieldAst::Money(_)
             | FieldAst::Url(_)
+            | FieldAst::Decimal(_)
+            | FieldAst::Timestamp(_)
+            | FieldAst::Serial(_)
+            | FieldAst::BigSerial(_)
+            | FieldAst::Interval(_)
+            | FieldAst::Ip(_)
+            | FieldAst::Cidr(_)
+            | FieldAst::Macaddr(_)
     )
 }
 

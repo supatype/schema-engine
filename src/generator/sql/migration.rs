@@ -1,11 +1,13 @@
 use crate::differ::column_diff::field_pg_type;
-use crate::differ::{DiffOutput, Operation, Risk};
+use crate::differ::{ColumnDependencySnapshot, DiffOutput, Operation, Risk};
 use crate::generator::sql::column_conversion::{
     add_column_backfill_default, kind_migrate_pre_update, rich_text_default_sql,
     using_expr_for_alter, ConversionStrategy, ConversionStrategyKind,
 };
 use crate::generator::sql::online::{self, AfterCommit, Online, OnlineTables};
-use crate::generator::sql::recreate::{recreate_column_sql, Reconciled};
+use crate::generator::sql::recreate::{
+    recreate_column_sql, retype_column_sql, ColumnSite, Reconciled,
+};
 use crate::generator::sql::settled::Settled;
 use crate::introspector::fingerprint::ObjectKind;
 use crate::ledger::reconcile;
@@ -14,7 +16,10 @@ use crate::parser::ast::{
     scalar_of, DefaultValueAst, FieldAst, IndexAst, ModelAst, RelationCardinality,
     RelationFieldAst, ScalarFieldAst, SchemaAst, ValidationAst,
 };
-use crate::sql_quote::{comment_text, quote_ident, quote_literal, quote_qualified, raise_message};
+use crate::sql_quote::{
+    comment_text, do_block, dollar_quote, quote_ident, quote_literal, quote_qualified,
+    raise_message,
+};
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 
@@ -249,6 +254,21 @@ fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
     ]
 }
 
+/// The schema's names for each end of a relation, in the `@graphql` directive pg_graphql reads
+/// from the key's comment. Re-asserted on every push, after the reconcile's additions, which make
+/// the keys; a key whose comment already holds its directive is not touched.
+fn render_graphql_name_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    let sql = super::graphql_names::graphql_names_sql(ast, schema);
+    if sql.is_empty() {
+        return Vec::new();
+    }
+    vec![
+        "-- GraphQL relation names, as the schema declares them".into(),
+        sql,
+        String::new(),
+    ]
+}
+
 /// The checks that field rules can be enforced here, emitted after the affordance functions the
 /// labels point at. The labels themselves are ledger objects, set by the reconcile after these
 /// have run: a schema that declares a masked column, pushed to a database without the masking
@@ -407,7 +427,7 @@ fn render_forward_operation_lines(f: &Forward<'_>, after: &mut AfterCommit) -> R
 
         let sql = online_not_null(
             op,
-            render_operation_reconciled(op, schema, ast, &names, &f.reconciled)?,
+            render_operation_reconciled(op, schema, ast, &names, Some(&f.reconciled))?,
             f,
             after,
         );
@@ -619,6 +639,7 @@ impl Migration {
         body.extend(render_forward_core(&forward, &mut after_commit)?);
         body.extend(reconciled_section(late_removals.clone()));
         body.extend(reconciled_section(additions.clone()));
+        body.extend(render_graphql_name_lines(ast, schema));
 
         // Undone in reverse: the additions, the late removals, the operations, then what the
         // early removals took.
@@ -933,8 +954,12 @@ fn render_create_rls_policy_sql(
     crate::generator::sql::junction_access::policy_sql(schema, ast, junction, suffix)
 }
 
+/// `op` alone, before the push's reconcile is known: what reading off which objects an operation
+/// creates needs. A column's dependents are left out, since nothing here says which are the
+/// engine's.
 pub(crate) fn render_operation(op: &Operation, schema: &str, ast: &SchemaAst) -> Result<String> {
-    render_operation_named(op, schema, ast, &ObjectNames::for_schema(ast))
+    let names = ObjectNames::for_schema(ast);
+    render_operation_reconciled(op, schema, ast, &names, None)
 }
 
 /// [`render_operation`] with the schema's names already chosen, for a caller rendering many
@@ -945,17 +970,43 @@ pub(crate) fn render_operation_named(
     ast: &SchemaAst,
     names: &ObjectNames,
 ) -> Result<String> {
-    render_operation_reconciled(op, schema, ast, names, &Reconciled::default())
+    render_operation_reconciled(op, schema, ast, names, Some(&Reconciled::NONE))
+}
+
+/// What a render before the reconcile is known goes by: no object is the engine's.
+static NO_RECONCILE: Reconciled = Reconciled::NONE;
+
+/// The column `op` changes, with what depends on it when the push's reconcile is known. Without
+/// it the render says only what the operation itself makes: statements about the dependents would
+/// be read as the operation creating them.
+fn column_site<'a>(
+    schema: &'a str,
+    table: &'a str,
+    column: &'a str,
+    dependencies: &'a [ColumnDependencySnapshot],
+    reconciled: Option<&'a Reconciled>,
+) -> ColumnSite<'a> {
+    ColumnSite {
+        schema,
+        table,
+        column,
+        dependencies: if reconciled.is_some() {
+            dependencies
+        } else {
+            &[]
+        },
+        reconciled: reconciled.unwrap_or(&NO_RECONCILE),
+    }
 }
 
 /// [`render_operation_named`], knowing what the push's reconcile does with the engine's objects,
-/// which decides what a recreated column's dependents need of the recreate.
+/// which decides what a column's dependents need of a change to it; `None` before it is known.
 fn render_operation_reconciled(
     op: &Operation,
     schema: &str,
     ast: &SchemaAst,
     names: &ObjectNames,
-    reconciled: &Reconciled,
+    reconciled: Option<&Reconciled>,
 ) -> Result<String> {
     match op {
         Operation::CreateTable { model, .. } => create_table_sql(model, schema, ast, names),
@@ -1024,8 +1075,12 @@ fn render_operation_reconciled(
             column,
             field,
             changes,
+            dependencies,
             ..
-        } => alter_column_sql(table, column, field.as_ref(), changes, schema),
+        } => {
+            let site = column_site(schema, table, column, dependencies, reconciled);
+            alter_column_sql(&site, field.as_ref(), changes)
+        }
         Operation::RecreateColumn {
             table,
             column,
@@ -1034,15 +1089,8 @@ fn render_operation_reconciled(
             changes,
             ..
         } => {
-            let recreate = recreate_column_sql(
-                names,
-                table,
-                column,
-                field.as_ref(),
-                dependencies,
-                schema,
-                reconciled,
-            )?;
+            let site = column_site(schema, table, column, dependencies, reconciled);
+            let recreate = recreate_column_sql(names, &site, field.as_ref())?;
             Ok(match changes.get("generated") {
                 Some(generated) => {
                     generated_column_sql(schema, table, column, generated, &recreate)
@@ -1823,7 +1871,7 @@ fn unique_clause(names: &ObjectNames, table: &str, column: &str, unique: bool) -
     }
 }
 
-fn render_default(d: &DefaultValueAst) -> String {
+pub(crate) fn render_default(d: &DefaultValueAst) -> String {
     match d {
         DefaultValueAst::Value { value } => match value {
             serde_json::Value::String(s) => quote_literal(s),
@@ -1867,72 +1915,134 @@ fn strategy_from_changes(changes: &serde_json::Value) -> ConversionStrategy {
     }
 }
 
-fn alter_column_sql(
-    table: &str,
-    column: &str,
+/// One column changed in place: the conversion's data fixes, the type change around what reads the
+/// column, the nullability and identity in the order Postgres takes them, a generated expression
+/// dropped, and last the default.
+pub(super) fn alter_column_sql(
+    site: &ColumnSite<'_>,
     field: &FieldAst,
     changes: &serde_json::Value,
-    schema: &str,
 ) -> Result<String> {
-    let mut stmts: Vec<String> = Vec::new();
+    let (schema, table, column) = (site.schema, site.table, site.column);
     let strategy = strategy_from_changes(changes);
-    let alter = alter_column_prefix(schema, table, column);
-
-    if let Some(pre) = strategy.pre_update.as_ref() {
-        stmts.push(pre.clone());
+    let mut stmts: Vec<String> = strategy.pre_update.iter().cloned().collect();
+    stmts.extend(kind_change_pre_update(
+        schema, table, column, field, changes,
+    ));
+    if let Some(retype) = retype_sql(schema, table, column, &strategy, changes) {
+        stmts.push(retype_column_sql(site, retype)?);
     }
-
-    if let Some(kc) = changes.get("kind_change") {
-        let from = kc.get("from").and_then(|v| v.as_str()).unwrap_or("");
-        let to = kc.get("to").and_then(|v| v.as_str()).unwrap_or("");
-        if let Some(pre) = kind_migrate_pre_update(table, column, schema, from, to, field) {
-            stmts.push(pre);
-        }
-    }
-
-    if let Some(type_change) = changes.get("type") {
-        let pg_type = type_change
-            .get("to_pg")
-            .and_then(|v| v.as_str())
-            .unwrap_or("TEXT");
-        let from_udt = type_change
-            .get("from_udt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
-
-        let using_expr = using_expr_for_alter(&strategy, column, pg_type);
-
-        stmts.push(format!(
-            "{alter} TYPE {pg_type} USING {using_expr}; -- was: {}",
-            comment_text(from_udt)
-        ));
-    }
-
-    if let Some(null_change) = changes.get("nullability") {
-        let to = null_change.get("to").and_then(|v| v.as_str()).unwrap_or("");
-        stmts.extend(nullability_sql(
-            schema,
-            table,
-            column,
-            (to == "not_null").then_some("set"),
-        ));
-    }
-
-    // After the nullability: an identity column must be NOT NULL before it can be one.
-    if let Some(identity) = changes.get("identity") {
-        stmts.extend(identity_change_sql(schema, table, column, identity));
-    }
-
+    stmts.extend(nullability_and_identity_sql(schema, table, column, changes));
     if changes
         .get("generated")
         .and_then(|g| g.get("action"))
         .and_then(|v| v.as_str())
         == Some("drop_expression")
     {
+        let alter = alter_column_prefix(schema, table, column);
         stmts.push(format!("{alter} DROP EXPRESSION IF EXISTS;"));
     }
-
+    // Last, once the column has its new type: a default is checked against the type it is set on.
+    if let Some(default) = changes.get("default") {
+        stmts.push(default_sql(schema, table, column, default.get("to")));
+    }
     Ok(stmts.join("\n"))
+}
+
+/// The data fix a change of field kind needs before the column changes, if any.
+fn kind_change_pre_update(
+    schema: &str,
+    table: &str,
+    column: &str,
+    field: &FieldAst,
+    changes: &serde_json::Value,
+) -> Option<String> {
+    let kc = changes.get("kind_change")?;
+    let from = kc.get("from").and_then(|v| v.as_str()).unwrap_or("");
+    let to = kc.get("to").and_then(|v| v.as_str()).unwrap_or("");
+    kind_migrate_pre_update(table, column, schema, from, to, field)
+}
+
+/// `ALTER COLUMN ... TYPE ... USING ...`, when `changes` change the column's type.
+fn retype_sql(
+    schema: &str,
+    table: &str,
+    column: &str,
+    strategy: &ConversionStrategy,
+    changes: &serde_json::Value,
+) -> Option<String> {
+    let type_change = changes.get("type")?;
+    let pg_type = type_change
+        .get("to_pg")
+        .and_then(|v| v.as_str())
+        .unwrap_or("TEXT");
+    let from_udt = type_change
+        .get("from_udt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    let using_expr = using_expr_for_alter(strategy, column, pg_type);
+    Some(format!(
+        "{} TYPE {pg_type} USING {using_expr}; -- was: {}",
+        alter_column_prefix(schema, table, column),
+        comment_text(from_udt)
+    ))
+}
+
+/// The nullability and identity statements `changes` ask for.
+fn nullability_and_identity_sql(
+    schema: &str,
+    table: &str,
+    column: &str,
+    changes: &serde_json::Value,
+) -> Vec<String> {
+    let nullability = changes.get("nullability").map(|n| {
+        let to = n.get("to").and_then(|v| v.as_str()).unwrap_or("");
+        nullability_sql(schema, table, column, (to == "not_null").then_some("set"))
+    });
+    let identity = changes.get("identity");
+    nullability_with_identity(
+        identity_action(identity) == Some("drop"),
+        nullability.unwrap_or_default(),
+        identity
+            .map(|identity| identity_change_sql(schema, table, column, identity))
+            .unwrap_or_default(),
+    )
+}
+
+/// What an identity change does: `add`, `drop` or `set`.
+pub(crate) fn identity_action(identity: Option<&serde_json::Value>) -> Option<&str> {
+    identity?.get("action")?.as_str()
+}
+
+/// A column's nullability and identity statements in the order Postgres takes them. An identity
+/// column is always `NOT NULL`, so the column is made `NOT NULL` before it becomes one, and its
+/// `NOT NULL` dropped only after it stops being one: Postgres refuses `DROP NOT NULL` on an
+/// identity column. `drops_identity` says the identity statements take it away.
+pub(crate) fn nullability_with_identity(
+    drops_identity: bool,
+    nullability: Vec<String>,
+    identity: Vec<String>,
+) -> Vec<String> {
+    let (first, then) = if drops_identity {
+        (identity, nullability)
+    } else {
+        (nullability, identity)
+    };
+    first.into_iter().chain(then).collect()
+}
+
+/// `SET DEFAULT` to `to`, or `DROP DEFAULT` when it is null or absent.
+pub(crate) fn default_sql(
+    schema: &str,
+    table: &str,
+    column: &str,
+    to: Option<&serde_json::Value>,
+) -> String {
+    let alter = alter_column_prefix(schema, table, column);
+    match to.and_then(|v| v.as_str()) {
+        Some(expr) => format!("{alter} SET DEFAULT {expr};"),
+        None => format!("{alter} DROP DEFAULT;"),
+    }
 }
 
 /// `SET NOT NULL` when `set_verb` is given, refused while rows hold NULL with a message saying it
@@ -1951,14 +2061,17 @@ pub(crate) fn nullability_sql(
         "Cannot {verb} NOT NULL on {table}.{column}: NULL values exist."
     ));
     vec![
-        format!(
-            "DO $$ BEGIN\n  \
-             IF EXISTS (SELECT 1 FROM {} WHERE {} IS NULL) THEN\n    \
-             RAISE EXCEPTION {refused};\n  \
-             END IF;\n\
-             END $$;",
-            quote_qualified(schema, table),
-            quote_ident(column)
+        do_block(
+            "",
+            &format!(
+                " BEGIN\n  \
+                 IF EXISTS (SELECT 1 FROM {} WHERE {} IS NULL) THEN\n    \
+                 RAISE EXCEPTION {refused};\n  \
+                 END IF;\n\
+                 END ",
+                quote_qualified(schema, table),
+                quote_ident(column)
+            ),
         ),
         format!("{alter} SET NOT NULL;"),
     ]
@@ -2008,8 +2121,11 @@ pub(crate) fn identity_change_sql(
             // A serial's own sequence goes with its default, found by its ownership (the default's
             // text names it relative to whatever search path it was read under).
             if identity.get("serial").is_some() {
-                stmts.push(format!(
-                    "DO $$ BEGIN EXECUTE format('DROP SEQUENCE IF EXISTS %s', {sequence}); END $$;"
+                stmts.push(do_block(
+                    "",
+                    &format!(
+                        " BEGIN EXECUTE format('DROP SEQUENCE IF EXISTS %s', {sequence}); END "
+                    ),
                 ));
             }
             stmts.push(format!(
@@ -2068,21 +2184,13 @@ fn generated_column_sql(
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .map(|l| format!("    EXECUTE {};\n", dollar_quoted(l, "recreate")))
+        .map(|l| format!("    EXECUTE {};\n", dollar_quote(l, "recreate")))
         .collect();
-    format!(
-        "DO $generated$\nBEGIN\n  IF current_setting('server_version_num')::int >= 170000 THEN\n    EXECUTE {};\n  ELSE\n{again}  END IF;\nEND\n$generated$;",
-        dollar_quoted(&in_place, "expr"),
-    )
-}
-
-/// `sql` as a dollar-quoted literal whose tag does not occur in it.
-pub(super) fn dollar_quoted(sql: &str, tag: &str) -> String {
-    let mut tag = format!("${tag}$");
-    while sql.contains(&tag) {
-        tag.insert(tag.len() - 1, '_');
-    }
-    format!("{tag}{sql}{tag}")
+    let body = format!(
+        "\nBEGIN\n  IF current_setting('server_version_num')::int >= 170000 THEN\n    EXECUTE {};\n  ELSE\n{again}  END IF;\nEND\n",
+        dollar_quote(&in_place, "expr"),
+    );
+    do_block("generated", &body)
 }
 
 /// `"a", "b"`: each name quoted, comma-separated, for a column list.
@@ -2224,16 +2332,17 @@ pub(crate) fn rename_serial_sequence_sql(
     let relation = quote_literal(&quote_qualified(schema, table));
     let column = quote_literal(column);
     let name = quote_literal(name);
-    format!(
-        "DO $seq$\nDECLARE\n  seq regclass;\nBEGIN\n  \
+    let body = format!(
+        "\nDECLARE\n  seq regclass;\nBEGIN\n  \
          IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = {relation}::regclass AND attname = {column} AND NOT attisdropped) THEN\n    \
          seq := pg_get_serial_sequence({relation}, {column})::regclass;\n    \
          IF seq IS NOT NULL AND (SELECT relname FROM pg_class WHERE oid = seq) <> {name} THEN\n      \
          EXECUTE format('ALTER SEQUENCE %s RENAME TO %I', seq, {name});\n    \
          END IF;\n  \
          END IF;\n\
-         END;\n$seq$;"
-    )
+         END;\n"
+    );
+    do_block("seq", &body)
 }
 
 /// FK column SQL type for a target model PK (SERIAL → INTEGER, UUID → UUID, …).
@@ -2464,5 +2573,38 @@ mod tests {
             let sql = foreign_key_sql_with_on_update(on_update);
             assert!(sql.ends_with(expected), "{on_update:?}: {sql}");
         }
+    }
+
+    /// Before the push's reconcile is known a column's type change renders alone: no statement
+    /// about what reads the column, which would be read as the operation creating it.
+    #[test]
+    fn a_render_before_the_reconcile_says_nothing_of_a_columns_dependents() {
+        let policy = crate::differ::ColumnDependencySnapshot {
+            kind: "policy".into(),
+            table: "posts".into(),
+            name: "p".into(),
+            schema: None,
+            columns: None,
+            foreign_table: None,
+            foreign_schema: None,
+            foreign_columns: None,
+            on_delete: None,
+            definition: Some(" AS PERMISSIVE FOR ALL TO PUBLIC".into()),
+            unique: false,
+            index_method: None,
+        };
+        let op = Operation::AlterColumn {
+            table: "posts".into(),
+            column: "score".into(),
+            field: Box::new(FieldAst::BigInt(Default::default())),
+            changes: serde_json::json!({ "type": { "from_udt": "int4", "to_pg": "BIGINT" } }),
+            dependencies: vec![policy],
+            risk: Risk::Safe,
+            warning: None,
+        };
+        let ast = parser::parse(r#"{ "astVersion": 2, "models": [] }"#).unwrap();
+        let sql = render_operation(&op, "public", &ast).unwrap();
+        assert!(sql.starts_with("ALTER TABLE \"public\".\"posts\" ALTER COLUMN \"score\" TYPE"));
+        assert!(!sql.contains("POLICY"), "{sql}");
     }
 }

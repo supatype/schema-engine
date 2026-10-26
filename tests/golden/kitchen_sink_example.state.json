@@ -2026,7 +2026,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (room_id) REFERENCES room(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"room\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -2064,7 +2064,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (speaker_id) REFERENCES speaker(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"speaker\",\"local_name\":\"talks\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -2167,7 +2167,7 @@
         "checkExpression": null,
         "onDelete": "RESTRICT",
         "definition": "FOREIGN KEY (attendee_id) REFERENCES attendee(id) ON UPDATE CASCADE ON DELETE RESTRICT",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"attendee\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -2259,6 +2259,24 @@
       },
       {
         "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "_global_site_settings",
         "name": "_global_site_settings_update",
         "command": "w",
         "permissive": true,
@@ -2295,6 +2313,24 @@
       },
       {
         "table": "attendee",
+        "name": "attendee_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "attendee",
+        "name": "attendee_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "attendee",
         "name": "attendee_update",
         "command": "w",
         "permissive": true,
@@ -2327,6 +2363,24 @@
         "permissive": true,
         "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "chat_message",
+        "name": "chat_message_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2376,6 +2430,24 @@
       },
       {
         "table": "page",
+        "name": "page_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "page",
+        "name": "page_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "page",
         "name": "page_update",
         "command": "w",
         "permissive": true,
@@ -2399,6 +2471,24 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "page_versions",
+        "name": "page_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "page_versions",
+        "name": "page_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2435,6 +2525,24 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "room",
+        "name": "room_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "room",
+        "name": "room_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2484,6 +2592,24 @@
       },
       {
         "table": "speaker",
+        "name": "speaker_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "speaker",
+        "name": "speaker_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "speaker",
         "name": "speaker_update",
         "command": "w",
         "permissive": true,
@@ -2507,6 +2633,24 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2543,6 +2687,24 @@
         "permissive": true,
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "sponsor",
+        "name": "sponsor_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "sponsor",
+        "name": "sponsor_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2592,6 +2754,24 @@
       },
       {
         "table": "talk",
+        "name": "talk_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "talk",
+        "name": "talk_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "talk",
         "name": "talk_update",
         "command": "w",
         "permissive": true,
@@ -2615,6 +2795,24 @@
         "permissive": true,
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "talk_versions",
+        "name": "talk_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "talk_versions",
+        "name": "talk_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -2655,6 +2853,24 @@
       },
       {
         "table": "ticket",
+        "name": "ticket_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "ticket",
+        "name": "ticket_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "ticket",
         "name": "ticket_update",
         "command": "w",
         "permissive": true,
@@ -2684,6 +2900,13 @@
         "event": "INSERT",
         "timing": "AFTER",
         "functionName": "EXECUTE FUNCTION _supatype.note_created_record('id')"
+      },
+      {
+        "table": "page",
+        "name": "page_drafts_only",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _supatype.refuse_live_edit()"
       },
       {
         "table": "page",
@@ -2740,6 +2963,13 @@
         "event": "INSERT",
         "timing": "AFTER",
         "functionName": "EXECUTE FUNCTION _supatype.note_created_record('id')"
+      },
+      {
+        "table": "speaker",
+        "name": "speaker_drafts_only",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _supatype.refuse_live_edit()"
       },
       {
         "table": "speaker",
@@ -2810,6 +3040,13 @@
         "event": "INSERT",
         "timing": "AFTER",
         "functionName": "EXECUTE FUNCTION _supatype.note_created_record('id')"
+      },
+      {
+        "table": "talk",
+        "name": "talk_drafts_only",
+        "event": "UPDATE",
+        "timing": "BEFORE",
+        "functionName": "EXECUTE FUNCTION _supatype.refuse_live_edit()"
       },
       {
         "table": "talk",
@@ -2991,6 +3228,21 @@
       {
         "schema": "public",
         "table": "page",
+        "name": "page_drafts_only",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.refuse_live_edit",
+        "definition": "CREATE TRIGGER page_drafts_only BEFORE UPDATE ON public.page FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit()",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page",
         "name": "page_slug_trigger",
         "timing": "BEFORE",
         "events": [
@@ -3077,6 +3329,21 @@
         "forEachRow": true,
         "function": "_supatype.note_created_record",
         "definition": "CREATE TRIGGER speaker_created_note AFTER INSERT ON public.speaker FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id')",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker",
+        "name": "speaker_drafts_only",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.refuse_live_edit",
+        "definition": "CREATE TRIGGER speaker_drafts_only BEFORE UPDATE ON public.speaker FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit()",
         "enabled": true,
         "comment": null
       },
@@ -3185,6 +3452,21 @@
         "forEachRow": true,
         "function": "_supatype.note_created_record",
         "definition": "CREATE TRIGGER talk_created_note AFTER INSERT ON public.talk FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id')",
+        "enabled": true,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk",
+        "name": "talk_drafts_only",
+        "timing": "BEFORE",
+        "events": [
+          "UPDATE"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.refuse_live_edit",
+        "definition": "CREATE TRIGGER talk_drafts_only BEFORE UPDATE ON public.talk FOR EACH ROW EXECUTE FUNCTION _supatype.refuse_live_edit()",
         "enabled": true,
         "comment": null
       },
@@ -3338,7 +3620,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "body": "\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -3347,7 +3629,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.set_page_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_page_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
         "acl": [
           "PUBLIC=EXECUTE"
         ]
@@ -3361,7 +3643,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "body": "\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -3370,7 +3652,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.set_speaker_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_speaker_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
         "acl": [
           "PUBLIC=EXECUTE"
         ]
@@ -3384,7 +3666,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "body": "\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -3393,7 +3675,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.set_talk_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_talk_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
         "acl": [
           "PUBLIC=EXECUTE"
         ]
@@ -4051,6 +4333,29 @@
       },
       {
         "schema": "_supatype",
+        "name": "refuse_live_edit",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\n  BEGIN\n    IF current_user::text NOT IN ('anon', 'authenticated')\n       OR current_setting('supatype.publishing', true) = 'on'\n       OR _supatype.jwt_claim_text('supatype_studio') = 'write' THEN\n      RETURN NEW;\n    END IF;\n    RAISE EXCEPTION USING\n      MESSAGE = TG_TABLE_NAME || ' has drafts: save a draft with supatype.create_draft or the client''s update, then publish',\n      ERRCODE = '42501',\n      HINT = 'Publish with supatype.publish, or pass { publish: true } to the client''s update to save and publish in one call.';\n  END;\n  ",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.refuse_live_edit()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF current_user::text NOT IN ('anon', 'authenticated')\n       OR current_setting('supatype.publishing', true) = 'on'\n       OR _supatype.jwt_claim_text('supatype_studio') = 'write' THEN\n      RETURN NEW;\n    END IF;\n    RAISE EXCEPTION USING\n      MESSAGE = TG_TABLE_NAME || ' has drafts: save a draft with supatype.create_draft or the client''s update, then publish',\n      ERRCODE = '42501',\n      HINT = 'Publish with supatype.publish, or pass { publish: true } to the client''s update to save and publish in one call.';\n  END;\n  $function$\n",
+        "acl": []
+      },
+      {
+        "schema": "_supatype",
         "name": "richtext_text",
         "identityArguments": "v jsonb",
         "identityTypes": "jsonb",
@@ -4104,7 +4409,7 @@
         "language": "plpgsql",
         "volatility": "s",
         "securityDefiner": true,
-        "body": "\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  ",
+        "body": "\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    IF ((SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')) IS NOT TRUE THEN\n      RETURN false;\n    END IF;\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  ",
         "comment": null,
         "arguments": "",
         "config": [
@@ -4115,7 +4420,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    IF ((SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')) IS NOT TRUE THEN\n      RETURN false;\n    END IF;\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "anon=EXECUTE",
@@ -5480,7 +5785,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  ",
+        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    -- The live row is the publishing functions' to write: the table's `drafts_only` trigger\n    -- admits these two updates and nothing after them.\n    PERFORM set_config('supatype.publishing', 'on', true);\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n    PERFORM set_config('supatype.publishing', '', true);\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  ",
         "comment": null,
         "arguments": "model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[]",
         "config": [
@@ -5491,7 +5796,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    -- The live row is the publishing functions' to write: the table's `drafts_only` trigger\n    -- admits these two updates and nothing after them.\n    PERFORM set_config('supatype.publishing', 'on', true);\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n    PERFORM set_config('supatype.publishing', '', true);\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "authenticated=EXECUTE",
@@ -5519,6 +5824,33 @@
         "cost": "100",
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION supatype.restore_version(model_table text, record_id text, version integer)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    snapshot jsonb;\n  BEGIN\n    EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s AND v.%I = $2',\n      'data', entry.\"schema_name\", entry.\"versions_table\",\n      'record_id', entry.\"primary_key_type\", 'version')\n      INTO snapshot USING record_id, version;\n\n    IF snapshot IS NULL THEN\n      RAISE EXCEPTION 'no version % of % in %', version, record_id, model_table\n        USING ERRCODE = '02000';\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, record_id, snapshot);\n  END;\n  $function$\n",
+        "acl": [
+          "PUBLIC=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "supatype",
+        "name": "save_drafts",
+        "identityArguments": "model_table text, record_ids jsonb, data jsonb, publish boolean",
+        "identityTypes": "text, jsonb, jsonb, boolean",
+        "returnType": "jsonb",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\n  DECLARE\n    id text;\n    saved jsonb;\n    published jsonb;\n    answers jsonb := '[]'::jsonb;\n  BEGIN\n    IF jsonb_typeof(record_ids) IS DISTINCT FROM 'array' THEN\n      RAISE EXCEPTION 'save_drafts takes a JSON array of record keys, not %', COALESCE(jsonb_typeof(record_ids), 'null')\n        USING ERRCODE = '22023',\n              HINT = 'Send the keys of the records to save a draft of, or call create_draft for one.';\n    END IF;\n\n    FOR id IN SELECT value FROM jsonb_array_elements_text(record_ids) WITH ORDINALITY ORDER BY ordinality LOOP\n      saved := \"supatype\".create_draft(model_table, id, data);\n      IF publish THEN\n        published := \"supatype\".publish(model_table, id, (saved->>'version')::integer);\n        saved := saved || jsonb_build_object('status', 'published', 'locales', published->'locales');\n      END IF;\n      answers := answers || jsonb_build_array(saved);\n    END LOOP;\n    RETURN answers;\n  END;\n  ",
+        "comment": null,
+        "arguments": "model_table text, record_ids jsonb, data jsonb, publish boolean DEFAULT false",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.save_drafts(model_table text, record_ids jsonb, data jsonb, publish boolean DEFAULT false)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\n  DECLARE\n    id text;\n    saved jsonb;\n    published jsonb;\n    answers jsonb := '[]'::jsonb;\n  BEGIN\n    IF jsonb_typeof(record_ids) IS DISTINCT FROM 'array' THEN\n      RAISE EXCEPTION 'save_drafts takes a JSON array of record keys, not %', COALESCE(jsonb_typeof(record_ids), 'null')\n        USING ERRCODE = '22023',\n              HINT = 'Send the keys of the records to save a draft of, or call create_draft for one.';\n    END IF;\n\n    FOR id IN SELECT value FROM jsonb_array_elements_text(record_ids) WITH ORDINALITY ORDER BY ordinality LOOP\n      saved := \"supatype\".create_draft(model_table, id, data);\n      IF publish THEN\n        published := \"supatype\".publish(model_table, id, (saved->>'version')::integer);\n        saved := saved || jsonb_build_object('status', 'published', 'locales', published->'locales');\n      END IF;\n      answers := answers || jsonb_build_array(saved);\n    END LOOP;\n    RETURN answers;\n  END;\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "authenticated=EXECUTE",
@@ -5561,7 +5893,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  ",
+        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    -- As in `publish`: the live row is this function's to write, until it returns.\n    PERFORM set_config('supatype.publishing', 'on', true);\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n    PERFORM set_config('supatype.publishing', '', true);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  ",
         "comment": null,
         "arguments": "model_table text, record_id text, locales text[] DEFAULT NULL::text[]",
         "config": [
@@ -5572,7 +5904,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION supatype.unpublish(model_table text, record_id text, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  $function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.unpublish(model_table text, record_id text, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    -- As in `publish`: the live row is this function's to write, until it returns.\n    PERFORM set_config('supatype.publishing', 'on', true);\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n    PERFORM set_config('supatype.publishing', '', true);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  $function$\n",
         "acl": [
           "PUBLIC=EXECUTE",
           "authenticated=EXECUTE",
@@ -6606,6 +6938,32 @@
       {
         "schema": "public",
         "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "_global_site_settings",
+        "name": "_global_site_settings_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "_global_site_settings",
         "name": "_global_site_settings_update",
         "command": "w",
         "permissive": true,
@@ -6658,6 +7016,32 @@
       {
         "schema": "public",
         "table": "attendee",
+        "name": "attendee_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "attendee",
+        "name": "attendee_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "attendee",
         "name": "attendee_update",
         "command": "w",
         "permissive": true,
@@ -6705,6 +7089,32 @@
         ],
         "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "chat_message",
+        "name": "chat_message_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "chat_message",
+        "name": "chat_message_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -6775,6 +7185,32 @@
       {
         "schema": "public",
         "table": "page",
+        "name": "page_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page",
+        "name": "page_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page",
         "name": "page_update",
         "command": "w",
         "permissive": true,
@@ -6809,6 +7245,32 @@
         ],
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('page'::text, (record_id)::text))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page_versions",
+        "name": "page_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "page_versions",
+        "name": "page_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -6861,6 +7323,32 @@
         ],
         "usingExpr": "true",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "room",
+        "name": "room_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "room",
+        "name": "room_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -6931,6 +7419,32 @@
       {
         "schema": "public",
         "table": "speaker",
+        "name": "speaker_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker",
+        "name": "speaker_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker",
         "name": "speaker_update",
         "command": "w",
         "permissive": true,
@@ -6965,6 +7479,32 @@
         ],
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('speaker'::text, (record_id)::text))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "speaker_versions",
+        "name": "speaker_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -7017,6 +7557,32 @@
         ],
         "usingExpr": "(published_at <= ( SELECT now() AS now))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "sponsor",
+        "name": "sponsor_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "sponsor",
+        "name": "sponsor_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -7087,6 +7653,32 @@
       {
         "schema": "public",
         "table": "talk",
+        "name": "talk_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk",
+        "name": "talk_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk",
         "name": "talk_update",
         "command": "w",
         "permissive": true,
@@ -7121,6 +7713,32 @@
         ],
         "usingExpr": "(((created_by IS NOT NULL) AND (created_by = _supatype.caller_id())) OR ( SELECT _supatype.sees_all_drafts() AS sees_all_drafts) OR _supatype.preview_allows('talk'::text, (record_id)::text))",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk_versions",
+        "name": "talk_versions_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "talk_versions",
+        "name": "talk_versions_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {
@@ -7173,6 +7791,32 @@
         ],
         "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) = auth_user_id)",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "ticket",
+        "name": "ticket_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "ticket",
+        "name": "ticket_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {

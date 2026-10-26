@@ -319,6 +319,19 @@ CREATE POLICY "documents_select" ON "public"."documents"
 FOR SELECT USING (
     TRUE
   );
+CREATE POLICY "documents_studio_read" ON "public"."documents"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "documents_studio_write" ON "public"."documents"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "documents_update" ON "public"."documents"
 FOR UPDATE USING (
     (SELECT _supatype.jwt_role()) = 'admin'

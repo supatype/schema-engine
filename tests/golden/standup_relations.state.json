@@ -178,7 +178,7 @@
         "checkExpression": null,
         "onDelete": "CASCADE",
         "definition": "FOREIGN KEY (owner_id) REFERENCES profile(id) ON UPDATE CASCADE ON DELETE CASCADE",
-        "comment": null,
+        "comment": "@graphql({\"foreign_name\":\"owner\"})",
         "foreignKeyOptions": {
           "onUpdate": "CASCADE",
           "matchType": "SIMPLE",
@@ -247,6 +247,24 @@
       },
       {
         "table": "profile",
+        "name": "profile_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "profile",
+        "name": "profile_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "managed": false
+      },
+      {
+        "table": "profile",
         "name": "profile_update",
         "command": "w",
         "permissive": true,
@@ -279,6 +297,24 @@
         "permissive": true,
         "usingExpr": "true",
         "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "team",
+        "name": "team_studio_read",
+        "command": "r",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "managed": false
+      },
+      {
+        "table": "team",
+        "name": "team_studio_write",
+        "command": "*",
+        "permissive": true,
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "managed": false
       },
       {
@@ -387,7 +423,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
+        "body": "\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -396,7 +432,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _platform.set_team_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_team_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n    NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n",
         "acl": [
           "PUBLIC=EXECUTE"
         ]
@@ -1244,6 +1280,32 @@
       {
         "schema": "public",
         "table": "profile",
+        "name": "profile_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "profile",
+        "name": "profile_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "profile",
         "name": "profile_update",
         "command": "w",
         "permissive": true,
@@ -1291,6 +1353,32 @@
         ],
         "usingExpr": "true",
         "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "team",
+        "name": "team_studio_read",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = ANY (ARRAY['read'::text, 'write'::text])) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "public",
+        "table": "team",
+        "name": "team_studio_write",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "public"
+        ],
+        "usingExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
+        "checkExpr": "((( SELECT _supatype.jwt_claim_text('supatype_studio'::text) AS jwt_claim_text) = 'write'::text) AND (current_setting('supatype.in_rule'::text, true) IS DISTINCT FROM 'on'::text))",
         "comment": null
       },
       {

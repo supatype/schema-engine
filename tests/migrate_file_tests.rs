@@ -218,6 +218,24 @@ async fn plain_migrate(pool: &PgPool, ast: &SchemaAst) -> anyhow::Result<String>
     migrate_file::render(pool, ast, "public", migrate_file::Options::default()).await
 }
 
+/// Plain `migrate` against a database no push has touched plans from its snapshot: Supatype's
+/// tables are not there yet, which is an empty ledger and not a failure, and finding that out must
+/// not leave the planning transaction aborted for the reads after it.
+#[tokio::test]
+async fn plain_migrate_plans_a_database_no_push_has_touched() {
+    common::with_integration_pool(|pool| async move {
+        let file = plain_migrate(&pool, &widgets(false))
+            .await
+            .expect("the file renders on an untouched database");
+        assert!(file.contains("CREATE TABLE"), "{file}");
+        assert!(
+            !exists(&pool, "public.widgets").await,
+            "migrate wrote to the database"
+        );
+    })
+    .await;
+}
+
 /// IN-A: plain `migrate` writes the file without locking anything an application uses. Another
 /// session holds EXCLUSIVE on every table, which lets only ACCESS SHARE through: a migrate that
 /// took anything stronger (the rehearsal's `ALTER TABLE`, the bootstrap's) would wait on it.

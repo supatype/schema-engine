@@ -68,6 +68,43 @@ pub fn comment_text(text: &str) -> String {
     text.replace(['\r', '\n'], " ")
 }
 
+/// The tag to dollar-quote `body` with: `tag`, with `_` added until the body can no longer end
+/// the quote. A name or value from the schema can hold any text, `$rule$` included, and a body
+/// that held its own closing tag, or ended in `$tag` so that the closing `$` completed one, would
+/// end there and run the rest as SQL. The tag depends only on the body, so a statement is the same
+/// on every push, and is `tag` itself unless the body holds it.
+pub fn dollar_tag(body: &str, tag: &str) -> String {
+    let mut tag = tag.to_string();
+    while body.contains(&format!("${tag}$")) || body.ends_with(&format!("${tag}")) {
+        tag.push('_');
+    }
+    tag
+}
+
+/// The tag for a body written from a template with no `$` of its own around `values`: a closing
+/// tag in the body can then only be inside one of the values, so they are all that is searched.
+pub fn dollar_tag_among(values: &[&str], tag: &str) -> String {
+    dollar_tag(&values.join("\n"), tag)
+}
+
+/// `body` between dollar quotes tagged by [`dollar_tag`].
+pub fn dollar_quote(body: &str, tag: &str) -> String {
+    let tag = dollar_tag(body, tag);
+    format!("${tag}${body}${tag}$")
+}
+
+/// `DO $tag$<body>$tag$;`, tagged by [`dollar_tag`].
+pub fn do_block(tag: &str, body: &str) -> String {
+    format!("DO {};", dollar_quote(body, tag))
+}
+
+/// Whether `sql` is a [`do_block`] tagged `tag`, whatever `_`s [`dollar_tag`] added.
+pub fn is_do_block(sql: &str, tag: &str) -> bool {
+    sql.strip_prefix("DO $")
+        .and_then(|rest| rest.strip_prefix(tag))
+        .is_some_and(|rest| rest.trim_start_matches('_').starts_with('$'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +146,29 @@ mod tests {
     #[test]
     fn a_comment_cannot_be_ended_by_a_name() {
         assert_eq!(comment_text("a\nDROP TABLE t;\r\n"), "a DROP TABLE t;  ");
+    }
+
+    #[test]
+    fn a_dollar_quote_is_never_closed_by_its_body() {
+        assert_eq!(dollar_quote("SELECT 1", "rule"), "$rule$SELECT 1$rule$");
+        assert_eq!(
+            dollar_quote("'x$rule$; DROP TABLE t; --'", "rule"),
+            "$rule_$'x$rule$; DROP TABLE t; --'$rule_$"
+        );
+        assert_eq!(
+            dollar_quote("'$rule$' || '$rule_$'", "rule"),
+            "$rule__$'$rule$' || '$rule_$'$rule__$"
+        );
+        assert_eq!(dollar_tag("SELECT 'a$can", "can"), "can_");
+    }
+
+    #[test]
+    fn a_do_block_is_known_by_its_tag_whatever_was_added() {
+        let block = do_block("grants", "BEGIN PERFORM '$grants$'; END");
+        assert!(block.starts_with("DO $grants_$"), "{block}");
+        assert!(is_do_block(&block, "grants"));
+        assert!(is_do_block(&do_block("grants", "BEGIN END"), "grants"));
+        assert!(!is_do_block(&block, "grant"));
+        assert!(!is_do_block("DO $grantsx$ BEGIN END $grantsx$;", "grants"));
     }
 }

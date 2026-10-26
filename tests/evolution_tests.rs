@@ -488,13 +488,13 @@ fn test_fk_already_exists_no_op() {
                 schema: "public".into(),
                 name: "users".into(),
                 comment: Some("supatype:managed;kind=table".into()),
-                columns: vec![col_nn("id", "uuid")],
+                columns: vec![uuid_key(col_nn("id", "uuid"))],
             },
             DbTable {
                 schema: "public".into(),
                 name: "posts".into(),
                 comment: Some("supatype:managed;kind=table".into()),
-                columns: vec![col_nn("id", "uuid"), col("author_id", "uuid")],
+                columns: vec![uuid_key(col_nn("id", "uuid")), col("author_id", "uuid")],
             },
         ],
         constraints: vec![fk("posts", "author_id", "users")], // already applied
@@ -1127,6 +1127,15 @@ fn col_nn(name: &str, udt: &str) -> DbColumn {
     }
 }
 
+/// `column` holding the default a database gives a `UUID` key the schema generates, so a fixture of an
+/// applied schema matches what the push would have left.
+fn uuid_key(column: DbColumn) -> DbColumn {
+    DbColumn {
+        default: Some("gen_random_uuid()".into()),
+        ..column
+    }
+}
+
 // ─── Scenario 15: add_column_not_null_with_default ───────────────────────────
 
 #[test]
@@ -1417,7 +1426,7 @@ fn test_add_required_richtext_column_with_string_default() {
             schema: "public".into(),
             name: "_global_homepage".into(),
             comment: Some("supatype:managed;kind=table".into()),
-            columns: vec![col("id", "uuid")],
+            columns: vec![uuid_key(col("id", "uuid"))],
         }],
         ..DatabaseState::default()
     };
