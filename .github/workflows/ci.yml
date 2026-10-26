@@ -201,6 +201,7 @@ jobs:
           cargo test \
             --test integration_test \
             --test migration_conversion_integration \
+            --test flat_blocks_push_tests \
             --test grants_tests \
             --test rls_convergence_tests \
             --test auth_server_migration_tests \
