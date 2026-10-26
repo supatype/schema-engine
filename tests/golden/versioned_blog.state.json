@@ -655,7 +655,7 @@
         "name": "ledger_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "checkExpr": null,
         "managed": false
       },
@@ -691,8 +691,8 @@
         "name": "posts_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'editor'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -934,7 +934,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT auth.uid();\n  ",
+        "body": "\n    SELECT _supatype.jwt_uid();\n  ",
         "comment": null,
         "arguments": "",
         "config": [
@@ -945,7 +945,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.caller_id()\n RETURNS uuid\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT auth.uid();\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.caller_id()\n RETURNS uuid\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT _supatype.jwt_uid();\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -956,7 +956,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  ",
+        "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts\"\n       WHERE \"id\" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')\n    );\n  ",
         "comment": null,
         "arguments": "p_record uuid",
         "config": [],
@@ -965,7 +965,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_edit_posts(p_record uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_edit_posts(p_record uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts\"\n       WHERE \"id\" = p_record AND ((SELECT _supatype.jwt_role()) = 'editor')\n    );\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -1020,7 +1020,7 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": true,
-        "body": "\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), auth.uid());\n    RETURN NULL;\n  END;\n  ",
+        "body": "\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), _supatype.jwt_uid());\n    RETURN NULL;\n  END;\n  ",
         "comment": null,
         "arguments": "",
         "config": [
@@ -1031,7 +1031,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION _supatype.ledger_versions_audit()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), auth.uid());\n    RETURN NULL;\n  END;\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.ledger_versions_audit()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), _supatype.jwt_uid());\n    RETURN NULL;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -1460,7 +1460,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
+        "body": "\n  SELECT _supatype.jwt_claim(claim_path);\n",
         "comment": null,
         "arguments": "claim_path text",
         "config": [],
@@ -1469,7 +1469,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim(claim_path);\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1480,7 +1480,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
+        "body": "\n  SELECT _supatype.jwt_claim_text(claim_path);\n",
         "comment": null,
         "arguments": "claim_path text",
         "config": [],
@@ -1489,7 +1489,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claim_text(claim_path);\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1500,7 +1500,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
+        "body": "\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1509,7 +1509,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1520,7 +1520,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
+        "body": "\n  SELECT _supatype.jwt_claims();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1529,7 +1529,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_claims();\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1540,7 +1540,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
+        "body": "\n  SELECT _supatype.jwt_role();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1549,7 +1549,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_role();\n$function$\n"
       },
       {
         "schema": "auth",
@@ -1560,7 +1560,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
+        "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  ",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1569,7 +1569,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -1580,7 +1580,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
+        "body": "\n  SELECT _supatype.jwt_uid();\n",
         "comment": null,
         "arguments": "",
         "config": [],
@@ -1589,7 +1589,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n$function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT _supatype.jwt_uid();\n$function$\n"
       },
       {
         "schema": "public",
@@ -1720,7 +1720,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ledger\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ledger\";\n  ",
         "comment": null,
         "arguments": "ledger public.ledger",
         "config": [],
@@ -1729,7 +1729,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_read_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_ledger(ledger public.ledger)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ledger\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -1800,7 +1800,7 @@
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
-        "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
+        "body": "\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"posts\";\n  ",
         "comment": null,
         "arguments": "posts public.posts",
         "config": [],
@@ -1809,7 +1809,7 @@
         "parallel": "u",
         "cost": "100",
         "rows": "0",
-        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_posts(posts public.posts)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT _supatype.jwt_role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"posts\";\n  $function$\n"
       },
       {
         "schema": "public",
@@ -2274,7 +2274,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
+        "usingExpr": "(( SELECT _supatype.jwt_uid() AS jwt_uid) IS NOT NULL)",
         "checkExpr": null,
         "comment": null
       },
@@ -2326,8 +2326,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'editor'::text)",
+        "checkExpr": "(( SELECT _supatype.jwt_role() AS jwt_role) = 'editor'::text)",
         "comment": null
       },
       {

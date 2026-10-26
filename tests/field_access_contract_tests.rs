@@ -3,8 +3,8 @@
 //! Field masking has two intended implementations: **tier 1**, the `supatype_mask` planner
 //! rewrite, and **tier 2**, generated `api`-schema views for databases that cannot load an
 //! extension. The plan's whole case for calling tier 2 *redundancy* rather than a second product
-//! rests on one claim — that both produce the same observable behaviour for the same schema and
-//! caller. A claim like that decays silently unless something checks it.
+//! rests on one claim, namely that both produce the same observable behaviour for the same schema
+//! and caller. A claim like that decays silently unless something checks it.
 //!
 //! So this suite is written once and run per tier. Every assertion is phrased in terms a client
 //! can see: what comes back in the row, what happens on a round-trip write, what happens to an
@@ -12,7 +12,7 @@
 //! same test can be honest about both.
 //!
 //! Tier 2 does not exist yet. Its cases skip with a message rather than passing vacuously, so
-//! this file is the parity gate the generator will be built against — and the day the generator
+//! this file is the parity gate the generator will be built against. The day the generator
 //! lands, drift between the tiers becomes a test failure rather than a discovery.
 
 mod common;
@@ -23,12 +23,12 @@ use supatype_engine::{
     introspector, parser,
 };
 
-/// The same table and rules as [`SETUP`], expressed as a schema — so tier 2 is built by the
+/// The same table and rules as [`SETUP`], expressed as a schema so that tier 2 is built by the
 /// generator rather than by hand.
 ///
 /// The write rule mirrors tier 1's hand-written function exactly, including the second clause on a
 /// claim that the caller may not have. That matters: with a simpler `private` rule the predicate
-/// compiles to `FALSE`, and the NULL case — a rule keyed on an absent claim — is never reached. Tier
+/// compiles to `FALSE`, and the NULL case (a rule keyed on an absent claim) is never reached. Tier
 /// 1's predicate *is* NULL for a caller who can read but has no `writer` claim, and it refuses; tier
 /// 2 has to refuse for the same reason rather than a different one.
 ///
@@ -81,7 +81,7 @@ const CONTRACT_SCHEMA: &str = r#"{
 async fn install_tier_two(pool: &sqlx::PgPool) {
     let ast = parser::parse(CONTRACT_SCHEMA).expect("contract schema parses");
 
-    // The generated predicate calls `auth.claim_text`, so the helpers have to exist.
+    // The generated predicate calls `_supatype.jwt_claim_text`, so the readers have to exist.
     sqlx::raw_sql("CREATE SCHEMA IF NOT EXISTS auth")
         .execute(pool)
         .await
@@ -107,14 +107,12 @@ async fn install_tier_two(pool: &sqlx::PgPool) {
 
     // The generator grants to the real API roles (anon / authenticated / service_role). This suite
     // uses a role of its own so that identity is explicit in every assertion, so it grants what that
-    // role needs — exactly as `SETUP` already does for the base table.
-    // `auth` too: the generated predicate calls `auth.claim_text`. In the view that call is inlined
-    // into the plan and no schema usage is checked, which is why the read assertions passed without
-    // it; inside the trigger it is a real function call and is checked. The product's auth migrations
-    // grant this to the API roles already.
+    // role needs, exactly as `SETUP` already does for the base table.
+    // `_supatype` too: the generated predicate calls `_supatype.jwt_claim_text`, both when the view
+    // inlines it and when the write trigger calls it. The push grants this to the API roles.
     sqlx::raw_sql(
         "GRANT USAGE ON SCHEMA api TO contract_app; \
-         GRANT USAGE ON SCHEMA auth TO contract_app; \
+         GRANT USAGE ON SCHEMA _supatype TO contract_app; \
          GRANT SELECT, INSERT, UPDATE, DELETE ON api.contract_posts TO contract_app;",
     )
     .execute(pool)
@@ -193,7 +191,7 @@ async fn as_caller(pool: &sqlx::PgPool, uid: &str, sql: &str) -> Result<(), Stri
     let mut tx = pool.begin().await.expect("begin");
     // Two settings, one identity. Tier 1's fixture is hand-written and reads `contract.uid`
     // directly; tier 2 is produced by the generator, so its predicate is whatever the AST compiles
-    // to — `auth.claim_text('uid')`, which reads `request.jwt.claims`. Setting both is what lets the
+    // to: `_supatype.jwt_claim_text('uid')`, which reads `request.jwt.claims`. Setting both is what lets the
     // assertions below be written once.
     let prelude = format!(
         "SET LOCAL contract.uid = '{uid}'; \
@@ -275,7 +273,7 @@ async fn assert_contract(pool: &sqlx::PgPool, tier: Tier) {
         "{where_}: the owner must read their own value"
     );
 
-    // 2. Everyone else gets NULL — present, not an error, because `SELECT *` must keep working.
+    // 2. Everyone else gets NULL: present, not an error, because `SELECT *` must keep working.
     assert_eq!(
         read_salary(pool, tier, "bob", 1).await,
         None,
@@ -293,7 +291,7 @@ async fn assert_contract(pool: &sqlx::PgPool, tier: Tier) {
 
     // 4. The round-trip. A client GETs a row, `salary` comes back NULL because it is masked, the
     //    user edits the title, and the client PATCHes the whole object back including
-    //    `salary: null`. The real value must survive, silently — this is the case the whole
+    //    `salary: null`. The real value must survive, silently. This is the case the whole
     //    coercion design exists for, and the one most likely to differ between tiers.
     let round_trip = as_caller(
         pool,
@@ -307,8 +305,8 @@ async fn assert_contract(pool: &sqlx::PgPool, tier: Tier) {
     );
 
     // 5. Saw it and tried to change it, without the write rule: rejected loudly. The distinction
-    //    from (4) is the point — collapsing them either destroys data or breaks whole-object
-    //    clients.
+    //    from (4) is the point, since collapsing them either destroys data or breaks
+    //    whole-object clients.
     let refused = as_caller(
         pool,
         "alice",
@@ -320,11 +318,11 @@ async fn assert_contract(pool: &sqlx::PgPool, tier: Tier) {
         "{where_}: a caller who can read but not write the column must be refused"
     );
 
-    // 7. A caller with no identity at all. `auth.claim_text('uid')` is NULL for them, so a rule
-    //    comparing a column to it is NULL — not FALSE. `NOT NULL` is NULL and `IF NULL THEN RAISE`
-    //    does not raise, so a predicate written as a comparison would silently *permit* the write.
+    // 7. A caller with no identity at all. The `uid` claim is NULL for them, so a rule comparing
+    //    a column to it is NULL, not FALSE. `NOT NULL` is NULL and `IF NULL THEN RAISE` does not
+    //    raise, so a predicate written as a comparison would silently *permit* the write.
     //
-    //    What tier 1 guarantees here is not an error — measured: it reports `UPDATE 1` and leaves the
+    //    What tier 1 guarantees here is not an error. Measured, it reports `UPDATE 1` and leaves the
     //    stored value alone, discarding the new one. So the assertion is about the data, which is the
     //    property that actually matters and the one a NULL-logic bug would break.
     let before = stored_salary(pool, 1).await;
@@ -342,14 +340,14 @@ async fn assert_contract(pool: &sqlx::PgPool, tier: Tier) {
 
     // 6. Aggregates: **the one place the tiers differ**, deliberately and by decision.
     //
-    // Tier 1 raises `column … is masked for this role and cannot be aggregated` — the planner knows
-    // the column appears inside an aggregate. A view cannot: requirement 2 above demands that
+    // Tier 1 raises `column … is masked for this role and cannot be aggregated`, because the planner
+    // knows the column appears inside an aggregate. A view cannot: requirement 2 above demands that
     // `SELECT salary` yield NULL rather than an error, and one expression cannot answer differently
     // inside `sum()` than in a projection.
     //
     // Decided 2026-08-12 to accept it, because the divergence is unreachable through the API:
     // PostgREST ships `db-aggregates-enabled = false` and Supatype never sets it, so only direct SQL
-    // against the `api` views can see it. Asserted per tier so that neither can change quietly — if
+    // against the `api` views can see it. Asserted per tier so that neither can change quietly: if
     // tier 1 ever stops raising, or tier 2 ever starts, this fails.
     let aggregate = as_caller(
         pool,
@@ -387,8 +385,8 @@ async fn both_tiers_present_the_same_contract() {
         // it exists precisely for databases that cannot load the extension.
         //
         // Not a tidiness point. With the label in place the extension also guards the base table, so
-        // a write the view wrongly permitted was refused by the extension instead — measured, by
-        // mutating the view's write guard and watching the suite still pass. Tier 2 has to be tested
+        // a write the view wrongly permitted was refused by the extension instead. That was
+        // measured by mutating the view's write guard and watching the suite still pass. Tier 2 has to be tested
         // alone or it is not being tested at all.
         sqlx::raw_sql("SECURITY LABEL FOR supatype ON COLUMN public.contract_posts.salary IS NULL")
             .execute(&pool)
@@ -403,7 +401,7 @@ async fn both_tiers_present_the_same_contract() {
             // Not a pass. Tier 2's generator does not exist yet, and this suite is the gate it
             // will be built against.
             eprintln!(
-                "SKIP {}: no `api` view for the fixture table. This is the parity gate for B9 — \
+                "SKIP {}: no `api` view for the fixture table. This is the parity gate for B9; \
                  when the view generator lands, remove nothing here and it becomes the check that \
                  the two tiers cannot drift.",
                 Tier::Views.label()
@@ -417,12 +415,13 @@ async fn both_tiers_present_the_same_contract() {
 ///
 /// Views run as their *owner* unless created `WITH (security_invoker = true)`, and the owner here is
 /// the migrating superuser. Without that option every caller would read every row through the `api`
-/// schema while the base table's policies applied only to callers who went around it — masking a
+/// schema while the base table's policies applied only to callers who went around it, masking a
 /// column while handing over the whole table.
 ///
 /// Its own test because the shared contract fixture deliberately has no policies: several of those
 /// assertions read another caller's row, which a policy would hide. Nothing in that suite noticed
-/// `security_invoker` being removed — measured by mutating the generator and watching it pass.
+/// `security_invoker` being removed, which was measured by mutating the generator and watching it
+/// pass.
 #[tokio::test]
 async fn a_masked_view_does_not_bypass_row_level_security() {
     common::with_integration_pool(|pool| async move {
@@ -498,7 +497,7 @@ async fn a_masked_view_does_not_bypass_row_level_security() {
             .await
             .unwrap_or_else(|e| panic!("view SQL does not apply: {e}\n\n{sql}"));
         sqlx::raw_sql(
-            "GRANT USAGE ON SCHEMA api, auth TO rls_view_app; \
+            "GRANT USAGE ON SCHEMA api, auth, _supatype TO rls_view_app; \
              GRANT SELECT ON api.rls_view_posts TO rls_view_app;",
         )
         .execute(&pool)
@@ -522,7 +521,7 @@ async fn a_masked_view_does_not_bypass_row_level_security() {
         assert_eq!(
             visible,
             vec!["alice".to_string()],
-            "the view exposed rows the base table's policy hides — it is missing \
+            "the view exposed rows the base table's policy hides: it is missing \
              `security_invoker`, so it ran as its owner"
         );
     })

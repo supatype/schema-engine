@@ -173,6 +173,7 @@ jobs:
             --test migration_conversion_integration \
             --test grants_tests \
             --test rls_convergence_tests \
+            --test auth_server_migration_tests \
             --test seed_execute_tests \
             --test seed_ledger_tests \
             --test seed_command_tests \

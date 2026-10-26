@@ -23,7 +23,7 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "src/generator/sql/rls.rs",
-        "GRANT USAGE ON SCHEMA {AUTH_SCHEMA} TO {roles};'",
+        "GRANT USAGE ON SCHEMA {CLAIMS_SCHEMA} TO {roles};'",
         "`roles` is the `API_ROLES` constant, in a hint for the reader",
     ),
     (
