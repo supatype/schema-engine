@@ -22,12 +22,12 @@ use supatype_engine::{
 
 use common::{exec, push};
 
-/// `salary` readable only by its owner, also writable only by its owner, or with no field rule.
+/// `salary` readable only by its owner, writable only by its owner, or with no field rule.
 #[derive(Clone, Copy)]
 enum SalaryRule {
     None,
     Read,
-    ReadWrite,
+    Write,
 }
 
 fn owner_only() -> Value {
@@ -42,9 +42,7 @@ fn employees(rule: SalaryRule) -> SchemaAst {
     match rule {
         SalaryRule::None => {}
         SalaryRule::Read => access["fields"] = json!({ "salary": { "read": owner_only() } }),
-        SalaryRule::ReadWrite => {
-            access["fields"] = json!({ "salary": { "read": owner_only(), "write": owner_only() } })
-        }
+        SalaryRule::Write => access["fields"] = json!({ "salary": { "write": owner_only() } }),
     }
     let doc = json!({
         "astVersion": 2,
@@ -111,7 +109,9 @@ fn is_label(action: &Action) -> bool {
     action.key().kind == ObjectKind::SecurityLabel
 }
 
-const READ_LABEL: &str = "MASK READ public.\"can_read_employees__salary\"";
+/// A read rule names its write predicate too, which judges a Studio editor's create.
+const READ_LABEL: &str =
+    "MASK READ public.\"can_read_employees__salary\" WRITE public.\"can_write_employees__salary\"";
 
 #[tokio::test]
 async fn a_label_is_recorded_replaced_when_its_rule_changes_and_taken_off_when_it_goes() {
@@ -129,13 +129,11 @@ async fn a_label_is_recorded_replaced_when_its_rule_changes_and_taken_off_when_i
         let again = push(&pool, &read).await.unwrap();
         assert!(up_to_date(&again), "{again:?}");
 
-        let outcome = push(&pool, &employees(SalaryRule::ReadWrite))
-            .await
-            .unwrap();
+        let outcome = push(&pool, &employees(SalaryRule::Write)).await.unwrap();
         assert!(applied(&outcome), "{outcome:?}");
         let label = live_label(&pool, "salary").await.unwrap_or_default();
         assert!(
-            label.contains("WRITE public.\"can_write_employees__salary\""),
+            label == "MASK WRITE public.\"can_write_employees__salary\"",
             "the label kept its old rule: {label}"
         );
 
@@ -265,6 +263,48 @@ async fn labels_under_our_provider_with_no_row_are_ours_only_where_a_push_set_th
             .unwrap();
         assert_eq!(live_label(&pool, "salary").await, None);
         assert!(live_label(&pool, "user_id").await.is_some());
+    })
+    .await;
+}
+
+/// Whether a `_supatype.studio_creates` helper exists: the fixture has one model, so it is that
+/// model's.
+async fn studio_creates_exists(pool: &PgPool) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                         WHERE n.nspname = '_supatype' AND p.proname = 'studio_creates')",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// The helper a field's write predicate calls is the model's while it has a field rule: a push
+/// that takes the last rule off drops it, and so does one that takes the model away.
+#[tokio::test]
+async fn the_studio_creates_helper_goes_with_the_field_rules_and_the_model() {
+    common::with_integration_pool(|pool| async move {
+        let read = employees(SalaryRule::Read);
+        push(&pool, &read).await.unwrap();
+        assert!(studio_creates_exists(&pool).await, "a field rule's helper");
+
+        push(&pool, &employees(SalaryRule::None)).await.unwrap();
+        assert!(
+            !studio_creates_exists(&pool).await,
+            "the helper outlived the model's field rules"
+        );
+
+        push(&pool, &read).await.unwrap();
+        let empty = parser::parse(r#"{ "astVersion": 2, "models": [] }"#).unwrap();
+        let force = push::ApplyOptions {
+            force: true,
+            ..Default::default()
+        };
+        common::push_with(&pool, &empty, force).await.unwrap();
+        assert!(
+            !studio_creates_exists(&pool).await,
+            "the helper outlived its model"
+        );
     })
     .await;
 }

@@ -866,6 +866,11 @@ CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles() RETURNS text[]
 -- A member is matched under either identity a membership row can hold, a project user or a Cloud
 -- account, as every other Studio check is. A subject-less caller matches no row.
 --
+-- Only a request that comes through Studio, carrying the claim its gateway signs, is shown other
+-- people's drafts. What a membership grants is who sees drafts in Studio. The same member signed
+-- in to the app with their own token is an app user there, bound by the app's rules like anyone
+-- else, and sees only their own drafts.
+--
 -- An absent membership table means no elevated readers rather than an error, so a deployment that
 -- has never bootstrapped Studio still has working drafts, visible to their creators.
 CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts() RETURNS boolean
@@ -873,6 +878,9 @@ CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts() RETURNS boolean
   DECLARE
     caller uuid := _supatype.caller_id();
   BEGIN
+    IF ((SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')) IS NOT TRUE THEN
+      RETURN false;
+    END IF;
     RETURN EXISTS (
       SELECT 1 FROM _supatype.studio_members m
        WHERE caller IN (m.user_id, m.platform_user_id)

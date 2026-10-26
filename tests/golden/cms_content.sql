@@ -226,7 +226,7 @@ BEGIN
     EXECUTE 'DROP VIEW IF EXISTS "draft"."authors"';
     EXECUTE 'DROP VIEW IF EXISTS "draft"."articles"';
     EXECUTE 'DROP VIEW IF EXISTS "draft"."tags"';
-    EXECUTE 'DROP VIEW IF EXISTS "draft"."articles"';
+    EXECUTE 'DROP VIEW IF EXISTS "draft"."article_tag"';
   END IF;
 END $$;
 
@@ -268,14 +268,14 @@ CREATE TABLE IF NOT EXISTS "public"."tags" (
     "slug" TEXT NOT NULL CONSTRAINT "tags_slug_key" UNIQUE
 );
 
--- [safe] Create table: articles
-CREATE TABLE IF NOT EXISTS "public"."articles" (
-    "id" UUID CONSTRAINT "articles_pkey" PRIMARY KEY DEFAULT gen_random_uuid()
+-- [safe] Create table: article_tag
+CREATE TABLE IF NOT EXISTS "public"."article_tag" (
+    "id" UUID CONSTRAINT "article_tag_pkey" PRIMARY KEY DEFAULT gen_random_uuid()
 );
 
 -- [safe] Create junction table: article_tags
 CREATE TABLE IF NOT EXISTS "public"."article_tags" (
-    "article_tag_id" UUID NOT NULL CONSTRAINT "article_tags_article_tag_id_fkey" REFERENCES "public"."articles" ("id") ON DELETE CASCADE,
+    "article_tag_id" UUID NOT NULL CONSTRAINT "article_tags_article_tag_id_fkey" REFERENCES "public"."article_tag" ("id") ON DELETE CASCADE,
     "tag_id" UUID NOT NULL CONSTRAINT "article_tags_tag_id_fkey" REFERENCES "public"."tags" ("id") ON DELETE CASCADE,
     CONSTRAINT "article_tags_pkey" PRIMARY KEY ("article_tag_id", "tag_id")
 );
@@ -377,37 +377,37 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_tags"("tags" "public"."tags", "n
 REVOKE ALL ON FUNCTION "public"."can_delete_tags"("public"."tags", boolean) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION "public"."can_delete_tags"("public"."tags", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_read_articles"("articles" "public"."articles", "not_in_graphql" boolean DEFAULT NULL)
+CREATE OR REPLACE FUNCTION "public"."can_read_article_tag"("article_tag" "public"."article_tag", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
-      FROM (SELECT ($1).*) AS "articles";
+      FROM (SELECT ($1).*) AS "article_tag";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_read_articles"("public"."articles", boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_read_articles"("public"."articles", boolean) TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_read_article_tag"("public"."article_tag", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_read_article_tag"("public"."article_tag", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_create_articles"("articles" "public"."articles", "not_in_graphql" boolean DEFAULT NULL)
+CREATE OR REPLACE FUNCTION "public"."can_create_article_tag"("article_tag" "public"."article_tag", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
-      FROM (SELECT ($1).*) AS "articles";
+      FROM (SELECT ($1).*) AS "article_tag";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_create_articles"("public"."articles", boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_create_articles"("public"."articles", boolean) TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_create_article_tag"("public"."article_tag", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_create_article_tag"("public"."article_tag", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_update_articles"("articles" "public"."articles", "not_in_graphql" boolean DEFAULT NULL)
+CREATE OR REPLACE FUNCTION "public"."can_update_article_tag"("article_tag" "public"."article_tag", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
-      FROM (SELECT ($1).*) AS "articles";
+      FROM (SELECT ($1).*) AS "article_tag";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_update_articles"("public"."articles", boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_update_articles"("public"."articles", boolean) TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_update_article_tag"("public"."article_tag", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_update_article_tag"("public"."article_tag", boolean) TO anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION "public"."can_delete_articles"("articles" "public"."articles", "not_in_graphql" boolean DEFAULT NULL)
+CREATE OR REPLACE FUNCTION "public"."can_delete_article_tag"("article_tag" "public"."article_tag", "not_in_graphql" boolean DEFAULT NULL)
   RETURNS boolean LANGUAGE sql STABLE AS $can$
     SELECT FALSE
-      FROM (SELECT ($1).*) AS "articles";
+      FROM (SELECT ($1).*) AS "article_tag";
   $can$;
-REVOKE ALL ON FUNCTION "public"."can_delete_articles"("public"."articles", boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION "public"."can_delete_articles"("public"."articles", boolean) TO anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION "public"."can_delete_article_tag"("public"."article_tag", boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "public"."can_delete_article_tag"("public"."article_tag", boolean) TO anon, authenticated, service_role;
 
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";
@@ -496,9 +496,22 @@ CREATE OR REPLACE TRIGGER "tags_slug_trigger"
 BEFORE INSERT OR UPDATE ON "public"."tags"
 FOR EACH ROW EXECUTE FUNCTION _platform.set_tags_slug();
 
+CREATE POLICY "article_tag_studio_read" ON "public"."article_tag"
+AS PERMISSIVE FOR SELECT USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
+CREATE POLICY "article_tag_studio_write" ON "public"."article_tag"
+AS PERMISSIVE FOR ALL USING (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  ) WITH CHECK (
+    (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
+    AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
+  );
 CREATE POLICY "article_tags_select" ON "public"."article_tags"
 FOR SELECT USING (
-    EXISTS (SELECT 1 FROM "public"."articles" WHERE "articles"."id" = "article_tags"."article_tag_id")
+    EXISTS (SELECT 1 FROM "public"."article_tag" WHERE "article_tag"."id" = "article_tags"."article_tag_id")
     AND EXISTS (SELECT 1 FROM "public"."tags" WHERE "tags"."id" = "article_tags"."tag_id")
   );
 CREATE POLICY "article_tags_studio_read" ON "public"."article_tags"
@@ -571,10 +584,26 @@ AS PERMISSIVE FOR ALL USING (
     (SELECT _supatype.jwt_claim_text('supatype_studio')) = 'write'
     AND current_setting('supatype.in_rule', true) IS DISTINCT FROM 'on'
   );
+ALTER TABLE "public"."article_tag" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."article_tags" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."articles" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."authors" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "public"."tags" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL PRIVILEGES ON "public"."article_tag" FROM PUBLIC;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."article_tag" FROM anon';
+  END IF;
+END
+$grants$;
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    EXECUTE 'REVOKE ALL PRIVILEGES ON "public"."article_tag" FROM authenticated';
+  END IF;
+END
+$grants$;
 REVOKE ALL PRIVILEGES ON "public"."article_tags" FROM PUBLIC;
 DO $grants$
 BEGIN
@@ -637,6 +666,7 @@ BEGIN
   END IF;
 END
 $grants$;
+ALTER TABLE "public"."article_tag" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."article_tags" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."articles" REPLICA IDENTITY FULL;
 ALTER TABLE "public"."authors" REPLICA IDENTITY FULL;

@@ -15,12 +15,16 @@
       "direction": "desc"
     },
     "articles": {
-      "field": "id",
+      "field": "created_at",
       "direction": "desc"
     },
     "tags": {
       "field": "name",
       "direction": "asc"
+    },
+    "article_tag": {
+      "field": "id",
+      "direction": "desc"
     }
   },
   "conformance_matrix": {

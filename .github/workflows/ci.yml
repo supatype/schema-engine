@@ -103,6 +103,7 @@ jobs:
             --test seed_plan_tests \
             --test conformance_tests \
             --test identity_generated_tests \
+            --test table_name_collision_tests \
             --test sql_quote_lint
 
   sdk-exec:
@@ -190,8 +191,22 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+    # Each `--test` below is its own binary linked against the whole crate, and with full debug
+    # info the set outgrew the runner's disk: the job died with "No space left on device" partway
+    # through the build. Line tables keep file and line numbers in a panic's backtrace at a
+    # fraction of the size, and incremental artefacts are never reused on a fresh runner.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
+      # The runner image ships SDKs this job never uses. Removing them gives the build the room
+      # it needs; each path is optional, so a later image without one of them still passes.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # SUPATYPE_FORCE_INTEGRATION_TESTS turns a skip into a failure. Without it, a suite that
@@ -213,6 +228,8 @@ jobs:
             --test seed_execute_tests \
             --test seed_ledger_tests \
             --test seed_command_tests \
+            --test seed_sql_params_tests \
+            --test seed_refs_tests \
             --test richtext_trigger_tests \
             --test slug_trigger_tests \
             --test schema_isolation_tests \
@@ -255,6 +272,12 @@ jobs:
             --test phase3_acceptance_tests \
             --test one_migration_tests \
             --test foreign_key_ledger_tests \
+            --test auth_user_on_delete_tests \
+            --test seed_upsert_children_tests \
+            --test column_default_tests \
+            --test junction_name_tests \
+            --test owner_caller_default_tests \
+            --test seed_rich_text_tests \
             --test trigger_ledger_tests \
             --test index_ledger_tests \
             --test versions_ledger_tests \
@@ -264,11 +287,13 @@ jobs:
             --test grant_ledger_tests \
             --test rls_ledger_tests \
             --test column_ledger_tests \
+            --test long_table_names_tests \
             --test declared_rename_tests \
             --test push_audit_tests \
             --test key_schema_sequence_ledger_tests \
             --test doctor_ledger_tests \
             --test identity_generated_db_tests \
+            --test column_type_change_dependents_tests \
             --test table_ledger_tests \
             --test rebaseline_tests \
             --test rebaseline_preview_tests \

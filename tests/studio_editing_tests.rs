@@ -289,6 +289,112 @@ async fn a_studio_editor_writes_past_the_apps_row_rules_tier_two() {
     editor_writes_past_row_rules(Tier::Views).await;
 }
 
+/// The record a caller creates in the tests below, for someone other than the editor.
+const NEW: &str = "22222222-2222-2222-2222-222222222222";
+
+/// The claims of `sub` as an app admin, who passes the fixture's create rule and its salary rule.
+fn app_admin(sub: &str) -> Value {
+    json!({ "role": "authenticated", "sub": sub, "app_metadata": { "role": "admin" } })
+}
+
+/// Nia's record, `NEW`'s, created in `tier` with both masked fields given.
+fn insert_nia(tier: Tier) -> String {
+    format!(
+        "INSERT INTO {} (id, name, salary, ssn) VALUES ('{NEW}', 'Nia', 7, 'N-SSN') RETURNING id",
+        tier.relation()
+    )
+}
+
+const NIA: &str = "Nia|7|N-SSN";
+
+/// A Studio editor creating a record may give the fields masked from them: on a new record they see
+/// only what they typed. Once the record exists those fields are protected as before, and a Studio
+/// reader creates nothing.
+async fn studio_create_sets_masked_fields(tier: Tier) {
+    common::with_integration_pool(|pool| async move {
+        pushed(&pool, tier).await;
+        let editor = claims(EDITOR, Some("write"));
+        let (created, stored) = as_caller(&pool, &editor, &insert_nia(tier)).await;
+        created.unwrap_or_else(|e| panic!("{tier:?}: the editor's create was refused: {e}"));
+        assert!(stored.contains(&NIA.to_string()), "{tier:?}: {stored:?}");
+
+        let rel = tier.relation();
+        let overwrite =
+            format!("UPDATE {rel} SET salary = 1, ssn = 'X' WHERE id = '{A}' RETURNING id");
+        let (_, stored) = as_caller(&pool, &editor, &overwrite).await;
+        assert_eq!(
+            stored, SEEDED,
+            "{tier:?}: an existing record's masked fields are kept"
+        );
+
+        let reader = claims(EDITOR, Some("read"));
+        let (refused, stored) = as_caller(&pool, &reader, &insert_nia(tier)).await;
+        assert!(
+            refused.is_err(),
+            "{tier:?}: a Studio reader created a record"
+        );
+        assert_eq!(stored, SEEDED, "{tier:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_studio_editor_creates_a_record_with_its_masked_fields_tier_one() {
+    studio_create_sets_masked_fields(Tier::Extension).await;
+}
+
+#[tokio::test]
+async fn a_studio_editor_creates_a_record_with_its_masked_fields_tier_two() {
+    studio_create_sets_masked_fields(Tier::Views).await;
+}
+
+/// An app caller's create is judged by the field rules as before: an admin may not give the ssn of
+/// a record they do not own, and may give their own.
+async fn app_create_is_judged_as_before(tier: Tier) {
+    common::with_integration_pool(|pool| async move {
+        pushed(&pool, tier).await;
+        let (refused, stored) = as_caller(&pool, &app_admin(EDITOR), &insert_nia(tier)).await;
+        assert!(
+            refused.as_ref().is_err_and(|e| e.contains("ssn")),
+            "{tier:?}: an app admin gave another's ssn: {refused:?}"
+        );
+        assert_eq!(stored, SEEDED, "{tier:?}");
+
+        let (own, stored) = as_caller(&pool, &app_admin(NEW), &insert_nia(tier)).await;
+        own.unwrap_or_else(|e| panic!("{tier:?}: an admin's own record was refused: {e}"));
+        assert!(stored.contains(&NIA.to_string()), "{tier:?}: {stored:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_app_callers_create_is_judged_by_the_field_rules_tier_one() {
+    app_create_is_judged_as_before(Tier::Extension).await;
+}
+
+#[tokio::test]
+async fn an_app_callers_create_is_judged_by_the_field_rules_tier_two() {
+    app_create_is_judged_as_before(Tier::Views).await;
+}
+
+/// An upsert that meets an existing record is not a create. Tier 1 judges its insert half against
+/// the record already stored, so a Studio editor overwrites no masked field through it. (Tier 2's
+/// views take no `ON CONFLICT`.)
+#[tokio::test]
+async fn a_studio_upsert_onto_an_existing_record_keeps_its_masked_fields_tier_one() {
+    common::with_integration_pool(|pool| async move {
+        pushed(&pool, Tier::Extension).await;
+        let upsert = format!(
+            "INSERT INTO public.st_employee (id, name, salary, ssn) VALUES ('{A}', 'Alice', 1, 'X')
+             ON CONFLICT (id) DO UPDATE SET salary = excluded.salary, ssn = excluded.ssn
+             RETURNING id"
+        );
+        let (_, stored) = as_caller(&pool, &claims(EDITOR, Some("write")), &upsert).await;
+        assert_eq!(stored, SEEDED, "the upsert kept Alice's masked fields");
+    })
+    .await;
+}
+
 /// A field rule still binds a Studio editor, and a Studio reader writes nothing at all.
 async fn field_rules_and_readers_still_bind(tier: Tier) {
     common::with_integration_pool(|pool| async move {

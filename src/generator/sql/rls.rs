@@ -1,12 +1,13 @@
 use crate::generator::sql::auth_functions::{API_ROLES, AUTH_SCHEMA, CLAIMS_SCHEMA};
 use crate::generator::sql::field_rules::reads_table;
+use crate::generator::sql::versions::HELPER_SCHEMA;
 use crate::parser::accessors::{
     db_table_name, is_user_identity_model, owner_field_on_model, platform_access,
     resolve_owner_column,
 };
 use crate::parser::ast::{
-    AccessRule, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst, Operand,
-    SchemaAst,
+    AccessRule, FieldAccessAst, FieldAst, IntervalSpec, LiteralValue, MembershipSource, ModelAst,
+    Operand, SchemaAst,
 };
 use crate::sql_quote::{
     comment_text, do_block, dollar_quote, quote_ident, quote_literal, quote_qualified,
@@ -287,10 +288,6 @@ pub const STUDIO_POLICIES: [(&str, &str); 2] =
 /// them in the app. Read admits `read` and `write`; write admits only `write`, and is `FOR ALL`
 /// so a delete, which has no `WITH CHECK`, is admitted by it and never by the read policy.
 pub fn studio_policy_sql(schema: &str, table: &str, suffix: &str) -> String {
-    let claim = format!(
-        "(SELECT {CLAIMS_SCHEMA}.jwt_claim_text({}))",
-        quote_literal(STUDIO_CLAIM)
-    );
     let outside_rule = format!(
         "current_setting({}, true) IS DISTINCT FROM 'on'",
         quote_literal(IN_RULE_SETTING)
@@ -298,13 +295,90 @@ pub fn studio_policy_sql(schema: &str, table: &str, suffix: &str) -> String {
     let head = policy_head(schema, table, suffix);
     if suffix == STUDIO_READ_POLICY {
         return format!(
-            "{head}\nAS PERMISSIVE FOR SELECT USING (\n    {claim} IN ('read', 'write')\n    AND {outside_rule}\n  );"
+            "{head}\nAS PERMISSIVE FOR SELECT USING (\n    {}\n    AND {outside_rule}\n  );",
+            studio_reader_sql()
         );
     }
-    let admitted = format!("{claim} = 'write'\n    AND {outside_rule}");
+    let admitted = format!("{}\n    AND {outside_rule}", studio_writer_sql());
     format!(
         "{head}\nAS PERMISSIVE FOR ALL USING (\n    {admitted}\n  ) WITH CHECK (\n    {admitted}\n  );"
     )
+}
+
+/// The caller's [`STUDIO_CLAIM`], read once per statement.
+fn studio_claim_sql() -> String {
+    format!(
+        "(SELECT {CLAIMS_SCHEMA}.jwt_claim_text({}))",
+        quote_literal(STUDIO_CLAIM)
+    )
+}
+
+/// The request comes through Studio: its [`STUDIO_CLAIM`] is `read` or `write`. NULL, not false,
+/// for a request without the claim, so a caller outside a policy tests it with `IS TRUE`.
+pub fn studio_reader_sql() -> String {
+    format!("{} IN ('read', 'write')", studio_claim_sql())
+}
+
+/// The request is a Studio editor's: its [`STUDIO_CLAIM`] is `write`.
+pub fn studio_writer_sql() -> String {
+    format!("{} = 'write'", studio_claim_sql())
+}
+
+/// The helper a field's write predicate asks whether a Studio editor is creating the row it is
+/// given: `_supatype.studio_creates(<row>)`, one overload per table, so no name is chosen per table.
+pub const STUDIO_CREATES_FUNCTION: &str = "studio_creates";
+
+/// The call a field's write predicate makes to [`studio_creates_sql`]'s helper, the claim tested
+/// first so an app caller never pays for the lookup.
+fn studio_creates_call() -> String {
+    format!(
+        "({} AND {}($1))",
+        studio_writer_sql(),
+        quote_qualified(HELPER_SCHEMA, STUDIO_CREATES_FUNCTION)
+    )
+}
+
+/// `_supatype.studio_creates(row)`: the caller is a Studio editor and no stored record has `row`'s
+/// key, so the write being judged makes a new record. `None` for a model with no primary key, whose
+/// field rules then judge a Studio editor's create as they judge anyone's.
+///
+/// A Studio editor creating a record may give the fields masked from them: on a new record they see
+/// only what they typed, so nothing leaks. On a stored record the field rules decide as before. The
+/// masking extension judges an INSERT's values before the row is stored and an UPDATE against the
+/// stored row, so asking whether the key is stored tells the two apart without the extension
+/// knowing about Studio, and an upsert meeting a stored record is judged as an update.
+///
+/// `VOLATILE`, so the lookup reads the latest committed state, not the statement's snapshot: an
+/// UPDATE that waits on a concurrent change of the key re-judges the row as it now is, and must
+/// still find it stored. `SECURITY DEFINER` because under tier 2 the API roles hold nothing on the
+/// base table, and with [`IN_RULE_SETTING`] off so the Studio policies show the lookup every row even
+/// when it runs inside a field rule that turned it on.
+pub fn studio_creates_sql(schema: &str, model: &ModelAst) -> Option<String> {
+    let key = crate::parser::accessors::primary_key_columns(model);
+    if key.is_empty() {
+        return None;
+    }
+    let row = quote_qualified(schema, db_table_name(model));
+    let function = quote_qualified(HELPER_SCHEMA, STUDIO_CREATES_FUNCTION);
+    let stored = key
+        .iter()
+        .map(|c| format!("stored.{q} = (candidate).{q}", q = quote_ident(c)))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let body = dollar_quote(
+        &format!(
+            "\nBEGIN\n  IF {} IS NOT TRUE THEN\n    RETURN false;\n  END IF;\n  \
+             RETURN NOT EXISTS (SELECT 1 FROM {row} AS stored WHERE {stored});\nEND\n",
+            studio_writer_sql()
+        ),
+        "creates",
+    );
+    Some(format!(
+        "CREATE OR REPLACE FUNCTION {function}(candidate {row})\n  \
+         RETURNS boolean LANGUAGE plpgsql VOLATILE SECURITY DEFINER\n  \
+         SET search_path = '' SET {IN_RULE_SETTING} = 'off' AS {body};\n{}\n",
+        grants_on(&format!("{function}({row})"))
+    ))
 }
 
 /// The caller's user id, wrapped so Postgres evaluates it once per query, not once per row.
@@ -931,7 +1005,8 @@ pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
     out
 }
 
-/// Per-column affordance functions, one pair per field rule.
+/// Per-column affordance functions, one pair per field rule, after the model's
+/// [`studio_creates_sql`] helper the write functions call.
 ///
 /// These are the functions the masking rewrite calls: `can_read_posts__salary(posts)`
 /// decides whether a caller sees the column at all, `can_write_posts__salary(posts)`
@@ -939,12 +1014,20 @@ pub fn generate_can_functions(ast: &SchemaAst, schema: &str) -> String {
 /// render a value, a lock, or a disabled input, so what the UI shows and what the
 /// database enforces are one expression rather than two that drift.
 ///
-/// **Write implies read, by construction.** The write body is conjoined with the read
-/// rule rather than checked against it: "does this write rule imply this read rule" is
-/// an implication between two arbitrary predicates and is not decidable in general.
-/// Conjoining makes write-without-read unrepresentable, which in turn removes the
-/// hazard that a caller who owns a row can hold write permission on a column they
-/// cannot see -- round-tripping a value they were never shown and destroying it.
+/// **On a stored row, write implies read, by construction.** The write body is conjoined
+/// with the read rule rather than checked against it: "does this write rule imply this
+/// read rule" is an implication between two arbitrary predicates and is not decidable in
+/// general. Conjoining makes write-without-read unrepresentable, which in turn removes the
+/// hazard that a caller who owns a row can hold write permission on a column they cannot
+/// see -- round-tripping a value they were never shown and destroying it. The one
+/// exception is a Studio editor creating a record ([`studio_creates_sql`]), who sees only
+/// what they typed.
+///
+/// A column with only a read rule gets a write function too, the read rule and that
+/// exception, so the masking extension judges a create by it rather than by the read rule.
+/// The read function answers false, never NULL, so the extension's "cannot read it, keep
+/// the stored value" branch is taken for a rule answering NULL, as it was before the column
+/// had a write function.
 fn render_field_can_functions(
     ast: &SchemaAst,
     model: &ModelAst,
@@ -952,48 +1035,86 @@ fn render_field_can_functions(
     table: &str,
     names: &crate::managed::ObjectNames,
 ) -> String {
-    let mut out = String::new();
+    let fields = &platform_access(model).fields;
+    if fields.is_empty() {
+        return String::new();
+    }
+    let creates = studio_creates_sql(schema, model);
+    let mut out = creates.clone().unwrap_or_default();
+    let field = FieldCans {
+        ast,
+        model,
+        schema,
+        table,
+        names,
+        creates: creates.map(|_| studio_creates_call()),
+    };
+    for (column, rules) in fields {
+        out.push_str(&field.render(column, rules));
+    }
+    out
+}
 
-    for (column, rules) in &platform_access(model).fields {
-        let read_expr = rules
-            .read
-            .as_ref()
-            .map(|rule| access_rule_to_expr(ast, model, rule, schema));
+/// What one model's field affordance functions are rendered from.
+struct FieldCans<'a> {
+    ast: &'a SchemaAst,
+    model: &'a ModelAst,
+    schema: &'a str,
+    table: &'a str,
+    names: &'a crate::managed::ObjectNames,
+    /// The [`studio_creates_call`], when the model has the helper.
+    creates: Option<String>,
+}
 
+impl FieldCans<'_> {
+    /// `column`'s read function and, when it has a rule of either kind, its write function.
+    fn render(&self, column: &str, rules: &FieldAccessAst) -> String {
+        let expr = |rule: &AccessRule| access_rule_to_expr(self.ast, self.model, rule, self.schema);
+        let reads =
+            |rule: Option<&AccessRule>| rule.is_some_and(|r| reads_table(self.ast, self.model, r));
+        let read_expr = rules.read.as_ref().map(expr);
+        let read_reads = reads(rules.read.as_ref());
         // No `read` rule means the column is as readable as the table, so the
         // affordance is unconditionally true rather than absent -- a UI should never
         // have to distinguish "allowed" from "no function".
-        let reads = |rule: Option<&AccessRule>| rule.is_some_and(|r| reads_table(ast, model, r));
-        let read_reads = reads(rules.read.as_ref());
-        out.push_str(&render_field_can_function(
-            &FieldCan {
-                schema,
-                table,
-                name: &names.field_can_function(table, "read", column),
-                in_rule: read_reads,
-            },
-            read_expr.as_deref().unwrap_or("TRUE"),
-        ));
-
-        if let Some(rule) = rules.write.as_ref() {
-            let write_expr = access_rule_to_expr(ast, model, rule, schema);
-            let conjoined = match read_expr.as_deref() {
-                Some(read) => format!("({write_expr}) AND ({read})"),
-                None => write_expr,
+        let read_body = read_expr.as_deref().map_or("TRUE".to_string(), |read| {
+            format!("COALESCE(({read}), false)")
+        });
+        let mut out = render_field_can_function(&self.can("read", column, read_reads), &read_body);
+        let write_expr = rules.write.as_ref().map(expr);
+        if let Some(test) = stored_write_test(write_expr, read_expr.as_deref()) {
+            let body = match &self.creates {
+                Some(creates) => format!("{creates}\n                 OR ({test})"),
+                None => test,
             };
+            let in_rule = read_reads || reads(rules.write.as_ref());
             out.push_str(&render_field_can_function(
-                &FieldCan {
-                    schema,
-                    table,
-                    name: &names.field_can_function(table, "write", column),
-                    in_rule: read_reads || reads(Some(rule)),
-                },
-                &conjoined,
+                &self.can("write", column, in_rule),
+                &body,
             ));
         }
+        out
     }
 
-    out
+    fn can<'n>(&'n self, op: &str, column: &str, in_rule: bool) -> FieldCan<'n> {
+        FieldCan {
+            schema: self.schema,
+            table: self.table,
+            name: self.names.field_can_function(self.table, op, column),
+            in_rule,
+        }
+    }
+}
+
+/// What a field's write function tests on a stored row: its write rule conjoined with its read
+/// rule, or whichever of the two it has.
+fn stored_write_test(write: Option<String>, read: Option<&str>) -> Option<String> {
+    match (write, read) {
+        (Some(write), Some(read)) => Some(format!("({write}) AND ({read})")),
+        (Some(write), None) => Some(write),
+        (None, Some(read)) => Some(read.to_string()),
+        (None, None) => None,
+    }
 }
 
 /// `can_<op>_<table>__<column>`, named by [`crate::managed::ObjectNames::field_can_function`].
@@ -1006,7 +1127,7 @@ fn render_field_can_functions(
 /// row's own columns goes without it. It costs no inlining: the body reads `FROM` a derived table,
 /// which Postgres never inlines, so the masking rewrite calls it once per row either way.
 fn render_field_can_function(can: &FieldCan<'_>, expr: &str) -> String {
-    let (function, row, alias) = can_function_names(can.schema, can.table, can.name);
+    let (function, row, alias) = can_function_names(can.schema, can.table, &can.name);
     let set = if can.in_rule {
         format!(" SET {IN_RULE_SETTING} = 'on'")
     } else {
@@ -1026,7 +1147,7 @@ fn render_field_can_function(can: &FieldCan<'_>, expr: &str) -> String {
            RETURNS boolean LANGUAGE sql STABLE{set} AS {body};
 {}
 ",
-        can_function_grants(can.schema, can.table, can.name)
+        can_function_grants(can.schema, can.table, &can.name)
     )
 }
 
@@ -1034,7 +1155,7 @@ fn render_field_can_function(can: &FieldCan<'_>, expr: &str) -> String {
 struct FieldCan<'a> {
     schema: &'a str,
     table: &'a str,
-    name: &'a str,
+    name: String,
     in_rule: bool,
 }
 
@@ -1153,7 +1274,8 @@ fn guarded_label_drop(statement: &str, subid: &str, target: &str) -> String {
 /// unrestricted, and labelling it with a trivially-true `READ` predicate would cost a
 /// function call per row per read to answer a question nobody asked. The `can_read_*`
 /// function is still generated (Studio wants a uniform affordance surface); it just
-/// does not appear in the label.
+/// does not appear in the label. A write predicate is named for every rule, a read-only
+/// one included, because the extension judges a create by it (`render_field_can_functions`).
 ///
 /// Each label is a ledger object (plan section 5): the reconcile sets it, and takes it off when
 /// the rule goes, which the stale-label sweep used to do.
@@ -1191,7 +1313,7 @@ pub fn field_predicates(ast: &SchemaAst, schema: &str) -> Vec<FieldPredicates> {
                 present.then(|| field_predicate_ref(&names, schema, op, table, column))
             };
             let read = predicate("read", rules.read.is_some());
-            let write = predicate("write", rules.write.is_some());
+            let write = predicate("write", rules.write.is_some() || rules.read.is_some());
             if read.is_none() && write.is_none() {
                 continue;
             }
@@ -1218,7 +1340,8 @@ pub struct FieldPredicates {
     pub column: String,
     /// The read predicate, absent when only writes are ruled.
     pub read: Option<String>,
-    /// The write predicate, absent when only reads are ruled.
+    /// The write predicate. Present for every column with a rule: a column with only a read rule
+    /// has one too, which judges a Studio editor's create (`render_field_can_functions`).
     pub write: Option<String>,
 }
 

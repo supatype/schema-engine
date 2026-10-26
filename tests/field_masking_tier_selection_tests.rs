@@ -262,7 +262,7 @@ async fn the_capability_record_says_views_not_broken() {
                 "table": "tier_employee",
                 "column": "salary",
                 "read": "public.\"can_read_tier_employee__salary\"",
-                "write": null
+                "write": "public.\"can_write_tier_employee__salary\""
             }])
         );
     })
@@ -293,7 +293,7 @@ async fn the_tier_one_record_names_each_columns_schema() {
                 "table": "tier_employee",
                 "column": "salary",
                 "read": "public.\"can_read_tier_employee__salary\"",
-                "write": null
+                "write": "public.\"can_write_tier_employee__salary\""
             }])
         );
     })

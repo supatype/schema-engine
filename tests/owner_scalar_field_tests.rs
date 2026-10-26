@@ -194,7 +194,7 @@ fn field_owner_on_a_uuid_field_reaches_predicates_labels_and_views() {
 
     let functions = rls::generate_can_functions(&ast, "public");
     assert!(
-        functions.contains(&format!("SELECT {OWNER_ID_EXPR}")),
+        functions.contains(&format!("SELECT COALESCE(({OWNER_ID_EXPR}), false)")),
         "the read predicate compares with owner_id:\n{functions}"
     );
     assert!(

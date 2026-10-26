@@ -55,7 +55,7 @@ use std::collections::BTreeMap;
 use crate::generator::sql::auth_functions::CLAIMS_SCHEMA;
 use crate::generator::sql::field_rules::{FieldRules, RuleSet};
 use crate::generator::sql::graphql_names::model_relation_names;
-use crate::generator::sql::rls::AUTH_ROLE;
+use crate::generator::sql::rls::{studio_writer_sql, AUTH_ROLE};
 use crate::parser::accessors::{db_table_name, platform_access};
 use crate::parser::ast::{JunctionTableAst, ModelAst, SchemaAst};
 use crate::sql_quote::{
@@ -403,6 +403,56 @@ pub fn field_view_plan(ast: &SchemaAst, db: &DatabaseState) -> Vec<FieldViewTabl
             .map(|j| junction_view_plan(j, db, &owner)),
     );
     plan
+}
+
+/// `plan` with each table's columns as they are once `operations` have run, in the order Postgres
+/// keeps them: a dropped column is gone, a renamed one has its new name in its place (in the key
+/// too), and an added one, or one dropped and added again, is last. The views are made after the
+/// operations, so a view read off the columns from before them would lag a push behind, and the
+/// next push make it again.
+pub fn after_operations(
+    mut plan: Vec<FieldViewTable>,
+    operations: &[crate::differ::Operation],
+) -> Vec<FieldViewTable> {
+    for op in operations {
+        for entry in plan.iter_mut().filter(|e| op_table(op) == Some(&e.table)) {
+            apply_column_operation(entry, op);
+        }
+    }
+    plan
+}
+
+/// The table a column operation changes.
+fn op_table(op: &crate::differ::Operation) -> Option<&String> {
+    use crate::differ::Operation;
+    match op {
+        Operation::AddColumn { table, .. }
+        | Operation::DropColumn { table, .. }
+        | Operation::RecreateColumn { table, .. }
+        | Operation::RenameColumn { table, .. } => Some(table),
+        _ => None,
+    }
+}
+
+/// What the column operation `op` does to the view of its table.
+fn apply_column_operation(entry: &mut FieldViewTable, op: &crate::differ::Operation) {
+    use crate::differ::Operation;
+    let columns = &mut entry.columns;
+    match op {
+        Operation::RenameColumn { from, to, .. } => {
+            for c in columns.iter_mut().chain(entry.key.iter_mut()) {
+                if c == from {
+                    *c = to.clone();
+                }
+            }
+        }
+        Operation::AddColumn { column, .. } | Operation::RecreateColumn { column, .. } => {
+            columns.retain(|c| c != column);
+            columns.push(column.clone());
+        }
+        Operation::DropColumn { column, .. } => columns.retain(|c| c != column),
+        _ => {}
+    }
 }
 
 /// A many-to-many junction's view: its two key columns, which are also its primary key. Without
@@ -941,10 +991,12 @@ impl WriteTrigger<'_> {
              \x20 sent jsonb;\n\
              \x20 dflt jsonb;\n\
              \x20 exempt boolean := {exempt};\n\
+             \x20 creates boolean := COALESCE({creates}, false);\n\
              BEGIN\n\
              {delete}{insert}{update}END ",
             base = self.base(),
             exempt = service_role_exempt(),
+            creates = studio_writer_sql(),
             delete = self.delete_branch(),
             insert = self.insert_branch(),
             update = self.update_branch(),
@@ -1114,7 +1166,10 @@ impl WriteTrigger<'_> {
     }
 
     /// Each masked column the caller wrote, judged against the completed `NEW`, `service_role`
-    /// exempt. `IS NOT TRUE`, so a rule answering NULL refuses.
+    /// exempt. `IS NOT TRUE`, so a rule answering NULL refuses. A Studio editor is exempt too
+    /// (`creates`): a new record shows them only what they typed, so they may give the fields
+    /// masked from them, as tier 1 lets them (`rls::studio_creates_sql`). Only the insert branch
+    /// reads it, so a stored record is judged as before.
     fn insert_checks(&self, masked: &[&String]) -> String {
         masked
             .iter()
@@ -1126,7 +1181,7 @@ impl WriteTrigger<'_> {
                     .or_else(|| self.rules.read.get(*column))?;
                 let judged = self.against(test, "NEW");
                 Some(format!(
-                    "\x20   IF NOT exempt AND {name} = ANY (wrote) AND {judged} IS NOT TRUE THEN\n\
+                    "\x20   IF NOT exempt AND NOT creates AND {name} = ANY (wrote) AND {judged} IS NOT TRUE THEN\n\
                      \x20     RAISE EXCEPTION {denied} USING ERRCODE = '42501';\n\
                      \x20   END IF;\n",
                     name = quote_literal(column),

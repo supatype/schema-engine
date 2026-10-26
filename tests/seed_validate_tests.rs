@@ -426,6 +426,60 @@ fn it_refuses_an_empty_sql_statement() {
     );
 }
 
+/// Postgres refuses too few params but silently ignores extras, so both are caught here,
+/// before anything runs, with the statement named.
+#[test]
+fn it_refuses_sql_params_that_do_not_match_the_placeholders() {
+    let text = "INSERT INTO organiser (slug, name) VALUES ($1, $2)";
+    rejects(
+        &format!(r#"[{{"op":"sql","text":"{text}","params":["a"]}}]"#),
+        &[
+            "operations[0]",
+            "takes 2 parameters but was given 1",
+            "`INSERT INTO organiser",
+        ],
+    );
+    rejects(
+        &format!(r#"[{{"op":"sql","text":"{text}","params":["a","b","c"]}}]"#),
+        &["takes 2 parameters but was given 3"],
+    );
+    rejects(
+        r#"[{"op":"sql","text":"ANALYZE organiser","params":["a"]}]"#,
+        &["takes no parameters but was given 1"],
+    );
+}
+
+#[test]
+fn it_accepts_sql_params_that_match_the_placeholders() {
+    accepts(r#"[{"op":"sql","text":"SELECT '$9', $2::int, $1 -- $3","params":["a", 1]}]"#);
+    accepts(r#"[{"op":"sql","text":"ANALYZE organiser","params":[]}]"#);
+}
+
+#[test]
+fn it_refuses_an_expression_as_a_sql_param() {
+    rejects(
+        r#"[{"op":"sql","text":"SELECT $1","params":[{"kind":"now"}]}]"#,
+        &["operations[0].params[0]", "must be a value", "now()"],
+    );
+}
+
+#[test]
+fn a_sql_param_can_reference_any_column_the_model_has() {
+    accepts(
+        r#"[
+        {"op":"create","model":"Organiser","id":"o","data":{"slug":"a","name":"A"}},
+        {"op":"sql","text":"SELECT $1::uuid, $2","params":[{"$ref":"o.id"},{"$ref":"o.slug"}]}
+    ]"#,
+    );
+    rejects(
+        r#"[
+        {"op":"create","model":"Organiser","id":"o","data":{"slug":"a","name":"A"}},
+        {"op":"sql","text":"SELECT $1","params":[{"$ref":"o.nickname"}]}
+    ]"#,
+        &["operations[1].params[0]", "`Organiser`", "`nickname`"],
+    );
+}
+
 // --- The error itself ---
 
 /// A failure inside a nested write has to say where it was, or the author is left

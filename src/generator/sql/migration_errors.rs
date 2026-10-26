@@ -75,18 +75,46 @@ pub fn enrich_migration_error(
         );
     }
 
-    if let Some((column, table)) = parse_null_violation(raw) {
-        return format!(
-            "Cannot apply required field \"{column}\" on table \"{table}\": existing rows have no value for this column.\n\n\
-             What you can do:\n\
-             • Make the field optional in your schema:  Optional<YourType>\n\
-             • Or give it a default:  Default<YourType, value>  or  RichText<\"…\">\n\
-             • Or backfill existing rows in seed/SQL, then push again\n\
-             • Dev reset (drops local data):  supatype self-host compose down -v\n\n\
-             Database error: {raw}"
-        );
-    }
-    raw.to_string()
+    identity_column_message(raw)
+        .or_else(|| null_violation_message(raw))
+        .unwrap_or_else(|| raw.to_string())
+}
+
+/// Postgres refusing a change to a column because it is an identity column (`DROP NOT NULL` on
+/// one): the column's definition is at fault, never the rows, so nothing about the data is said.
+fn identity_column_message(raw: &str) -> Option<String> {
+    let (column, table) = column_of_relation(raw, "is an identity column")?;
+    Some(format!(
+        "Cannot change column \"{table}\".\"{column}\": Postgres refused the change while it is an \
+         identity column. The rows are not at fault and need nothing.\n\n\
+         Nothing was applied: the migration runs in one transaction and rolled back.\n\n\
+         Database error: {raw}"
+    ))
+}
+
+fn null_violation_message(raw: &str) -> Option<String> {
+    let (column, table) = parse_null_violation(raw)?;
+    Some(format!(
+        "Cannot apply required field \"{column}\" on table \"{table}\": existing rows have no value for this column.\n\n\
+         What you can do:\n\
+         • Make the field optional in your schema:  Optional<YourType>\n\
+         • Or give it a default:  Default<YourType, value>  or  RichText<\"…\">\n\
+         • Or backfill existing rows in seed/SQL, then push again\n\
+         • Dev reset (drops local data):  supatype self-host compose down -v\n\n\
+         Database error: {raw}"
+    ))
+}
+
+/// `column "c" of relation "t" <what>` → `("c", "t")`, for the error Postgres words that way.
+fn column_of_relation<'a>(raw: &'a str, what: &str) -> Option<(&'a str, &'a str)> {
+    let (column, tail) = raw
+        .split("column \"")
+        .nth(1)?
+        .split_once("\" of relation \"")?;
+    let (table, rest) = tail.split_once('"')?;
+    rest.trim_start()
+        .starts_with(what)
+        .then_some((column, table))
 }
 
 /// `cannot cast type integer to uuid` → `("integer", "uuid")`.
@@ -173,26 +201,17 @@ fn parse_check_violation(raw: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+/// The column and table of a NULL violation: Postgres's `column "c" of relation "t" contains null
+/// values`, or the engine's own guard before a `SET NOT NULL` (`Cannot set NOT NULL on t.c: ...`).
+/// Nothing else that names a column of a relation is one.
 fn parse_null_violation(raw: &str) -> Option<(&str, &str)> {
-    if let Some((col, tail)) = raw
-        .split("column \"")
-        .nth(1)?
-        .split_once("\" of relation \"")
-    {
-        let table = tail.split('"').next()?;
-        return Some((col, table));
+    if let Some(found) = column_of_relation(raw, "contains null values") {
+        return Some(found);
     }
-
-    // Engine guard from alter_column_sql (types without automatic backfill).
-    if let Some(tail) = raw.strip_prefix("Cannot set NOT NULL on ") {
-        if let Some((table_col, _)) = tail.split_once(':') {
-            if let Some((table, column)) = table_col.rsplit_once('.') {
-                return Some((column, table));
-            }
-        }
-    }
-
-    None
+    let tail = raw.split("Cannot set NOT NULL on ").nth(1)?;
+    let (table_col, _) = tail.split_once(':')?;
+    let (table, column) = table_col.rsplit_once('.')?;
+    Some((column, table))
 }
 
 #[cfg(test)]
@@ -215,6 +234,7 @@ mod tests {
                     },
                 )),
                 changes: serde_json::json!({ "type": { "from_udt": "int4", "to_pg": "UUID" } }),
+                dependencies: Vec::new(),
                 risk: crate::differ::Risk::Destructive,
                 warning: None,
             }],
@@ -276,6 +296,38 @@ mod tests {
         assert!(msg.contains("someField"));
         assert!(msg.contains("_global_homepage"));
         assert!(msg.contains("Optional<YourType>"));
+    }
+
+    /// Postgres refuses `DROP NOT NULL` on an identity column with an error that names the column
+    /// and its table the way a NULL violation does. Read as one, it sent the user to backfill rows
+    /// that were fine.
+    #[test]
+    fn an_identity_column_error_is_not_read_as_missing_values() {
+        let raw = r#"column "seq" of relation "lines" is an identity column"#;
+        let msg = enrich_migration_error(raw, None, &[]);
+        assert!(!msg.contains("no value"), "{msg}");
+        assert!(!msg.contains("backfill"), "{msg}");
+        assert!(msg.contains("\"lines\".\"seq\""), "{msg}");
+        assert!(msg.contains("identity column"), "{msg}");
+        assert!(msg.contains("rolled back"), "{msg}");
+    }
+
+    /// The engine's own guard before a `SET NOT NULL` names no `column "..."`, and is still read.
+    #[test]
+    fn enriches_the_engines_not_null_guard() {
+        let raw = "Cannot set NOT NULL on posts.title: NULL values exist.";
+        let msg = enrich_migration_error(raw, None, &[]);
+        assert!(
+            msg.contains("required field \"title\" on table \"posts\""),
+            "{msg}"
+        );
+    }
+
+    /// Only Postgres's own NULL violation wording is read as one.
+    #[test]
+    fn other_errors_naming_a_column_are_not_read_as_missing_values() {
+        let raw = r#"column "seq" of relation "lines" already exists"#;
+        assert_eq!(enrich_migration_error(raw, None, &[]), raw);
     }
 
     #[test]

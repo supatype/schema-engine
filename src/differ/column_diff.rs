@@ -342,6 +342,20 @@ pub fn discover_column_dependencies(
         .collect()
 }
 
+/// What depends on `table.column` when `changes` change its type in place, which is the one
+/// change to a column that what reads it can refuse; nothing otherwise.
+fn retype_dependencies(
+    changes: &serde_json::Value,
+    table: &str,
+    column: &str,
+    db: &DatabaseState,
+) -> Vec<ColumnDependencySnapshot> {
+    if changes.get("type").is_none() {
+        return Vec::new();
+    }
+    discover_column_dependencies(table, column, db)
+}
+
 /// One `pg_depend` dependent as the recreate drops and restores it. A foreign key of the project
 /// schema takes its parts from the constraint read, so its referenced table is restored
 /// schema-qualified.
@@ -1232,11 +1246,13 @@ pub fn diff(
                     warning,
                 });
             } else {
+                let dependencies = retype_dependencies(&changes, model.table_name(), col_name, db);
                 ops.push(Operation::AlterColumn {
                     table: model.table_name().to_string(),
                     column: col_name.clone(),
                     field: Box::new((*field).clone()),
                     changes,
+                    dependencies,
                     risk,
                     warning,
                 });
