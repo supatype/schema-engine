@@ -787,6 +787,56 @@ CREATE INDEX IF NOT EXISTS "preview_links_live_for_record"
 REVOKE ALL ON _supatype.preview_links FROM PUBLIC;
 REVOKE ALL ON _supatype.preview_links FROM anon, authenticated, service_role;
 
+CREATE TABLE IF NOT EXISTS _supatype.created_records (
+  "seq" BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  "xact" XID8 NOT NULL,
+  "model_table" TEXT NOT NULL,
+  "record_id" TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS "created_records_by_transaction"
+  ON _supatype.created_records ("xact", "model_table", "record_id");
+
+REVOKE ALL ON _supatype.created_records FROM PUBLIC;
+REVOKE ALL ON _supatype.created_records FROM anon, authenticated, service_role;
+
+-- The trigger behind every drafts model's `<table>_created_note`. The first argument names the
+-- table's key column.
+CREATE OR REPLACE FUNCTION _supatype.note_created_record() RETURNS trigger
+  LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
+  BEGIN
+    INSERT INTO _supatype.created_records ("xact", "model_table", "record_id")
+    VALUES (pg_current_xact_id(), TG_TABLE_NAME, to_jsonb(NEW) ->> TG_ARGV[0]);
+    RETURN NULL;
+  END;
+  $fn$;
+
+REVOKE ALL ON FUNCTION _supatype.note_created_record() FROM PUBLIC;
+
+-- Whether this transaction inserted the record. Asked by each `sees_draft_<table>`.
+CREATE OR REPLACE FUNCTION _supatype.created_in_this_transaction(p_table text, p_record text)
+  RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+    SELECT EXISTS (
+      SELECT 1 FROM _supatype.created_records c
+       WHERE c."xact" = pg_current_xact_id_if_assigned()
+         AND c."model_table" = p_table
+         AND c."record_id" = p_record
+    );
+  $fn$;
+
+-- The key of the newest row this transaction inserted into the table, for `create_record`, which
+-- inserts without `RETURNING`. Only ever a key the caller's own insert produced.
+CREATE OR REPLACE FUNCTION _supatype.newest_created_record(p_table text)
+  RETURNS text LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$
+    SELECT c."record_id" FROM _supatype.created_records c
+     WHERE c."xact" = pg_current_xact_id_if_assigned() AND c."model_table" = p_table
+     ORDER BY c."seq" DESC LIMIT 1;
+  $fn$;
+
+REVOKE ALL ON FUNCTION _supatype.created_in_this_transaction(text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION _supatype.newest_created_record(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION _supatype.newest_created_record(text) TO authenticated, service_role;
+
 -- The caller's user id, or NULL when the request has no subject.
 --
 -- A thin alias for `_supatype.jwt_uid()`, which is what it now means. It was its own implementation
@@ -1391,6 +1441,10 @@ CREATE OR REPLACE FUNCTION _supatype.prune_versions()
       GET DIAGNOSTICS n = ROW_COUNT;
       removed := removed + n;
     END LOOP;
+
+    -- And the notes of transactions that have ended, which no caller can match any more.
+    DELETE FROM _supatype.created_records
+     WHERE pg_xact_status("xact") IS DISTINCT FROM 'in progress';
     RETURN removed;
   END;
   $fn$;
@@ -1440,7 +1494,7 @@ CREATE OR REPLACE FUNCTION "supatype".create_record(model_table text, data jsonb
     live jsonb := COALESCE(data, '{}'::jsonb);
     col text;
     columns text;
-    created jsonb;
+    created text;
   BEGIN
     IF NOT entry."drafts" THEN
       RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry."model_name"
@@ -1461,20 +1515,22 @@ CREATE OR REPLACE FUNCTION "supatype".create_record(model_table text, data jsonb
        AND c.table_name = entry."table_name"
        AND live ? c.column_name;
 
+    -- No `RETURNING`: Postgres checks a returned row against the read rule as it is inserted, and
+    -- an unpublished row fails a rule like `published_at <= now()` (DR8). The key comes from the
+    -- note the table's `created_note` trigger wrote, which also lets this transaction see the row.
     IF columns IS NULL THEN
-      EXECUTE format('INSERT INTO %I.%I AS t DEFAULT VALUES RETURNING to_jsonb(t)',
-        entry."schema_name", entry."table_name")
-        INTO created;
+      EXECUTE format('INSERT INTO %I.%I DEFAULT VALUES',
+        entry."schema_name", entry."table_name");
     ELSE
       EXECUTE format(
-        'INSERT INTO %I.%I AS t (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)
-          RETURNING to_jsonb(t)',
+        'INSERT INTO %I.%I (%s) SELECT %s FROM jsonb_populate_record(NULL::%I.%I, $1)',
         entry."schema_name", entry."table_name", columns, columns,
         entry."schema_name", entry."table_name")
-        INTO created USING live;
+        USING live;
     END IF;
 
-    RETURN "supatype".create_draft(model_table, created ->> entry."primary_key", data);
+    created := _supatype.newest_created_record(model_table);
+    RETURN "supatype".create_draft(model_table, created, data);
   END;
   $fn$;
 
@@ -1524,13 +1580,17 @@ CREATE OR REPLACE FUNCTION _supatype."sees_draft_page"(p_record text)
            OR (SELECT _supatype.sees_all_drafts())
            OR _supatype.preview_allows('page', v."record_id"::text)
          )
-    );
+    ) OR _supatype.created_in_this_transaction('page', p_record);
   $fn$;
 GRANT EXECUTE ON FUNCTION _supatype."sees_draft_page"(text) TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS "page_draft_select" ON "public"."page";
 CREATE POLICY "page_draft_select" ON "public"."page"
   FOR SELECT USING (_supatype."sees_draft_page"("id"::text));
+
+DROP TRIGGER IF EXISTS "page_created_note" ON "public"."page";
+CREATE TRIGGER "page_created_note" AFTER INSERT ON "public"."page"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
 
 DROP POLICY IF EXISTS "page_versions_insert" ON "public"."page_versions";
 CREATE POLICY "page_versions_insert" ON "public"."page_versions"
@@ -1626,13 +1686,17 @@ CREATE OR REPLACE FUNCTION _supatype."sees_draft_speaker"(p_record text)
            OR (SELECT _supatype.sees_all_drafts())
            OR _supatype.preview_allows('speaker', v."record_id"::text)
          )
-    );
+    ) OR _supatype.created_in_this_transaction('speaker', p_record);
   $fn$;
 GRANT EXECUTE ON FUNCTION _supatype."sees_draft_speaker"(text) TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS "speaker_draft_select" ON "public"."speaker";
 CREATE POLICY "speaker_draft_select" ON "public"."speaker"
   FOR SELECT USING (_supatype."sees_draft_speaker"("id"::text));
+
+DROP TRIGGER IF EXISTS "speaker_created_note" ON "public"."speaker";
+CREATE TRIGGER "speaker_created_note" AFTER INSERT ON "public"."speaker"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
 
 DROP POLICY IF EXISTS "speaker_versions_insert" ON "public"."speaker_versions";
 CREATE POLICY "speaker_versions_insert" ON "public"."speaker_versions"
@@ -1728,13 +1792,17 @@ CREATE OR REPLACE FUNCTION _supatype."sees_draft_talk"(p_record text)
            OR (SELECT _supatype.sees_all_drafts())
            OR _supatype.preview_allows('talk', v."record_id"::text)
          )
-    );
+    ) OR _supatype.created_in_this_transaction('talk', p_record);
   $fn$;
 GRANT EXECUTE ON FUNCTION _supatype."sees_draft_talk"(text) TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS "talk_draft_select" ON "public"."talk";
 CREATE POLICY "talk_draft_select" ON "public"."talk"
   FOR SELECT USING (_supatype."sees_draft_talk"("id"::text));
+
+DROP TRIGGER IF EXISTS "talk_created_note" ON "public"."talk";
+CREATE TRIGGER "talk_created_note" AFTER INSERT ON "public"."talk"
+  FOR EACH ROW EXECUTE FUNCTION _supatype.note_created_record('id');
 
 DROP POLICY IF EXISTS "talk_versions_insert" ON "public"."talk_versions";
 CREATE POLICY "talk_versions_insert" ON "public"."talk_versions"

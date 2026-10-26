@@ -1679,3 +1679,174 @@ async fn publishing_leaves_the_columns_the_database_fills_alone() {
     })
     .await;
 }
+
+/// The fixture with `posts` hidden until it is published, created and edited by editors: the shape
+/// of a real blog, and the one DR8 was found in.
+fn withheld_ast() -> SchemaAst {
+    let mut doc: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/versioned_blog.json")).unwrap();
+    doc["models"][0]["annotations"]["platform"]["access"] = serde_json::json!({
+        "read": {
+            "type": "compare", "op": "lte",
+            "left": { "kind": "column", "name": "published_at" },
+            "right": { "kind": "now" }
+        },
+        "create": { "type": "role", "roles": ["editor"] },
+        "update": { "type": "role", "roles": ["editor"] }
+    });
+    parser::parse(&doc.to_string()).unwrap()
+}
+
+/// Claims as the auth server issues them to an editor: the application role in `app_metadata`,
+/// which is where `Role<...>` rules read it. [`become_caller`]'s `roles` array is read by nothing,
+/// which is harmless only because those tests run as the table's owner.
+async fn become_api_editor(db: &mut PgConnection, subject: &str) {
+    let claims = serde_json::json!({
+        "sub": subject, "role": "authenticated", "app_metadata": { "role": "editor" }
+    });
+    sqlx::query("SELECT set_config('request.jwt.claims', $1, false)")
+        .bind(claims.to_string())
+        .execute(db)
+        .await
+        .expect("set claims");
+}
+
+/// Push [`withheld_ast`] and hand `f` one connection that is an API editor: the `authenticated`
+/// role with an editor's claims, and no Studio membership, so nothing shows them every draft.
+async fn as_api_editor<F>(f: F)
+where
+    F: for<'a> FnOnce(
+            &'a mut PgConnection,
+        ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>>
+        + Send,
+{
+    common::with_integration_pool(|pool| async move {
+        let _guard = FIXTURE_LOCK.lock().await;
+        common::push(&pool, &withheld_ast())
+            .await
+            .expect("the withheld fixture pushes");
+        let mut conn = pool.acquire().await.expect("acquire one connection");
+        become_api_editor(&mut conn, EDITOR).await;
+        sqlx::query("SET ROLE authenticated")
+            .execute(&mut *conn)
+            .await
+            .expect("become authenticated");
+        f(&mut conn).await;
+    })
+    .await;
+}
+
+/// DR8: an editor calling the API (not Studio) could not create a record on a model whose read rule
+/// hides unpublished rows. The new row is unpublished, so reading it back failed the read rule, and
+/// the draft-aware rule had no version by them to find yet.
+#[tokio::test]
+async fn an_api_editor_can_create_a_record_they_cannot_yet_read_as_published() {
+    as_api_editor(|db| {
+        Box::pin(async move {
+            let created: serde_json::Value = sqlx::query_scalar(
+                r#"SELECT supatype.create_record('posts', '{"title": "Mine"}')"#,
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("an editor creates a record as a draft");
+            let id = created["record_id"]
+                .as_str()
+                .expect("the new record's id")
+                .to_string();
+            assert_eq!(created["version"], 1, "{created}");
+
+            // Later, in another transaction, the creator still sees their draft.
+            let drafted: Option<String> =
+                sqlx::query_scalar("SELECT title FROM draft.posts WHERE id = $1::uuid")
+                    .bind(&id)
+                    .fetch_optional(&mut *db)
+                    .await
+                    .expect("read the draft view");
+            assert_eq!(drafted.as_deref(), Some("Mine"));
+
+            // Another editor, with no Studio membership, is shown nothing.
+            become_api_editor(db, "44444444-4444-4444-4444-444444444444").await;
+            let seen: i64 =
+                sqlx::query_scalar("SELECT count(*) FROM public.posts WHERE id = $1::uuid")
+                    .bind(&id)
+                    .fetch_one(&mut *db)
+                    .await
+                    .expect("count as another editor");
+            assert_eq!(
+                seen, 0,
+                "a draft is not shown to someone who did not write it"
+            );
+        })
+    })
+    .await;
+}
+
+/// `count(*)` of `posts` rows with this id, as the connection's caller sees them.
+async fn posts_seen(db: &mut PgConnection, id: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM public.posts WHERE id = $1::uuid")
+        .bind(id)
+        .fetch_one(db)
+        .await
+        .expect("count the caller's view of a post")
+}
+
+/// The visibility DR8 adds is the inserting transaction's own: inside it the editor can read the
+/// row they inserted (which is what writing its first draft needs), and once it ends a row with no
+/// draft by them is as hidden as any other unpublished row.
+#[tokio::test]
+async fn a_new_row_is_visible_to_the_transaction_that_inserted_it_and_no_longer() {
+    as_api_editor(|db| {
+        Box::pin(async move {
+            let id = "55555555-5555-5555-5555-555555555555";
+            db.execute("BEGIN").await.expect("begin");
+            sqlx::query("INSERT INTO public.posts (id, title) VALUES ($1::uuid, 'Fleeting')")
+                .bind(id)
+                .execute(&mut *db)
+                .await
+                .expect("insert without reading back");
+            assert_eq!(
+                posts_seen(db, id).await,
+                1,
+                "the inserting transaction sees its row"
+            );
+            db.execute("COMMIT").await.expect("commit");
+            assert_eq!(
+                posts_seen(db, id).await,
+                0,
+                "an unpublished row with no draft is hidden again"
+            );
+        })
+    })
+    .await;
+}
+
+/// An insert that meets someone else's unpublished record and does nothing has inserted nothing,
+/// so it is shown nothing. A note written before the conflict was known (a `BEFORE` trigger) would
+/// have shown the record to anyone who guessed its key.
+#[tokio::test]
+async fn an_insert_that_conflicts_with_a_hidden_record_is_not_shown_it() {
+    as_api_editor(|db| {
+        Box::pin(async move {
+            let created: serde_json::Value = sqlx::query_scalar(
+                r#"SELECT supatype.create_record('posts', '{"title": "Not yours"}')"#,
+            )
+            .fetch_one(&mut *db)
+            .await
+            .expect("the first editor creates a record");
+            let id = created["record_id"].as_str().expect("the new record's id").to_string();
+
+            become_api_editor(db, "44444444-4444-4444-4444-444444444444").await;
+            db.execute("BEGIN").await.expect("begin");
+            sqlx::query(
+                "INSERT INTO public.posts (id, title) VALUES ($1::uuid, 'Guess') ON CONFLICT DO NOTHING",
+            )
+            .bind(&id)
+            .execute(&mut *db)
+            .await
+            .expect("an insert that conflicts and does nothing");
+            assert_eq!(posts_seen(db, &id).await, 0, "a conflicting insert must not reveal the record");
+            db.execute("COMMIT").await.expect("commit");
+        })
+    })
+    .await;
+}
