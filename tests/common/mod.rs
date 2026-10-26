@@ -275,6 +275,196 @@ where
     }
 }
 
+/// Runs `f` against the database `pg_cron` runs in, for a test of what a push schedules.
+///
+/// `pg_cron` can only be created in the one database `cron.database_name` names (`postgres` on
+/// `supatype/postgres`), so in the ephemeral database [`with_integration_pool`] makes,
+/// `CREATE EXTENSION pg_cron` fails with "can only create extension in database postgres" even
+/// on an image that preloads it. Where it is preloaded the test runs in that database instead,
+/// and everything it adds is dropped after, pass or panic: new schemas, new objects in `public`,
+/// new extensions and new cron jobs. Where it is not, this is [`with_integration_pool`], and the
+/// test's own `CREATE EXTENSION` reports the image as unable to load it.
+pub async fn with_cron_database<F, Fut>(f: F)
+where
+    F: FnOnce(sqlx::PgPool) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    let Ok(admin_url) = std::env::var("DATABASE_URL") else {
+        // A testcontainers database is the image's `postgres`, which is where pg_cron runs.
+        return with_integration_pool(f).await;
+    };
+    let admin = sqlx::PgPool::connect(&admin_url)
+        .await
+        .expect("DATABASE_URL: connect admin pool");
+    let cron_db: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('cron.database_name', true)")
+            .fetch_one(&admin)
+            .await
+            .expect("read cron.database_name");
+    admin.close().await;
+    let Some(cron_db) = cron_db.filter(|d| !d.is_empty()) else {
+        return with_integration_pool(f).await;
+    };
+
+    // One database for every such test, so one at a time; a suite's tests otherwise run at once.
+    let _one_at_a_time = CRON_DATABASE.lock().await;
+    let url = database_url_with_name(&admin_url, &cron_db);
+    let connect = || async {
+        sqlx::PgPool::connect(&url)
+            .await
+            .unwrap_or_else(|e| panic!("connect the pg_cron database {cron_db}: {e}"))
+    };
+    let pool = connect().await;
+    let before = CronDatabaseObjects::read(&pool).await;
+    let outcome = std::panic::AssertUnwindSafe(f(pool.clone()))
+        .catch_unwind()
+        .await;
+    // A fresh pool: the test's connections may still carry a `SET ROLE` of its own.
+    pool.close().await;
+    let pool = connect().await;
+    before.drop_what_was_added(&pool).await;
+    pool.close().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+static CRON_DATABASE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// What the `pg_cron` database held before a test, for [`with_cron_database`] to put it back.
+struct CronDatabaseObjects {
+    schemas: Vec<String>,
+    public_relations: Vec<i64>,
+    public_functions: Vec<i64>,
+    public_types: Vec<i64>,
+    extensions: Vec<String>,
+    cron_jobs: Vec<i64>,
+}
+
+const CRON_DB_SCHEMAS: &str = "SELECT nspname::text FROM pg_namespace
+     WHERE left(nspname, 3) <> 'pg_' AND nspname <> 'information_schema'";
+const CRON_DB_PUBLIC_RELATIONS: &str = "SELECT c.oid::bigint FROM pg_class c
+     WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c')";
+const CRON_DB_PUBLIC_FUNCTIONS: &str = "SELECT p.oid::bigint FROM pg_proc p
+     LEFT JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+     WHERE p.pronamespace = 'public'::regnamespace AND d.objid IS NULL";
+const CRON_DB_PUBLIC_TYPES: &str = "SELECT t.oid::bigint FROM pg_type t
+     LEFT JOIN pg_depend d ON d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
+     WHERE t.typnamespace = 'public'::regnamespace AND t.typtype IN ('e', 'd') AND d.objid IS NULL";
+const CRON_DB_EXTENSIONS: &str = "SELECT extname::text FROM pg_extension";
+
+impl CronDatabaseObjects {
+    async fn read(pool: &sqlx::PgPool) -> Self {
+        let texts = |sql: &'static str| async move {
+            sqlx::query_scalar::<_, String>(sql)
+                .fetch_all(pool)
+                .await
+                .unwrap_or_else(|e| panic!("snapshot the pg_cron database: {e}"))
+        };
+        let oids = |sql: &'static str| async move {
+            sqlx::query_scalar::<_, i64>(sql)
+                .fetch_all(pool)
+                .await
+                .unwrap_or_else(|e| panic!("snapshot the pg_cron database: {e}"))
+        };
+        Self {
+            schemas: texts(CRON_DB_SCHEMAS).await,
+            public_relations: oids(CRON_DB_PUBLIC_RELATIONS).await,
+            public_functions: oids(CRON_DB_PUBLIC_FUNCTIONS).await,
+            public_types: oids(CRON_DB_PUBLIC_TYPES).await,
+            extensions: texts(CRON_DB_EXTENSIONS).await,
+            cron_jobs: cron_job_ids(pool).await,
+        }
+    }
+
+    async fn drop_what_was_added(&self, pool: &sqlx::PgPool) {
+        let now = Self::read(pool).await;
+        let mut sql = String::new();
+        for job in now.cron_jobs.iter().filter(|j| !self.cron_jobs.contains(j)) {
+            sql.push_str(&format!("SELECT cron.unschedule({job}::bigint);\n"));
+        }
+        for ext in now
+            .extensions
+            .iter()
+            .filter(|e| !self.extensions.contains(e))
+        {
+            sql.push_str(&format!(
+                "DROP EXTENSION IF EXISTS \"{}\" CASCADE;\n",
+                ext.replace('"', "\"\"")
+            ));
+        }
+        for oid in now
+            .public_relations
+            .iter()
+            .filter(|o| !self.public_relations.contains(o))
+        {
+            sql.push_str(&format!(
+                "DO $$ DECLARE r record; BEGIN
+                   SELECT oid::regclass AS name, relkind INTO r FROM pg_class WHERE oid = {oid};
+                   IF FOUND THEN
+                     EXECUTE format('DROP %s IF EXISTS %s CASCADE',
+                       CASE r.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
+                         WHEN 'S' THEN 'SEQUENCE' WHEN 'f' THEN 'FOREIGN TABLE'
+                         WHEN 'c' THEN 'TYPE' ELSE 'TABLE' END, r.name);
+                   END IF;
+                 END $$;\n"
+            ));
+        }
+        for oid in now
+            .public_functions
+            .iter()
+            .filter(|o| !self.public_functions.contains(o))
+        {
+            sql.push_str(&format!(
+                "DO $$ BEGIN
+                   IF EXISTS (SELECT 1 FROM pg_proc WHERE oid = {oid}) THEN
+                     EXECUTE format('DROP ROUTINE IF EXISTS %s CASCADE', {oid}::regprocedure);
+                   END IF;
+                 END $$;\n"
+            ));
+        }
+        for oid in now
+            .public_types
+            .iter()
+            .filter(|o| !self.public_types.contains(o))
+        {
+            sql.push_str(&format!(
+                "DO $$ BEGIN
+                   IF EXISTS (SELECT 1 FROM pg_type WHERE oid = {oid}) THEN
+                     EXECUTE format('DROP TYPE IF EXISTS %s CASCADE', {oid}::regtype);
+                   END IF;
+                 END $$;\n"
+            ));
+        }
+        for schema in now.schemas.iter().filter(|s| !self.schemas.contains(s)) {
+            sql.push_str(&format!(
+                "DROP SCHEMA IF EXISTS \"{}\" CASCADE;\n",
+                schema.replace('"', "\"\"")
+            ));
+        }
+        sqlx::raw_sql(&sql)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| panic!("drop what the test added to the pg_cron database: {e}"));
+    }
+}
+
+/// The jobs in `cron.job`, none where the extension is not created.
+async fn cron_job_ids(pool: &sqlx::PgPool) -> Vec<i64> {
+    let created: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')")
+            .fetch_one(pool)
+            .await
+            .expect("read pg_extension");
+    if !created {
+        return Vec::new();
+    }
+    sqlx::query_scalar("SELECT jobid FROM cron.job")
+        .fetch_all(pool)
+        .await
+        .expect("read cron.job")
+}
+
 /// The push a user runs, as the CLI and the server run it: `prepare` then `apply`.
 pub async fn push(
     pool: &sqlx::PgPool,
@@ -291,6 +481,27 @@ pub async fn push_with(
 ) -> anyhow::Result<supatype_engine::push::Outcome> {
     let plan = supatype_engine::push::prepare(pool, ast, "public").await?;
     supatype_engine::push::apply(pool, plan, options).await
+}
+
+/// What a push reads of `public` before it decides: the live state under the pinned
+/// `search_path`, its fingerprints and the ledger. A test that compares fingerprints, or hands a
+/// state to the doctor, reads through here; the differ's unpinned `introspector::introspect`
+/// deparses names the session's path covers bare, and the ledger recorded them qualified.
+pub async fn live_state(pool: &sqlx::PgPool) -> supatype_engine::push::State {
+    let mut conn = pool.acquire().await.expect("acquire");
+    supatype_engine::push::read_state(&mut conn, "public")
+        .await
+        .expect("read the state a push reads")
+}
+
+/// `supatype doctor` on `public`, as the binary and the server run it.
+pub async fn doctor(
+    pool: &sqlx::PgPool,
+    ast: &supatype_engine::parser::ast::SchemaAst,
+) -> supatype_engine::differ::doctor::DoctorReport {
+    supatype_engine::inspect::doctor(pool, ast, "public", false)
+        .await
+        .expect("doctor")
 }
 
 /// Run `sql` as one batch.

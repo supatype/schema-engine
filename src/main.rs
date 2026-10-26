@@ -36,6 +36,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Print what this engine supports of the ownership contract, as JSON
+    Capabilities,
     /// Parse and validate a schema AST
     Parse,
     /// Introspect current database state
@@ -171,6 +173,14 @@ enum Command {
         /// list each one (plan 3.2: after a Postgres upgrade reformats definitions).
         #[arg(long)]
         rebaseline: bool,
+        /// With `--rebaseline`: record drift on policies, grants, labels and RLS too, which is
+        /// otherwise refused and listed (plan 3.5).
+        #[arg(long, requires = "rebaseline")]
+        accept_access_drift: bool,
+        /// A push option, refused here with a pointer to `--accept-access-drift`: accepted by the
+        /// parser only so the refusal can say so.
+        #[arg(long, hide = true)]
+        overwrite_drift: bool,
     },
     /// Apply a seed IR document to the database
     Seed {
@@ -215,6 +225,16 @@ enum Command {
         /// it to the schema again. Repeatable.
         #[arg(long)]
         reclaim: Vec<String>,
+        /// With `--yes`: a conflict the preview listed, named the same way, or a column added
+        /// outside the schema (`column:table.name`), which is adopted only when named. Only these
+        /// are adopted, and nothing is if one of them is no longer a conflict. Repeatable; without
+        /// it `--yes` adopts every conflict found when it runs.
+        #[arg(long = "key")]
+        keys: Vec<String>,
+        /// With `--yes`: adopt no conflict at all, only `--release` and `--reclaim`. The binary's
+        /// spelling of an empty `keys` list, which a repeated `--key` cannot express.
+        #[arg(long, conflicts_with = "keys")]
+        adopt_none: bool,
         /// No longer does anything: the database is always read live. Accepted for one release so
         /// scripts that pass it keep working, and says so.
         #[arg(long, hide = true)]
@@ -240,12 +260,38 @@ async fn main() -> Result<()> {
     let _license = supatype_engine::licensing::License::new(cli.license.as_deref());
 
     let input = match &cli.command {
-        Command::Migrations { .. } | Command::Rollback { .. } => String::new(),
+        Command::Migrations { .. } | Command::Rollback { .. } | Command::Capabilities => {
+            String::new()
+        }
         Command::Seed { status: true, .. } => String::new(),
         _ => read_input(cli.input.as_deref())?,
     };
 
-    match cli.command {
+    let result = run(cli.command, input).await;
+    // Refused because another writer holds the engine's lock: said on stdout too, beside the other
+    // refusals, so a caller reading the result can tell it from a failure and retry. The message
+    // still reaches stderr via the error, and the exit is non-zero.
+    if let Err(e) = &result {
+        if let Some(busy) = e.downcast_ref::<supatype_engine::push::EngineBusy>() {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "status": "refused",
+                    "reason": supatype_engine::push::ENGINE_BUSY,
+                    "message": busy.to_string(),
+                })
+            );
+        }
+    }
+    result
+}
+
+/// The command, once its input is read.
+async fn run(command: Command, input: String) -> Result<()> {
+    match command {
+        Command::Capabilities => {
+            println!("{}", supatype_engine::capabilities::capabilities());
+        }
         Command::Parse => {
             let ast = supatype_engine::parser::parse(&input)?;
             println!("{}", serde_json::to_string_pretty(&ast)?);
@@ -550,10 +596,24 @@ async fn main() -> Result<()> {
             schema,
             strict,
             rebaseline,
+            accept_access_drift,
+            overwrite_drift,
         } => {
+            if let Some(refusal) = supatype_engine::inspect::doctor_flags_refusal(
+                rebaseline,
+                accept_access_drift,
+                overwrite_drift,
+            ) {
+                anyhow::bail!(refusal);
+            }
             let ast = supatype_engine::parser::parse(&input)?;
             let pool = sqlx::PgPool::connect(&database_url).await?;
-            let report = supatype_engine::inspect::doctor(&pool, &ast, &schema, rebaseline).await?;
+            let report = if rebaseline {
+                supatype_engine::inspect::rebaseline(&pool, &ast, &schema, accept_access_drift)
+                    .await?
+            } else {
+                supatype_engine::inspect::doctor(&pool, &ast, &schema, false).await?
+            };
             println!("{}", serde_json::to_string_pretty(&report)?);
             if strict && supatype_engine::differ::doctor::has_strict_issues(&report) {
                 std::process::exit(1);
@@ -565,6 +625,8 @@ async fn main() -> Result<()> {
             yes,
             release,
             reclaim,
+            keys,
+            adopt_none,
             no_cache,
         } => {
             use supatype_engine::state::migration_history;
@@ -577,6 +639,9 @@ async fn main() -> Result<()> {
                 release: &release,
                 reclaim: &reclaim,
                 apply: yes,
+                // `--adopt-none` is an empty list, as HTTP `keys: []` is; no `--key` at all is
+                // every conflict.
+                keys: (adopt_none || !keys.is_empty()).then_some(keys.as_slice()),
             };
             let outcome = supatype_engine::adopt::run(&pool, &ast, &schema, request).await?;
             println!("{}", serde_json::to_string_pretty(&outcome)?);

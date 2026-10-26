@@ -40,6 +40,9 @@ pub fn normalise(mut ast: SchemaAst) -> SchemaAst {
                     read_only: false,
                     sources: vec![],
                     template: None,
+                    identity: None,
+                    auto_increment: false,
+                    generated: None,
                     annotations: FieldAnnotations {
                         db: super::annotations::DbFieldAnnotations {
                             pg_type: "UUID".to_string(),

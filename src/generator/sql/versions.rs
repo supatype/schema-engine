@@ -140,8 +140,7 @@ pub fn create_versions_table_sql(
     let pk_name = crate::managed::primary_key_name(versions_table);
     let fk_name = crate::managed::foreign_key_name(versions_table, "record_id");
     let status_check = crate::managed::type_check_name(versions_table, "status");
-    let record_version_key =
-        crate::managed::truncate_identifier(&format!("{versions_table}_record_id_version"), "_key");
+    let record_version_key = versions_record_key_name(versions_table);
     format!(
         "CREATE TABLE IF NOT EXISTS {schema_q}.{versions_q} (\n    \
          \"id\" UUID CONSTRAINT {pk_name_q} PRIMARY KEY DEFAULT gen_random_uuid(),\n    \
@@ -177,13 +176,7 @@ pub fn create_versions_table_sql(
     )
 }
 
-/// Name of the index that makes "the newest version of this record" a lookup rather than a scan.
-///
-/// Every read of a draft goes through it, so it is not optional decoration: the draft view's lateral
-/// join orders by `version DESC` and takes one row.
-pub fn versions_record_index_name(versions_table: &str) -> String {
-    format!("{versions_table}_record_idx")
-}
+pub use crate::managed::{versions_record_index_name, versions_record_key_name};
 
 /// The statement [`create_versions_table_sql`] ends with, on its own, for the desired object set.
 pub fn versions_record_index_sql(schema: &str, versions_table: &str) -> String {
@@ -411,7 +404,7 @@ CREATE OR REPLACE FUNCTION {helper}.preview_allows(target_model text, target_rec
 /// table as its owner, and the API roles are never its owner, so forcing would break the owner path
 /// without narrowing anything a caller can reach.
 fn versions_table_access_sql(schema: &str, model_table: &str, versions_table: &str) -> String {
-    let policy = format!("{versions_table}_select");
+    let policy = crate::managed::policy_name(versions_table, "select");
     format!(
         "ALTER TABLE {schema_q}.{versions_q} ENABLE ROW LEVEL SECURITY;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{versions_q};\n\
@@ -560,6 +553,7 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
     out.push_str(&registry_sql(ast, schema));
     out.push_str(&rpc_functions_sql(schema));
     out.push_str(&draft_schema_preamble());
+    let names = crate::managed::ObjectNames::for_schema(ast);
 
     for model in &models {
         let table = db_table_name(model);
@@ -573,14 +567,20 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
         if drafts {
             // The `can_edit` function comes before the policies that call it: a policy naming a
             // function that does not exist is refused at `CREATE POLICY`, not at evaluation time.
-            out.push_str(&can_edit_function_sql(ast, model, schema));
+            out.push_str(&can_edit_function_sql(ast, model, schema, &names));
             out.push_str(&draft_aware_select_policy_sql(
                 schema,
                 table,
                 &versions_table,
                 &primary_key,
+                &names,
             ));
-            out.push_str(&versions_write_access_sql(schema, table, &versions_table));
+            out.push_str(&versions_write_access_sql(
+                schema,
+                table,
+                &versions_table,
+                &names,
+            ));
             out.push_str(&draft_view_sql(schema, table, &versions_table));
         } else {
             // History without withholding writes. The table is written directly and each write
@@ -600,6 +600,7 @@ pub fn render_versions_layer(ast: &SchemaAst, schema: &str) -> Result<String> {
                 table,
                 &versions_table,
                 &primary_key,
+                &names,
             ));
         }
     }
@@ -739,10 +740,6 @@ fn model_primary_key(model: &ModelAst) -> (String, String) {
 
 // ─── Per-model edit authority ─────────────────────────────────────────────────
 
-fn can_edit_function_name(table: &str) -> String {
-    format!("can_edit_{table}")
-}
-
 /// `_supatype.can_edit_<table>(record)`: does the model's own `update` rule admit this caller?
 ///
 /// **`SECURITY INVOKER`**, so row level security on the model's table applies and nothing here sees
@@ -756,7 +753,12 @@ fn can_edit_function_name(table: &str) -> String {
 ///
 /// A model with **no** `update` rule renders `FALSE`. No rule means no writers through the API, and
 /// drafting is a write: granting it here would invent an entitlement the schema withholds.
-fn can_edit_function_sql(ast: &SchemaAst, model: &ModelAst, schema: &str) -> String {
+fn can_edit_function_sql(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    schema: &str,
+    names: &crate::managed::ObjectNames,
+) -> String {
     let table = db_table_name(model);
     let (primary_key, primary_key_type) = model_primary_key(model);
     let expr = match crate::parser::accessors::platform_access(model)
@@ -766,7 +768,7 @@ fn can_edit_function_sql(ast: &SchemaAst, model: &ModelAst, schema: &str) -> Str
         Some(rule) => crate::generator::sql::rls::access_rule_to_expr(ast, model, rule, schema),
         None => "FALSE".to_string(),
     };
-    let name = can_edit_function_name(table);
+    let name = names.can_edit_function(table);
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record {pk_type})\n  \
          RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER AS $fn$\n    \
@@ -783,10 +785,6 @@ fn can_edit_function_sql(ast: &SchemaAst, model: &ModelAst, schema: &str) -> Str
         table_q = quoted(table),
         pk_q = quoted(&primary_key),
     )
-}
-
-fn sees_draft_function_name(table: &str) -> String {
-    format!("sees_draft_{table}")
 }
 
 /// The extra SELECT policy that lets the right people read an unpublished row, and the helper it
@@ -815,9 +813,10 @@ fn draft_aware_select_policy_sql(
     table: &str,
     versions_table: &str,
     primary_key: &str,
+    names: &crate::managed::ObjectNames,
 ) -> String {
-    let policy = format!("{table}_draft_select");
-    let helper_fn = sees_draft_function_name(table);
+    let policy = crate::managed::policy_name(table, "draft_select");
+    let helper_fn = names.sees_draft_function(table);
     format!(
         "CREATE OR REPLACE FUNCTION {helper}.{fn_q}(p_record text)\n  \
          RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $fn$\n    \
@@ -865,11 +864,19 @@ fn draft_aware_select_policy_sql(
 /// * **On update**, only the publishing state may change: `status`, `published_locales` and
 ///   `scheduled_locales`. `data` and `created_by` are restored
 ///   from the stored row, so history cannot be rewritten by whoever can still edit the record.
-fn versions_write_access_sql(schema: &str, table: &str, versions_table: &str) -> String {
-    let can_edit = format!("{HELPER_SCHEMA}.{}", quoted(&can_edit_function_name(table)));
-    let insert_policy = format!("{versions_table}_insert");
-    let update_policy = format!("{versions_table}_update");
-    let guard = format!("{versions_table}_guard");
+fn versions_write_access_sql(
+    schema: &str,
+    table: &str,
+    versions_table: &str,
+    names: &crate::managed::ObjectNames,
+) -> String {
+    let can_edit = format!(
+        "{HELPER_SCHEMA}.{}",
+        quoted(&names.can_edit_function(table))
+    );
+    let insert_policy = crate::managed::policy_name(versions_table, "insert");
+    let update_policy = crate::managed::policy_name(versions_table, "update");
+    let guard = names.versions_guard(table, versions_table);
 
     format!(
         "DROP POLICY IF EXISTS {insert_q} ON {schema_q}.{versions_q};\n\
@@ -953,8 +960,14 @@ CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
 /// `SECURITY DEFINER` because the caller holds no privilege on the snapshot table on this path: they
 /// are not drafting, they are writing the table, and the history is the system's record rather than
 /// theirs to compose.
-fn audit_trigger_sql(schema: &str, table: &str, versions_table: &str, primary_key: &str) -> String {
-    let audit = format!("{versions_table}_audit");
+fn audit_trigger_sql(
+    schema: &str,
+    table: &str,
+    versions_table: &str,
+    primary_key: &str,
+    names: &crate::managed::ObjectNames,
+) -> String {
+    let audit = names.versions_audit(table, versions_table);
     format!(
         r#"CREATE OR REPLACE FUNCTION {helper}.{audit_q}() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $fn$
@@ -1164,7 +1177,9 @@ CREATE OR REPLACE FUNCTION "{rpc}".publish(
     END IF;
 
     -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a
-    -- draft must not be able to move a record's identity.
+    -- draft must not be able to move a record's identity. So are the columns only the database
+    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to
+    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).
     SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))
       INTO assignments
       FROM information_schema.columns c
@@ -1172,7 +1187,8 @@ CREATE OR REPLACE FUNCTION "{rpc}".publish(
        AND c.table_name = entry."table_name"
        AND c.column_name <> entry."primary_key"
        AND NOT (c.column_name = ANY (entry."localized_columns"))
-       AND c.is_generated = 'NEVER';
+       AND c.is_generated = 'NEVER'
+       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');
     assignments := COALESCE(assignments, ARRAY[]::text[]);
 
     -- Localized columns, merged key by key for the locales being published.
@@ -1589,10 +1605,12 @@ BEGIN
   END IF;
 
   -- Replaced rather than added to, so a push converges on one job per purpose instead of stacking a
-  -- new one every time.
-  PERFORM cron.unschedule(jobname)
+  -- new one every time. Only this database's: `cron.job` holds every database's jobs, and another
+  -- project on the cluster has jobs by the same names.
+  PERFORM cron.unschedule(jobid)
      FROM cron.job
-    WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions');
+    WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions')
+      AND database = current_database();
 
   -- Every minute: the smallest useful granularity for "publish at nine", and the job does nothing
   -- but one indexed scan per versioned model when there is nothing due.

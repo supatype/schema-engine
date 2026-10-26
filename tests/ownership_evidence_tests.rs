@@ -474,14 +474,18 @@ async fn turning_drafts_off_removes_the_draft_view() {
 
 #[tokio::test]
 async fn removing_the_last_versioned_model_retires_the_cron_jobs() {
-    common::with_integration_pool(|pool| async move {
+    common::with_cron_database(|pool| async move {
         // `pg_cron` needs shared_preload_libraries, so it is available in the supatype image and
         // absent almost everywhere else; the same guard `versions_runtime_tests` uses.
-        if exec(&pool, "CREATE EXTENSION IF NOT EXISTS pg_cron")
-            .await
-            .is_err()
-        {
-            eprintln!("SKIP cron retirement: this image cannot load pg_cron");
+        if let Err(e) = exec(&pool, "CREATE EXTENSION IF NOT EXISTS pg_cron").await {
+            if common::force_integration_tests() {
+                panic!(
+                    "this image cannot load pg_cron ({e}); supatype/postgres preloads it. Point \
+                     INTEGRATION_POSTGRES_IMAGE at a current image, or unset \
+                     SUPATYPE_FORCE_INTEGRATION_TESTS to let this test skip."
+                );
+            }
+            eprintln!("SKIP cron retirement: this image cannot load pg_cron ({e})");
             return;
         }
         let versioned = schema(vec![model(

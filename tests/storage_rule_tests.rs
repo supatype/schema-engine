@@ -275,3 +275,52 @@ fn two_bucket_ids_with_the_same_policy_names_are_refused() {
         "{msg}"
     );
 }
+
+#[test]
+fn colliding_bucket_ids_are_refused_on_the_migrate_path_too() {
+    // `supatype migrate` and `diff` never rendered the storage layer, which is where the refusal
+    // lived, so the desired set kept the first bucket's policies and dropped the second's silently.
+    let two = r#"{ "id": "user-avatars", "public": false, "accessMode": "private" },
+                 { "id": "user_avatars", "public": false, "accessMode": "private" }"#;
+    let ast = ast_for(two, "");
+    let err = supatype_engine::push::fresh_migration(&ast, "public", false)
+        .err()
+        .expect("the migration must refuse");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("user-avatars") && msg.contains("user_avatars"),
+        "{msg}"
+    );
+    let err = supatype_engine::desired::desired_objects(&ast, "public")
+        .expect_err("the desired set must refuse");
+    assert!(err.to_string().contains("user_avatars"), "{err}");
+}
+
+#[test]
+fn the_migration_file_creates_storage_objects_before_its_bucket_policies() {
+    // The bucket policies are the reconcile's, so they are in the migration; `storage.objects` is
+    // the storage layer's. The file `supatype migrate` prints, and the `sql_up` the history keeps,
+    // have to carry both, in that order, or they fail on a database without `storage.objects`.
+    let ast = ast_for(AVATARS_READ_CREATE, "");
+    let migration = supatype_engine::push::fresh_migration(&ast, "public", false).unwrap();
+    for (what, sql) in [
+        ("file", migration.file()),
+        ("apply body", migration.apply_body()),
+    ] {
+        let table = sql
+            .find("CREATE TABLE IF NOT EXISTS storage.objects")
+            .unwrap_or_else(|| panic!("the {what} creates storage.objects:\n{sql}"));
+        let policy = sql
+            .find("CREATE POLICY \"storage_avatars_sel\"")
+            .unwrap_or_else(|| panic!("the {what} creates the bucket's policy:\n{sql}"));
+        assert!(table < policy, "{what}: the table comes first:\n{sql}");
+    }
+    let file = migration.file();
+    let begin = file.find("BEGIN;").unwrap();
+    assert!(
+        file.find("CREATE TABLE IF NOT EXISTS storage.objects")
+            .unwrap()
+            > begin,
+        "the storage layer is inside the forward transaction"
+    );
+}

@@ -38,18 +38,22 @@ use crate::generator::sql::{
     grants::{revoke_all_sql, table_grants},
     migration::{
         field_check_expression, implicit_model_indexes, normalize_fk_action, option_columns,
-        render_operation,
+        render_operation_named,
     },
-    rls::{drop_field_label_sql, field_labels, membership_index_targets, MASK_PROVIDER},
+    rls::{
+        drop_field_label_sql, drop_table_label_sql, field_labels, membership_index_targets,
+        MASK_PROVIDER,
+    },
     type_checks,
-    versions::{versions_record_index_name, versions_record_index_sql},
+    versions::{versions_record_index_name, versions_record_index_sql, versions_record_key_name},
 };
-use crate::introspector::fingerprint::{normalise_sql, rls_enable_sql, ObjectKind};
+use crate::introspector::constraints::ForeignKeyOptions;
+use crate::introspector::fingerprint::{
+    definition_value, normalise_sql, rls_enable_sql, ObjectKind,
+};
 use crate::managed::{
     comment_on_constraint, comment_on_index, comment_on_table, comment_value,
-    expected_check_constraint_name, expected_model_constraint_name, expected_model_index_name,
-    expected_unique_constraint_name, foreign_key_name, primary_key_name, truncate_identifier,
-    type_check_name,
+    membership_index_name, policy_name, ObjectNames,
 };
 use crate::parser::accessors::{
     column_names_for, db_foreign_key, default_foreign_key_column, versions_of, versions_table_name,
@@ -64,7 +68,7 @@ pub(crate) struct ExpectedCheck {
 }
 
 /// Every bounds and model-level check `model` asks for, named as the generator names them.
-pub(crate) fn expected_checks(model: &ModelAst) -> Vec<ExpectedCheck> {
+pub(crate) fn expected_checks(model: &ModelAst, names: &ObjectNames) -> Vec<ExpectedCheck> {
     let table = model.table_name();
     let mut out = Vec::new();
 
@@ -78,7 +82,7 @@ pub(crate) fn expected_checks(model: &ModelAst) -> Vec<ExpectedCheck> {
                 continue;
             };
             out.push(ExpectedCheck {
-                constraint: expected_check_constraint_name(table, &col),
+                constraint: names.bounds(table, &col),
                 expression,
             });
         }
@@ -93,7 +97,7 @@ pub(crate) fn expected_checks(model: &ModelAst) -> Vec<ExpectedCheck> {
             continue;
         };
         out.push(ExpectedCheck {
-            constraint: expected_model_constraint_name(table, index),
+            constraint: names.model_constraint(table, index),
             expression,
         });
     }
@@ -139,14 +143,16 @@ impl ObjectKey {
                 format!("DROP FUNCTION IF EXISTS \"{schema}\".\"{ident}\"({args};")
             }
             // Guarded as the schedule is: a database without `pg_cron` has no job to unschedule.
+            // Only this database's job, as introspection reads them: `cron.job` is the cluster's.
             ObjectKind::CronJob => format!(
-                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}';\n  END IF;\nEND;\n$cron$;"
+                "DO $cron$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN\n    PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = '{name}' AND database = current_database();\n  END IF;\nEND;\n$cron$;"
             ),
-            // The parent is `table.column`; only our own provider's labels are ever desired.
-            ObjectKind::SecurityLabel => {
-                let (table, column) = parent.split_once('.')?;
-                drop_field_label_sql(schema, table, column)
-            }
+            // The parent is `table.column`, or the table for a label on the table itself; only our
+            // own provider's labels are ever desired or dropped.
+            ObjectKind::SecurityLabel => match parent.split_once('.') {
+                Some((table, column)) => drop_field_label_sql(schema, table, column),
+                None => drop_table_label_sql(schema, parent),
+            },
             // The parent is the table and the name the role: everything it holds there goes.
             ObjectKind::TableGrant => revoke_all_sql(schema, parent, name),
             ObjectKind::Schema
@@ -211,6 +217,13 @@ pub struct DesiredObject {
     pub security_relevant: bool,
 }
 
+/// The statement a serial's sequence is recorded with: `ALTER SEQUENCE ... OWNED BY` its column.
+pub fn sequence_owned_by_sql(schema: &str, name: &str, table: &str, column: &str) -> String {
+    format!(
+        "ALTER SEQUENCE \"{schema}\".\"{name}\" OWNED BY \"{schema}\".\"{table}\".\"{column}\";"
+    )
+}
+
 /// The kinds the engine never removes (D9): row-level security on a table it owns is never turned
 /// off automatically, because a table with RLS on and no policies denies everything and turning it
 /// off is a decision no reconcile should make; and a schema or sequence (plan section 15: created if
@@ -261,6 +274,7 @@ pub fn desired_objects_for(
     let mut b = Builder {
         ast,
         schema,
+        names: ObjectNames::for_schema(ast),
         field_views: match fields {
             FieldEnforcement::Labels => &[],
             FieldEnforcement::Views(plan) => plan,
@@ -293,7 +307,7 @@ pub fn desired_objects_for(
     b.versions_layer()?;
     b.affordance_functions();
     b.api_views();
-    b.bucket_policies();
+    b.bucket_policies()?;
     for junction in &ast.junction_tables {
         b.junction(junction)?;
         b.rls_enabled(&junction.name);
@@ -306,6 +320,8 @@ pub fn desired_objects_for(
 struct Builder<'a> {
     ast: &'a SchemaAst,
     schema: &'a str,
+    /// Every generated name, chosen once for the whole schema, as the generator chooses them.
+    names: ObjectNames,
     field_views: &'a [FieldViewTable],
     out: Vec<DesiredObject>,
 }
@@ -358,7 +374,7 @@ impl<'a> Builder<'a> {
     }
 
     fn render(&self, op: Operation) -> Result<String> {
-        render_operation(&op, self.schema, self.ast)
+        render_operation_named(&op, self.schema, self.ast, &self.names)
     }
 
     fn alter(&self, table: &str) -> String {
@@ -424,7 +440,7 @@ impl<'a> Builder<'a> {
     // --- constraints --------------------------------------------------------------------------
 
     fn primary_key(&mut self, table: &str, columns: &[String]) {
-        let name = primary_key_name(table);
+        let name = self.names.primary_key(table);
         let cols = columns
             .iter()
             .map(|c| format!("\"{c}\""))
@@ -473,18 +489,14 @@ impl<'a> Builder<'a> {
             .into_iter()
             .filter(|e| e.table == table)
         {
+            let name = self.names.unique(table, &exp.column);
             let create = self.render(Operation::AddUniqueConstraint {
                 table: table.to_string(),
                 column: exp.column.clone(),
-                constraint: exp.constraint_name.clone(),
+                constraint: name.clone(),
                 risk: Risk::Safe,
             })?;
-            self.unique(
-                table,
-                &exp.constraint_name,
-                std::slice::from_ref(&exp.column),
-                create,
-            );
+            self.unique(table, &name, std::slice::from_ref(&exp.column), create);
         }
         // A belongsTo declared one-to-one is unique on its column, which the generator writes
         // inline and `expected_column_uniques` leaves out because it skips relation fields.
@@ -493,7 +505,7 @@ impl<'a> Builder<'a> {
                 if matches!(rel.cardinality, RelationCardinality::BelongsTo) && rel.unique_fk {
                     let column = db_foreign_key(field, field_name)
                         .unwrap_or_else(|| default_foreign_key_column(field_name));
-                    let name = expected_unique_constraint_name(table, &column);
+                    let name = self.names.unique(table, &column);
                     let create = format!(
                         "{} ADD CONSTRAINT \"{name}\" UNIQUE (\"{column}\");",
                         self.alter(table)
@@ -508,9 +520,17 @@ impl<'a> Builder<'a> {
     fn foreign_key(&mut self, table: &str, name: &str, fk: ForeignKeyRef<'_>, create: String) {
         let mut structure = BTreeMap::new();
         structure.insert("columns", fk.column.to_string());
-        structure.insert("references", fk.ref_table.to_string());
+        // Schema-qualified, as the live side reports it: a key to `auth.users` and one to a
+        // `users` model are different keys.
+        structure.insert("references", format!("{}.{}", fk.ref_schema, fk.ref_table));
         structure.insert("referenced_columns", fk.ref_column.to_string());
         structure.insert("on_delete", fk.on_delete.to_string());
+        // The rest of what the key does, read off the statement that makes it.
+        let options = foreign_key_options(&create);
+        structure.insert("on_update", options.on_update);
+        structure.insert("match_type", options.match_type);
+        structure.insert("deferrable", flag(options.deferrable));
+        structure.insert("initially_deferred", flag(options.initially_deferred));
         let mut depends_on = vec![self.table_key(table)];
         if fk.ref_schema == self.schema {
             depends_on.push(self.table_key(fk.ref_table));
@@ -548,7 +568,7 @@ impl<'a> Builder<'a> {
                     None,
                 ),
             };
-            let name = foreign_key_name(table, &column);
+            let name = self.names.foreign_key(table, &column);
             let ref_column = rel.references.clone().unwrap_or_else(|| "id".to_string());
             let on_delete = normalize_fk_action(rel.on_delete.as_deref().unwrap_or("restrict"));
             let create = self.render(Operation::AddForeignKey {
@@ -586,7 +606,7 @@ impl<'a> Builder<'a> {
     }
 
     fn type_check(&mut self, table: &str, column: &str, expression: &str) {
-        let name = type_check_name(table, column);
+        let name = self.names.type_check(table, column);
         let create = format!(
             "{} ADD CONSTRAINT \"{name}\" CHECK ({expression});",
             self.alter(table)
@@ -596,7 +616,7 @@ impl<'a> Builder<'a> {
 
     fn model_checks(&mut self, model: &ModelAst) {
         let table = model.table_name();
-        for exp in expected_checks(model) {
+        for exp in expected_checks(model, &self.names) {
             let create = format!(
                 "{} ADD CONSTRAINT \"{}\" CHECK ({});",
                 self.alter(table),
@@ -635,6 +655,7 @@ impl<'a> Builder<'a> {
 
     // --- indexes ------------------------------------------------------------------------------
 
+    /// An index of plain column keys.
     fn index(
         &mut self,
         table: &str,
@@ -644,11 +665,29 @@ impl<'a> Builder<'a> {
         unique: bool,
         create: String,
     ) {
-        let mut structure = BTreeMap::new();
-        structure.insert("columns", columns.join(","));
-        structure.insert("method", method.to_string());
-        structure.insert("unique", flag(unique));
-        structure.insert("primary", flag(false));
+        let structure = index_structure(columns, method, unique, "");
+        self.push(
+            self.key(ObjectKind::Index, table, name),
+            structure,
+            create,
+            vec![self.table_key(table)],
+        );
+    }
+
+    /// An index of column keys some of which say more than their column (`version DESC`), as
+    /// `options` in the form the live side reports (`DbIndex::options`).
+    #[allow(clippy::too_many_arguments)]
+    fn index_with_options(
+        &mut self,
+        table: &str,
+        name: &str,
+        columns: &[String],
+        method: &str,
+        unique: bool,
+        options: &str,
+        create: String,
+    ) {
+        let structure = index_structure(columns, method, unique, options);
         self.push(
             self.key(ObjectKind::Index, table, name),
             structure,
@@ -665,10 +704,7 @@ impl<'a> Builder<'a> {
             .cloned()
             .chain(implicit_model_indexes(model))
         {
-            let name = index
-                .name
-                .clone()
-                .unwrap_or_else(|| expected_model_index_name(table, &index.fields));
+            let name = self.names.index(table, &index);
             let create = self.render(Operation::AddIndex {
                 table: table.to_string(),
                 index: Box::new(index.clone()),
@@ -684,16 +720,14 @@ impl<'a> Builder<'a> {
             );
         }
         if model.options.singleton {
-            let name = truncate_identifier(table, "_singleton_idx");
+            let name = self.names.singleton_index(table);
             let create = format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{table}\" ((TRUE));",
                 self.schema
             );
-            // No column key: its structure is the expression, which is not predictable text.
-            let mut structure = BTreeMap::new();
-            structure.insert("method", "btree".to_string());
-            structure.insert("unique", flag(true));
-            structure.insert("primary", flag(false));
+            // No column key, and one expression, which Postgres deparses as `true`.
+            let mut structure = index_structure(&[], "btree", true, "");
+            structure.insert("expressions", "true".to_string());
             self.push(
                 self.key(ObjectKind::Index, table, &name),
                 structure,
@@ -708,13 +742,13 @@ impl<'a> Builder<'a> {
 
     /// The policies `access` asks for on `table`, and the membership index each rule's join
     /// columns get beside them (`rls.rs` emits `idx_{table}_{column}_rls` with every policy whose
-    /// rule reads another table; the name is built there without truncation, so it is here too).
+    /// rule reads another table, fitted to the identifier limit by the same rule as here).
     fn policies_for(&mut self, table: &str, access: &AccessAst) -> Result<()> {
         let mut policies: Vec<(String, &'static str)> = Vec::new();
         for (suffix, rule) in expected_policies(access) {
             if let Some(rule) = rule {
                 for (target_table, column) in membership_index_targets(rule) {
-                    let name = format!("idx_{target_table}_{column}_rls");
+                    let name = membership_index_name(&target_table, &column);
                     let create = format!(
                         "CREATE INDEX IF NOT EXISTS \"{name}\" ON \"{}\".\"{}\" (\"{}\");",
                         self.schema,
@@ -727,7 +761,7 @@ impl<'a> Builder<'a> {
             policies.push((suffix.clone(), polcmd(&suffix)));
         }
         for (suffix, command) in policies {
-            let name = format!("{table}_{suffix}");
+            let name = policy_name(table, &suffix);
             let create = self.render(Operation::CreateRlsPolicy {
                 table: table.to_string(),
                 policy: name.clone(),
@@ -775,10 +809,15 @@ impl<'a> Builder<'a> {
 
     /// The policies on `storage.objects` the buckets' rules and the models storing into them ask
     /// for (Phase 4.7b): ours by the ledger, created by the reconcile after the storage layer.
-    fn bucket_policies(&mut self) {
+    /// Two buckets whose policies would share names are refused here, as the storage layer refuses
+    /// them, so a plan that never renders that layer (`diff`, `doctor`) cannot keep one bucket's
+    /// policies and silently lose the other's.
+    fn bucket_policies(&mut self) -> Result<()> {
+        crate::generator::sql::storage::refuse_colliding_policy_labels(self.ast)?;
         self.attributed_script(&crate::generator::sql::storage::bucket_policies_sql(
             self.ast,
         ));
+        Ok(())
     }
 
     /// The `api` field views and their write triggers (Phase 4.6), for the tables the push's plan
@@ -827,24 +866,19 @@ impl<'a> Builder<'a> {
     }
 
     /// The sequence a `SERIAL` or `BIGSERIAL` column owns (Phase 4.10), under the name Postgres
-    /// gives it. Made and kept by its column, so recorded only, and never dropped. A name Postgres
-    /// would have to shorten past 63 bytes is not predicted, and so not recorded.
+    /// gives it: `makeObjectName`'s, with a digit when another relation of the schema has it first.
+    /// Made and kept by its column, so recorded only, and never dropped; a rename of its table or
+    /// column renames it to match.
     fn model_sequences(&mut self, model: &ModelAst) {
         let table = model.table_name();
         for (field_name, field) in &model.fields {
-            if !matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_)) {
+            if !crate::parser::accessors::owns_sequence(field) {
                 continue;
             }
             for column in column_names_for(field_name, field) {
-                let name = format!("{table}_{column}_seq");
-                if name.len() > 63 {
-                    continue;
-                }
+                let name = self.names.sequence(table, &column);
                 let structure = BTreeMap::from([("owned_by", format!("{table}.{column}"))]);
-                let create = format!(
-                    "ALTER SEQUENCE \"{schema}\".\"{name}\" OWNED BY \"{schema}\".\"{table}\".\"{column}\";",
-                    schema = self.schema
-                );
+                let create = sequence_owned_by_sql(self.schema, &name, table, &column);
                 let column_key = self.key(ObjectKind::Column, table, &column);
                 self.push(
                     self.key(ObjectKind::Sequence, "", &name),
@@ -898,15 +932,17 @@ impl<'a> Builder<'a> {
 
     /// One `_platform` function, with the parts the catalog reports (`DbFunction`): the return
     /// type as `pg_get_function_result` spells it, the language, the volatility code, whether it
-    /// is security definer, and the body between the dollar quotes, whitespace-normalised as the
-    /// fingerprint normalises it.
+    /// is security definer, the body between the dollar quotes, whitespace-normalised as the
+    /// fingerprint normalises it, and the options its statement declares.
     fn platform_function(&mut self, function: &triggers::TriggerFunction) {
         let mut structure = BTreeMap::new();
         structure.insert("returns", function.returns.to_string());
         structure.insert("language", "plpgsql".to_string());
         structure.insert("volatility", function.volatility.to_string());
         structure.insert("security_definer", flag(false));
-        structure.insert("body", normalise_sql(&function.body));
+        structure.insert("body", definition_value(&normalise_sql(&function.body)));
+        // `SET`, `STRICT`, `PARALLEL`, cost and rows, as its statement declares them.
+        structure.extend(attributed::function_options(&function.create_sql()));
         self.push(
             Self::platform_function_key(&function.key_name()),
             structure,
@@ -927,10 +963,10 @@ impl<'a> Builder<'a> {
     /// A model's triggers and the `_platform` functions of its own they run. The trigger's parts
     /// are the catalog's structural ones (`pg_trigger`), not its deparsed definition.
     fn model_triggers(&mut self, model: &ModelAst) {
-        for function in triggers::model_functions(model) {
+        for function in triggers::model_functions(model, &self.names) {
             self.platform_function(&function);
         }
-        for trigger in triggers::model_triggers(model) {
+        for trigger in triggers::model_triggers(model, &self.names) {
             let mut structure = BTreeMap::new();
             structure.insert("timing", "BEFORE".to_string());
             structure.insert("events", trigger.events.join(","));
@@ -977,7 +1013,7 @@ impl<'a> Builder<'a> {
 
         self.primary_key(&vt, &["id".to_string()]);
 
-        let fk = foreign_key_name(&vt, "record_id");
+        let fk = self.names.foreign_key(&vt, "record_id");
         let fk_create = format!(
             "{} ADD CONSTRAINT \"{fk}\" FOREIGN KEY (\"record_id\") REFERENCES \"{}\".\"{table}\" (\"{primary_key}\") ON DELETE CASCADE;",
             self.alter(&vt),
@@ -998,7 +1034,7 @@ impl<'a> Builder<'a> {
 
         self.type_check(&vt, "status", type_checks::versions_status_check_expr());
 
-        let key = truncate_identifier(&format!("{vt}_record_id_version"), "_key");
+        let key = versions_record_key_name(&vt);
         let key_create = format!(
             "{} ADD CONSTRAINT \"{key}\" UNIQUE (\"record_id\", \"version\");",
             self.alter(&vt)
@@ -1012,12 +1048,13 @@ impl<'a> Builder<'a> {
 
         let idx = versions_record_index_name(&vt);
         let idx_create = versions_record_index_sql(self.schema, &vt);
-        self.index(
+        self.index_with_options(
             &vt,
             &idx,
             &["record_id".to_string(), "version".to_string()],
             "btree",
             false,
+            "2 DESC",
             idx_create,
         );
         Ok(())
@@ -1045,7 +1082,7 @@ impl<'a> Builder<'a> {
             };
             let (pk, _) = versions_record_id(parent);
             let ref_table = parent.table_name().to_string();
-            let name = foreign_key_name(table, fk_col);
+            let name = self.names.foreign_key(table, fk_col);
             let create = format!(
                 "{} ADD CONSTRAINT \"{name}\" FOREIGN KEY (\"{fk_col}\") REFERENCES \"{}\".\"{ref_table}\" (\"{pk}\") ON DELETE CASCADE;",
                 self.alter(table),
@@ -1076,6 +1113,28 @@ impl<'a> Builder<'a> {
     }
 }
 
+/// What an index the engine creates is, in the labels the live fingerprint uses. Every part is
+/// predicted, the empty ones included: a same-named index with a `WHERE`, an expression, an
+/// `INCLUDE` or a `DESC` the engine never asked for is not the one it would create, and must not
+/// be adopted as it (D2 compares only the labels the desired object has).
+fn index_structure(
+    columns: &[String],
+    method: &str,
+    unique: bool,
+    options: &str,
+) -> BTreeMap<&'static str, String> {
+    BTreeMap::from([
+        ("columns", columns.join(",")),
+        ("expressions", String::new()),
+        ("predicate", String::new()),
+        ("method", method.to_string()),
+        ("unique", flag(unique)),
+        ("primary", flag(false)),
+        ("include", String::new()),
+        ("options", options.to_string()),
+    ])
+}
+
 /// Where a foreign key points, and what happens on delete.
 struct ForeignKeyRef<'a> {
     column: &'a str,
@@ -1083,6 +1142,47 @@ struct ForeignKeyRef<'a> {
     ref_table: &'a str,
     ref_column: &'a str,
     on_delete: &'a str,
+}
+
+/// The `ON UPDATE`, `MATCH` and deferral a foreign key's `ADD CONSTRAINT` declares, spelled as the
+/// catalog read spells them, each at its default when the statement leaves it out. Quoted names
+/// are taken out first, so a table or column called `on update` reads as nothing.
+fn foreign_key_options(create: &str) -> ForeignKeyOptions {
+    let mut bare = String::new();
+    for (i, part) in create.split('"').enumerate() {
+        if i % 2 == 0 {
+            bare.push_str(part);
+        }
+    }
+    let sql = bare.to_ascii_uppercase();
+    let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+    let tail = sql
+        .rsplit_once("REFERENCES")
+        .map(|(_, tail)| tail)
+        .unwrap_or_default();
+    let mut options = ForeignKeyOptions::default();
+    if let Some((_, after)) = tail.split_once("ON UPDATE ") {
+        if let Some(action) = [
+            "NO ACTION",
+            "RESTRICT",
+            "CASCADE",
+            "SET NULL",
+            "SET DEFAULT",
+        ]
+        .into_iter()
+        .find(|a| after.starts_with(a))
+        {
+            options.on_update = action.to_string();
+        }
+    }
+    if tail.contains("MATCH FULL") {
+        options.match_type = "FULL".into();
+    } else if tail.contains("MATCH PARTIAL") {
+        options.match_type = "PARTIAL".into();
+    }
+    options.deferrable = tail.contains("DEFERRABLE") && !tail.contains("NOT DEFERRABLE");
+    options.initially_deferred = tail.contains("INITIALLY DEFERRED");
+    options
 }
 
 /// `pg_policy.polcmd` for a policy suffix, which is how the live side reports the command.
@@ -1093,5 +1193,211 @@ fn polcmd(suffix: &str) -> &'static str {
         "update" => "w",
         "delete" => "d",
         _ => "*",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ast(json: &str) -> SchemaAst {
+        crate::parser::parse(json).expect("fixture parses")
+    }
+
+    /// The desired side names the referenced table with its schema, as the live fingerprint does:
+    /// a relation to `supatype:user` points at `auth.users`, and recorded as `users` alone it
+    /// matched a live key to a `users` table in the project schema.
+    #[test]
+    fn a_foreign_key_references_its_table_with_its_schema() {
+        let ast = ast(r#"{"astVersion":2,"models":[
+              {"name":"Ticket","fields":{
+                "id":{"kind":"uuid","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"UUID","unique":true,"index":false}}},
+                "owner":{"kind":"relation","cardinality":"belongsTo","target":"supatype:user","annotations":{"db":{"foreignKey":"owner_id"}}},
+                "venue":{"kind":"relation","cardinality":"belongsTo","target":"Venue","annotations":{"db":{"foreignKey":"venue_id"}}}
+              },"options":{},"annotations":{"db":{"tableName":"ticket","indexes":[]}}},
+              {"name":"Venue","fields":{
+                "id":{"kind":"uuid","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"UUID","unique":true,"index":false}}}
+              },"options":{},"annotations":{"db":{"tableName":"venue","indexes":[]}}}
+            ]}"#);
+        let set = desired_objects(&ast, "public").unwrap();
+        let references = |name: &str| {
+            set.iter()
+                .find(|o| o.key.kind == ObjectKind::ForeignKey && o.key.name == name)
+                .unwrap_or_else(|| panic!("{name} desired"))
+                .structure["references"]
+                .clone()
+        };
+        assert_eq!(references("ticket_owner_id_fkey"), "auth.users");
+        assert_eq!(references("ticket_venue_id_fkey"), "public.venue");
+    }
+
+    /// A foreign key's `ON UPDATE`, `MATCH` and deferral are read off its statement, quoted names
+    /// aside, each at its default when left out.
+    #[test]
+    fn a_foreign_keys_options_are_read_off_its_statement() {
+        let base = r#"ALTER TABLE "public"."posts" ADD CONSTRAINT "posts_author_id_fkey" FOREIGN KEY ("author_id") REFERENCES "public"."on update cascade" ("id") ON DELETE RESTRICT"#;
+        assert_eq!(
+            foreign_key_options(&format!("{base};")),
+            ForeignKeyOptions::default()
+        );
+        let all = foreign_key_options(&format!(
+            "{base} ON UPDATE SET NULL MATCH FULL DEFERRABLE INITIALLY DEFERRED;"
+        ));
+        assert_eq!(
+            all,
+            ForeignKeyOptions {
+                on_update: "SET NULL".into(),
+                match_type: "FULL".into(),
+                deferrable: true,
+                initially_deferred: true,
+            }
+        );
+        assert!(!foreign_key_options(&format!("{base} NOT DEFERRABLE;")).deferrable);
+    }
+
+    /// Every desired foreign key predicts `ON UPDATE`, `MATCH` and deferral, so a user's key of the
+    /// same name that differs only in one of them does not match ours and is not adopted.
+    #[test]
+    fn a_desired_foreign_key_predicts_on_update_and_deferral() {
+        use crate::introspector::{
+            catalog::CatalogState,
+            constraints::{DbConstraint, DbConstraintType},
+            fingerprint::fingerprints,
+        };
+        use crate::ledger::reconcile::parse_definition;
+        use crate::state::database_state::DatabaseState;
+
+        let ast = ast(r#"{"astVersion":2,"models":[
+              {"name":"User","fields":{
+                "id":{"kind":"integer","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}}
+              },"options":{},"annotations":{"db":{"tableName":"users","indexes":[]}}},
+              {"name":"Post","fields":{
+                "id":{"kind":"integer","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}},
+                "author":{"kind":"relation","cardinality":"belongsTo","target":"User","annotations":{"db":{"foreignKey":"author_id"}}}
+              },"options":{},"annotations":{"db":{"tableName":"posts","indexes":[]}}}
+            ]}"#);
+        let set = desired_objects(&ast, "public").unwrap();
+        let fk = set
+            .iter()
+            .find(|o| o.key.kind == ObjectKind::ForeignKey)
+            .expect("a foreign key");
+        assert_eq!(fk.structure["on_update"], "CASCADE", "{:?}", fk.create_sql);
+        assert_eq!(fk.structure["match_type"], "SIMPLE");
+        assert_eq!(fk.structure["deferrable"], "f");
+        assert_eq!(fk.structure["initially_deferred"], "f");
+
+        let live = |options: ForeignKeyOptions| {
+            let db = DatabaseState {
+                schema: "public".into(),
+                constraints: vec![DbConstraint {
+                    table: "posts".into(),
+                    name: fk.key.name.clone(),
+                    constraint_type: DbConstraintType::ForeignKey,
+                    columns: vec!["author_id".into()],
+                    foreign_table: Some("users".into()),
+                    foreign_schema: Some("public".into()),
+                    foreign_columns: Some(vec!["id".into()]),
+                    check_expression: None,
+                    on_delete: Some(fk.structure["on_delete"].clone()),
+                    definition: None,
+                    comment: None,
+                    foreign_key_options: Some(options),
+                }],
+                ..Default::default()
+            };
+            fingerprints(&db, &CatalogState::default()).remove(0)
+        };
+        let matches = |options: ForeignKeyOptions| {
+            let live = live(options);
+            let parts = parse_definition(&live.definition);
+            fk.structure
+                .iter()
+                .all(|(label, want)| parts.get(label) == Some(&want.as_str()))
+        };
+        let ours = ForeignKeyOptions {
+            on_update: "CASCADE".into(),
+            ..Default::default()
+        };
+        assert!(matches(ours.clone()));
+        assert!(
+            !matches(ForeignKeyOptions::default()),
+            "ON UPDATE NO ACTION"
+        );
+        assert!(!matches(ForeignKeyOptions {
+            deferrable: true,
+            ..ours.clone()
+        }));
+        assert!(!matches(ForeignKeyOptions {
+            match_type: "FULL".into(),
+            ..ours
+        }));
+    }
+
+    /// Every desired index predicts every part a same-named live index could differ in, the empty
+    /// ones included, so adoption (which compares only the parts predicted) cannot take a partial
+    /// or expression index of the user's for ours. The singleton's has an empty `columns` too.
+    #[test]
+    fn a_desired_index_predicts_empty_expressions_predicate_and_include() {
+        use crate::introspector::{
+            catalog::CatalogState, fingerprint::fingerprints, indexes::DbIndex,
+        };
+        use crate::ledger::reconcile::parse_definition;
+        use crate::state::database_state::DatabaseState;
+
+        let ast = ast(r#"{"astVersion":2,"models":[
+              {"name":"Post","fields":{
+                "id":{"kind":"integer","required":true,"primaryKey":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}},
+                "slug":{"kind":"text","required":false,"annotations":{"db":{"pgType":"TEXT","unique":false}}}
+              },"options":{"singleton":true},"annotations":{"db":{"tableName":"posts","indexes":[
+                {"fields":["slug"],"unique":true,"using":"btree"}
+              ]}}}
+            ]}"#);
+        let set = desired_objects(&ast, "public").unwrap();
+        let index = |name: &str| {
+            set.iter()
+                .find(|o| o.key.kind == ObjectKind::Index && o.key.name == name)
+                .unwrap_or_else(|| panic!("{name} desired"))
+        };
+        let slug = index("posts_slug_idx");
+        for (label, want) in [
+            ("columns", "slug"),
+            ("expressions", ""),
+            ("predicate", ""),
+            ("include", ""),
+            ("options", ""),
+            ("unique", "t"),
+        ] {
+            assert_eq!(slug.structure[label], want, "{label}");
+        }
+        let singleton = index("posts_singleton_idx");
+        assert_eq!(singleton.structure["columns"], "");
+        assert_eq!(singleton.structure["expressions"], "true");
+        assert_eq!(singleton.structure["predicate"], "");
+
+        // The same index live matches part for part; a partial one of the same name does not.
+        let live = |predicate: Option<&str>| {
+            let db = DatabaseState {
+                schema: "public".into(),
+                indexes: vec![DbIndex {
+                    table: "posts".into(),
+                    name: "posts_slug_idx".into(),
+                    columns: vec!["slug".into()],
+                    unique: true,
+                    method: "btree".into(),
+                    predicate: predicate.map(str::to_string),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            fingerprints(&db, &CatalogState::default()).remove(0)
+        };
+        let matches = |live: &crate::introspector::fingerprint::ObjectFingerprint| {
+            let parts = parse_definition(&live.definition);
+            slug.structure
+                .iter()
+                .all(|(label, want)| parts.get(label) == Some(&want.as_str()))
+        };
+        assert!(matches(&live(None)));
+        assert!(!matches(&live(Some("(slug <> ''::text)"))));
     }
 }

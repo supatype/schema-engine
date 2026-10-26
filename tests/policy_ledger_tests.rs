@@ -130,6 +130,47 @@ async fn a_policy_dropped_by_hand_is_put_back() {
 }
 
 #[tokio::test]
+async fn a_hand_edit_is_not_overwritten_without_consent_when_the_schema_changes_it_too() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &public_read()).await.unwrap();
+        exec(
+            &pool,
+            "ALTER POLICY posts_select ON public.posts USING (false)",
+        )
+        .await
+        .unwrap();
+
+        // The schema changes the policy as well, so the reconcile replaces rather than puts back;
+        // the hand edit is overwritten all the same, so it needs the same consent.
+        let signed_in = posts(json!({ "read": { "type": "authenticated" } }));
+        let plan = push::prepare(&pool, &signed_in, "public").await.unwrap();
+        let actions = policy_actions(&plan);
+        assert!(
+            matches!(
+                actions[..],
+                [Action::Replace {
+                    drifted: Some(_),
+                    ..
+                }]
+            ),
+            "{actions:?}"
+        );
+        common::apply_with_consent(&pool, plan, &signed_in).await;
+        let using = using_of(&pool, "posts_select").await.unwrap_or_default();
+        assert!(
+            using.contains("uid()"),
+            "the schema's rule was not applied: {using}"
+        );
+
+        // A change made only in the schema needs no consent.
+        push(&pool, &public_read())
+            .await
+            .expect("a schema-only change is applied without asking");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_hand_written_policy_on_a_model_table_is_never_ours() {
     common::with_integration_pool(|pool| async move {
         push(&pool, &public_read()).await.unwrap();
@@ -161,17 +202,21 @@ async fn a_hand_written_policy_on_a_model_table_is_never_ours() {
 
 /// What an older engine left: its policies stamped, one with a rule the schema has since
 /// changed, and one for an operation the schema no longer declares, all with no rows. The first
-/// is replaced, since the name says it is ours and its expression cannot be compared with our
-/// text; the second is dropped, as the stamp says it is ours.
+/// is replaced, since the name says it is ours and it is what the last push's schema made of it
+/// (one that is not is a hand edit, which asks first: `doctor_ledger_tests`); the second is
+/// dropped, as the stamp says it is ours.
 #[tokio::test]
 async fn an_older_engines_policies_are_brought_up_to_date() {
     common::with_integration_pool(|pool| async move {
-        push(&pool, &public_read()).await.unwrap();
+        push(
+            &pool,
+            &posts(json!({ "read": { "type": "authenticated" } })),
+        )
+        .await
+        .unwrap();
         exec(
             &pool,
             "DELETE FROM _supatype.managed_objects WHERE kind = 'policy';
-             DROP POLICY posts_select ON public.posts;
-             CREATE POLICY posts_select ON public.posts FOR SELECT USING (false);
              COMMENT ON POLICY posts_select ON public.posts
                IS 'supatype:managed;kind=rls_policy;table=posts;fields=select;v=1';
              CREATE POLICY posts_delete ON public.posts FOR DELETE USING (true);
@@ -202,6 +247,131 @@ async fn an_older_engines_policies_are_brought_up_to_date() {
         assert_eq!(using_of(&pool, "posts_delete").await, None);
         assert_eq!(recorded(&pool).await, ["posts_select"]);
         assert!(up_to_date(&push(&pool, &public_read()).await.unwrap()));
+    })
+    .await;
+}
+
+async fn adopt_with(pool: &PgPool, ast: &SchemaAst, release: &[String], reclaim: &[String]) {
+    supatype_engine::adopt::run(
+        pool,
+        ast,
+        "public",
+        supatype_engine::adopt::Request {
+            release,
+            reclaim,
+            apply: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+fn select_policy() -> Vec<String> {
+    vec!["policy:posts.posts_select".to_string()]
+}
+
+#[tokio::test]
+async fn a_policy_reclaimed_after_being_made_by_hand_is_not_overwritten_without_consent() {
+    common::with_integration_pool(|pool| async move {
+        let ast = public_read();
+        // Released before it existed: the first push leaves it for the user to write.
+        adopt_with(&pool, &ast, &select_policy(), &[]).await;
+        push(&pool, &ast).await.unwrap();
+        assert_eq!(using_of(&pool, "posts_select").await, None);
+        exec(
+            &pool,
+            "CREATE POLICY posts_select ON public.posts FOR SELECT USING (false)",
+        )
+        .await
+        .unwrap();
+
+        adopt_with(&pool, &ast, &[], &select_policy()).await;
+        let plan = push::prepare(&pool, &ast, "public").await.unwrap();
+        let actions = policy_actions(&plan);
+        assert!(
+            matches!(
+                actions[..],
+                [Action::Replace {
+                    drifted: Some(_),
+                    ..
+                }]
+            ),
+            "{actions:?}"
+        );
+        common::apply_with_consent(&pool, plan, &ast).await;
+        assert_eq!(
+            using_of(&pool, "posts_select").await.as_deref(),
+            Some("true")
+        );
+
+        // Recorded as it was found, so rolling the push back restores the user's policy.
+        supatype_engine::state::migration_history::apply_rollback(&pool, "public")
+            .await
+            .unwrap();
+        assert_eq!(
+            using_of(&pool, "posts_select").await.as_deref(),
+            Some("false")
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_reclaimed_policy_edited_while_released_is_drift() {
+    common::with_integration_pool(|pool| async move {
+        let ast = public_read();
+        push(&pool, &ast).await.unwrap();
+        adopt_with(&pool, &ast, &select_policy(), &[]).await;
+        exec(
+            &pool,
+            "ALTER POLICY posts_select ON public.posts USING (false)",
+        )
+        .await
+        .unwrap();
+
+        adopt_with(&pool, &ast, &[], &select_policy()).await;
+        let plan = push::prepare(&pool, &ast, "public").await.unwrap();
+        let actions = policy_actions(&plan);
+        assert!(
+            matches!(
+                actions[..],
+                [Action::Drift {
+                    security_relevant: true,
+                    ..
+                }]
+            ),
+            "{actions:?}"
+        );
+        common::apply_with_consent(&pool, plan, &ast).await;
+        assert_eq!(
+            using_of(&pool, "posts_select").await.as_deref(),
+            Some("true")
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_policy_reclaimed_before_it_exists_is_simply_created() {
+    common::with_integration_pool(|pool| async move {
+        let ast = public_read();
+        adopt_with(&pool, &ast, &select_policy(), &[]).await;
+        push(&pool, &ast).await.unwrap();
+        adopt_with(&pool, &ast, &[], &select_policy()).await;
+        assert!(
+            recorded(&pool).await.is_empty(),
+            "a row that records nothing was kept"
+        );
+
+        push(&pool, &ast)
+            .await
+            .expect("nothing was changed by hand, so nothing needs consent");
+        assert_eq!(
+            using_of(&pool, "posts_select").await.as_deref(),
+            Some("true")
+        );
+        assert_eq!(recorded(&pool).await, ["posts_select"]);
     })
     .await;
 }

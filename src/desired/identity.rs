@@ -60,7 +60,8 @@ const MULTI_WORD_TYPE_HEADS: &[&str] = &["timestamp", "time", "double", "charact
 /// The canonical type of one declared argument, or `None` for an `OUT` argument, which is not
 /// part of the identity.
 fn argument_type(arg: &str) -> Option<String> {
-    let mut toks = split_outside_quotes(arg, |c, _| c.is_whitespace());
+    // Whitespace inside a modifier (`numeric(10, 2)`) does not separate tokens.
+    let mut toks = split_outside_quotes(arg, |c, depth| c.is_whitespace() && depth == 0);
     // Everything from `DEFAULT` or `=` on is the default value, which the identity leaves out.
     if let Some(i) = toks
         .iter()
@@ -78,7 +79,11 @@ fn argument_type(arg: &str) -> Option<String> {
             return None;
         }
     }
-    if toks.len() > 1 && !MULTI_WORD_TYPE_HEADS.contains(&toks[0].to_ascii_lowercase().as_str()) {
+    // `timestamp(3) with time zone`: the head is compared without its modifier.
+    let head = toks
+        .first()
+        .map(|t| t.split('(').next().unwrap_or_default().to_ascii_lowercase());
+    if toks.len() > 1 && !head.is_some_and(|h| MULTI_WORD_TYPE_HEADS.contains(&h.as_str())) {
         toks.remove(0);
     }
     if toks.is_empty() {
@@ -95,21 +100,56 @@ fn canonical_type(declared: &str) -> String {
         text = stripped.trim_end().to_string();
         dims += 1;
     }
-    // A type modifier (`varchar(32)`, `numeric(10, 2)`) is not part of the identity.
-    if let Some(i) = text.find('(') {
-        text.truncate(i);
-        text = text.trim_end().to_string();
-    }
-    let parts = split_identifier(&text);
+    // A type modifier (`varchar(32)`, `numeric(10, 2)`, the `(3)` of `timestamp(3) with time
+    // zone`) is not part of the identity, but the words after it are. `float(p)` is the one
+    // modifier that picks the type: `real` up to 24 bits, `double precision` above.
+    let (unmodified, modifier) = without_modifiers(&text);
+    let parts = split_identifier(&unmodified);
     let base = match parts.as_slice() {
         [bare] => {
-            let lower = bare.to_ascii_lowercase();
-            format_type_spelling(&lower).unwrap_or(&lower).to_string()
+            let lower = bare.split_whitespace().collect::<Vec<_>>().join(" ");
+            let lower = lower.to_ascii_lowercase();
+            if lower == "float" && modifier.is_some_and(|p| p <= 24) {
+                "real".to_string()
+            } else {
+                format_type_spelling(&lower).unwrap_or(&lower).to_string()
+            }
         }
         [schema, name] => format!("{}.{}", quote_if_needed(schema), quote_if_needed(name)),
-        _ => text,
+        _ => unmodified,
     };
     format!("{base}{}", "[]".repeat(dims))
+}
+
+/// `declared` with every parenthesised modifier outside double quotes taken out, and the first
+/// modifier's leading number (the `p` of `float(p)`), if it has one.
+fn without_modifiers(declared: &str) -> (String, Option<u32>) {
+    let mut out = String::new();
+    let mut first: Option<String> = None;
+    let mut current = String::new();
+    let mut depth = 0usize;
+    let mut quoted = false;
+    for c in declared.chars() {
+        match c {
+            '"' if depth == 0 => {
+                quoted = !quoted;
+                out.push(c);
+            }
+            '(' if !quoted => {
+                depth += 1;
+            }
+            ')' if !quoted && depth > 0 => {
+                depth -= 1;
+                if depth == 0 && first.is_none() {
+                    first = Some(std::mem::take(&mut current));
+                }
+            }
+            _ if depth > 0 => current.push(c),
+            _ => out.push(c),
+        }
+    }
+    let modifier = first.and_then(|m| m.split(',').next()?.trim().parse().ok());
+    (out.trim().to_string(), modifier)
 }
 
 /// `"a"."b"`, `a.b`, `"a"` or `a` into its unquoted parts. A bare multi-word built-in
@@ -132,6 +172,11 @@ fn split_identifier(s: &str) -> Vec<String> {
 /// Every keyword `quote_ident` quotes: the ones Postgres does not class as unreserved
 /// (`select word from pg_get_keywords() where catcode <> 'U'` on Postgres 17), sorted for
 /// binary search.
+///
+/// This list is Postgres 17's, the baseline `supatype/postgres` image. Postgres adds keywords
+/// between majors, and a function keyed on a type named by a new one would no longer match the
+/// catalog's `identity_types`: re-run that query and update this list whenever the baseline
+/// Postgres version moves.
 const QUOTED_KEYWORDS: &[&str] = &[
     "all",
     "analyse",
@@ -324,7 +369,8 @@ fn format_type_spelling(lower: &str) -> Option<&'static str> {
         "int" | "int4" => "integer",
         "int8" => "bigint",
         "int2" => "smallint",
-        "decimal" => "numeric",
+        "decimal" | "dec" => "numeric",
+        "float" => "double precision",
         "float4" => "real",
         "float8" => "double precision",
         "timestamptz" => "timestamp with time zone",
@@ -382,6 +428,52 @@ mod tests {
         assert_eq!(
             function_key("g", "x \"Mixed\".\"Case\""),
             "g(\"Mixed\".\"Case\")"
+        );
+    }
+
+    /// A modifier is dropped and the words after it kept: cutting at the first `(` turned
+    /// `timestamp(3) with time zone` into `timestamp`, and so `timestamp without time zone`.
+    #[test]
+    fn a_type_modifier_goes_and_the_rest_of_the_type_stays() {
+        assert_eq!(
+            function_key(
+                "f",
+                "a timestamp(3) with time zone, b time(0) with time zone, c timestamp(6)"
+            ),
+            "f(timestamp with time zone, time with time zone, timestamp without time zone)"
+        );
+        // Unnamed, and with whitespace inside the modifier.
+        assert_eq!(
+            function_key(
+                "g",
+                "timestamp(3) with time zone, numeric(10, 2), character varying(32)"
+            ),
+            "g(timestamp with time zone, numeric, character varying)"
+        );
+        assert_eq!(
+            function_key("h", "n numeric(10, 2)[], v varchar(5)"),
+            "h(numeric[], character varying)"
+        );
+    }
+
+    #[test]
+    fn float_and_dec_take_their_format_type_spelling() {
+        assert_eq!(
+            function_key(
+                "f",
+                "a float, b float(24), c float(53), d dec, e dec(4, 1), f float8"
+            ),
+            "f(double precision, real, double precision, numeric, numeric, double precision)"
+        );
+    }
+
+    /// An array of a type outside `pg_catalog` is its element type, qualified, with brackets: what
+    /// the catalog reader now reports in place of the array type's own name (`public._things`).
+    #[test]
+    fn an_array_of_a_qualified_type_keeps_its_brackets() {
+        assert_eq!(
+            function_key("f", "rows \"public\".\"things\"[], tags text[]"),
+            "f(public.things[], text[])"
         );
     }
 

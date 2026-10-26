@@ -45,7 +45,9 @@ fn fk(table: &str, col_name: &str, ftable: &str) -> DbConstraint {
         foreign_columns: Some(vec!["id".into()]),
         check_expression: None,
         on_delete: Some("RESTRICT".into()),
+        definition: None,
         comment: None,
+        foreign_key_options: Some(Default::default()),
     }
 }
 
@@ -275,6 +277,8 @@ fn test_rename_column_detected() {
             comment: Some("supatype:managed;kind=table".into()),
             columns: vec![col("id", "uuid"), col("body_text", "text")],
         }],
+        // The ledger records `body_text` as ours: only a column that is ours is renamed.
+        column_ownership: [(("posts".to_string(), "body_text".to_string()), true)].into(),
         ..DatabaseState::default()
     };
 
@@ -311,6 +315,73 @@ fn test_rename_column_detected() {
         add_of_new.is_empty(),
         "must not emit AddColumn for the renamed column"
     );
+}
+
+/// A column the ledger does not record is someone else's (D4), so it is never the source of a
+/// rename: `subtitel`, added by hand, is not renamed into the declared `subtitle`, which is added.
+/// With no ledger row at all (an upgraded database), the last push's schema declaring the column
+/// is what makes it ours.
+#[test]
+fn test_rename_column_needs_a_column_that_is_ours() {
+    let ast = |field: &str| {
+        parser::parse(&format!(
+            r#"{{ "astVersion": 2, "models": [{{ "name": "Post",
+                 "fields": {{
+                   "id": {{ "kind": "uuid", "primaryKey": true, "required": true,
+                            "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }} }},
+                   "{field}": {{ "kind": "text",
+                            "annotations": {{ "db": {{ "pgType": "TEXT", "unique": false }} }} }} }},
+                 "options": {{ "timestamps": false, "softDelete": false }},
+                 "annotations": {{ "db": {{ "tableName": "posts", "indexes": [] }},
+                                   "platform": {{ "access": {{}} }} }} }}] }}"#
+        ))
+        .unwrap()
+    };
+    let mut db = DatabaseState {
+        tables: vec![DbTable {
+            schema: "public".into(),
+            name: "posts".into(),
+            comment: Some("supatype:managed;kind=table".into()),
+            columns: vec![col("id", "uuid"), col("subtitel", "text")],
+        }],
+        ..DatabaseState::default()
+    };
+    let renames = |diff: &differ::DiffOutput| {
+        diff.operations
+            .iter()
+            .filter(|op| matches!(op, Operation::RenameColumn { .. }))
+            .count()
+    };
+    let adds_subtitle = |diff: &differ::DiffOutput| {
+        diff.operations
+            .iter()
+            .any(|op| matches!(op, Operation::AddColumn { column, .. } if column == "subtitle"))
+    };
+
+    let unowned = differ::diff(&ast("subtitle"), &db).unwrap();
+    assert_eq!(renames(&unowned), 0, "{:?}", unowned.operations);
+    assert!(adds_subtitle(&unowned), "{:?}", unowned.operations);
+
+    // An upgraded database: no row, but the last push declared it.
+    let previous = ast("subtitel");
+    let upgraded = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
+    assert_eq!(renames(&upgraded), 1, "{:?}", upgraded.operations);
+
+    // A row decides over the previous schema: released means not ours.
+    db.column_ownership = [(("posts".to_string(), "subtitel".to_string()), false)].into();
+    let released = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
+    assert_eq!(renames(&released), 0, "{:?}", released.operations);
+    assert!(adds_subtitle(&released), "{:?}", released.operations);
+
+    // Adopted while undeclared (`adopt --key column:posts.subtitel`): recorded, but someone
+    // else's column Supatype was told about, never the source of a rename.
+    db.column_ownership = [(("posts".to_string(), "subtitel".to_string()), true)].into();
+    let managed = differ::diff(&ast("subtitle"), &db).unwrap();
+    assert_eq!(renames(&managed), 1, "{:?}", managed.operations);
+    db.adopted_columns = [("posts".to_string(), "subtitel".to_string())].into();
+    let adopted = differ::diff_with_previous(&ast("subtitle"), &db, Some(&previous)).unwrap();
+    assert_eq!(renames(&adopted), 0, "{:?}", adopted.operations);
+    assert!(adds_subtitle(&adopted), "{:?}", adopted.operations);
 }
 
 // ─── Scenario 5: FK already exists, a no-op ───────────────────────────────────
@@ -1018,7 +1089,7 @@ fn test_rollback_reverses_create_table() {
 
     let ast = parser::parse(ast_json).unwrap();
     let diff = differ::diff(&ast, &DatabaseState::default()).unwrap();
-    let rollback_sql = rollback::generate(&diff, "public").unwrap();
+    let rollback_sql = rollback::generate(&diff, "public", &ast).unwrap();
 
     assert!(
         rollback_sql.contains("DROP TABLE IF EXISTS"),
@@ -1857,7 +1928,7 @@ fn test_alter_column_rollback_reverses_nullability() {
     };
 
     let diff = differ::diff(&ast, &db).unwrap();
-    let rollback_sql = rollback::generate(&diff, "public").unwrap();
+    let rollback_sql = rollback::generate(&diff, "public", &ast).unwrap();
 
     // Rollback of NOT NULL should emit DROP NOT NULL
     assert!(
@@ -5424,9 +5495,11 @@ fn managed_unique_constraint(table: &str, column: &str) -> DbConstraint {
         foreign_columns: None,
         check_expression: None,
         on_delete: None,
+        definition: None,
         comment: Some(format!(
             "supatype:managed;kind=unique_constraint;table={table};fields={column};v=1"
         )),
+        foreign_key_options: None,
     }
 }
 
@@ -5484,6 +5557,7 @@ fn test_drop_managed_slug_unique_when_removed_from_ast() {
             comment: Some(
                 "supatype:managed;kind=unique_index;table=album;fields=owner_id,slug;v=1".into(),
             ),
+            ..Default::default()
         }],
         ..DatabaseState::default()
     };
@@ -6477,7 +6551,9 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
                 foreign_columns: None,
                 check_expression: Some("CHECK ((length(excerpt) <= 80))".into()),
                 on_delete: None,
+                definition: None,
                 comment: None,
+                foreign_key_options: None,
             },
             // A NOT NULL is a column property, not a rule anyone declared. Reporting it would bury
             // the finding that matters under one per nullable column.
@@ -6491,7 +6567,9 @@ fn test_doctor_reports_an_unmanaged_check_it_will_not_adopt() {
                 foreign_columns: None,
                 check_expression: Some("CHECK ((id IS NOT NULL))".into()),
                 on_delete: None,
+                definition: None,
                 comment: None,
+                foreign_key_options: None,
             },
         ],
         ..DatabaseState::default()
@@ -6578,9 +6656,11 @@ fn test_doctor_leaves_supatype_owned_checks_alone() {
             foreign_columns: None,
             check_expression: Some("CHECK ((char_length(excerpt) <= 80))".into()),
             on_delete: None,
+            definition: None,
             comment: Some(
                 "supatype:managed;kind=check;table=posts;fields=excerpt;v=1;bounds=abc".into(),
             ),
+            foreign_key_options: None,
         }],
         ..DatabaseState::default()
     };

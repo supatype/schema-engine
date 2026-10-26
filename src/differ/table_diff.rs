@@ -295,7 +295,9 @@ mod tests {
             foreign_columns: Some(vec!["id".into()]),
             check_expression: None,
             on_delete: None,
+            definition: None,
             comment: None,
+            foreign_key_options: Some(Default::default()),
         }
     }
 

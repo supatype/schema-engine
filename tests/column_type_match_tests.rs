@@ -47,6 +47,7 @@ fn pg_numeric_col(name: &str, precision: Option<i32>, scale: Option<i32>) -> DbC
         ordinal_position: 1,
         numeric_precision: precision,
         numeric_scale: scale,
+        ..Default::default()
     }
 }
 

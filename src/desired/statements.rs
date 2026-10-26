@@ -8,6 +8,13 @@
 //! after the fact, which keeps every blob byte-identical, and the test proves that joining the
 //! statements reproduces the blob and that no statement is left unattributed.
 //!
+//! What that proof covers is the statements a push renders against an empty database
+//! (`statement_attribution_tests`, every fixture): the creations and the re-asserted layers. The
+//! incremental statements a later push renders from the differ's operations (`ALTER COLUMN`,
+//! `RENAME`, a backfill `UPDATE`) are not all recognised, and one that is not reads as
+//! [`Attribution::Unknown`], naming no object. `push::created_by_parent` reads every operation
+//! through this, but only for the objects a statement creates inline.
+//!
 //! The split is honest about SQL: a `;` inside a string, a quoted identifier, a line comment or a
 //! dollar-quoted body does not end a statement. Everything else is kept verbatim, so each segment
 //! is a slice of the original and the concatenation is the original.
@@ -127,7 +134,8 @@ pub struct Context {
     constraint_kind: HashMap<(String, String), ObjectKind>,
 }
 
-/// Attribute every statement of a push, in order.
+/// Attribute every statement of `statements`, in order; [`Attribution::Unknown`] for a head this
+/// module does not recognise (see the module docs for which statements it is proved on).
 ///
 /// A push drops an index before it creates it, so which table an index belongs to is learned
 /// from every `CREATE INDEX` first, then the statements are attributed in order.
@@ -145,6 +153,72 @@ pub fn attribute_all(schema: &str, statements: Vec<String>) -> Vec<Statement> {
             Statement { sql, attribution }
         })
         .collect()
+}
+
+/// The table an `ALTER TABLE`, `DROP TABLE` or `CREATE TABLE` statement acts on, and the column or
+/// constraint its clause names, for what [`attribute_all`] does not name: the differ's incremental
+/// and rollback statements (`DROP COLUMN`, `ALTER COLUMN`, `DROP CONSTRAINT`, a table's rename).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableTarget {
+    pub schema: String,
+    pub table: String,
+    pub column: Option<String>,
+    pub constraint: Option<String>,
+}
+
+/// [`TableTarget`] for `sql`, or `None` when it is not a statement on a table.
+pub fn table_target(schema: &str, sql: &str) -> Option<TableTarget> {
+    let h = head(sql);
+    let rest = [
+        "DROP TABLE IF EXISTS ",
+        "DROP TABLE ",
+        "CREATE TABLE IF NOT EXISTS ",
+    ]
+    .iter()
+    .find_map(|p| h.strip_prefix(p));
+    if let Some(rest) = rest {
+        let (parts, _) = qualified_name(rest)?;
+        let (schema, table) = split_schema(parts, schema);
+        return Some(TableTarget {
+            schema,
+            table,
+            column: None,
+            constraint: None,
+        });
+    }
+    let rest = h.strip_prefix("ALTER TABLE ")?;
+    let rest = rest.strip_prefix("IF EXISTS ").unwrap_or(rest);
+    let rest = rest.strip_prefix("ONLY ").unwrap_or(rest);
+    let (parts, clause) = qualified_name(rest)?;
+    let (schema, table) = split_schema(parts, schema);
+    let clause = clause.trim_start();
+    let named = |prefixes: &[&str]| {
+        prefixes.iter().find_map(|p| {
+            let (parts, _) = qualified_name(clause.strip_prefix(p)?)?;
+            parts.into_iter().next()
+        })
+    };
+    let column = named(&[
+        "DROP COLUMN IF EXISTS ",
+        "DROP COLUMN ",
+        "ALTER COLUMN ",
+        "RENAME COLUMN ",
+        "ADD COLUMN IF NOT EXISTS ",
+        "ADD COLUMN ",
+    ]);
+    let constraint = named(&[
+        "DROP CONSTRAINT IF EXISTS ",
+        "DROP CONSTRAINT ",
+        "RENAME CONSTRAINT ",
+        "VALIDATE CONSTRAINT ",
+        "ADD CONSTRAINT ",
+    ]);
+    Some(TableTarget {
+        schema,
+        table,
+        column,
+        constraint,
+    })
 }
 
 /// The statement with leading whitespace and `--` comment lines removed.
@@ -284,6 +358,15 @@ fn after_keyword<'a>(s: &'a str, keyword: &str) -> Option<&'a str> {
         from = end;
     }
     None
+}
+
+/// What follows `keyword` when `s` starts with it as a whole word, compared without case.
+fn strip_keyword<'a>(s: &'a str, keyword: &str) -> Option<&'a str> {
+    let s = s.trim_start();
+    let head = s.get(..keyword.len())?;
+    let rest = &s[keyword.len()..];
+    (head.eq_ignore_ascii_case(keyword) && rest.starts_with(|c: char| c.is_ascii_whitespace()))
+        .then_some(rest)
 }
 
 /// The roles after `TO` or `FROM`, trimmed, without the trailing `;`.
@@ -584,32 +667,63 @@ fn attribute(schema: &str, sql: &str, ctx: &mut Context) -> Attribution {
         }
     }
     if starts("SECURITY LABEL ") {
-        let Some(column) = after_keyword(h, "COLUMN") else {
+        // A label on a column is keyed `table.column`, one on the table itself by the table.
+        let Some(on) = after_keyword(h, "ON") else {
             return Attribution::Unknown;
         };
-        let (parts, _) = match qualified_name(column) {
-            Some(x) => x,
-            None => return Attribution::Unknown,
+        let (s, parent) = if let Some(column) = strip_keyword(on, "COLUMN") {
+            let (parts, _) = match qualified_name(column) {
+                Some(x) => x,
+                None => return Attribution::Unknown,
+            };
+            let (s, t, c) = split_column(parts, schema);
+            (s, format!("{t}.{c}"))
+        } else if let Some(table) = strip_keyword(on, "TABLE") {
+            let (parts, _) = match qualified_name(table) {
+                Some(x) => x,
+                None => return Attribution::Unknown,
+            };
+            split_schema(parts, schema)
+        } else {
+            return Attribution::Unknown;
         };
-        let (s, t, c) = split_column(parts, schema);
         let provider = h["SECURITY LABEL ".len()..]
             .trim_start()
             .strip_prefix("FOR ")
             .and_then(|r| r.split_whitespace().next())
             .unwrap_or("")
             .to_string();
-        return Attribution::Object(key(
-            ObjectKind::SecurityLabel,
-            &s,
-            &format!("{t}.{c}"),
-            &provider,
-        ));
+        return Attribution::Object(key(ObjectKind::SecurityLabel, &s, &parent, &provider));
     }
     if starts("GRANT ") || starts("REVOKE ") {
-        // Table and view privileges: `GRANT ... ON s.t TO r1, r2` / `REVOKE ... ON s.t FROM r`.
+        // Table and view privileges: `GRANT ... ON [TABLE] s.t TO r1, r2` / `REVOKE ... ON s.t
+        // FROM r`. Any other object type, and the `ALL ... IN SCHEMA` forms, name no one table:
+        // read as one, their keyword became the table's name.
         let Some(on) = after_keyword(h, "ON") else {
             return Attribution::Unknown;
         };
+        let on = strip_keyword(on, "TABLE").unwrap_or(on);
+        if [
+            "ALL",
+            "SEQUENCE",
+            "FUNCTION",
+            "PROCEDURE",
+            "ROUTINE",
+            "SCHEMA",
+            "DATABASE",
+            "DOMAIN",
+            "TYPE",
+            "LANGUAGE",
+            "LARGE",
+            "FOREIGN",
+            "TABLESPACE",
+            "PARAMETER",
+        ]
+        .iter()
+        .any(|object_type| strip_keyword(on, object_type).is_some())
+        {
+            return Attribution::Unknown;
+        }
         let (parts, _) = match qualified_name(on) {
             Some(x) => x,
             None => return Attribution::Unknown,
@@ -720,6 +834,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_table_statement_names_its_table_column_and_constraint() {
+        let target = |sql: &str| table_target("public", sql).unwrap();
+        let t = target("ALTER TABLE \"public\".\"order_item\" DROP COLUMN IF EXISTS \"note\";");
+        assert_eq!(
+            (t.table.as_str(), t.column.as_deref()),
+            ("order_item", Some("note"))
+        );
+        let t =
+            target("-- undo\nALTER TABLE \"public\".\"t\" DROP CONSTRAINT IF EXISTS \"t_a_key\";");
+        assert_eq!(
+            (t.table.as_str(), t.constraint.as_deref()),
+            ("t", Some("t_a_key"))
+        );
+        let t = target("DROP TABLE IF EXISTS \"public\".\"posts\";");
+        assert_eq!(
+            (t.table.as_str(), t.column, t.constraint),
+            ("posts", None, None)
+        );
+        assert_eq!(
+            table_target("public", "DROP POLICY IF EXISTS \"p\" ON \"public\".\"t\";"),
+            None
+        );
+    }
+
+    #[test]
     fn splitting_keeps_every_byte_and_respects_quotes() {
         let sql = "-- lead\nCREATE TABLE a (x text DEFAULT 'a;b');\nCREATE FUNCTION f() RETURNS text AS $$ SELECT 'x;y'; $$ LANGUAGE sql;\nSELECT 1;\n";
         let parts = split_statements(sql);
@@ -751,6 +890,9 @@ mod tests {
             ("CREATE VIEW \"draft\".\"posts\" WITH (security_invoker = true) AS SELECT 1;", ObjectKind::View, "draft", "", "posts"),
             ("SECURITY LABEL FOR supatype ON COLUMN \"public\".\"posts\".\"salary\" IS 'MASK READ x';", ObjectKind::SecurityLabel, "public", "posts.salary", "supatype"),
             ("GRANT SELECT ON \"draft\".\"posts\" TO authenticated;", ObjectKind::TableGrant, "draft", "posts", "authenticated"),
+            ("GRANT SELECT ON TABLE \"draft\".\"posts\" TO authenticated;", ObjectKind::TableGrant, "draft", "posts", "authenticated"),
+            ("REVOKE ALL ON TABLE public.posts FROM anon;", ObjectKind::TableGrant, "public", "posts", "anon"),
+            ("SECURITY LABEL FOR supatype ON TABLE \"public\".\"posts\" IS NULL;", ObjectKind::SecurityLabel, "public", "posts", "supatype"),
         ];
         for (sql, kind, schema, parent, name) in cases {
             match attribute("public", sql, &mut ctx) {
@@ -768,6 +910,24 @@ mod tests {
                 }
                 other => panic!("{sql}: {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn a_grant_on_no_one_table_is_not_read_as_a_table_grant() {
+        // The object-type keyword used to be taken as the table's name.
+        for sql in [
+            "GRANT ALL ON ALL TABLES IN SCHEMA public TO anon;",
+            "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO anon;",
+            "REVOKE EXECUTE ON FUNCTION public.f(integer) FROM anon;",
+            "GRANT USAGE ON SEQUENCE public.s TO anon;",
+            "GRANT USAGE ON TYPE public.mood TO anon;",
+        ] {
+            assert_eq!(
+                attribute("public", sql, &mut Context::default()),
+                Attribution::Unknown,
+                "{sql}"
+            );
         }
     }
 

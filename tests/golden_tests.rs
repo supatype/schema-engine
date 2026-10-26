@@ -154,9 +154,31 @@ async fn create_auth_users(pool: &sqlx::PgPool) {
     .expect("auth.users fixture applies");
 }
 
+/// The `search_path` the golden's `DatabaseState` is read under. That read is the differ's and
+/// unpinned, so it deparses a name bare when its schema is on the session's path. On the
+/// `supatype/postgres` image `supatype_admin`'s path carries `auth`, which spells a policy's
+/// `auth.uid()` as `uid()`; on a plain Postgres it does not. Fixed here, the golden records the
+/// same text on either. (`CatalogState` is read under the push's pinned path already.)
+const DATABASE_READ_PATH: &str = "public";
+
 /// `DatabaseState` plus `CatalogState` for the project schema, as one document.
 async fn state_value(pool: &sqlx::PgPool) -> serde_json::Value {
-    let db = introspector::introspect(pool, "public").await.unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let saved: String = sqlx::query_scalar("SELECT current_setting('search_path')")
+        .fetch_one(&mut *conn)
+        .await
+        .unwrap();
+    let set_path =
+        |path: String| sqlx::query("SELECT set_config('search_path', $1, false)").bind(path);
+    set_path(DATABASE_READ_PATH.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let db = introspector::introspect_connection(&mut conn, "public")
+        .await
+        .unwrap();
+    set_path(saved).execute(&mut *conn).await.unwrap();
+    drop(conn);
     let catalog = introspector::introspect_catalog(pool, "public")
         .await
         .unwrap();

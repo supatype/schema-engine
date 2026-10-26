@@ -1,4 +1,6 @@
-//! Phase 2c of the managed-object ownership plan: every statement of a push belongs to an object.
+//! Phase 2c of the managed-object ownership plan: every statement of a push against an empty
+//! database belongs to an object. (The incremental statements of a later push are not covered;
+//! see `desired::statements`.)
 //!
 //! The generator renders a push as blobs. `desired::statements` splits them and attributes each
 //! statement to the object key it creates, drops, comments on or grants on. Three things are
@@ -20,10 +22,7 @@ use supatype_engine::{
         statements::{attribute_all, head, split_statements, Attribution, Statement},
         ObjectKey,
     },
-    introspector::{
-        self,
-        fingerprint::{fingerprints, ObjectKind},
-    },
+    introspector::fingerprint::ObjectKind,
     parser,
     parser::ast::SchemaAst,
     push,
@@ -220,9 +219,9 @@ async fn after_a_push_every_created_object_exists_under_its_key() {
                 .await
                 .unwrap_or_else(|e| panic!("{name}: applies: {e}"));
 
-            let db = introspector::introspect(&pool, "public").await.unwrap();
-            let catalog = introspector::introspect_catalog(&pool, "public").await.unwrap();
-            let live: BTreeSet<ObjectKey> = fingerprints(&db, &catalog)
+            let live: BTreeSet<ObjectKey> = common::live_state(&pool)
+                .await
+                .fingerprints
                 .into_iter()
                 .map(|f| f.key())
                 .collect();

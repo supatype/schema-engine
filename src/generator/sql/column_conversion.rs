@@ -629,7 +629,14 @@ pub fn required_field_existing_table_warning(table: &str, column: &str) -> Strin
 }
 
 /// DEFAULT expression for ADD COLUMN on a table that already has rows (required, no schema default).
+///
+/// None for a column the database fills itself: an identity column numbers the existing rows from
+/// its sequence and a generated one computes them, and Postgres refuses a `DEFAULT` beside either
+/// (`both default and identity specified`).
 pub fn add_column_backfill_default(field: &FieldAst) -> Option<String> {
+    if crate::parser::accessors::database_fills(field) {
+        return None;
+    }
     match field {
         FieldAst::RichText(f) if required_scalar_no_default(f) => {
             Some(text_to_lexical_jsonb_expr("''"))
@@ -656,9 +663,10 @@ pub fn add_column_backfill_default(field: &FieldAst) -> Option<String> {
         FieldAst::Money(f) if f.required => Some("0".into()),
         FieldAst::Json(f) if f.required => Some("'{}'::jsonb".into()),
         FieldAst::Blocks(f) if f.required => Some("'[]'::jsonb".into()),
-        FieldAst::Enum(f) if f.required && f.default.is_none() => {
-            f.values.first().map(|v| format!("'{v}'"))
-        }
+        FieldAst::Enum(f) if f.required && f.default.is_none() => f
+            .values
+            .first()
+            .map(|v| format!("'{}'", v.replace('\'', "''"))),
         _ => None,
     }
 }
@@ -679,7 +687,7 @@ pub fn using_expr_for_alter(strategy: &ConversionStrategy, column: &str, to_pg: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ast::ScalarFieldAst;
+    use crate::parser::ast::{GeneratedColumnAst, IdentityGeneration, ScalarFieldAst};
 
     fn rich_text(localized: bool) -> FieldAst {
         let mut scalar = ScalarFieldAst {
@@ -737,6 +745,42 @@ mod tests {
         )
         .expect("the conversion is supported");
         assert!(!plain.contains("jsonb_each"), "plain target: {plain}");
+    }
+
+    fn required_int(
+        identity: Option<IdentityGeneration>,
+        auto_increment: bool,
+        generated: Option<&str>,
+    ) -> FieldAst {
+        FieldAst::Integer(ScalarFieldAst {
+            pg_type: "INTEGER".into(),
+            required: true,
+            identity,
+            auto_increment,
+            generated: generated.map(|expression| GeneratedColumnAst {
+                expression: expression.into(),
+                stored: true,
+            }),
+            ..Default::default()
+        })
+    }
+
+    /// A required column the database fills gets no backfill `DEFAULT`, which Postgres refuses
+    /// beside an identity or a generation expression; a plain one still gets its zero.
+    #[test]
+    fn a_column_the_database_fills_has_no_backfill_default() {
+        assert_eq!(
+            add_column_backfill_default(&required_int(None, false, None)).as_deref(),
+            Some("0")
+        );
+        for field in [
+            required_int(Some(IdentityGeneration::Always), false, None),
+            required_int(Some(IdentityGeneration::ByDefault), false, None),
+            required_int(Some(IdentityGeneration::ByDefault), true, None),
+            required_int(None, false, Some("1 + 1")),
+        ] {
+            assert_eq!(add_column_backfill_default(&field), None, "{field:?}");
+        }
     }
 
     #[test]

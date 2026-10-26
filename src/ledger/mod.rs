@@ -24,6 +24,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 
+use crate::desired::statements::{head, split_statements};
 use crate::desired::ObjectKey;
 use crate::introspector::fingerprint::{hash, normalise_sql, ObjectKind};
 
@@ -86,31 +87,24 @@ pub fn desired_fingerprint(kind: ObjectKind, create_sql: &str) -> String {
     hash(kind, &[&normalise_sql(&without_comments(create_sql))])
 }
 
-/// `sql` without its `COMMENT ON ... ;` statements. A comment's text is a quoted literal that may
-/// itself hold semicolons (an older engine's stamp does), so quotes are followed to find the end.
+/// `sql` without its `COMMENT ON ... ;` statements. Split the way the attribution splits a push
+/// (`desired::statements`), so a `;` inside a literal (an older engine's stamp holds several), a
+/// quoted identifier or a dollar-quoted body does not end a statement, and only a statement that
+/// starts with `COMMENT ON` goes: a function whose body mentions `COMMENT ON` keeps its body.
 fn without_comments(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len());
-    let mut rest = sql;
-    while let Some(at) = rest.find("COMMENT ON ") {
-        out.push_str(&rest[..at]);
-        rest = after_statement(&rest[at..]);
-    }
-    out.push_str(rest);
-    out
+    split_statements(sql)
+        .into_iter()
+        .filter(|statement| !is_comment(head(statement)))
+        .collect()
 }
 
-/// What follows the statement `sql` starts with: everything after its first `;` outside quotes.
-fn after_statement(sql: &str) -> &str {
-    let mut quoted = false;
-    for (i, c) in sql.char_indices() {
-        match c {
-            // A doubled quote inside a literal toggles twice, which leaves it quoted.
-            '\'' => quoted = !quoted,
-            ';' if !quoted => return &sql[i + 1..],
-            _ => {}
-        }
-    }
-    ""
+/// Whether a statement's head is `COMMENT ON`, in any case and with any whitespace between.
+fn is_comment(head: &str) -> bool {
+    let mut words = head.split_whitespace();
+    matches!(
+        (words.next(), words.next()),
+        (Some(a), Some(b)) if a.eq_ignore_ascii_case("COMMENT") && b.eq_ignore_ascii_case("ON")
+    )
 }
 
 pub fn create_table_sql() -> String {
@@ -357,6 +351,31 @@ mod tests {
         );
         let quoted = "COMMENT ON TABLE t IS 'it''s; ours';CREATE INDEX i ON t (a);";
         assert_eq!(without_comments(quoted), "CREATE INDEX i ON t (a);");
+    }
+
+    /// Only a statement that starts with `COMMENT ON` is a comment. The text inside a function
+    /// body, or a literal that says it, is part of what is intended, and a change to it is a
+    /// change of intent.
+    #[test]
+    fn comment_on_inside_a_body_or_literal_is_not_a_comment() {
+        let function = "CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN\n  \
+            EXECUTE 'COMMENT ON TABLE t IS ''x''';\n  PERFORM 1;\nEND\n$fn$;\n\
+            COMMENT ON FUNCTION f() IS 'mine; really';";
+        let kept = without_comments(function);
+        assert!(kept.contains("PERFORM 1"), "{kept}");
+        assert!(kept.contains("EXECUTE 'COMMENT ON TABLE t"), "{kept}");
+        assert!(!kept.contains("mine; really"), "{kept}");
+        let other = function.replace("PERFORM 1", "PERFORM 2");
+        assert_ne!(
+            desired_fingerprint(ObjectKind::Function, function),
+            desired_fingerprint(ObjectKind::Function, &other),
+            "a change inside the body after the text `COMMENT ON ` is a change"
+        );
+        // A comment statement in another case, after a leading line comment, still goes.
+        assert_eq!(
+            without_comments("CREATE INDEX i ON t (a);\n-- note\ncomment  on INDEX i IS 'x';"),
+            "CREATE INDEX i ON t (a);"
+        );
     }
 
     #[test]

@@ -110,3 +110,210 @@ async fn a_migration_with_nothing_recorded_rolls_back_and_leaves_the_ledger_alon
     })
     .await;
 }
+
+/// An engine from before Phase 4.0 stored `sql_down` as a script with its own `BEGIN`/`COMMIT`.
+/// Run inside the rollback's transaction, its `COMMIT` ended that transaction after the objects
+/// came back and before the history and the ledger were updated.
+#[tokio::test]
+async fn a_legacy_rollback_script_runs_inside_the_rollbacks_transaction() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        push(&pool, &posts("body")).await.unwrap();
+        exec(
+            &pool,
+            "UPDATE _supatype.migrations
+                SET sql_down = E'-- ROLLBACK MIGRATION\\nBEGIN;\\n' || sql_down || E'\\nCOMMIT;\\n'
+              WHERE id = (SELECT max(id) FROM _supatype.migrations)",
+        )
+        .await
+        .unwrap();
+        // The rollback's last step fails, after the legacy script's `COMMIT` would have run.
+        exec(
+            &pool,
+            "CREATE FUNCTION public.refuse() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'refused'; END; $$;
+             CREATE TRIGGER refuse BEFORE UPDATE ON _supatype.migrations
+               FOR EACH ROW EXECUTE FUNCTION public.refuse();",
+        )
+        .await
+        .unwrap();
+
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect_err("the history update is refused");
+        assert!(
+            index_exists(&pool, "posts_body_idx").await,
+            "the objects' rollback went back with the failed history update"
+        );
+        assert!(!index_exists(&pool, "posts_title_idx").await);
+
+        exec(&pool, "DROP TRIGGER refuse ON _supatype.migrations")
+            .await
+            .unwrap();
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("the legacy script rolls back");
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        assert!(!index_exists(&pool, "posts_body_idx").await);
+    })
+    .await;
+}
+
+async fn table_comment(pool: &PgPool) -> Option<String> {
+    sqlx::query_scalar("SELECT obj_description('public.posts'::regclass, 'pg_class')")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn rolling_back_the_push_that_took_over_a_stamped_table_puts_the_stamp_back() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        // The upgrade: an older engine's stamped table, taken over by the push that takes the stamp
+        // out of its comment.
+        common::as_an_older_engine_left_it(&pool).await.unwrap();
+        let stamp = table_comment(&pool).await;
+        assert!(stamp
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("supatype:managed"));
+        push(&pool, &posts("title")).await.unwrap();
+        assert_eq!(
+            table_comment(&pool).await,
+            None,
+            "the stamp was not taken out"
+        );
+
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("the upgrade push rolls back");
+        assert_eq!(
+            table_comment(&pool).await,
+            stamp,
+            "the rollback removed the row and left the table with neither row nor stamp"
+        );
+
+        // Recognisably ours again, so the next push takes it over rather than refusing it.
+        push(&pool, &posts("title"))
+            .await
+            .expect("the table is Supatype's after the rollback");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_release_made_after_a_push_survives_rolling_that_push_back() {
+    use supatype_engine::adopt;
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        push(&pool, &posts("body")).await.unwrap();
+        // Released after the push, outside any migration: not the push's to undo.
+        let release = ["policy:posts.posts_select".to_string()];
+        adopt::run(
+            &pool,
+            &posts("body"),
+            "public",
+            adopt::Request {
+                release: &release,
+                apply: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("the second push rolls back");
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM _supatype.managed_objects
+              WHERE kind = 'policy' AND parent = 'posts' AND name = 'posts_select'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "released", "the rollback overwrote a later release");
+    })
+    .await;
+}
+
+/// `posts` with the `title` index and an extra `note` column.
+fn posts_with_note() -> SchemaAst {
+    let mut ast = posts("body");
+    let doc = serde_json::to_value(&ast).unwrap();
+    let mut doc = doc;
+    doc["models"][0]["fields"]["note"] = json!({ "kind": "text", "required": false,
+        "annotations": { "db": { "pgType": "TEXT", "unique": false } } });
+    ast = serde_json::from_value(doc).expect("the AST round-trips");
+    ast
+}
+
+async fn release(pool: &PgPool, ast: &SchemaAst, objects: &[&str]) {
+    use supatype_engine::adopt;
+    let release: Vec<String> = objects.iter().map(|o| o.to_string()).collect();
+    adopt::run(
+        pool,
+        ast,
+        "public",
+        adopt::Request {
+            release: &release,
+            apply: true,
+            keys: Some(&[]),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A column and an index the push made, released after it: rolling the push back leaves both,
+/// and the column's data, where they are, with their rows still saying released. It used to drop
+/// the column with its data and leave a row for a column that was gone.
+#[tokio::test]
+async fn rolling_back_leaves_what_was_released_since_the_push() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &posts("title")).await.unwrap();
+        let ast = posts_with_note();
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            "INSERT INTO public.posts (id, title, body, note) VALUES (1, 't', 'b', 'kept')",
+        )
+        .await
+        .unwrap();
+        release(
+            &pool,
+            &ast,
+            &["column:posts.note", "index:posts.posts_body_idx"],
+        )
+        .await;
+
+        let result = migration_history::apply_rollback(&pool, "public")
+            .await
+            .expect("the push rolls back");
+        assert!(result.message.contains("posts.note"), "{}", result.message);
+
+        let note: String = sqlx::query_scalar("SELECT note FROM public.posts WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("the released column and its data are still there");
+        assert_eq!(note, "kept");
+        assert!(index_exists(&pool, "posts_body_idx").await);
+        // The rest of the push is undone.
+        assert!(index_exists(&pool, "posts_title_idx").await);
+        let released: Vec<String> = sqlx::query_scalar(
+            "SELECT kind || ':' || parent || '.' || name FROM _supatype.managed_objects
+              WHERE status = 'released' ORDER BY 1",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            released,
+            ["column:posts.note", "index:posts.posts_body_idx"]
+        );
+    })
+    .await;
+}

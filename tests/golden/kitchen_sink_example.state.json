@@ -1130,7 +1130,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX _global_site_settings_pkey ON public._global_site_settings USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX _global_site_settings_pkey ON public._global_site_settings USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "attendee",
@@ -1144,7 +1146,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX attendee_pkey ON public.attendee USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX attendee_pkey ON public.attendee USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "chat_message",
@@ -1158,7 +1162,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX chat_message_pkey ON public.chat_message USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX chat_message_pkey ON public.chat_message USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "chat_message",
@@ -1172,7 +1178,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX chat_message_room_idx ON public.chat_message USING btree (room)"
+        "definition": "CREATE INDEX chat_message_room_idx ON public.chat_message USING btree (room)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "page",
@@ -1186,7 +1194,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX page_body_gin_idx ON public.page USING gin (body)"
+        "definition": "CREATE INDEX page_body_gin_idx ON public.page USING gin (body)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "page",
@@ -1200,7 +1210,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX page_pkey ON public.page USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX page_pkey ON public.page USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "page",
@@ -1214,7 +1226,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX page_slug_key ON public.page USING btree (slug)"
+        "definition": "CREATE UNIQUE INDEX page_slug_key ON public.page USING btree (slug)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "page_versions",
@@ -1228,7 +1242,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX page_versions_pkey ON public.page_versions USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX page_versions_pkey ON public.page_versions USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "page_versions",
@@ -1243,7 +1259,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX page_versions_record_id_version_key ON public.page_versions USING btree (record_id, version)"
+        "definition": "CREATE UNIQUE INDEX page_versions_record_id_version_key ON public.page_versions USING btree (record_id, version)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "page_versions",
@@ -1258,7 +1276,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX page_versions_record_idx ON public.page_versions USING btree (record_id, version DESC)"
+        "definition": "CREATE INDEX page_versions_record_idx ON public.page_versions USING btree (record_id, version DESC)",
+        "include": [],
+        "options": "2 DESC"
       },
       {
         "table": "room",
@@ -1272,7 +1292,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX room_pkey ON public.room USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX room_pkey ON public.room USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "spatial_ref_sys",
@@ -1286,7 +1308,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX spatial_ref_sys_pkey ON public.spatial_ref_sys USING btree (srid)"
+        "definition": "CREATE UNIQUE INDEX spatial_ref_sys_pkey ON public.spatial_ref_sys USING btree (srid)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "speaker",
@@ -1300,7 +1324,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX speaker_pkey ON public.speaker USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX speaker_pkey ON public.speaker USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "speaker",
@@ -1314,7 +1340,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX speaker_slug_key ON public.speaker USING btree (slug)"
+        "definition": "CREATE UNIQUE INDEX speaker_slug_key ON public.speaker USING btree (slug)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "speaker_versions",
@@ -1328,7 +1356,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX speaker_versions_pkey ON public.speaker_versions USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX speaker_versions_pkey ON public.speaker_versions USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "speaker_versions",
@@ -1343,7 +1373,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX speaker_versions_record_id_version_key ON public.speaker_versions USING btree (record_id, version)"
+        "definition": "CREATE UNIQUE INDEX speaker_versions_record_id_version_key ON public.speaker_versions USING btree (record_id, version)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "speaker_versions",
@@ -1358,7 +1390,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX speaker_versions_record_idx ON public.speaker_versions USING btree (record_id, version DESC)"
+        "definition": "CREATE INDEX speaker_versions_record_idx ON public.speaker_versions USING btree (record_id, version DESC)",
+        "include": [],
+        "options": "2 DESC"
       },
       {
         "table": "sponsor",
@@ -1372,7 +1406,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX sponsor_name_key ON public.sponsor USING btree (name)"
+        "definition": "CREATE UNIQUE INDEX sponsor_name_key ON public.sponsor USING btree (name)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "sponsor",
@@ -1386,7 +1422,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX sponsor_pkey ON public.sponsor USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX sponsor_pkey ON public.sponsor USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "talk",
@@ -1401,7 +1439,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX talk_day_starts_at_idx ON public.talk USING btree (day, starts_at)"
+        "definition": "CREATE INDEX talk_day_starts_at_idx ON public.talk USING btree (day, starts_at)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "talk",
@@ -1415,7 +1455,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX talk_pkey ON public.talk USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX talk_pkey ON public.talk USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "talk",
@@ -1429,7 +1471,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX talk_slug_key ON public.talk USING btree (slug)"
+        "definition": "CREATE UNIQUE INDEX talk_slug_key ON public.talk USING btree (slug)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "talk",
@@ -1443,7 +1487,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX talk_starts_at_idx ON public.talk USING btree (starts_at)"
+        "definition": "CREATE INDEX talk_starts_at_idx ON public.talk USING btree (starts_at)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "talk_versions",
@@ -1457,7 +1503,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX talk_versions_pkey ON public.talk_versions USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX talk_versions_pkey ON public.talk_versions USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "talk_versions",
@@ -1472,7 +1520,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX talk_versions_record_id_version_key ON public.talk_versions USING btree (record_id, version)"
+        "definition": "CREATE UNIQUE INDEX talk_versions_record_id_version_key ON public.talk_versions USING btree (record_id, version)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "talk_versions",
@@ -1487,7 +1537,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE INDEX talk_versions_record_idx ON public.talk_versions USING btree (record_id, version DESC)"
+        "definition": "CREATE INDEX talk_versions_record_idx ON public.talk_versions USING btree (record_id, version DESC)",
+        "include": [],
+        "options": "2 DESC"
       },
       {
         "table": "ticket",
@@ -1501,7 +1553,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX ticket_pkey ON public.ticket USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX ticket_pkey ON public.ticket USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "ticket",
@@ -1515,7 +1569,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX ticket_reference_key ON public.ticket USING btree (reference)"
+        "definition": "CREATE UNIQUE INDEX ticket_reference_key ON public.ticket USING btree (reference)",
+        "include": [],
+        "options": ""
       }
     ],
     "constraints": [
@@ -1531,6 +1587,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1543,6 +1600,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((\"supportEmail\" ~* '^[^@]+@[^@]+\\.[^@]+$'::text))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1555,6 +1613,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(\"displayName\") <= 80))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1569,6 +1628,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1585,7 +1645,14 @@
         ],
         "checkExpression": null,
         "onDelete": "RESTRICT",
-        "comment": null
+        "definition": "FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "chat_message",
@@ -1597,6 +1664,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(body) <= 500))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1609,6 +1677,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(body) >= 2))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1623,6 +1692,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1635,6 +1705,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK (((jsonb_typeof(body) = 'array'::text) AND (jsonb_array_length(body) <= 20)))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1649,6 +1720,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1663,6 +1735,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1675,6 +1748,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((char_length(summary) <= 200))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1689,6 +1763,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1705,7 +1780,14 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
-        "comment": null
+        "definition": "FOREIGN KEY (record_id) REFERENCES page(id) ON DELETE CASCADE",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "page_versions",
@@ -1720,6 +1802,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1732,6 +1815,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((status = ANY (ARRAY['draft'::text, 'published'::text])))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1744,6 +1828,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK (((capacity >= 10) AND (capacity <= 2000)))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1758,6 +1843,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1772,6 +1858,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1784,6 +1871,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK (((srid > 0) AND (srid <= 998999)))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1796,6 +1884,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((email ~* '^[^@]+@[^@]+\\.[^@]+$'::text))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1810,6 +1899,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1824,6 +1914,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1838,6 +1929,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1854,7 +1946,14 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
-        "comment": null
+        "definition": "FOREIGN KEY (record_id) REFERENCES speaker(id) ON DELETE CASCADE",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "speaker_versions",
@@ -1869,6 +1968,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1881,6 +1981,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((status = ANY (ARRAY['draft'::text, 'published'::text])))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1895,6 +1996,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1909,6 +2011,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1921,6 +2024,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((tier = ANY (ARRAY['platinum'::text, 'gold'::text, 'community'::text])))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1933,6 +2037,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((website ~* '^https?://'::text))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1945,6 +2050,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((starts_at <= ends_at))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1959,6 +2065,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -1975,7 +2082,14 @@
         ],
         "checkExpression": null,
         "onDelete": "RESTRICT",
-        "comment": null
+        "definition": "FOREIGN KEY (room_id) REFERENCES room(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "talk",
@@ -1989,6 +2103,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -2005,7 +2120,14 @@
         ],
         "checkExpression": null,
         "onDelete": "RESTRICT",
-        "comment": null
+        "definition": "FOREIGN KEY (speaker_id) REFERENCES speaker(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "talk_versions",
@@ -2019,6 +2141,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -2035,7 +2158,14 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
-        "comment": null
+        "definition": "FOREIGN KEY (record_id) REFERENCES talk(id) ON DELETE CASCADE",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "talk_versions",
@@ -2050,6 +2180,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -2062,6 +2193,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((status = ANY (ARRAY['draft'::text, 'published'::text])))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -2078,7 +2210,14 @@
         ],
         "checkExpression": null,
         "onDelete": "RESTRICT",
-        "comment": null
+        "definition": "FOREIGN KEY (attendee_id) REFERENCES attendee(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "ticket",
@@ -2094,7 +2233,14 @@
         ],
         "checkExpression": null,
         "onDelete": "RESTRICT",
-        "comment": null
+        "definition": "FOREIGN KEY (auth_user_id) REFERENCES auth.users(id) ON UPDATE CASCADE ON DELETE RESTRICT",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "CASCADE",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "ticket",
@@ -2108,6 +2254,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -2122,6 +2269,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       }
     ],
@@ -2131,7 +2279,7 @@
         "name": "_global_site_settings_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -2141,7 +2289,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2158,8 +2306,8 @@
         "name": "_global_site_settings_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2167,7 +2315,7 @@
         "name": "attendee_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
         "checkExpr": null,
         "managed": false
       },
@@ -2177,7 +2325,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "managed": false
       },
       {
@@ -2185,7 +2333,7 @@
         "name": "attendee_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "checkExpr": null,
         "managed": false
       },
@@ -2194,8 +2342,8 @@
         "name": "attendee_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "managed": false
       },
       {
@@ -2203,7 +2351,7 @@
         "name": "chat_message_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "checkExpr": null,
         "managed": false
       },
@@ -2213,7 +2361,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "managed": false
       },
       {
@@ -2221,7 +2369,7 @@
         "name": "chat_message_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "checkExpr": null,
         "managed": false
       },
@@ -2230,8 +2378,8 @@
         "name": "chat_message_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "managed": false
       },
       {
@@ -2239,7 +2387,7 @@
         "name": "page_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -2258,7 +2406,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2275,8 +2423,8 @@
         "name": "page_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2311,7 +2459,7 @@
         "name": "room_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -2321,7 +2469,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2338,8 +2486,8 @@
         "name": "room_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2347,7 +2495,7 @@
         "name": "speaker_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -2366,7 +2514,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2383,8 +2531,8 @@
         "name": "speaker_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2419,7 +2567,7 @@
         "name": "sponsor_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -2429,7 +2577,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2446,8 +2594,8 @@
         "name": "sponsor_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2455,7 +2603,7 @@
         "name": "talk_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "managed": false
       },
@@ -2474,7 +2622,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2491,8 +2639,8 @@
         "name": "talk_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "managed": false
       },
       {
@@ -2527,7 +2675,7 @@
         "name": "ticket_delete",
         "command": "d",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "checkExpr": null,
         "managed": false
       },
@@ -2537,7 +2685,7 @@
         "command": "a",
         "permissive": true,
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "managed": false
       },
       {
@@ -2545,7 +2693,7 @@
         "name": "ticket_select",
         "command": "r",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "checkExpr": null,
         "managed": false
       },
@@ -2554,8 +2702,8 @@
         "name": "ticket_update",
         "command": "w",
         "permissive": true,
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "managed": false
       }
     ],
@@ -2764,7 +2912,9 @@
         "comment": null,
         "expressions": "true",
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX _global_site_settings_singleton_idx ON public._global_site_settings USING btree ((true))"
+        "definition": "CREATE UNIQUE INDEX _global_site_settings_singleton_idx ON public._global_site_settings USING btree ((true))",
+        "include": [],
+        "options": ""
       }
     ],
     "triggers": [
@@ -3028,7 +3178,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  NEW.\"bio\" := CASE WHEN NEW.\"bio\" IS NULL THEN NULL WHEN NEW.\"bio\" ? 'root' THEN NEW.\"bio\" WHEN jsonb_typeof(NEW.\"bio\") <> 'object' THEN CASE WHEN NEW.\"bio\" IS NULL THEN NULL WHEN NEW.\"bio\" ? 'root' THEN NEW.\"bio\" WHEN jsonb_typeof(NEW.\"bio\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"bio\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"bio\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"bio\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"bio\"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW.\"bio\") AS locale), NEW.\"bio\") END;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.normalise_speaker_rich_text()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.\"bio\" := CASE WHEN NEW.\"bio\" IS NULL THEN NULL WHEN NEW.\"bio\" ? 'root' THEN NEW.\"bio\" WHEN jsonb_typeof(NEW.\"bio\") <> 'object' THEN CASE WHEN NEW.\"bio\" IS NULL THEN NULL WHEN NEW.\"bio\" ? 'root' THEN NEW.\"bio\" WHEN jsonb_typeof(NEW.\"bio\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"bio\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"bio\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"bio\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"bio\"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW.\"bio\") AS locale), NEW.\"bio\") END;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -3040,7 +3198,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  NEW.\"abstract\" := CASE WHEN NEW.\"abstract\" IS NULL THEN NULL WHEN NEW.\"abstract\" ? 'root' THEN NEW.\"abstract\" WHEN jsonb_typeof(NEW.\"abstract\") <> 'object' THEN CASE WHEN NEW.\"abstract\" IS NULL THEN NULL WHEN NEW.\"abstract\" ? 'root' THEN NEW.\"abstract\" WHEN jsonb_typeof(NEW.\"abstract\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"abstract\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"abstract\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"abstract\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"abstract\"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW.\"abstract\") AS locale), NEW.\"abstract\") END;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.normalise_talk_rich_text()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.\"abstract\" := CASE WHEN NEW.\"abstract\" IS NULL THEN NULL WHEN NEW.\"abstract\" ? 'root' THEN NEW.\"abstract\" WHEN jsonb_typeof(NEW.\"abstract\") <> 'object' THEN CASE WHEN NEW.\"abstract\" IS NULL THEN NULL WHEN NEW.\"abstract\" ? 'root' THEN NEW.\"abstract\" WHEN jsonb_typeof(NEW.\"abstract\") = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (NEW.\"abstract\" #>> '{}')::text)))))) WHEN jsonb_typeof(NEW.\"abstract\") = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(NEW.\"abstract\") AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', NEW.\"abstract\"::text::text)))))) END ELSE COALESCE((SELECT jsonb_object_agg(locale.key, CASE WHEN locale.value IS NULL THEN NULL WHEN locale.value ? 'root' THEN locale.value WHEN jsonb_typeof(locale.value) = 'string' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', (locale.value #>> '{}')::text)))))) WHEN jsonb_typeof(locale.value) = 'array' THEN jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', COALESCE((SELECT string_agg(CASE jsonb_typeof(elem) WHEN 'string' THEN elem #>> '{}' ELSE elem::text END, E'\\n') FROM jsonb_array_elements(locale.value) AS elem), '')::text)))))) ELSE jsonb_build_object('root', jsonb_build_object('type', 'root', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'paragraph', 'version', 1, 'direction', 'ltr', 'format', '', 'indent', 0, 'children', jsonb_build_array(jsonb_build_object('type', 'text', 'version', 1, 'detail', 0, 'format', 0, 'mode', 'normal', 'style', '', 'text', locale.value::text::text)))))) END) FROM jsonb_each(NEW.\"abstract\") AS locale), NEW.\"abstract\") END;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -3052,7 +3218,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_page_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -3064,7 +3238,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_speaker_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"name\" IS DISTINCT FROM OLD.\"name\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"name\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"name\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -3076,7 +3258,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_talk_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -3088,7 +3278,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -3100,7 +3298,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "val text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3112,7 +3318,17 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT auth.uid();\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.caller_id()\n RETURNS uuid\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT auth.uid();\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3124,7 +3340,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "p_record uuid",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_edit_page(p_record uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3136,7 +3360,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "p_record uuid",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_edit_speaker(p_record uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3148,7 +3380,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "p_record uuid",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.can_edit_talk(p_record uuid)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk\"\n       WHERE \"id\" = p_record AND ((SELECT auth.role()) = 'editor')\n    );\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3160,7 +3400,17 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n    SELECT CASE\n      WHEN cardinality(entry.\"localized_columns\") = 0 OR cardinality(entry.\"locales\") = 0\n        THEN ARRAY['*'] ELSE entry.\"locales\" END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "entry _supatype.versioned_models",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.default_locales(entry _supatype.versioned_models)\n RETURNS text[]\n LANGUAGE sql\n IMMUTABLE\n SET search_path TO ''\nAS $function$\n    SELECT CASE\n      WHEN cardinality(entry.\"localized_columns\") = 0 OR cardinality(entry.\"locales\") = 0\n        THEN ARRAY['*'] ELSE entry.\"locales\" END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3172,7 +3422,17 @@
         "volatility": "s",
         "securityDefiner": true,
         "body": "\n    SELECT COALESCE(s.\"override_visibility\", s.\"configured_visibility\")\n      FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.draft_visibility_roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT COALESCE(s.\"override_visibility\", s.\"configured_visibility\")\n      FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3184,7 +3444,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3196,7 +3464,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3208,7 +3484,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3220,7 +3504,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3232,7 +3524,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3244,7 +3544,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3256,7 +3564,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3268,7 +3584,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3280,7 +3604,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3292,7 +3624,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3304,7 +3644,17 @@
         "volatility": "v",
         "securityDefiner": true,
         "body": "\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"page_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.page_versions_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"page_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3316,7 +3666,17 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT CASE\n      WHEN c.claim IS NULL THEN false\n      -- A bumped epoch withdraws every link minted before it.\n      WHEN (c.claim->>'epoch') IS DISTINCT FROM _supatype.preview_epoch()::text THEN false\n      WHEN c.claim->>'scope' = 'project' THEN true\n      WHEN c.claim->>'scope' = 'record'\n        THEN c.claim->>'model' = target_model AND c.claim->>'record_id' = target_record\n      ELSE false\n    END\n    FROM (\n      SELECT (nullif(current_setting('request.jwt.claims', true), '')::jsonb -> 'preview') AS claim\n    ) c;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "target_model text, target_record text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_allows(target_model text, target_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n    SELECT CASE\n      WHEN c.claim IS NULL THEN false\n      -- A bumped epoch withdraws every link minted before it.\n      WHEN (c.claim->>'epoch') IS DISTINCT FROM _supatype.preview_epoch()::text THEN false\n      WHEN c.claim->>'scope' = 'project' THEN true\n      WHEN c.claim->>'scope' = 'record'\n        THEN c.claim->>'model' = target_model AND c.claim->>'record_id' = target_record\n      ELSE false\n    END\n    FROM (\n      SELECT (nullif(current_setting('request.jwt.claims', true), '')::jsonb -> 'preview') AS claim\n    ) c;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3328,7 +3688,17 @@
         "volatility": "s",
         "securityDefiner": true,
         "body": "\n    SELECT s.\"preview_epoch\" FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_epoch()\n RETURNS integer\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT s.\"preview_epoch\" FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3340,7 +3710,17 @@
         "volatility": "v",
         "securityDefiner": true,
         "body": "\n  DECLARE\n    removed integer;\n  BEGIN\n    DELETE FROM _supatype.preview_links\n     WHERE COALESCE(\"revoked_at\", \"expires_at\") < now() - interval '7 days';\n    GET DIAGNOSTICS removed = ROW_COUNT;\n    RETURN removed;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_preview_links()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    removed integer;\n  BEGIN\n    DELETE FROM _supatype.preview_links\n     WHERE COALESCE(\"revoked_at\", \"expires_at\") < now() - interval '7 days';\n    GET DIAGNOSTICS removed = ROW_COUNT;\n    RETURN removed;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3352,7 +3732,17 @@
         "volatility": "v",
         "securityDefiner": true,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n    RETURN removed;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_versions()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n    RETURN removed;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3364,7 +3754,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -3376,7 +3774,17 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models;\n    due record;\n    published integer := 0;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models WHERE \"drafts\" LOOP\n      FOR due IN\n        EXECUTE format(\n          'SELECT v.%I AS record_id, v.%I AS version,\n                  array_agg(e.key) AS locales\n             FROM %I.%I v, jsonb_each_text(v.%I) e\n            WHERE (e.value)::timestamptz <= $1\n            GROUP BY v.%I, v.%I',\n          'record_id', 'version', entry.\"schema_name\", entry.\"versions_table\",\n          'scheduled_locales', 'record_id', 'version')\n          USING now_at\n      LOOP\n        BEGIN\n          PERFORM \"supatype\".publish(\n            entry.\"table_name\", due.record_id::text, due.version, due.locales);\n          published := published + 1;\n        EXCEPTION WHEN OTHERS THEN\n          RAISE WARNING 'scheduled publish failed for % version % in %: %',\n            due.record_id, due.version, entry.\"table_name\", SQLERRM;\n        END;\n\n        EXECUTE format('UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n          entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n          'record_id', entry.\"primary_key_type\", 'version')\n          USING due.record_id::text, due.version, due.locales;\n      END LOOP;\n    END LOOP;\n    RETURN published;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "now_at timestamp with time zone DEFAULT now()",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.run_due_publishes(now_at timestamp with time zone DEFAULT now())\n RETURNS integer\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    due record;\n    published integer := 0;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models WHERE \"drafts\" LOOP\n      FOR due IN\n        EXECUTE format(\n          'SELECT v.%I AS record_id, v.%I AS version,\n                  array_agg(e.key) AS locales\n             FROM %I.%I v, jsonb_each_text(v.%I) e\n            WHERE (e.value)::timestamptz <= $1\n            GROUP BY v.%I, v.%I',\n          'record_id', 'version', entry.\"schema_name\", entry.\"versions_table\",\n          'scheduled_locales', 'record_id', 'version')\n          USING now_at\n      LOOP\n        BEGIN\n          PERFORM \"supatype\".publish(\n            entry.\"table_name\", due.record_id::text, due.version, due.locales);\n          published := published + 1;\n        EXCEPTION WHEN OTHERS THEN\n          RAISE WARNING 'scheduled publish failed for % version % in %: %',\n            due.record_id, due.version, entry.\"table_name\", SQLERRM;\n        END;\n\n        EXECUTE format('UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n          entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n          'record_id', entry.\"primary_key_type\", 'version')\n          USING due.record_id::text, due.version, due.locales;\n      END LOOP;\n    END LOOP;\n    RETURN published;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3388,7 +3796,17 @@
         "volatility": "s",
         "securityDefiner": true,
         "body": "\n  DECLARE\n    caller uuid := _supatype.caller_id();\n    caller_role text;\n  BEGIN\n    IF caller IS NULL THEN\n      RETURN false;\n    END IF;\n    SELECT m.role INTO caller_role FROM _supatype.studio_members m WHERE m.user_id = caller;\n    IF caller_role IS NULL THEN\n      RETURN false;\n    END IF;\n    RETURN caller_role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]));\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n    caller_role text;\n  BEGIN\n    IF caller IS NULL THEN\n      RETURN false;\n    END IF;\n    SELECT m.role INTO caller_role FROM _supatype.studio_members m WHERE m.user_id = caller;\n    IF caller_role IS NULL THEN\n      RETURN false;\n    END IF;\n    RETURN caller_role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]));\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3400,7 +3818,17 @@
         "volatility": "s",
         "securityDefiner": true,
         "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('page', v.\"record_id\"::text)\n         )\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "p_record text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_page(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"page_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('page', v.\"record_id\"::text)\n         )\n    );\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3412,7 +3840,17 @@
         "volatility": "s",
         "securityDefiner": true,
         "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('speaker', v.\"record_id\"::text)\n         )\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "p_record text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_speaker(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"speaker_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('speaker', v.\"record_id\"::text)\n         )\n    );\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3424,7 +3862,17 @@
         "volatility": "s",
         "securityDefiner": true,
         "body": "\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('talk', v.\"record_id\"::text)\n         )\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "p_record text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_talk(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"talk_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('talk', v.\"record_id\"::text)\n         )\n    );\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3436,7 +3884,17 @@
         "volatility": "v",
         "securityDefiner": true,
         "body": "\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"speaker_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.speaker_versions_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"speaker_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3448,7 +3906,17 @@
         "volatility": "v",
         "securityDefiner": true,
         "body": "\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"talk_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.talk_versions_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"talk_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  $function$\n"
       },
       {
         "schema": "_supatype",
@@ -3460,7 +3928,17 @@
         "volatility": "s",
         "securityDefiner": true,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models;\n  BEGIN\n    SELECT * INTO entry FROM _supatype.versioned_models WHERE \"table_name\" = p_table;\n    IF entry.\"table_name\" IS NULL THEN\n      RAISE EXCEPTION 'no versioned model for table %', p_table\n        USING ERRCODE = '22023',\n              HINT = 'Add `versions` to the model in your schema and push, or check the table name.';\n    END IF;\n    RETURN entry;\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "p_table text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.versioned_model(p_table text)\n RETURNS _supatype.versioned_models\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n  BEGIN\n    SELECT * INTO entry FROM _supatype.versioned_models WHERE \"table_name\" = p_table;\n    IF entry.\"table_name\" IS NULL THEN\n      RAISE EXCEPTION 'no versioned model for table %', p_table\n        USING ERRCODE = '22023',\n              HINT = 'Add `versions` to the model in your schema and push, or check the table name.';\n    END IF;\n    RETURN entry;\n  END;\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -3472,7 +3950,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -3484,7 +3970,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -3496,7 +3990,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -3508,7 +4010,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -3520,7 +4030,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -3532,7 +4050,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -3544,439 +4070,735 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n$function$\n"
       },
       {
         "schema": "public",
         "name": "can_create__global_site_settings",
-        "identityArguments": "_global_site_settings _global_site_settings",
+        "identityArguments": "_global_site_settings public._global_site_settings",
         "identityTypes": "public._global_site_settings",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "_global_site_settings public._global_site_settings",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create__global_site_settings(_global_site_settings public._global_site_settings)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_attendee",
-        "identityArguments": "attendee attendee",
+        "identityArguments": "attendee public.attendee",
         "identityTypes": "public.attendee",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"attendee\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "attendee public.attendee",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_attendee(attendee public.attendee)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"attendee\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_chat_message",
-        "identityArguments": "chat_message chat_message",
+        "identityArguments": "chat_message public.chat_message",
         "identityTypes": "public.chat_message",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "chat_message public.chat_message",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_chat_message(chat_message public.chat_message)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_page",
-        "identityArguments": "page page",
+        "identityArguments": "page public.page",
         "identityTypes": "public.page",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"page\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "page public.page",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_page(page public.page)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"page\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_room",
-        "identityArguments": "room room",
+        "identityArguments": "room public.room",
         "identityTypes": "public.room",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"room\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "room public.room",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_room(room public.room)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"room\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_speaker",
-        "identityArguments": "speaker speaker",
+        "identityArguments": "speaker public.speaker",
         "identityTypes": "public.speaker",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"speaker\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "speaker public.speaker",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_speaker(speaker public.speaker)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"speaker\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_sponsor",
-        "identityArguments": "sponsor sponsor",
+        "identityArguments": "sponsor public.sponsor",
         "identityTypes": "public.sponsor",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "sponsor public.sponsor",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_sponsor(sponsor public.sponsor)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_talk",
-        "identityArguments": "talk talk",
+        "identityArguments": "talk public.talk",
         "identityTypes": "public.talk",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"talk\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "talk public.talk",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_talk(talk public.talk)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"talk\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_ticket",
-        "identityArguments": "ticket ticket",
+        "identityArguments": "ticket public.ticket",
         "identityTypes": "public.ticket",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ticket\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "ticket public.ticket",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_ticket(ticket public.ticket)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"ticket\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete__global_site_settings",
-        "identityArguments": "_global_site_settings _global_site_settings",
+        "identityArguments": "_global_site_settings public._global_site_settings",
         "identityTypes": "public._global_site_settings",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "_global_site_settings public._global_site_settings",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete__global_site_settings(_global_site_settings public._global_site_settings)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_attendee",
-        "identityArguments": "attendee attendee",
+        "identityArguments": "attendee public.attendee",
         "identityTypes": "public.attendee",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"attendee\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "attendee public.attendee",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_attendee(attendee public.attendee)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"attendee\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_chat_message",
-        "identityArguments": "chat_message chat_message",
+        "identityArguments": "chat_message public.chat_message",
         "identityTypes": "public.chat_message",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "chat_message public.chat_message",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_chat_message(chat_message public.chat_message)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_page",
-        "identityArguments": "page page",
+        "identityArguments": "page public.page",
         "identityTypes": "public.page",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"page\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "page public.page",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_page(page public.page)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"page\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_room",
-        "identityArguments": "room room",
+        "identityArguments": "room public.room",
         "identityTypes": "public.room",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"room\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "room public.room",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_room(room public.room)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"room\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_speaker",
-        "identityArguments": "speaker speaker",
+        "identityArguments": "speaker public.speaker",
         "identityTypes": "public.speaker",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"speaker\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "speaker public.speaker",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_speaker(speaker public.speaker)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"speaker\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_sponsor",
-        "identityArguments": "sponsor sponsor",
+        "identityArguments": "sponsor public.sponsor",
         "identityTypes": "public.sponsor",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "sponsor public.sponsor",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_sponsor(sponsor public.sponsor)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_talk",
-        "identityArguments": "talk talk",
+        "identityArguments": "talk public.talk",
         "identityTypes": "public.talk",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"talk\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "talk public.talk",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_talk(talk public.talk)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"talk\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_ticket",
-        "identityArguments": "ticket ticket",
+        "identityArguments": "ticket public.ticket",
         "identityTypes": "public.ticket",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"ticket\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "ticket public.ticket",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_ticket(ticket public.ticket)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"ticket\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read__global_site_settings",
-        "identityArguments": "_global_site_settings _global_site_settings",
+        "identityArguments": "_global_site_settings public._global_site_settings",
         "identityTypes": "public._global_site_settings",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "_global_site_settings public._global_site_settings",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read__global_site_settings(_global_site_settings public._global_site_settings)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_attendee",
-        "identityArguments": "attendee attendee",
+        "identityArguments": "attendee public.attendee",
         "identityTypes": "public.attendee",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"attendee\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "attendee public.attendee",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_attendee(attendee public.attendee)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"attendee\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_chat_message",
-        "identityArguments": "chat_message chat_message",
+        "identityArguments": "chat_message public.chat_message",
         "identityTypes": "public.chat_message",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "chat_message public.chat_message",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_chat_message(chat_message public.chat_message)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) IS NOT NULL\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_page",
-        "identityArguments": "page page",
+        "identityArguments": "page public.page",
         "identityTypes": "public.page",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"page\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "page public.page",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_page(page public.page)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"page\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_room",
-        "identityArguments": "room room",
+        "identityArguments": "room public.room",
         "identityTypes": "public.room",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"room\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "room public.room",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_room(room public.room)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT TRUE\n      FROM (SELECT ($1).*) AS \"room\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_speaker",
-        "identityArguments": "speaker speaker",
+        "identityArguments": "speaker public.speaker",
         "identityTypes": "public.speaker",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"speaker\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "speaker public.speaker",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_speaker(speaker public.speaker)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"speaker\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_sponsor",
-        "identityArguments": "sponsor sponsor",
+        "identityArguments": "sponsor public.sponsor",
         "identityTypes": "public.sponsor",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "sponsor public.sponsor",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_sponsor(sponsor public.sponsor)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_talk",
-        "identityArguments": "talk talk",
+        "identityArguments": "talk public.talk",
         "identityTypes": "public.talk",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"talk\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "talk public.talk",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_talk(talk public.talk)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT \"published_at\" <= (SELECT now())\n      FROM (SELECT ($1).*) AS \"talk\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_ticket",
-        "identityArguments": "ticket ticket",
+        "identityArguments": "ticket public.ticket",
         "identityTypes": "public.ticket",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"ticket\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "ticket public.ticket",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_ticket(ticket public.ticket)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"ticket\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update__global_site_settings",
-        "identityArguments": "_global_site_settings _global_site_settings",
+        "identityArguments": "_global_site_settings public._global_site_settings",
         "identityTypes": "public._global_site_settings",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "_global_site_settings public._global_site_settings",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update__global_site_settings(_global_site_settings public._global_site_settings)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"_global_site_settings\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_attendee",
-        "identityArguments": "attendee attendee",
+        "identityArguments": "attendee public.attendee",
         "identityTypes": "public.attendee",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"attendee\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "attendee public.attendee",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_attendee(attendee public.attendee)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"id\"\n      FROM (SELECT ($1).*) AS \"attendee\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_chat_message",
-        "identityArguments": "chat_message chat_message",
+        "identityArguments": "chat_message public.chat_message",
         "identityTypes": "public.chat_message",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "chat_message public.chat_message",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_chat_message(chat_message public.chat_message)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"chat_message\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_page",
-        "identityArguments": "page page",
+        "identityArguments": "page public.page",
         "identityTypes": "public.page",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"page\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "page public.page",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_page(page public.page)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"page\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_room",
-        "identityArguments": "room room",
+        "identityArguments": "room public.room",
         "identityTypes": "public.room",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"room\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "room public.room",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_room(room public.room)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"room\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_speaker",
-        "identityArguments": "speaker speaker",
+        "identityArguments": "speaker public.speaker",
         "identityTypes": "public.speaker",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"speaker\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "speaker public.speaker",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_speaker(speaker public.speaker)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"speaker\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_sponsor",
-        "identityArguments": "sponsor sponsor",
+        "identityArguments": "sponsor public.sponsor",
         "identityTypes": "public.sponsor",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "sponsor public.sponsor",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_sponsor(sponsor public.sponsor)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"sponsor\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_talk",
-        "identityArguments": "talk talk",
+        "identityArguments": "talk public.talk",
         "identityTypes": "public.talk",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"talk\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "talk public.talk",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_talk(talk public.talk)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.role()) = 'editor'\n      FROM (SELECT ($1).*) AS \"talk\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_ticket",
-        "identityArguments": "ticket ticket",
+        "identityArguments": "ticket public.ticket",
         "identityTypes": "public.ticket",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"ticket\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "ticket public.ticket",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_ticket(ticket public.ticket)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT (SELECT auth.uid()) = \"auth_user_id\"\n      FROM (SELECT ($1).*) AS \"ticket\";\n  $function$\n"
       },
       {
         "schema": "supatype",
@@ -3988,7 +4810,17 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    base jsonb;\n    saved record;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Write to the table directly; every change is recorded as a version.';\n    END IF;\n\n    EXECUTE format(\n      'SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n      'data', entry.\"schema_name\", entry.\"versions_table\", 'record_id',\n      entry.\"primary_key_type\", 'version')\n      INTO base USING record_id;\n\n    IF base IS NULL THEN\n      EXECUTE format('SELECT to_jsonb(t) FROM %I.%I t WHERE t.%I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"primary_key\", entry.\"primary_key_type\")\n        INTO base USING record_id;\n    END IF;\n\n    IF base IS NULL THEN\n      RAISE EXCEPTION 'no such record % in %', record_id, model_table USING ERRCODE = '02000';\n    END IF;\n\n    -- `version`, `created_by` and `status` are the guard trigger's to assign.\n    EXECUTE format(\n      'INSERT INTO %I.%I (%I, %I) VALUES ($1::%s, $2) RETURNING %I, %I, %I',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', 'data',\n      entry.\"primary_key_type\", 'version', 'status', 'created_at')\n      INTO saved USING record_id, base || COALESCE(data, '{}'::jsonb);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', saved.\"version\",\n      'status', saved.\"status\", 'created_at', saved.\"created_at\");\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "model_table text, record_id text, data jsonb",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.create_draft(model_table text, record_id text, data jsonb)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    base jsonb;\n    saved record;\n  BEGIN\n    IF NOT entry.\"drafts\" THEN\n      RAISE EXCEPTION 'model % keeps history but does not withhold writes, so it has no drafts', entry.\"model_name\"\n        USING ERRCODE = '22023',\n              HINT = 'Write to the table directly; every change is recorded as a version.';\n    END IF;\n\n    EXECUTE format(\n      'SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n      'data', entry.\"schema_name\", entry.\"versions_table\", 'record_id',\n      entry.\"primary_key_type\", 'version')\n      INTO base USING record_id;\n\n    IF base IS NULL THEN\n      EXECUTE format('SELECT to_jsonb(t) FROM %I.%I t WHERE t.%I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"primary_key\", entry.\"primary_key_type\")\n        INTO base USING record_id;\n    END IF;\n\n    IF base IS NULL THEN\n      RAISE EXCEPTION 'no such record % in %', record_id, model_table USING ERRCODE = '02000';\n    END IF;\n\n    -- `version`, `created_by` and `status` are the guard trigger's to assign.\n    EXECUTE format(\n      'INSERT INTO %I.%I (%I, %I) VALUES ($1::%s, $2) RETURNING %I, %I, %I',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', 'data',\n      entry.\"primary_key_type\", 'version', 'status', 'created_at')\n      INTO saved USING record_id, base || COALESCE(data, '{}'::jsonb);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', saved.\"version\",\n      'status', saved.\"status\", 'created_at', saved.\"created_at\");\n  END;\n  $function$\n"
       },
       {
         "schema": "supatype",
@@ -3999,8 +4831,18 @@
         "language": "plpgsql",
         "volatility": "v",
         "securityDefiner": false,
-        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity.\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER';\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  ",
-        "comment": null
+        "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  ",
+        "comment": null,
+        "arguments": "model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[]",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target record;\n    want text[];\n    pending text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    stamp timestamptz := now();\n    updated integer;\n  BEGIN\n    -- The version to promote: the one named, or the newest.\n    IF version IS NULL THEN\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    ELSE\n      EXECUTE format(\n        'SELECT v.%I AS version, v.%I AS data, v.%I AS published_locales FROM %I.%I v\n          WHERE v.%I = $1::%s AND v.%I = $2',\n        'version', 'data', 'published_locales', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id, version;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to publish for % in %', record_id, model_table\n        USING ERRCODE = '02000',\n              HINT = 'Save a draft first, or name a version that exists.';\n    END IF;\n\n    -- `*` stands for the whole record on a model with no localized column, so the state map has one\n    -- shape rather than two.\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    -- Only the locales this version is not already live for. That is also what makes a repeat\n    -- publish a refusal rather than a silent no-op, and it replaced an earlier check that looked for\n    -- the newest *draft* and would fall back to an older one, putting stale content live.\n    SELECT array_agg(l) INTO pending\n      FROM unnest(want) AS l\n     WHERE NOT (target.published_locales ? l);\n\n    IF pending IS NULL THEN\n      RAISE EXCEPTION 'version % of % in % is already live for %',\n        target.version, record_id, model_table, array_to_string(want, ', ')\n        USING ERRCODE = '02000',\n              HINT = 'The live row already says what this version says.';\n    END IF;\n\n    -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a\n    -- draft must not be able to move a record's identity. So are the columns only the database\n    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to\n    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).\n    SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))\n      INTO assignments\n      FROM information_schema.columns c\n     WHERE c.table_schema = entry.\"schema_name\"\n       AND c.table_name = entry.\"table_name\"\n       AND c.column_name <> entry.\"primary_key\"\n       AND NOT (c.column_name = ANY (entry.\"localized_columns\"))\n       AND c.is_generated = 'NEVER'\n       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');\n    assignments := COALESCE(assignments, ARRAY[]::text[]);\n\n    -- Localized columns, merged key by key for the locales being published.\n    -- `jsonb_each` raises on anything but an object, and a localized column the author has not\n    -- filled in is JSON `null` in the snapshot rather than absent. Found by running it: every\n    -- publish failed `22023` the moment the fixture gained a localized field nobody had set.\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format(\n        '%I = COALESCE(%I, ''{}''::jsonb) || (\n           SELECT COALESCE(jsonb_object_agg(e.key, e.value), ''{}''::jsonb)\n             FROM jsonb_each(CASE WHEN jsonb_typeof($2 -> %L) = ''object''\n                                  THEN $2 -> %L ELSE ''{}''::jsonb END) e\n            WHERE e.key = ANY ($3))',\n        col, col, col, col);\n    END LOOP;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %s FROM (SELECT jsonb_populate_record(NULL::%I.%I, $2) AS r) src\n        WHERE %I = $1::%s',\n      entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n      entry.\"schema_name\", entry.\"table_name\",\n      entry.\"primary_key\", entry.\"primary_key_type\")\n      USING record_id, target.data, pending;\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to publish % in %', record_id, model_table\n        USING ERRCODE = '42501',\n              HINT = 'Publishing a record requires the same permission as editing it.';\n    END IF;\n\n    IF entry.\"published_at_column\" IS NOT NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = COALESCE(%I, $2) WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\",\n        entry.\"published_at_column\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, stamp;\n    END IF;\n\n    -- Exactly one version claims a locale, so publishing takes it off every other version. Without\n    -- this, \"which version is live for fr\" would have several answers after a restore.\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $3, %I = CASE WHEN (%I - $3) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I <> $2 AND %I ?| $3',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'version', 'published_locales')\n      USING record_id, target.version, pending;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3, %I = ''published''\n        WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target.version,\n            (SELECT jsonb_object_agg(l, stamp) FROM unnest(pending) AS l);\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target.version,\n      'status', 'published', 'locales', to_jsonb(pending));\n  END;\n  $function$\n"
       },
       {
         "schema": "supatype",
@@ -4012,7 +4854,17 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    snapshot jsonb;\n  BEGIN\n    EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s AND v.%I = $2',\n      'data', entry.\"schema_name\", entry.\"versions_table\",\n      'record_id', entry.\"primary_key_type\", 'version')\n      INTO snapshot USING record_id, version;\n\n    IF snapshot IS NULL THEN\n      RAISE EXCEPTION 'no version % of % in %', version, record_id, model_table\n        USING ERRCODE = '02000';\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, record_id, snapshot);\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "model_table text, record_id text, version integer",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.restore_version(model_table text, record_id text, version integer)\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    snapshot jsonb;\n  BEGIN\n    EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s AND v.%I = $2',\n      'data', entry.\"schema_name\", entry.\"versions_table\",\n      'record_id', entry.\"primary_key_type\", 'version')\n      INTO snapshot USING record_id, version;\n\n    IF snapshot IS NULL THEN\n      RAISE EXCEPTION 'no version % of % in %', version, record_id, model_table\n        USING ERRCODE = '02000';\n    END IF;\n\n    RETURN \"supatype\".create_draft(model_table, record_id, snapshot);\n  END;\n  $function$\n"
       },
       {
         "schema": "supatype",
@@ -4024,7 +4876,17 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target integer;\n    want text[];\n    updated integer;\n  BEGIN\n    IF at IS NULL THEN\n      RAISE EXCEPTION 'schedule_publish needs a time' USING ERRCODE = '22023';\n    END IF;\n\n    target := version;\n    IF target IS NULL THEN\n      EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to schedule for % in %', record_id, model_table\n        USING ERRCODE = '02000', HINT = 'Save a draft first.';\n    END IF;\n\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3 WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target,\n            (SELECT jsonb_object_agg(l, at) FROM unnest(want) AS l);\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to schedule % in %, or no such version', record_id, model_table\n        USING ERRCODE = '42501';\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target, 'at', at, 'locales', to_jsonb(want));\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "model_table text, record_id text, at timestamp with time zone, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[]",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.schedule_publish(model_table text, record_id text, at timestamp with time zone, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    target integer;\n    want text[];\n    updated integer;\n  BEGIN\n    IF at IS NULL THEN\n      RAISE EXCEPTION 'schedule_publish needs a time' USING ERRCODE = '22023';\n    END IF;\n\n    target := version;\n    IF target IS NULL THEN\n      EXECUTE format('SELECT v.%I FROM %I.%I v WHERE v.%I = $1::%s ORDER BY v.%I DESC LIMIT 1',\n        'version', entry.\"schema_name\", entry.\"versions_table\",\n        'record_id', entry.\"primary_key_type\", 'version')\n        INTO target USING record_id;\n    END IF;\n\n    IF target IS NULL THEN\n      RAISE EXCEPTION 'no version to schedule for % in %', record_id, model_table\n        USING ERRCODE = '02000', HINT = 'Save a draft first.';\n    END IF;\n\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I || $3 WHERE %I = $1::%s AND %I = $2',\n      entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n      'record_id', entry.\"primary_key_type\", 'version')\n      USING record_id, target,\n            (SELECT jsonb_object_agg(l, at) FROM unnest(want) AS l);\n    GET DIAGNOSTICS updated = ROW_COUNT;\n\n    IF updated = 0 THEN\n      RAISE EXCEPTION 'not permitted to schedule % in %, or no such version', record_id, model_table\n        USING ERRCODE = '42501';\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'version', target, 'at', at, 'locales', to_jsonb(want));\n  END;\n  $function$\n"
       },
       {
         "schema": "supatype",
@@ -4036,7 +4898,17 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "model_table text, record_id text, locales text[] DEFAULT NULL::text[]",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.unpublish(model_table text, record_id text, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[];\n    assignments text[] := ARRAY[]::text[];\n    col text;\n    remaining boolean;\n    updated integer;\n  BEGIN\n    want := COALESCE(locales, _supatype.default_locales(entry));\n\n    FOREACH col IN ARRAY entry.\"localized_columns\" LOOP\n      assignments := assignments || format('%I = COALESCE(%I, ''{}''::jsonb) - $2', col, col);\n    END LOOP;\n\n    IF cardinality(assignments) > 0 THEN\n      EXECUTE format('UPDATE %I.%I SET %s WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", array_to_string(assignments, ', '),\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id, want;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    EXECUTE format(\n      'UPDATE %I.%I SET %I = %I - $2, %I = CASE WHEN (%I - $2) = ''{}''::jsonb\n          THEN ''draft'' ELSE ''published'' END\n        WHERE %I = $1::%s AND %I ?| $2',\n      entry.\"schema_name\", entry.\"versions_table\",\n      'published_locales', 'published_locales', 'status', 'published_locales',\n      'record_id', entry.\"primary_key_type\", 'published_locales')\n      USING record_id, want;\n\n    EXECUTE format(\n      'SELECT EXISTS (SELECT 1 FROM %I.%I v WHERE v.%I = $1::%s AND v.%I <> ''{}''::jsonb)',\n      entry.\"schema_name\", entry.\"versions_table\", 'record_id', entry.\"primary_key_type\",\n      'published_locales')\n      INTO remaining USING record_id;\n\n    IF entry.\"published_at_column\" IS NOT NULL AND NOT remaining THEN\n      EXECUTE format('UPDATE %I.%I SET %I = NULL WHERE %I = $1::%s',\n        entry.\"schema_name\", entry.\"table_name\", entry.\"published_at_column\",\n        entry.\"primary_key\", entry.\"primary_key_type\")\n        USING record_id;\n      GET DIAGNOSTICS updated = ROW_COUNT;\n      IF updated = 0 THEN\n        RAISE EXCEPTION 'not permitted to unpublish % in %, or no such record', record_id, model_table\n          USING ERRCODE = '42501';\n      END IF;\n    END IF;\n\n    RETURN jsonb_build_object(\n      'record_id', record_id, 'status',\n      CASE WHEN remaining THEN 'partially_published' ELSE 'unpublished' END,\n      'locales', to_jsonb(want));\n  END;\n  $function$\n"
       },
       {
         "schema": "supatype",
@@ -4048,7 +4920,17 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[] := COALESCE(locales, _supatype.default_locales(entry));\n  BEGIN\n    IF version IS NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = %I - $2 WHERE %I = $1::%s AND %I ?| $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'scheduled_locales')\n        USING record_id, want;\n    ELSE\n      EXECUTE format(\n        'UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'version')\n        USING record_id, version, want;\n    END IF;\n\n    RETURN jsonb_build_object('record_id', record_id, 'locales', to_jsonb(want));\n  END;\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[]",
+        "config": [
+          "search_path=pg_catalog, public, extensions"
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION supatype.unschedule_publish(model_table text, record_id text, version integer DEFAULT NULL::integer, locales text[] DEFAULT NULL::text[])\n RETURNS jsonb\n LANGUAGE plpgsql\n SET search_path TO 'pg_catalog', 'public', 'extensions'\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models := _supatype.versioned_model(model_table);\n    want text[] := COALESCE(locales, _supatype.default_locales(entry));\n  BEGIN\n    IF version IS NULL THEN\n      EXECUTE format('UPDATE %I.%I SET %I = %I - $2 WHERE %I = $1::%s AND %I ?| $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'scheduled_locales')\n        USING record_id, want;\n    ELSE\n      EXECUTE format(\n        'UPDATE %I.%I SET %I = %I - $3 WHERE %I = $1::%s AND %I = $2',\n        entry.\"schema_name\", entry.\"versions_table\", 'scheduled_locales', 'scheduled_locales',\n        'record_id', entry.\"primary_key_type\", 'version')\n        USING record_id, version, want;\n    END IF;\n\n    RETURN jsonb_build_object('record_id', record_id, 'locales', to_jsonb(want));\n  END;\n  $function$\n"
       }
     ],
     "views": [
@@ -4056,21 +4938,21 @@
         "schema": "draft",
         "name": "page",
         "materialized": false,
-        "definition": " SELECT (jsonb_populate_record(NULL::page, data)).id AS id,\n    (jsonb_populate_record(NULL::page, data)).title AS title,\n    (jsonb_populate_record(NULL::page, data)).slug AS slug,\n    (jsonb_populate_record(NULL::page, data)).summary AS summary,\n    (jsonb_populate_record(NULL::page, data)).body AS body,\n    (jsonb_populate_record(NULL::page, data)).published_at AS published_at,\n    (jsonb_populate_record(NULL::page, data)).created_at AS created_at,\n    (jsonb_populate_record(NULL::page, data)).updated_at AS updated_at\n   FROM ( SELECT DISTINCT ON (pv.record_id) pv.record_id,\n            pv.data\n           FROM page_versions pv\n          ORDER BY pv.record_id, pv.version DESC) v;",
+        "definition": " SELECT (jsonb_populate_record(NULL::public.page, data)).id AS id,\n    (jsonb_populate_record(NULL::public.page, data)).title AS title,\n    (jsonb_populate_record(NULL::public.page, data)).slug AS slug,\n    (jsonb_populate_record(NULL::public.page, data)).summary AS summary,\n    (jsonb_populate_record(NULL::public.page, data)).body AS body,\n    (jsonb_populate_record(NULL::public.page, data)).published_at AS published_at,\n    (jsonb_populate_record(NULL::public.page, data)).created_at AS created_at,\n    (jsonb_populate_record(NULL::public.page, data)).updated_at AS updated_at\n   FROM ( SELECT DISTINCT ON (pv.record_id) pv.record_id,\n            pv.data\n           FROM public.page_versions pv\n          ORDER BY pv.record_id, pv.version DESC) v;",
         "comment": null
       },
       {
         "schema": "draft",
         "name": "speaker",
         "materialized": false,
-        "definition": " SELECT (jsonb_populate_record(NULL::speaker, data)).id AS id,\n    (jsonb_populate_record(NULL::speaker, data)).name AS name,\n    (jsonb_populate_record(NULL::speaker, data)).slug AS slug,\n    (jsonb_populate_record(NULL::speaker, data)).bio AS bio,\n    (jsonb_populate_record(NULL::speaker, data)).headshot AS headshot,\n    (jsonb_populate_record(NULL::speaker, data)).links AS links,\n    (jsonb_populate_record(NULL::speaker, data)).email AS email,\n    (jsonb_populate_record(NULL::speaker, data)).published_at AS published_at,\n    (jsonb_populate_record(NULL::speaker, data)).created_at AS created_at,\n    (jsonb_populate_record(NULL::speaker, data)).updated_at AS updated_at\n   FROM ( SELECT DISTINCT ON (pv.record_id) pv.record_id,\n            pv.data\n           FROM speaker_versions pv\n          ORDER BY pv.record_id, pv.version DESC) v;",
+        "definition": " SELECT (jsonb_populate_record(NULL::public.speaker, data)).id AS id,\n    (jsonb_populate_record(NULL::public.speaker, data)).name AS name,\n    (jsonb_populate_record(NULL::public.speaker, data)).slug AS slug,\n    (jsonb_populate_record(NULL::public.speaker, data)).bio AS bio,\n    (jsonb_populate_record(NULL::public.speaker, data)).headshot AS headshot,\n    (jsonb_populate_record(NULL::public.speaker, data)).links AS links,\n    (jsonb_populate_record(NULL::public.speaker, data)).email AS email,\n    (jsonb_populate_record(NULL::public.speaker, data)).published_at AS published_at,\n    (jsonb_populate_record(NULL::public.speaker, data)).created_at AS created_at,\n    (jsonb_populate_record(NULL::public.speaker, data)).updated_at AS updated_at\n   FROM ( SELECT DISTINCT ON (pv.record_id) pv.record_id,\n            pv.data\n           FROM public.speaker_versions pv\n          ORDER BY pv.record_id, pv.version DESC) v;",
         "comment": null
       },
       {
         "schema": "draft",
         "name": "talk",
         "materialized": false,
-        "definition": " SELECT (jsonb_populate_record(NULL::talk, data)).id AS id,\n    (jsonb_populate_record(NULL::talk, data)).title AS title,\n    (jsonb_populate_record(NULL::talk, data)).slug AS slug,\n    (jsonb_populate_record(NULL::talk, data)).abstract AS abstract,\n    (jsonb_populate_record(NULL::talk, data)).speaker_id AS speaker_id,\n    (jsonb_populate_record(NULL::talk, data)).room_id AS room_id,\n    (jsonb_populate_record(NULL::talk, data)).day AS day,\n    (jsonb_populate_record(NULL::talk, data)).starts_at AS starts_at,\n    (jsonb_populate_record(NULL::talk, data)).ends_at AS ends_at,\n    (jsonb_populate_record(NULL::talk, data)).length AS length,\n    (jsonb_populate_record(NULL::talk, data)).embedding AS embedding,\n    (jsonb_populate_record(NULL::talk, data)).published_at AS published_at,\n    (jsonb_populate_record(NULL::talk, data)).created_at AS created_at,\n    (jsonb_populate_record(NULL::talk, data)).updated_at AS updated_at\n   FROM ( SELECT DISTINCT ON (pv.record_id) pv.record_id,\n            pv.data\n           FROM talk_versions pv\n          ORDER BY pv.record_id, pv.version DESC) v;",
+        "definition": " SELECT (jsonb_populate_record(NULL::public.talk, data)).id AS id,\n    (jsonb_populate_record(NULL::public.talk, data)).title AS title,\n    (jsonb_populate_record(NULL::public.talk, data)).slug AS slug,\n    (jsonb_populate_record(NULL::public.talk, data)).abstract AS abstract,\n    (jsonb_populate_record(NULL::public.talk, data)).speaker_id AS speaker_id,\n    (jsonb_populate_record(NULL::public.talk, data)).room_id AS room_id,\n    (jsonb_populate_record(NULL::public.talk, data)).day AS day,\n    (jsonb_populate_record(NULL::public.talk, data)).starts_at AS starts_at,\n    (jsonb_populate_record(NULL::public.talk, data)).ends_at AS ends_at,\n    (jsonb_populate_record(NULL::public.talk, data)).length AS length,\n    (jsonb_populate_record(NULL::public.talk, data)).embedding AS embedding,\n    (jsonb_populate_record(NULL::public.talk, data)).published_at AS published_at,\n    (jsonb_populate_record(NULL::public.talk, data)).created_at AS created_at,\n    (jsonb_populate_record(NULL::public.talk, data)).updated_at AS updated_at\n   FROM ( SELECT DISTINCT ON (pv.record_id) pv.record_id,\n            pv.data\n           FROM public.talk_versions pv\n          ORDER BY pv.record_id, pv.version DESC) v;",
         "comment": null
       }
     ],
@@ -4770,7 +5652,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -4784,7 +5666,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -4809,8 +5691,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -4822,7 +5704,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
         "checkExpr": null,
         "comment": null
       },
@@ -4836,7 +5718,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "comment": null
       },
       {
@@ -4848,7 +5730,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "checkExpr": null,
         "comment": null
       },
@@ -4861,8 +5743,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = id)",
-        "checkExpr": "(( SELECT uid() AS uid) = id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = id)",
         "comment": null
       },
       {
@@ -4874,7 +5756,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "checkExpr": null,
         "comment": null
       },
@@ -4888,7 +5770,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "comment": null
       },
       {
@@ -4900,7 +5782,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "checkExpr": null,
         "comment": null
       },
@@ -4913,8 +5795,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "comment": null
       },
       {
@@ -4926,7 +5808,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -4953,7 +5835,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -4978,8 +5860,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5030,7 +5912,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -5044,7 +5926,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5069,8 +5951,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5082,7 +5964,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -5109,7 +5991,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5134,8 +6016,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5186,7 +6068,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -5200,7 +6082,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5225,8 +6107,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5238,7 +6120,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "checkExpr": null,
         "comment": null
       },
@@ -5265,7 +6147,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5290,8 +6172,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT role() AS role) = 'editor'::text)",
-        "checkExpr": "(( SELECT role() AS role) = 'editor'::text)",
+        "usingExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
+        "checkExpr": "(( SELECT auth.role() AS role) = 'editor'::text)",
         "comment": null
       },
       {
@@ -5342,7 +6224,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "checkExpr": null,
         "comment": null
       },
@@ -5356,7 +6238,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "(( SELECT uid() AS uid) IS NOT NULL)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) IS NOT NULL)",
         "comment": null
       },
       {
@@ -5368,7 +6250,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "checkExpr": null,
         "comment": null
       },
@@ -5381,8 +6263,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "(( SELECT uid() AS uid) = auth_user_id)",
-        "checkExpr": "(( SELECT uid() AS uid) = auth_user_id)",
+        "usingExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
+        "checkExpr": "(( SELECT auth.uid() AS uid) = auth_user_id)",
         "comment": null
       },
       {
@@ -5394,7 +6276,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() = owner))",
+        "usingExpr": "((bucket_id = 'speaker-headshots'::text) AND (auth.uid() = owner))",
         "checkExpr": null,
         "comment": null
       },
@@ -5408,7 +6290,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() IS NOT NULL))",
+        "checkExpr": "((bucket_id = 'speaker-headshots'::text) AND (auth.uid() IS NOT NULL))",
         "comment": null
       },
       {
@@ -5433,8 +6315,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() = owner))",
-        "checkExpr": "((bucket_id = 'speaker-headshots'::text) AND (uid() = owner))",
+        "usingExpr": "((bucket_id = 'speaker-headshots'::text) AND (auth.uid() = owner))",
+        "checkExpr": "((bucket_id = 'speaker-headshots'::text) AND (auth.uid() = owner))",
         "comment": null
       },
       {
@@ -5460,7 +6342,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "((bucket_id = 'sponsor-assets'::text) AND (role() = 'sponsor'::text))",
+        "checkExpr": "((bucket_id = 'sponsor-assets'::text) AND (auth.role() = 'sponsor'::text))",
         "comment": null
       },
       {
@@ -5472,7 +6354,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((bucket_id = 'sponsor-assets'::text) AND (role() = 'sponsor'::text))",
+        "usingExpr": "((bucket_id = 'sponsor-assets'::text) AND (auth.role() = 'sponsor'::text))",
         "checkExpr": null,
         "comment": null
       },
@@ -5498,7 +6380,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
+        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (auth.uid() = owner))",
         "checkExpr": null,
         "comment": null
       },
@@ -5512,7 +6394,7 @@
           "public"
         ],
         "usingExpr": null,
-        "checkExpr": "((bucket_id = 'ticket-files'::text) AND (uid() IS NOT NULL))",
+        "checkExpr": "((bucket_id = 'ticket-files'::text) AND (auth.uid() IS NOT NULL))",
         "comment": null
       },
       {
@@ -5524,7 +6406,7 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
+        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (auth.uid() = owner))",
         "checkExpr": null,
         "comment": null
       },
@@ -5537,8 +6419,8 @@
         "roles": [
           "public"
         ],
-        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
-        "checkExpr": "((bucket_id = 'ticket-files'::text) AND (uid() = owner))",
+        "usingExpr": "((bucket_id = 'ticket-files'::text) AND (auth.uid() = owner))",
+        "checkExpr": "((bucket_id = 'ticket-files'::text) AND (auth.uid() = owner))",
         "comment": null
       }
     ],
@@ -5842,7 +6724,9 @@
             "comment": null,
             "expressions": null,
             "predicate": "(revoked_at IS NULL)",
-            "definition": "CREATE INDEX preview_links_live_for_record ON _supatype.preview_links USING btree (model, record_id) WHERE (revoked_at IS NULL)"
+            "definition": "CREATE INDEX preview_links_live_for_record ON _supatype.preview_links USING btree (model, record_id) WHERE (revoked_at IS NULL)",
+            "include": [],
+            "options": ""
           },
           {
             "table": "preview_links",
@@ -5856,7 +6740,9 @@
             "comment": null,
             "expressions": null,
             "predicate": null,
-            "definition": "CREATE UNIQUE INDEX preview_links_pkey ON _supatype.preview_links USING btree (id)"
+            "definition": "CREATE UNIQUE INDEX preview_links_pkey ON _supatype.preview_links USING btree (id)",
+            "include": [],
+            "options": ""
           },
           {
             "table": "publishing_settings",
@@ -5870,7 +6756,9 @@
             "comment": null,
             "expressions": null,
             "predicate": null,
-            "definition": "CREATE UNIQUE INDEX publishing_settings_pkey ON _supatype.publishing_settings USING btree (singleton)"
+            "definition": "CREATE UNIQUE INDEX publishing_settings_pkey ON _supatype.publishing_settings USING btree (singleton)",
+            "include": [],
+            "options": ""
           },
           {
             "table": "versioned_models",
@@ -5884,7 +6772,9 @@
             "comment": null,
             "expressions": null,
             "predicate": null,
-            "definition": "CREATE UNIQUE INDEX versioned_models_pkey ON _supatype.versioned_models USING btree (table_name)"
+            "definition": "CREATE UNIQUE INDEX versioned_models_pkey ON _supatype.versioned_models USING btree (table_name)",
+            "include": [],
+            "options": ""
           }
         ],
         "constraints": [
@@ -5900,6 +6790,7 @@
             "foreignColumns": null,
             "checkExpression": null,
             "onDelete": null,
+            "definition": null,
             "comment": null
           },
           {
@@ -5912,6 +6803,7 @@
             "foreignColumns": null,
             "checkExpression": "CHECK (((scope <> 'record'::text) OR ((model IS NOT NULL) AND (record_id IS NOT NULL))))",
             "onDelete": null,
+            "definition": null,
             "comment": null
           },
           {
@@ -5924,6 +6816,7 @@
             "foreignColumns": null,
             "checkExpression": "CHECK ((scope = ANY (ARRAY['record'::text, 'project'::text])))",
             "onDelete": null,
+            "definition": null,
             "comment": null
           },
           {
@@ -5938,6 +6831,7 @@
             "foreignColumns": null,
             "checkExpression": null,
             "onDelete": null,
+            "definition": null,
             "comment": null
           },
           {
@@ -5950,6 +6844,7 @@
             "foreignColumns": null,
             "checkExpression": "CHECK (singleton)",
             "onDelete": null,
+            "definition": null,
             "comment": null
           },
           {
@@ -5964,6 +6859,7 @@
             "foreignColumns": null,
             "checkExpression": null,
             "onDelete": null,
+            "definition": null,
             "comment": null
           }
         ]

@@ -5,7 +5,7 @@ use crate::introspector::{
 };
 use crate::ledger::{LedgerRow, Status};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +28,22 @@ pub struct DatabaseState {
     /// false when released. Filled by the caller that read the ledger; never part of a snapshot.
     #[serde(skip)]
     pub table_ownership: BTreeMap<String, bool>,
+    /// The same for each column the ledger has a row for, keyed by table and column (D4).
+    #[serde(skip)]
+    pub column_ownership: BTreeMap<(String, String), bool>,
+    /// The columns among those the ledger records as `adopted`: Supatype knows of them, but they
+    /// are not of its making, so a rename never takes one as its source.
+    #[serde(skip)]
+    pub adopted_columns: BTreeSet<(String, String)>,
+    /// The `(table, policy)` pairs of this schema the ledger records as Supatype's (not released):
+    /// the reconcile's to keep or drop. Filled with `table_ownership`; never part of a snapshot.
+    #[serde(skip)]
+    pub owned_policies: BTreeSet<(String, String)>,
+    /// The statement the ledger records for each column it has a row for, keyed by table and
+    /// column: what the last push declared, which the differ compares a generated column's
+    /// expression with (Postgres deparses the live one into other words). Never part of a snapshot.
+    #[serde(skip)]
+    pub recorded_columns: BTreeMap<(String, String), String>,
 }
 
 impl DatabaseState {
@@ -41,12 +57,77 @@ impl DatabaseState {
             .unwrap_or_else(|| crate::managed::is_managed_comment(table.comment.as_deref()))
     }
 
-    /// Takes each table's ownership from the ledger rows of `schema`.
+    /// What the ledger says of `column` on `table`: `Some(true)` when Supatype's, `Some(false)`
+    /// when released, `None` when it has no row.
+    pub fn column_owned(&self, table: &str, column: &str) -> Option<bool> {
+        self.column_ownership
+            .get(&(table.to_string(), column.to_string()))
+            .copied()
+    }
+
+    /// Whether the ledger records `column` on `table` as adopted rather than made by Supatype.
+    pub fn column_adopted(&self, table: &str, column: &str) -> bool {
+        self.adopted_columns
+            .contains(&(table.to_string(), column.to_string()))
+    }
+
+    /// Takes each table's and each column's ownership, and which policies are ours, from the
+    /// ledger rows of `schema`.
     pub fn set_table_ownership(&mut self, ledger: &[LedgerRow]) {
-        self.table_ownership = ledger
-            .iter()
-            .filter(|r| r.key.kind == ObjectKind::Table && r.key.schema == self.schema)
+        let schema = self.schema.as_str();
+        let here = |kind| {
+            ledger
+                .iter()
+                .filter(move |r: &&LedgerRow| r.key.kind == kind && r.key.schema == schema)
+        };
+        let table_ownership = here(ObjectKind::Table)
             .map(|r| (r.key.name.clone(), r.status != Status::Released))
             .collect();
+        let column_ownership = here(ObjectKind::Column)
+            .map(|r| {
+                (
+                    (r.key.parent.clone(), r.key.name.clone()),
+                    r.status != Status::Released,
+                )
+            })
+            .collect();
+        let adopted_columns = here(ObjectKind::Column)
+            .filter(|r| r.status == Status::Adopted)
+            .map(|r| (r.key.parent.clone(), r.key.name.clone()))
+            .collect();
+        let recorded_columns = here(ObjectKind::Column)
+            .map(|r| {
+                (
+                    (r.key.parent.clone(), r.key.name.clone()),
+                    r.desired_sql.clone(),
+                )
+            })
+            .collect();
+        let owned_policies = here(ObjectKind::Policy)
+            .filter(|r| r.status != Status::Released)
+            .map(|r| (r.key.parent.clone(), r.key.name.clone()))
+            .collect();
+        self.table_ownership = table_ownership;
+        self.column_ownership = column_ownership;
+        self.adopted_columns = adopted_columns;
+        self.owned_policies = owned_policies;
+        self.recorded_columns = recorded_columns;
+    }
+
+    /// The statement the ledger records for `column` on `table`, when it has a row for it.
+    pub fn recorded_column_sql(&self, table: &str, column: &str) -> Option<&str> {
+        self.recorded_columns
+            .get(&(table.to_string(), column.to_string()))
+            .map(String::as_str)
+    }
+
+    /// Whether a policy is Supatype's: the ledger records it, or it carries the stamp an older
+    /// engine wrote. One that is, but that the schema no longer declares, is the reconcile's to
+    /// drop, not a hand-written policy.
+    pub fn owns_policy(&self, policy: &DbRlsPolicy) -> bool {
+        policy.managed
+            || self
+                .owned_policies
+                .contains(&(policy.table.clone(), policy.name.clone()))
     }
 }

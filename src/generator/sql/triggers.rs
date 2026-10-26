@@ -12,6 +12,7 @@
 //! Supatype did not create.
 
 use crate::desired::identity::function_key;
+use crate::managed::ObjectNames;
 use crate::parser::ast::{FieldAst, ModelAst, SchemaAst};
 use anyhow::Result;
 
@@ -130,7 +131,7 @@ fn needs_updated_at(model: &ModelAst) -> bool {
         || model.fields.contains_key("updated_at")
 }
 
-fn slug_fields(model: &ModelAst) -> impl Iterator<Item = (&String, &str)> {
+pub(crate) fn slug_fields(model: &ModelAst) -> impl Iterator<Item = (&String, &str)> {
     model.fields.iter().filter_map(|(name, field)| match field {
         FieldAst::Slug(slug) => Some((name, slug.from.as_str())),
         _ => None,
@@ -148,25 +149,18 @@ fn rich_text_fields(model: &ModelAst) -> Vec<(&str, bool)> {
         .collect()
 }
 
-/// The function that keeps `slug_field` of `table` filled. Folded to lower case because
-/// [`TriggerFunction::create_sql`] writes the name unquoted, so Postgres stores it folded: a
-/// `probeSlug` field kept as written was keyed `set_probe_all_probeSlug` against the catalog's
-/// `set_probe_all_probeslug`, and the push could not find the function it had just created.
-fn slug_function_name(table: &str, slug_field: &str) -> String {
-    format!("set_{table}_{slug_field}").to_ascii_lowercase()
-}
-
-/// The function that normalises `table`'s rich text columns, folded as [`slug_function_name`].
-fn rich_text_function_name(table: &str) -> String {
-    format!("normalise_{table}_rich_text").to_ascii_lowercase()
-}
-
 /// The functions a model's own triggers run: one per slug field, one for all its rich text.
-pub fn model_functions(model: &ModelAst) -> Vec<TriggerFunction> {
+///
+/// Their names (`set_{table}_{slug}`, `normalise_{table}_rich_text`) are [`ObjectNames`]'s,
+/// fitted to 63 bytes and folded to lower case because [`TriggerFunction::create_sql`] writes the
+/// name unquoted, so Postgres stores it folded: a `probeSlug` field kept as written was keyed
+/// `set_probe_all_probeSlug` against the catalog's `set_probe_all_probeslug`, and the push could
+/// not find the function it had just created.
+pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunction> {
     let table = model.table_name();
     let mut out: Vec<TriggerFunction> = slug_fields(model)
         .map(|(slug_field, source_field)| TriggerFunction {
-            name: slug_function_name(table, slug_field),
+            name: names.slug_function(table, slug_field),
             args: "",
             returns: "trigger",
             volatility: 'v',
@@ -197,7 +191,7 @@ pub fn model_functions(model: &ModelAst) -> Vec<TriggerFunction> {
             })
             .collect();
         out.push(TriggerFunction {
-            name: rich_text_function_name(table),
+            name: names.rich_text_function(table),
             args: "",
             returns: "trigger",
             volatility: 'v',
@@ -208,13 +202,13 @@ pub fn model_functions(model: &ModelAst) -> Vec<TriggerFunction> {
 }
 
 /// The triggers on a model's table.
-pub fn model_triggers(model: &ModelAst) -> Vec<ModelTrigger> {
+pub fn model_triggers(model: &ModelAst, names: &ObjectNames) -> Vec<ModelTrigger> {
     let table = model.table_name();
     let mut out = Vec::new();
     if needs_updated_at(model) {
         out.push(ModelTrigger {
             table: table.to_string(),
-            name: format!("{table}_updated_at_trigger"),
+            name: names.updated_at_trigger(table),
             events: &["UPDATE"],
             function: "set_updated_at".into(),
         });
@@ -222,17 +216,17 @@ pub fn model_triggers(model: &ModelAst) -> Vec<ModelTrigger> {
     for (slug_field, _) in slug_fields(model) {
         out.push(ModelTrigger {
             table: table.to_string(),
-            name: format!("{table}_{slug_field}_trigger"),
+            name: names.slug_trigger(table, slug_field),
             events: &["INSERT", "UPDATE"],
-            function: slug_function_name(table, slug_field),
+            function: names.slug_function(table, slug_field),
         });
     }
     if !rich_text_fields(model).is_empty() {
         out.push(ModelTrigger {
             table: table.to_string(),
-            name: format!("{table}_rich_text_trigger"),
+            name: names.rich_text_trigger(table),
             events: &["INSERT", "UPDATE"],
-            function: rich_text_function_name(table),
+            function: names.rich_text_function(table),
         });
     }
     out
@@ -243,14 +237,15 @@ pub fn model_triggers(model: &ModelAst) -> Vec<ModelTrigger> {
 pub fn generate(ast: &SchemaAst, schema: &str) -> Result<String> {
     let mut out = platform_schema_sql();
     out.push_str("\nCREATE EXTENSION IF NOT EXISTS \"unaccent\";\n\n");
+    let names = ObjectNames::for_schema(ast);
     let functions = shared_functions()
         .into_iter()
-        .chain(ast.models.iter().flat_map(model_functions));
+        .chain(ast.models.iter().flat_map(|m| model_functions(m, &names)));
     for function in functions {
         out.push_str(&function.create_sql());
         out.push('\n');
     }
-    for trigger in ast.models.iter().flat_map(model_triggers) {
+    for trigger in ast.models.iter().flat_map(|m| model_triggers(m, &names)) {
         out.push_str(&trigger.create_sql(schema));
         out.push('\n');
     }
@@ -265,12 +260,13 @@ mod tests {
     /// unquoted `CREATE`, so a camelCase field or table cannot split the two apart.
     #[test]
     fn a_model_function_is_named_as_postgres_folds_it() {
+        let names = ObjectNames::default();
         assert_eq!(
-            slug_function_name("probe_all", "probeSlug"),
+            names.slug_function("probe_all", "probeSlug"),
             "set_probe_all_probeslug"
         );
         assert_eq!(
-            rich_text_function_name("BlogPosts"),
+            names.rich_text_function("BlogPosts"),
             "normalise_blogposts_rich_text"
         );
     }

@@ -90,6 +90,7 @@ These read the AST and need no database connection.
 
 | Command | Description |
 |---|---|
+| `capabilities` | What this engine supports of the ownership contract, as JSON (also `GET /capabilities`) |
 | `parse` | Parse and validate an AST, printing the resolved form |
 | `generate` | Typed client code. `--lang typescript` (default), `python`, `go`, `php`, `swift`, `kotlin`, `dart` |
 | `rls` | RLS policy SQL plus auth helpers |
@@ -127,6 +128,11 @@ supatype-engine push -i schema.json --database-url "$DATABASE_URL" --non-interac
 
 # Report drift, exit non-zero when managed objects are missing or stale
 supatype-engine doctor -i schema.json --database-url "$DATABASE_URL" --strict
+
+# Record drift as the new baseline (after a Postgres upgrade reformats definitions). Drift on
+# policies, grants, labels and RLS is recorded only with --accept-access-drift (HTTP
+# `accept_access_drift`); doctor refuses push's --overwrite-drift, which puts definitions back
+supatype-engine doctor -i schema.json --database-url "$DATABASE_URL" --rebaseline --accept-access-drift
 
 # Take ownership of pre-existing tables that match the schema
 supatype-engine adopt -i schema.json --database-url "$DATABASE_URL" --yes
@@ -234,7 +240,9 @@ ENGINE_ADMIN_TOKEN=<token> supatype-engine-server
 | `ENGINE_ADMIN_TOKEN` | none | Required. Every route rejects a request without a matching `X-Engine-Admin-Token`, and returns `503` when the variable is unset. |
 | `RUST_LOG` | `info` | Tracing filter |
 
-Routes mirror the subcommands. Compute only: `/parse`, `/generate`, `/triggers`, `/rls`, `/storage`,
+Routes mirror the subcommands. `GET /capabilities` answers `{"features": [...]}`, what this
+engine supports of the ownership contract, and `identity_columns` when it makes identity and
+generated columns. Compute only: `/parse`, `/generate`, `/triggers`, `/rls`, `/storage`,
 `/postgrest`, `/auth-functions`, `/sso`, `/admin`, `/studio`, `/openapi`. Database backed:
 `/introspect`, `/diff`, `/migrate`, `/push`, `/migrations`, `/rollback`, `/doctor`,
 `/adopt`, `/studio-config`, `/sql`. `/health` sits behind the admin token as well.
@@ -344,19 +352,17 @@ src/
 ├── introspector/          Postgres to DatabaseState (tables, columns, indexes,
 │                          constraints, enums, RLS, triggers, extensions)
 ├── differ/                SchemaAst x DatabaseState to DiffOutput
-│   ├── table_diff.rs         Create and drop tables
+│   ├── table_diff.rs         Create, rename and drop tables
 │   ├── column_diff.rs        Add, drop, rename, retype columns
-│   ├── enum_diff.rs          Enum type changes
-│   ├── index_diff.rs         Index changes
-│   ├── constraint_diff.rs    Constraint changes
-│   ├── check_diff.rs         Field bound and model constraint changes
-│   ├── rls_diff.rs           RLS policy changes
+│   ├── constraint_diff.rs    Declared single-column unique constraints
+│   ├── rls_diff.rs           Warnings: deny-all tables, hand-written policies, junctions
 │   ├── field_access_diff.rs  Unwritable required columns
-│   ├── trigger_diff.rs       Trigger changes
 │   ├── ordering.rs           Topological sort (petgraph)
-│   ├── risk_analyser.rs      Pre-flight safety validation
 │   ├── doctor.rs             Drift report: missing, stale managed, unmanaged
 │   └── integrity.rs          Post-push drift warnings
+├── desired/               The objects a schema asks for; rendered SQL attributed to them
+├── ledger/                Managed-object ledger and the reconcile (indexes, checks,
+│                          foreign keys, triggers, policies, grants, labels, …)
 ├── generator/
 │   ├── sql/               Migration DDL, RLS, grants, constraints, triggers, storage,
 │   │                      auth functions, SSO, field views, versions, rollback,
@@ -421,7 +427,8 @@ choosing which: the unit job has no database, the integration job does.
 
 ## CI / CD
 
-**CI** (`.github/workflows/ci.yml`), on every push and PR to `main`:
+**CI** (`.github/workflows/ci.yml`), on every push to `main` and every pull request, whatever
+its base branch:
 
 | Job | What it runs |
 |---|---|

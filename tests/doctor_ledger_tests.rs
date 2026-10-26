@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
     differ::doctor::{self, DoctorReport},
-    introspector, ledger, parser,
+    parser,
     parser::ast::SchemaAst,
 };
 
@@ -41,13 +41,7 @@ fn title_index() -> Value {
 }
 
 async fn doctor_of(pool: &PgPool, ast: &SchemaAst) -> DoctorReport {
-    let db = introspector::introspect(pool, "public").await.unwrap();
-    let catalog = introspector::introspect_catalog(pool, "public")
-        .await
-        .unwrap();
-    let mut conn = pool.acquire().await.unwrap();
-    let rows = ledger::load_if_present(&mut conn).await.unwrap();
-    doctor::report(ast, &db, &catalog, &rows).unwrap()
+    common::doctor(pool, ast).await
 }
 
 fn names(items: &[doctor::DoctorItem]) -> Vec<String> {
@@ -64,6 +58,7 @@ fn is_clean(report: &DoctorReport) -> bool {
         && report.drifted.is_empty()
         && report.conflicting.is_empty()
         && report.released.is_empty()
+        && report.claimed.is_empty()
 }
 
 #[tokio::test]
@@ -169,6 +164,229 @@ async fn what_someone_added_to_a_model_table_is_unmanaged_columns_included() {
         assert!(
             !doctor::has_strict_issues(&report),
             "someone else's objects are reported, not failures"
+        );
+    })
+    .await;
+}
+
+/// What an older engine leaves: its policies, grants, RLS attributes and schemas, with no row, and
+/// its grants as it made them on the supatype image. The image's default privileges give the API
+/// roles everything on a new table, and that engine revoked only those of the four privileges the
+/// rules govern which they do not allow (here, every write), so `TRUNCATE`, `REFERENCES`, `TRIGGER`
+/// and `MAINTAIN` stayed.
+const FORGET_THE_ACCESS_ROWS: &str = "DELETE FROM _supatype.managed_objects
+    WHERE kind IN ('policy', 'table_grant', 'rls_attributes', 'schema');
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated;
+    GRANT ALL ON public.posts TO anon, authenticated;
+    REVOKE INSERT, UPDATE, DELETE ON public.posts FROM anon, authenticated";
+
+/// A clean upgrade: Supatype's own objects with no row yet are claimed, reported apart from the
+/// conflicts and failing nothing, and the push records them without asking.
+#[tokio::test]
+async fn an_older_engines_own_objects_are_claimed_not_conflicting() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(&pool, FORGET_THE_ACCESS_ROWS).await.unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        let claimed = names(&report.claimed);
+        assert!(
+            claimed.contains(&"policy posts.posts_select".to_string()),
+            "{claimed:?}"
+        );
+        assert!(
+            claimed.contains(&"rls_attributes posts.rls".to_string()),
+            "{claimed:?}"
+        );
+        assert!(
+            claimed.contains(&"table_grant posts.anon".to_string()),
+            "{claimed:?}"
+        );
+        assert!(report.conflicting.is_empty(), "{report:#?}");
+        assert!(report.drifted.is_empty(), "{report:#?}");
+        assert!(report.claimed[0]
+            .message
+            .contains("next `supatype push` records it"));
+        assert!(!doctor::has_strict_issues(&report), "{report:#?}");
+        assert!(!report.blocking);
+
+        // Recorded without consent: nothing was changed by hand.
+        push(&pool, &ast)
+            .await
+            .expect("a clean upgrade asks nothing");
+        assert!(is_clean(&doctor_of(&pool, &ast).await));
+    })
+    .await;
+}
+
+/// Hand edits made under an older engine, which recorded nothing: each policy and RLS attribute is
+/// compared with what the last push's schema makes of it, and one that differs is drift on access,
+/// so the push asks before overwriting it, as it would after the upgrade.
+#[tokio::test]
+async fn an_older_engines_object_edited_by_hand_is_drift() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            &format!(
+                "{FORGET_THE_ACCESS_ROWS};
+                 ALTER POLICY posts_select ON public.posts USING (false);
+                 ALTER TABLE public.posts DISABLE ROW LEVEL SECURITY;"
+            ),
+        )
+        .await
+        .unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        assert_eq!(
+            names(&report.drifted),
+            ["policy posts.posts_select", "rls_attributes posts.rls"]
+        );
+        let claimed = names(&report.claimed);
+        assert!(
+            !claimed.contains(&"policy posts.posts_select".to_string()),
+            "{claimed:?}"
+        );
+        let item = &report.drifted[0];
+        assert!(
+            item.live.as_deref().unwrap_or_default().contains("false"),
+            "{item:?}"
+        );
+        assert!(item.message.contains("after asking"), "{item:?}");
+        assert!(doctor::has_strict_issues(&report));
+
+        let refused = push(&pool, &ast)
+            .await
+            .expect_err("overwrote a hand edit made under the older engine without consent");
+        let drift = refused
+            .downcast_ref::<supatype_engine::ledger::drift::SecurityDrift>()
+            .unwrap_or_else(|| panic!("{refused:#}"));
+        assert_eq!(drift.objects.len(), 2, "{drift}");
+
+        common::push_with(
+            &pool,
+            &ast,
+            supatype_engine::push::ApplyOptions {
+                overwrite_drift: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("applied with consent");
+        assert!(is_clean(&doctor_of(&pool, &ast).await));
+    })
+    .await;
+}
+
+/// A privilege an older engine's grant would not hold, given the database's default privileges, was
+/// granted by hand: drift on access, refused without consent like a policy edited by hand.
+#[tokio::test]
+async fn a_privilege_granted_by_hand_under_an_older_engine_is_drift() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            &format!("{FORGET_THE_ACCESS_ROWS}; GRANT DELETE ON public.posts TO anon;"),
+        )
+        .await
+        .unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        assert_eq!(names(&report.drifted), ["table_grant posts.anon"]);
+        let claimed = names(&report.claimed);
+        assert!(
+            claimed.contains(&"table_grant posts.authenticated".to_string()),
+            "{claimed:?}"
+        );
+        let item = &report.drifted[0];
+        assert!(
+            item.live.as_deref().unwrap_or_default().contains("DELETE"),
+            "{item:?}"
+        );
+        assert!(
+            !item
+                .recorded
+                .as_deref()
+                .unwrap_or_default()
+                .contains("DELETE"),
+            "{item:?}"
+        );
+
+        let refused = push(&pool, &ast)
+            .await
+            .expect_err("took a privilege granted by hand under the older engine without consent");
+        let drift = refused
+            .downcast_ref::<supatype_engine::ledger::drift::SecurityDrift>()
+            .unwrap_or_else(|| panic!("{refused:#}"));
+        assert_eq!(drift.objects.len(), 1, "{drift}");
+
+        common::push_with(
+            &pool,
+            &ast,
+            supatype_engine::push::ApplyOptions {
+                overwrite_drift: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("applied with consent");
+        assert!(is_clean(&doctor_of(&pool, &ast).await));
+    })
+    .await;
+}
+
+/// Where the default privileges give the API roles nothing, an older engine left nothing beyond
+/// the four it governs: `TRUNCATE` on a model table was granted by hand.
+#[tokio::test]
+async fn a_privilege_the_defaults_never_gave_is_drift() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            "DELETE FROM _supatype.managed_objects
+               WHERE kind IN ('policy', 'table_grant', 'rls_attributes', 'schema');
+             GRANT TRUNCATE ON public.posts TO anon;",
+        )
+        .await
+        .unwrap();
+
+        let report = doctor_of(&pool, &ast).await;
+        assert_eq!(names(&report.drifted), ["table_grant posts.anon"]);
+        assert!(push(&pool, &ast).await.is_err(), "refused without consent");
+    })
+    .await;
+}
+
+/// With no earlier schema to compare with, the push replaces them as before, and says so.
+#[tokio::test]
+async fn without_an_earlier_schema_the_push_says_it_could_not_check() {
+    common::with_integration_pool(|pool| async move {
+        let ast = posts(json!([]));
+        push(&pool, &ast).await.unwrap();
+        exec(
+            &pool,
+            &format!(
+                "{FORGET_THE_ACCESS_ROWS};
+                 UPDATE _supatype.migrations SET schema_snapshot = NULL WHERE true;
+                 UPDATE _supatype.schema_state SET ast_snapshot = NULL WHERE true;
+                 ALTER POLICY posts_select ON public.posts USING (false);"
+            ),
+        )
+        .await
+        .unwrap();
+        let outcome = push(&pool, &ast).await.expect("replaced as before");
+        let supatype_engine::push::Outcome::Applied { warnings, .. } = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("no earlier schema to compare") && w.contains("posts_select")),
+            "{warnings:?}"
         );
     })
     .await;

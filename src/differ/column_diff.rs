@@ -6,7 +6,7 @@ use crate::generator::sql::column_conversion::{
 use crate::introspector::constraints::DbConstraintType;
 use crate::introspector::tables::{DbColumn, DbTable};
 use crate::parser::accessors::{column_names_for, is_localized};
-use crate::parser::ast::{FieldAst, ModelAst, RelationCardinality};
+use crate::parser::ast::{FieldAst, IdentityGeneration, ModelAst, RelationCardinality};
 use crate::state::database_state::DatabaseState;
 use anyhow::{bail, Result};
 use serde_json::json;
@@ -101,6 +101,17 @@ fn field_for_column<'a>(model: &'a ModelAst, col_name: &str) -> Option<&'a Field
         }
     }
     None
+}
+
+/// Whether `model` (the last push's, when there was one) declares `column`, by a field or by an
+/// option. What says a column with no ledger row is the engine's: an older engine created it.
+pub(crate) fn declared_by(model: Option<&ModelAst>, column: &str) -> bool {
+    model.is_some_and(|m| {
+        field_for_column(m, column).is_some()
+            || crate::generator::sql::migration::option_columns(m)
+                .iter()
+                .any(|(c, _)| *c == column)
+    })
 }
 
 fn field_migration_kind(field: &FieldAst) -> Option<&'static str> {
@@ -529,6 +540,14 @@ fn changes_risk(changes: &serde_json::Value, field: &FieldAst, column: &str) -> 
         return Risk::Destructive;
     }
 
+    // Taking away how the database fills a column (its identity, its generation expression) is
+    // asked for like a drop: the column's values stop being the database's to keep, and putting
+    // it back is not the reverse (a re-added identity numbers on from the rows, a re-added
+    // expression replaces what was written meanwhile).
+    if removes_database_fill(changes) {
+        return Risk::Destructive;
+    }
+
     if let Some(null_change) = changes.get("nullability") {
         if null_change.get("to").and_then(|v| v.as_str()) == Some("not_null") {
             return Risk::Cautious;
@@ -553,6 +572,10 @@ fn changes_risk(changes: &serde_json::Value, field: &FieldAst, column: &str) -> 
     }
 
     if changes.get("kind_change").is_some() {
+        return Risk::Cautious;
+    }
+
+    if changes.get("identity").is_some() || changes.get("generated").is_some() {
         return Risk::Cautious;
     }
 
@@ -663,6 +686,45 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
         }
     }
 
+    if let Some(identity) = changes.get("identity") {
+        let action = identity
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let text = |key: &str| {
+            identity
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|v| if v == "byDefault" { "by default" } else { v })
+                .unwrap_or("?")
+                .to_string()
+        };
+        parts.push(match action {
+            "add" if identity.get("serial").is_some() => format!(
+                "{table}.{column}: a serial column becomes an identity column (generated {}): its default and its sequence are dropped, and it is numbered on from the rows there",
+                text("to")
+            ),
+            "add" => format!(
+                "{table}.{column}: becomes an identity column (generated {}), numbered on from the rows there",
+                text("to")
+            ),
+            "drop" => format!(
+                "{table}.{column}: is no longer an identity column; an insert must now give it a value. Use --force to proceed (destructive)."
+            ),
+            _ => format!(
+                "{table}.{column}: identity changes from generated {} to generated {}",
+                text("from"),
+                text("to")
+            ),
+        });
+    }
+
+    if changes.get("generated").is_some() {
+        parts.push(format!(
+            "{table}.{column}: is no longer a generated column; it keeps its values and can be written. Use --force to proceed (destructive)."
+        ));
+    }
+
     if parts.is_empty() {
         None
     } else {
@@ -670,11 +732,156 @@ fn changes_warning(table: &str, column: &str, changes: &serde_json::Value) -> Op
     }
 }
 
+/// Whether `changes` take a column's identity or its generation expression away.
+fn removes_database_fill(changes: &serde_json::Value) -> bool {
+    let action = |key: &str| {
+        changes
+            .get(key)
+            .and_then(|c| c.get("action"))
+            .and_then(|v| v.as_str())
+    };
+    action("identity") == Some("drop") || action("generated") == Some("drop_expression")
+}
+
 fn conversion_strategy_name(changes: &serde_json::Value) -> Option<&str> {
     changes
         .get("conversion")
         .and_then(|c| c.get("strategy"))
         .and_then(|v| v.as_str())
+}
+
+/// What changes how the database fills a column (identity-contract): the entries an
+/// `AlterColumn` carries (`identity`, `generated`), and a generated column to recreate instead.
+#[derive(Debug, Default)]
+struct GenerationDiff {
+    alter: serde_json::Map<String, serde_json::Value>,
+    recreate: Option<serde_json::Value>,
+}
+
+/// The expression a recorded column statement generates the column with, as it was declared.
+fn recorded_expression(sql: &str) -> Option<&str> {
+    let start = sql.find("GENERATED ALWAYS AS (")? + "GENERATED ALWAYS AS (".len();
+    let end = sql.rfind(") STORED")?;
+    (end >= start).then(|| sql[start..end].trim())
+}
+
+/// An expression with what deparsing adds or moves taken out (space, parentheses, case), for
+/// comparing a declared expression with one the ledger has no record of.
+fn loose_expression(expression: &str) -> String {
+    expression
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '(' && *c != ')')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// How the schema's identity and generation for `field` differ from `db_col`'s.
+///
+/// - Identity is compared with the catalog: added (`ADD GENERATED ... AS IDENTITY`, the sequence
+///   started past the rows there), removed (`DROP IDENTITY`) or switched (`SET GENERATED`). A
+///   `SERIAL` column satisfies `AutoIncrement` (identity by default, which used to make a serial)
+///   and is left as it is; an explicit `Identity` on one converts it (its default and sequence
+///   dropped, the identity numbering on past the rows there).
+/// - A generated column's expression cannot be compared with the catalog's text, which Postgres
+///   rewrites on the way in, so it is compared with the statement the ledger records (the last
+///   push's declaration), or loosely with the live text where there is no record. A change is a
+///   `SET EXPRESSION` (Postgres 17) or the column made again (16); a plain column becoming
+///   generated is made again (its values are replaced); a generated one becoming plain keeps its
+///   values (`DROP EXPRESSION`).
+fn generation_diff(field: &FieldAst, db_col: &DbColumn, recorded: Option<&str>) -> GenerationDiff {
+    let mut out = GenerationDiff::default();
+    // A serial declares its own sequence and is never converted either way here.
+    if matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_)) {
+        return out;
+    }
+    let Some(declared) = crate::parser::ast::scalar_of(field) else {
+        return out;
+    };
+    let live_identity = db_col
+        .identity_generation
+        .as_deref()
+        .and_then(IdentityGeneration::from_catalog)
+        .filter(|_| db_col.is_identity);
+    let serial_default = db_col
+        .default
+        .as_deref()
+        .filter(|d| d.starts_with("nextval("));
+    match (declared.identity, live_identity) {
+        (Some(to), Some(from)) if to != from => {
+            out.alter.insert(
+                "identity".into(),
+                json!({ "action": "set", "from": from, "to": to }),
+            );
+        }
+        (Some(to), None) => {
+            if serial_default.is_some() {
+                // `AutoIncrement` used to make a serial: a column made then already is one, and is
+                // left as it is, with nothing to say. An explicit `Identity` asks for the
+                // conversion: the default and its sequence go, and the identity numbers on past
+                // the rows there.
+                if !declared.auto_increment {
+                    out.alter.insert(
+                        "identity".into(),
+                        json!({
+                            "action": "add",
+                            "to": to,
+                            "dropDefault": true,
+                            "serial": { "sequenceType": sequence_type(&db_col.udt_name) },
+                        }),
+                    );
+                }
+            } else {
+                out.alter.insert(
+                    "identity".into(),
+                    json!({ "action": "add", "to": to, "dropDefault": db_col.default.is_some() }),
+                );
+            }
+        }
+        (None, Some(from)) => {
+            out.alter
+                .insert("identity".into(), json!({ "action": "drop", "from": from }));
+        }
+        _ => {}
+    }
+    let live_expression = db_col
+        .generation_expression
+        .as_deref()
+        .filter(|_| db_col.is_generated);
+    match (&declared.generated, live_expression) {
+        (Some(g), Some(live)) => {
+            let changed = match recorded.and_then(recorded_expression) {
+                Some(was) => was != g.expression.trim(),
+                None => loose_expression(live) != loose_expression(&g.expression),
+            };
+            if changed {
+                out.recreate = Some(json!({
+                    "action": "set_expression",
+                    "expression": g.expression,
+                    "from": recorded.and_then(recorded_expression).unwrap_or(live),
+                }));
+            }
+        }
+        (Some(g), None) => {
+            out.recreate = Some(json!({ "action": "add", "expression": g.expression }));
+        }
+        (None, Some(live)) => {
+            out.alter.insert(
+                "generated".into(),
+                json!({ "action": "drop_expression", "from": live }),
+            );
+        }
+        (None, None) => {}
+    }
+    out
+}
+
+/// The `AS` type of a serial's sequence, from its column's type.
+fn sequence_type(udt: &str) -> &'static str {
+    match udt {
+        "int2" => "smallint",
+        "int8" => "bigint",
+        _ => "integer",
+    }
 }
 
 pub fn diff(
@@ -724,7 +931,19 @@ pub fn diff(
     let mut renamed_dropped = std::collections::HashSet::new();
     let mut renamed_added = std::collections::HashSet::new();
 
-    for &drop in &dropped {
+    // Only a column that is ours is renamed (D4): one the ledger records, or, where it has no row
+    // (an upgraded database), one the last push's schema declared on this table. A rename is a
+    // similarity guess, so a column someone added (`nickname`) would otherwise be renamed into a
+    // declared one (`nick_name`) and taken over with its data. Not one recorded as adopted: that is
+    // someone else's column Supatype was told about (`adopt --key column:...`), never its own.
+    let ours = |column: &str| {
+        !db.column_adopted(&db_table.name, column)
+            && db
+                .column_owned(&db_table.name, column)
+                .unwrap_or_else(|| declared_by(previous_model, column))
+    };
+
+    for &drop in dropped.iter().filter(|c| ours(c)) {
         if let Some(&add) = added
             .iter()
             .filter(|&&a| !renamed_added.contains(a))
@@ -755,8 +974,9 @@ pub fn diff(
     for col in &added {
         if !renamed_added.contains(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
-                // A serial fills existing rows from its own sequence, so it needs no backfill.
-                let fills_itself = matches!(**field, FieldAst::Serial(_) | FieldAst::BigSerial(_));
+                // A serial or identity column fills existing rows from its own sequence, and a
+                // generated one from its expression, so they need no backfill.
+                let fills_itself = crate::parser::accessors::database_fills(field);
                 if field_is_required(field) == Some(true)
                     && add_column_backfill_default(field).is_none()
                     && !fills_itself
@@ -775,6 +995,27 @@ pub fn diff(
                 });
             }
         }
+    }
+
+    // The columns the model's options add, which `CREATE TABLE` writes beside the fields. A table
+    // that predates the option (`timestamps` turned on later), or one whose column was dropped by
+    // hand, gets it here, with the definition `CREATE TABLE` would have given it: the composite
+    // field the option stands for renders exactly that.
+    for (column, _) in crate::generator::sql::migration::option_columns(model) {
+        if db_col_names.contains(column) {
+            continue;
+        }
+        let field = if column == "deleted_at" {
+            FieldAst::SoftDelete
+        } else {
+            FieldAst::Timestamps
+        };
+        ops.push(Operation::AddColumn {
+            table: model.table_name().to_string(),
+            column: column.to_string(),
+            field: Box::new(field),
+            risk: Risk::Safe,
+        });
     }
 
     // Dropping a column from a table Supatype did not create is the same class of data loss as
@@ -820,7 +1061,7 @@ pub fn diff(
 
         if let Some(db_col) = db_col_map.get(col_name.as_str()) {
             let previous_field = previous_model.and_then(|m| field_for_column(m, col_name));
-            let changes = detect_changes(
+            let mut changes = detect_changes(
                 field,
                 db_col,
                 default_locale,
@@ -828,6 +1069,59 @@ pub fn diff(
                 model.table_name(),
                 &db_table.schema,
             );
+            let generation = generation_diff(
+                field,
+                db_col,
+                db.recorded_column_sql(model.table_name(), col_name),
+            );
+            if !generation.alter.is_empty() {
+                if changes.is_null() {
+                    changes = json!({});
+                }
+                if let Some(map) = changes.as_object_mut() {
+                    map.extend(generation.alter.clone());
+                }
+            }
+
+            // A generated column whose expression changes, or a plain one that becomes generated,
+            // is made again by its own operation (a type change on it would be moot).
+            if let Some(generated) = generation.recreate {
+                if !managed {
+                    warnings.push(format!(
+                        "Column \"{}\".\"{}\" differs from your schema, but the table is not managed by Supatype, so it is left alone. Run `supatype adopt` to bring the table under management, or point the model at a different table with `tableName`.",
+                        db_table.name, col_name
+                    ));
+                    continue;
+                }
+                let adds = generated.get("action").and_then(|v| v.as_str()) == Some("add");
+                let warning = Some(if adds {
+                    format!(
+                        "{}.{col_name}: becomes a generated column, so it is dropped and added again and its values are replaced by the expression's (destructive, data loss)",
+                        model.table_name()
+                    )
+                } else {
+                    format!(
+                        "{}.{col_name}: generated expression changes; its values are computed again",
+                        model.table_name()
+                    )
+                });
+                warnings.push(warning.clone().unwrap_or_default());
+                let dependencies = discover_column_dependencies(model.table_name(), col_name, db);
+                ops.push(Operation::RecreateColumn {
+                    table: model.table_name().to_string(),
+                    column: col_name.clone(),
+                    field: Box::new((*field).clone()),
+                    changes: json!({ "generated": generated }),
+                    dependencies,
+                    risk: if adds {
+                        Risk::Destructive
+                    } else {
+                        Risk::Cautious
+                    },
+                    warning,
+                });
+                continue;
+            }
 
             if changes.is_null() {
                 continue;
@@ -853,6 +1147,7 @@ pub fn diff(
                 == Some("not_null")
                 && field_is_required(field) == Some(true)
                 && add_column_backfill_default(field).is_none()
+                && !crate::parser::accessors::database_fills(field)
             {
                 warnings.push(required_field_existing_table_warning(
                     model.table_name(),

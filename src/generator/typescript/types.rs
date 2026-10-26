@@ -190,7 +190,15 @@ pub(crate) fn emit_fields(model: &ModelAst, mode: Mode, out: &mut String, ind: &
                 } else {
                     ts
                 };
-                let has_def = field_has_default(other);
+                // What Postgres refuses to write (a generated column, a `GENERATED ALWAYS`
+                // identity) can be neither inserted nor updated: `never`, as an optional key so a
+                // row read back can still be spread into a write.
+                if mode != Mode::Row && crate::parser::accessors::never_written(other) {
+                    out.push_str(&format!("{ind}{name}?: never\n"));
+                    continue;
+                }
+                let has_def =
+                    field_has_default(other) || crate::parser::accessors::database_fills(other);
                 emit_one(name, &ts, nullable, has_def, mode, out, ind);
             }
         }

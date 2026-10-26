@@ -888,7 +888,9 @@ CREATE OR REPLACE FUNCTION "supatype".publish(
     END IF;
 
     -- Shared columns, taken wholesale from the snapshot. The primary key is excluded: publishing a
-    -- draft must not be able to move a record's identity.
+    -- draft must not be able to move a record's identity. So are the columns only the database
+    -- writes: a generated one, and a `GENERATED ALWAYS` identity one, which an `UPDATE` may set to
+    -- nothing but `DEFAULT` (it failed every publish of a model with one that was not the key).
     SELECT array_agg(format('%I = (src.r).%I', c.column_name, c.column_name))
       INTO assignments
       FROM information_schema.columns c
@@ -896,7 +898,8 @@ CREATE OR REPLACE FUNCTION "supatype".publish(
        AND c.table_name = entry."table_name"
        AND c.column_name <> entry."primary_key"
        AND NOT (c.column_name = ANY (entry."localized_columns"))
-       AND c.is_generated = 'NEVER';
+       AND c.is_generated = 'NEVER'
+       AND NOT (c.is_identity = 'YES' AND c.identity_generation = 'ALWAYS');
     assignments := COALESCE(assignments, ARRAY[]::text[]);
 
     -- Localized columns, merged key by key for the locales being published.
@@ -1580,10 +1583,12 @@ BEGIN
   END IF;
 
   -- Replaced rather than added to, so a push converges on one job per purpose instead of stacking a
-  -- new one every time.
-  PERFORM cron.unschedule(jobname)
+  -- new one every time. Only this database's: `cron.job` holds every database's jobs, and another
+  -- project on the cluster has jobs by the same names.
+  PERFORM cron.unschedule(jobid)
      FROM cron.job
-    WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions');
+    WHERE jobname IN ('supatype-scheduled-publish', 'supatype-prune-versions')
+      AND database = current_database();
 
   -- Every minute: the smallest useful granularity for "publish at nine", and the job does nothing
   -- but one indexed scan per versioned model when there is nothing due.

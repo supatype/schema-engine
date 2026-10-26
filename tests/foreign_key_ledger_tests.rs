@@ -176,7 +176,7 @@ async fn foreign_keys_are_recorded_on_creation_and_left_alone_on_a_second_push()
         assert!(rows[0].migration_id.is_some());
         assert!(rows[0].desired_sql.contains("FOREIGN KEY"));
         assert!(
-            rows[0].live_def.contains("references=users"),
+            rows[0].live_def.contains("references=public.users\n"),
             "{}",
             rows[0].live_def
         );
@@ -365,6 +365,42 @@ async fn an_existing_matching_foreign_key_is_adopted_and_a_different_one_refuses
             Some("accounts"),
             "and leaves it alone"
         );
+    })
+    .await;
+}
+
+/// A key that differs from ours only in `ON UPDATE` or in being `DEFERRABLE` does something else
+/// when a row changes or a transaction commits, so it is the user's, not ours to adopt.
+#[tokio::test]
+async fn a_foreign_key_differing_only_in_on_update_or_deferral_refuses_the_push() {
+    common::with_integration_pool(|pool| async move {
+        let ast = schema(vec![users(), accounts(), posts_by("User")]);
+        push(&pool, &ast).await.unwrap();
+        for options in [
+            "ON DELETE RESTRICT",
+            "ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE",
+        ] {
+            exec(
+                &pool,
+                &format!(
+                    "DELETE FROM _supatype.managed_objects WHERE kind = 'foreign_key';
+                     ALTER TABLE public.posts DROP CONSTRAINT posts_author_id_fkey;
+                     ALTER TABLE public.posts ADD CONSTRAINT posts_author_id_fkey \
+                     FOREIGN KEY (author_id) REFERENCES public.users (id) {options}"
+                ),
+            )
+            .await
+            .unwrap();
+            let refused = push(&pool, &ast)
+                .await
+                .expect_err("a key that behaves differently is not adopted");
+            let message = format!("{refused:#}");
+            assert!(
+                message.contains("posts_author_id_fkey") && message.contains("supatype adopt"),
+                "{options}: {message}"
+            );
+            assert!(fk_rows(&pool).await.is_empty(), "{options}");
+        }
     })
     .await;
 }

@@ -233,7 +233,13 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
             _ => {}
         }
 
-        let prop = field_to_schema(field);
+        let mut prop = field_to_schema(field);
+        // A column Postgres refuses to write (generated, or a `GENERATED ALWAYS` identity).
+        if crate::parser::accessors::never_written(field) {
+            if let Some(map) = prop.as_object_mut() {
+                map.insert("readOnly".into(), json!(true));
+            }
+        }
         let is_required = field_is_required(field);
         properties.insert(name.clone(), prop);
         if is_required {

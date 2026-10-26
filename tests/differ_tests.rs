@@ -273,3 +273,68 @@ fn test_unmanaged_policies_are_reported_and_never_dropped() {
         "a stamped policy is an older engine's, not hand-written: {reported}"
     );
 }
+
+// A policy the ledger records as ours that the schema no longer declares (an `update` rule taken
+// out) is the reconcile's to drop in this same push. Reporting it as hand-written and left
+// untouched said the opposite of what the push does.
+#[test]
+fn a_ledger_policy_the_reconcile_drops_is_not_reported_as_hand_written() {
+    use supatype_engine::introspector::{fingerprint::ObjectKey, rls::DbRlsPolicy};
+    use supatype_engine::ledger::{LedgerRow, Status};
+
+    let ast = parser::parse(&blog_ast_without_access()).unwrap();
+    let table = ast.models[0].table_name().to_string();
+    let policy = |name: &str| DbRlsPolicy {
+        table: table.clone(),
+        name: name.into(),
+        command: "w".into(),
+        permissive: true,
+        using_expr: Some("true".into()),
+        check_expr: None,
+        managed: false,
+    };
+    let row = |name: &str, status| LedgerRow {
+        key: ObjectKey {
+            kind: ObjectKind::Policy,
+            schema: "public".into(),
+            parent: table.clone(),
+            name: name.into(),
+        },
+        desired_fp: String::new(),
+        desired_sql: String::new(),
+        live_fp: String::new(),
+        live_def: String::new(),
+        status,
+        migration_id: None,
+    };
+    let mut db = DatabaseState {
+        schema: "public".into(),
+        rls_enabled_tables: vec![table.clone()],
+        rls_policies: vec![
+            policy(&format!("{table}_update")),
+            policy("released_rule"),
+            policy("handwritten_extra"),
+        ],
+        ..DatabaseState::default()
+    };
+    db.set_table_ownership(&[
+        row(&format!("{table}_update"), Status::Managed),
+        row("released_rule", Status::Released),
+    ]);
+
+    let diff = differ::diff(&ast, &db).unwrap();
+    let reported = diff
+        .warnings
+        .iter()
+        .find(|w| w.contains("hand-written"))
+        .expect("the hand-written policy is still reported");
+    assert!(reported.contains("handwritten_extra"), "{reported}");
+    assert!(
+        reported.contains("released_rule"),
+        "a released policy is the user's again: {reported}"
+    );
+    assert!(
+        !reported.contains(&format!("{table}_update")),
+        "the reconcile drops this one: {reported}"
+    );
+}

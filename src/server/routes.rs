@@ -16,6 +16,13 @@ pub async fn health() -> Json<HealthResponse> {
     })
 }
 
+// ── Capabilities ────────────────────────────────────────────────────────────
+
+/// What this engine supports of the ownership contract (`crate::capabilities`).
+pub async fn capabilities() -> Json<serde_json::Value> {
+    Json(crate::capabilities::capabilities())
+}
+
 // ── Parse (no DB) ───────────────────────────────────────────────────────────
 
 pub async fn parse(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Value> {
@@ -29,6 +36,8 @@ pub async fn parse(Json(req): Json<AstRequest>) -> EngineResponse<serde_json::Va
 // ── Introspect (DB) ─────────────────────────────────────────────────────────
 
 pub async fn introspect(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    // Unpinned on purpose (see `introspector::introspect`): an API read in the caller's terms,
+    // feeding no fingerprint.
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
     match crate::introspector::introspect(&pool, &req.schema).await {
@@ -255,9 +264,10 @@ pub async fn rollback(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::
             .await
             .map_err(engine_error)?;
     }
+    // Refused with `engine_busy` while another writer holds the engine's lock.
     let result = crate::state::migration_history::apply_rollback(&pool, &req.schema)
         .await
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
     Ok(Json(serde_json::to_value(&result).unwrap()))
 }
 
@@ -306,13 +316,30 @@ pub async fn execute_sql(Json(req): Json<SqlExecRequest>) -> EngineResponse<SqlE
 // ── Doctor (DB: drift report; with `rebaseline`, ledger rows only) ──────────
 
 pub async fn doctor(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Value> {
+    if let Some(refusal) = crate::inspect::doctor_flags_refusal(
+        req.rebaseline,
+        req.accept_access_drift,
+        req.overwrite_drift,
+    ) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: refusal.to_string(),
+                ..Default::default()
+            }),
+        ));
+    }
     let ast_json = require_ast(&req.ast)?;
     let ast = parse_ast(&ast_json)?;
     let url = resolve_db_request_url(&req)?;
     let pool = connect_db(&url).await?;
-    let report = crate::inspect::doctor(&pool, &ast, &req.schema, req.rebaseline)
-        .await
-        .map_err(engine_error)?;
+    let report = if req.rebaseline {
+        crate::inspect::rebaseline(&pool, &ast, &req.schema, req.accept_access_drift).await
+    } else {
+        crate::inspect::doctor(&pool, &ast, &req.schema, false).await
+    }
+    // A rebaseline takes the engine's lock, so it can be refused while another writer holds it.
+    .map_err(refusal_error)?;
     Ok(Json(serde_json::to_value(&report).map_err(engine_error)?))
 }
 
@@ -330,19 +357,33 @@ pub async fn adopt(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Val
         release: &req.release,
         reclaim: &req.reclaim,
         apply: req.yes,
+        keys: req.keys.as_deref(),
     };
     let outcome = crate::adopt::run(&pool, &ast, &req.schema, request)
         .await
-        .map_err(engine_error)?;
+        .map_err(refusal_error)?;
     Ok(Json(serde_json::to_value(&outcome).map_err(engine_error)?))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// A refused push, as 409 with the reason and what it is about when it is one a caller can act on.
+/// A refused push, adopt or rebaseline, as 409 with the reason and what it is about when it is one
+/// a caller can act on; anything else as [`engine_error`].
 fn refusal_error(e: anyhow::Error) -> (StatusCode, Json<ErrorResponse>) {
     use crate::generator::sql::migration::{UnmanagedModelTables, UNMANAGED_MODEL_TABLES};
     use crate::ledger::drift::{SecurityDrift, SECURITY_DRIFT};
+    use crate::push::{EngineBusy, ENGINE_BUSY};
+    if let Some(busy) = e.downcast_ref::<EngineBusy>() {
+        error!("refused: the engine is busy");
+        return (
+            StatusCode::CONFLICT,
+            Json(ErrorResponse {
+                error: busy.to_string(),
+                reason: Some(ENGINE_BUSY),
+                ..Default::default()
+            }),
+        );
+    }
     if let Some(drift) = e.downcast_ref::<SecurityDrift>() {
         error!(
             objects = drift.objects.len(),
@@ -505,7 +546,7 @@ mod tests {
     use axum::http::StatusCode;
     use axum::Json;
 
-    use super::ErrorResponse;
+    use super::{DbRequest, ErrorResponse};
 
     fn sanitize_schema_identifier(
         schema: &str,
@@ -542,6 +583,60 @@ mod tests {
         let result = sanitize_schema_identifier("public_schema1");
         assert!(result.is_ok());
         assert_eq!(result.unwrap_or_default(), "\"public_schema1\"");
+    }
+
+    /// Another writer holding the engine's lock is a 409 a caller can retry on, told apart by its
+    /// reason, not the 422 of a push that failed; even under the context a caller adds to it.
+    #[test]
+    fn an_engine_busy_refusal_is_a_409_with_its_reason() {
+        use anyhow::Context;
+        let refused: anyhow::Result<()> = Err(crate::push::EngineBusy.into());
+        let (status, Json(body)) = super::refusal_error(refused.context("push").unwrap_err());
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body.reason, Some("engine_busy"));
+        assert!(body.error.contains("try again"), "{}", body.error);
+
+        let (status, Json(body)) = super::refusal_error(anyhow::anyhow!("failed"));
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body.reason, None);
+    }
+
+    /// `overwrite_drift` is the push's consent; a doctor asked for it refuses, naming the
+    /// rebaseline's own, before touching any database.
+    #[tokio::test]
+    async fn doctor_refuses_the_push_consent_and_names_its_own() {
+        let request =
+            |body: serde_json::Value| -> DbRequest { serde_json::from_value(body).unwrap() };
+        let ast = serde_json::json!({ "astVersion": 2, "models": [] });
+        for body in [
+            serde_json::json!({ "ast": ast, "rebaseline": true, "overwrite_drift": true }),
+            serde_json::json!({ "ast": ast, "overwrite_drift": true }),
+        ] {
+            let Err((status, Json(body))) = super::doctor(Json(request(body))).await else {
+                panic!("doctor took overwrite_drift");
+            };
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert!(body.error.contains("accept_access_drift"), "{}", body.error);
+        }
+        let Err((status, Json(body))) = super::doctor(Json(request(
+            serde_json::json!({ "ast": ast, "accept_access_drift": true }),
+        )))
+        .await
+        else {
+            panic!("doctor took accept_access_drift without rebaseline");
+        };
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body.error.contains("rebaseline"), "{}", body.error);
+    }
+
+    #[tokio::test]
+    async fn capabilities_lists_the_contracts_features() {
+        let Json(body) = super::capabilities().await;
+        assert_eq!(body, crate::capabilities::capabilities());
+        assert!(body["features"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("accept_access_drift")));
     }
 
     #[test]

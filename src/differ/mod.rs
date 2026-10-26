@@ -307,6 +307,40 @@ impl DiffOutput {
         ));
         self.summary = DiffSummary::of(&self.operations);
     }
+
+    /// Without the operations that would change a column the user took back with
+    /// `adopt --release`: a released object is left alone whatever the schema says, its type and
+    /// name included. One warning names them.
+    pub fn leave_released_columns(&mut self, released: impl Fn(&str, &str) -> bool) {
+        let mut left = Vec::new();
+        self.operations.retain(|op| {
+            let (table, column) = match op {
+                // A drop is `keep_columns_not_ours`'s, which leaves every column not ours.
+                Operation::AlterColumn { table, column, .. }
+                | Operation::RecreateColumn { table, column, .. } => (table, column),
+                Operation::RenameColumn { table, from, .. } => (table, from),
+                _ => return true,
+            };
+            if !released(table, column) {
+                return true;
+            }
+            let name = format!("\"{table}\".\"{column}\"");
+            if !left.contains(&name) {
+                left.push(name);
+            }
+            false
+        });
+        if left.is_empty() {
+            return;
+        }
+        self.warnings.push(format!(
+            "{} released column(s) left as they are, whatever the schema says: {}. Run \
+             `supatype adopt --reclaim column:<table>.<column>` to hand one back.",
+            left.len(),
+            left.join(", ")
+        ));
+        self.summary = DiffSummary::of(&self.operations);
+    }
 }
 
 pub fn risk_of(op: &Operation) -> &Risk {

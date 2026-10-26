@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, whatever its base: a PR stacked on another PR's branch merges into main
+  # through that branch, so checking only PRs into main left the stacked ones unchecked.
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -66,7 +67,8 @@ jobs:
             --test seed_ir_tests \
             --test seed_validate_tests \
             --test seed_plan_tests \
-            --test conformance_tests
+            --test conformance_tests \
+            --test identity_generated_tests
 
   sdk-exec:
     name: SDK Exec Tests (${{ matrix.os }})
@@ -134,6 +136,14 @@ jobs:
     services:
       postgres:
         image: supatype/postgres:17-latest
+        # Service images are pulled before any step runs, so a login step cannot cover this one.
+        # Anonymous Docker Hub pulls are rate-limited per runner IP and were failing with 429
+        # toomanyrequests. Where secrets are withheld (fork and Dependabot PRs) both values are
+        # empty, and the runner skips the registry login when either is empty and pulls
+        # anonymously, so those runs behave as before instead of failing.
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: supatype_admin
           POSTGRES_PASSWORD: postgres
@@ -203,6 +213,8 @@ jobs:
             --test column_ledger_tests \
             --test key_schema_sequence_ledger_tests \
             --test doctor_ledger_tests \
+            --test identity_generated_db_tests \
             --test table_ledger_tests \
             --test rebaseline_tests \
-            --test rollback_ledger_tests
+            --test rollback_ledger_tests \
+            --test object_names_tests

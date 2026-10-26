@@ -190,9 +190,10 @@ impl ConstraintIndex {
 /// Build the constraint lookup from the schema.
 ///
 /// This is what makes an error say `Event.slug` instead of `event_slug_key`. The names are
-/// **constructed from the same rules the migration generator uses**, not parsed back out of
-/// a message: `{table}_{column}_key`, `{table}_{fk}_fkey`, `{table}_pkey`,
-/// `{table}_{column}_bounds`, and an index's declared name or its derived one.
+/// **the ones the migration generator chose** ([`crate::managed::ObjectNames`]), not parsed back
+/// out of a message: `{table}_{column}_key`, `{table}_{fk}_fkey`, `{table}_pkey`,
+/// `{table}_{column}_bounds`, and an index's declared name or its derived one, each fitted to the
+/// identifier limit and given a digit on a clash exactly as the generator does.
 ///
 /// Reconstructing them here rather than recording them at migration time is a deliberate
 /// trade. It means a constraint whose name the author set by hand is not in the map, and
@@ -201,6 +202,7 @@ impl ConstraintIndex {
 /// the author needs to be right.
 pub fn constraint_index_for(ast: &SchemaAst) -> ConstraintIndex {
     let mut index = ConstraintIndex::new();
+    let names = crate::managed::ObjectNames::for_schema(ast);
 
     for model in &ast.models {
         let table = &model.annotations.db.table_name;
@@ -221,7 +223,7 @@ pub fn constraint_index_for(ast: &SchemaAst) -> ConstraintIndex {
             if let FieldAst::Relation(_) = field {
                 if let Some(fk) = db_foreign_key(field, name) {
                     index.insert(
-                        format!("{table}_{fk}_fkey"),
+                        names.foreign_key(table, &fk),
                         model.name.clone(),
                         vec![name.clone()],
                     );
@@ -231,14 +233,14 @@ pub fn constraint_index_for(ast: &SchemaAst) -> ConstraintIndex {
 
             if flag("primaryKey") {
                 index.insert(
-                    format!("{table}_pkey"),
+                    names.primary_key(table),
                     model.name.clone(),
                     vec![name.clone()],
                 );
             }
             if flag("unique") {
                 index.insert(
-                    format!("{table}_{name}_key"),
+                    names.unique(table, name),
                     model.name.clone(),
                     vec![name.clone()],
                 );
@@ -247,16 +249,18 @@ pub fn constraint_index_for(ast: &SchemaAst) -> ConstraintIndex {
             // Bounds are named by Supatype rather than by Postgres, so an inline CHECK
             // written elsewhere cannot be mistaken for one the schema manages.
             index.insert(
-                crate::managed::expected_check_constraint_name(table, name),
+                names.bounds(table, name),
                 model.name.clone(),
                 vec![name.clone()],
             );
         }
 
         for declared in &model.annotations.db.indexes {
-            let derived = format!("{table}_{}_idx", declared.fields.join("_"));
-            let name = declared.name.clone().unwrap_or(derived);
-            index.insert(name, model.name.clone(), declared.fields.clone());
+            index.insert(
+                names.index(table, declared),
+                model.name.clone(),
+                declared.fields.clone(),
+            );
         }
     }
 

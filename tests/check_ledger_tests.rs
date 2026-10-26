@@ -431,3 +431,49 @@ async fn doctor_agrees_with_push_about_a_check_the_database_proves_ours() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn doctor_proves_what_push_would_adopt_and_a_probe_it_cannot_run_proves_nothing() {
+    use supatype_engine::inspect;
+    common::with_integration_pool(|pool| async move {
+        let ast = schema(Some(10), None);
+        exec(
+            &pool,
+            "CREATE TABLE public.products (
+               id integer PRIMARY KEY, name text NOT NULL, price integer NOT NULL,
+               CONSTRAINT products_name_bounds CHECK (char_length(name) <= 10));
+             COMMENT ON TABLE public.products IS 'supatype:managed;kind=table;table=products;fields=;v=1';",
+        )
+        .await
+        .unwrap();
+        let conflicting = |report: &supatype_engine::differ::doctor::DoctorReport| -> Vec<String> {
+            report
+                .conflicting
+                .iter()
+                .filter(|i| i.kind == "check")
+                .map(|i| i.name.clone())
+                .collect()
+        };
+
+        // As a push would: the database deparses it to ours, so it is no conflict.
+        let report = inspect::doctor(&pool, &ast, "public", false).await.unwrap();
+        assert!(conflicting(&report).is_empty(), "{report:#?}");
+
+        // On a connection that cannot make the probe's temporary table (a read-only role, a
+        // standby), nothing is proven: still reported, as a conflict, rather than failing.
+        let options = (*pool.connect_options())
+            .clone()
+            .options([("default_transaction_read_only", "on")]);
+        let read_only = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        let report = inspect::doctor(&read_only, &ast, "public", false)
+            .await
+            .expect("doctor fails when the probe cannot run");
+        assert_eq!(conflicting(&report), ["products_name_bounds"]);
+        read_only.close().await;
+    })
+    .await;
+}

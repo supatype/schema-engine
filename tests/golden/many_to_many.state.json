@@ -222,7 +222,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX course_tags_pkey ON public.course_tags USING btree (tag_id, course_id)"
+        "definition": "CREATE UNIQUE INDEX course_tags_pkey ON public.course_tags USING btree (tag_id, course_id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "courses",
@@ -236,7 +238,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX courses_pkey ON public.courses USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX courses_pkey ON public.courses USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "courses",
@@ -250,7 +254,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX courses_slug_key ON public.courses USING btree (slug)"
+        "definition": "CREATE UNIQUE INDEX courses_slug_key ON public.courses USING btree (slug)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "enrollments",
@@ -265,7 +271,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX enrollments_pkey ON public.enrollments USING btree (student_id, course_id)"
+        "definition": "CREATE UNIQUE INDEX enrollments_pkey ON public.enrollments USING btree (student_id, course_id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "students",
@@ -279,7 +287,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX students_email_key ON public.students USING btree (email)"
+        "definition": "CREATE UNIQUE INDEX students_email_key ON public.students USING btree (email)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "students",
@@ -293,7 +303,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX students_pkey ON public.students USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX students_pkey ON public.students USING btree (id)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "tags",
@@ -307,7 +319,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX tags_name_key ON public.tags USING btree (name)"
+        "definition": "CREATE UNIQUE INDEX tags_name_key ON public.tags USING btree (name)",
+        "include": [],
+        "options": ""
       },
       {
         "table": "tags",
@@ -321,7 +335,9 @@
         "comment": null,
         "expressions": null,
         "predicate": null,
-        "definition": "CREATE UNIQUE INDEX tags_pkey ON public.tags USING btree (id)"
+        "definition": "CREATE UNIQUE INDEX tags_pkey ON public.tags USING btree (id)",
+        "include": [],
+        "options": ""
       }
     ],
     "constraints": [
@@ -339,7 +355,14 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
-        "comment": null
+        "definition": "FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "course_tags",
@@ -354,6 +377,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -370,7 +394,14 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
-        "comment": null
+        "definition": "FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "courses",
@@ -384,6 +415,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -398,6 +430,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -414,7 +447,14 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
-        "comment": null
+        "definition": "FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "enrollments",
@@ -429,6 +469,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -445,7 +486,14 @@
         ],
         "checkExpression": null,
         "onDelete": "CASCADE",
-        "comment": null
+        "definition": "FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE",
+        "comment": null,
+        "foreignKeyOptions": {
+          "onUpdate": "NO ACTION",
+          "matchType": "SIMPLE",
+          "deferrable": false,
+          "initiallyDeferred": false
+        }
       },
       {
         "table": "students",
@@ -457,6 +505,7 @@
         "foreignColumns": null,
         "checkExpression": "CHECK ((email ~* '^[^@]+@[^@]+\\.[^@]+$'::text))",
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -471,6 +520,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -485,6 +535,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -499,6 +550,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       },
       {
@@ -513,6 +565,7 @@
         "foreignColumns": null,
         "checkExpression": null,
         "onDelete": null,
+        "definition": null,
         "comment": null
       }
     ],
@@ -622,7 +675,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_courses_slug()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.\"slug\" IS NULL OR BTRIM(NEW.\"slug\"::TEXT) = '' THEN\n      NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.\"title\" IS DISTINCT FROM OLD.\"title\" THEN\n      IF OLD.\"slug\" IS NOT DISTINCT FROM _platform.slugify(OLD.\"title\"::TEXT) THEN\n        NEW.\"slug\" = _platform.slugify(NEW.\"title\"::TEXT);\n      END IF;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -634,7 +695,15 @@
         "volatility": "v",
         "securityDefiner": false,
         "body": "\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.set_updated_at()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $function$\nBEGIN\n  NEW.updated_at = NOW();\n  RETURN NEW;\nEND;\n$function$\n"
       },
       {
         "schema": "_platform",
@@ -646,7 +715,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "val text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _platform.slugify(val text)\n RETURNS text\n LANGUAGE plpgsql\n IMMUTABLE\nAS $function$\nBEGIN\n  RETURN lower(\n    regexp_replace(\n      regexp_replace(\n        unaccent(trim(val)),\n        '[^a-zA-Z0-9\\s-]', '', 'g'\n      ),\n      '[\\s-]+', '-', 'g'\n    )\n  );\nEND;\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -658,7 +735,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -670,7 +755,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_items_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(jsonb_array_length(value::jsonb) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -682,7 +775,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -694,7 +795,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(value) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -706,7 +815,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_max(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -718,7 +835,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n numeric",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_number_min(v jsonb, n numeric)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::numeric >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -730,7 +855,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_max(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) <= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -742,7 +875,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n integer",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_richtext_length_min(v jsonb, n integer)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(char_length(_supatype.richtext_text(value::jsonb)) >= n) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -754,7 +895,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_max(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz <= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -766,7 +915,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb, n text",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.localized_temporal_min(v jsonb, n text)\n RETURNS boolean\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT bool_and(value::timestamptz >= n::timestamptz) FROM jsonb_each_text(v)\n$function$\n"
       },
       {
         "schema": "_supatype",
@@ -778,7 +935,15 @@
         "volatility": "i",
         "securityDefiner": false,
         "body": "\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n",
-        "comment": null
+        "comment": null,
+        "arguments": "v jsonb",
+        "config": [],
+        "strict": true,
+        "leakproof": false,
+        "parallel": "s",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.richtext_text(v jsonb)\n RETURNS text\n LANGUAGE sql\n IMMUTABLE PARALLEL SAFE STRICT\nAS $function$\n  SELECT coalesce(string_agg(t, ''), '')\n  FROM jsonb_path_query(v, 'strict $.**.text ? (@.type() == \"string\")') AS q(j),\n       LATERAL (SELECT j #>> '{}') AS s(t)\n$function$\n"
       },
       {
         "schema": "auth",
@@ -790,7 +955,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim(claim_path text)\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -802,7 +975,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "claim_path text",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text)\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT auth.jwt() #>> string_to_array(claim_path, '.');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -814,7 +995,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.email()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(auth.jwt() ->> 'email', '');\n$function$\n"
       },
       {
         "schema": "auth",
@@ -826,7 +1015,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.jwt()\n RETURNS jsonb\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    NULLIF(current_setting('request.jwt.claims', true), '')::jsonb,\n    '{}'::jsonb\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -838,7 +1035,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.role()\n RETURNS text\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT COALESCE(\n    auth.jwt() -> 'app_metadata' ->> 'role',\n    auth.jwt() ->> 'role',\n    'anon'\n  );\n$function$\n"
       },
       {
         "schema": "auth",
@@ -850,7 +1055,15 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.roles()\n RETURNS text[]\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT ARRAY(\n      SELECT jsonb_array_elements_text(\n        COALESCE(current_setting('request.jwt.claims', true)::jsonb->'roles', '[]'::jsonb)\n      )\n    );\n  $function$\n"
       },
       {
         "schema": "auth",
@@ -862,151 +1075,255 @@
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n",
-        "comment": null
+        "comment": null,
+        "arguments": "",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION auth.uid()\n RETURNS uuid\n LANGUAGE sql\n STABLE\nAS $function$\n  SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid;\n$function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_courses",
-        "identityArguments": "courses courses",
+        "identityArguments": "courses public.courses",
         "identityTypes": "public.courses",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "courses public.courses",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_courses(courses public.courses)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_students",
-        "identityArguments": "students students",
+        "identityArguments": "students public.students",
         "identityTypes": "public.students",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "students public.students",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_students(students public.students)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_create_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_create_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_courses",
-        "identityArguments": "courses courses",
+        "identityArguments": "courses public.courses",
         "identityTypes": "public.courses",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "courses public.courses",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_courses(courses public.courses)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_students",
-        "identityArguments": "students students",
+        "identityArguments": "students public.students",
         "identityTypes": "public.students",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "students public.students",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_students(students public.students)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_delete_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_delete_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_courses",
-        "identityArguments": "courses courses",
+        "identityArguments": "courses public.courses",
         "identityTypes": "public.courses",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "courses public.courses",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_courses(courses public.courses)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_students",
-        "identityArguments": "students students",
+        "identityArguments": "students public.students",
         "identityTypes": "public.students",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "students public.students",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_students(students public.students)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_read_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_read_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_courses",
-        "identityArguments": "courses courses",
+        "identityArguments": "courses public.courses",
         "identityTypes": "public.courses",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "courses public.courses",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_courses(courses public.courses)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"courses\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_students",
-        "identityArguments": "students students",
+        "identityArguments": "students public.students",
         "identityTypes": "public.students",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "students public.students",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_students(students public.students)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"students\";\n  $function$\n"
       },
       {
         "schema": "public",
         "name": "can_update_tags",
-        "identityArguments": "tags tags",
+        "identityArguments": "tags public.tags",
         "identityTypes": "public.tags",
         "returnType": "boolean",
         "language": "sql",
         "volatility": "s",
         "securityDefiner": false,
         "body": "\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  ",
-        "comment": null
+        "comment": null,
+        "arguments": "tags public.tags",
+        "config": [],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION public.can_update_tags(tags public.tags)\n RETURNS boolean\n LANGUAGE sql\n STABLE\nAS $function$\n    SELECT FALSE\n      FROM (SELECT ($1).*) AS \"tags\";\n  $function$\n"
       }
     ],
     "views": [],

@@ -4,7 +4,9 @@
 //! object the ledger owns: an owned object that is absent is **missing**, one changed outside
 //! Supatype is **drifted** (with what Supatype recorded beside what the database holds), one the
 //! schema no longer asks for is **stale**, a desired name taken by someone else's object is
-//! **conflicting**, and one the user took back is **released**. Objects on a model table that
+//! **conflicting**, and one the user took back is **released**. One of Supatype's own from an
+//! earlier engine, which no row records yet (a policy or grant named for its table, an object in
+//! the engine's own schemas), is **claimed**: the next push records it, and that is not a failure. Objects on a model table that
 //! Supatype did not create, columns included (D4), are **unmanaged**: a push leaves them in place.
 //! A table the schema no longer declares is stale when it is ours and unmanaged when it is not.
 
@@ -41,9 +43,17 @@ pub struct DoctorReport {
     /// Taken back with `adopt --release`: left alone whatever the schema says.
     #[serde(default)]
     pub released: Vec<DoctorItem>,
+    /// Supatype's own object from an earlier engine, which no row records yet: the next push
+    /// records it, with the schema's definition. Reported, not a failure (`--strict` passes).
+    #[serde(default)]
+    pub claimed: Vec<DoctorItem>,
     /// Drifted objects whose live definition `doctor --rebaseline` just recorded as the baseline.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rebaselined: Vec<DoctorItem>,
+    /// Drifted objects that decide access, which `doctor --rebaseline` did not record because
+    /// `--accept-access-drift` was not given (plan 3.5). Still listed under `drifted`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rebaseline_refused: Vec<DoctorItem>,
     /// Whether a push would change or refuse something: what `doctor --strict` fails on, so a
     /// caller reads the engine's rule rather than keeping a copy of it.
     #[serde(default)]
@@ -129,11 +139,24 @@ pub fn report(
 pub fn report_of(ast: &SchemaAst, state: &State, decision: &Decision) -> DoctorReport {
     let plan = &decision.reconcile;
     let mut out = DoctorReport::default();
+    let recorded: BTreeSet<&ObjectKey> = state.ledger.iter().map(|r| &r.key).collect();
     for action in &plan.actions {
-        classify(action, &mut out);
+        classify(action, &recorded, &mut out);
     }
     out.unmanaged_drift
         .extend(unmanaged_objects(ast, state, plan));
+    // A column added outside Supatype that a narrowed write grant leaves unwritable says so, and
+    // how to include it (#63).
+    let narrowed = crate::push::NarrowedColumns::of(ast, state, &decision.diff, &state.db.schema);
+    for (table, column, roles) in &narrowed.ungranted {
+        if let Some(item) = out
+            .unmanaged_drift
+            .iter_mut()
+            .find(|i| i.kind == "column" && i.table == *table && i.name == *column)
+        {
+            item.message = crate::push::ungranted_message(table, column, roles);
+        }
+    }
     // Every table a push owns in the project schema (models, junction and versions tables). The
     // engine's own tables are the ledger's to account for.
     let declared: HashSet<&str> = decision
@@ -147,9 +170,31 @@ pub fn report_of(ast: &SchemaAst, state: &State, decision: &Decision) -> DoctorR
     out
 }
 
+/// The item for an object changed outside Supatype: what was recorded beside what is live.
+fn drifted_item(
+    key: &ObjectKey,
+    security_relevant: bool,
+    recorded_def: &str,
+    live_def: &str,
+) -> DoctorItem {
+    let mut item = DoctorItem::about(
+        key,
+        if security_relevant {
+            "was changed outside Supatype: `supatype push` puts it back, after asking, \
+             since it decides who may read or write"
+        } else {
+            "was changed outside Supatype: `supatype push` puts it back"
+        },
+    );
+    item.recorded = Some(recorded_def.to_string());
+    item.live = Some(live_def.to_string());
+    item
+}
+
 /// One reconcile action as the report's category, or nothing for what needs no attention: a
-/// kept, forgotten, adopted or replaced object.
-fn classify(action: &Action, out: &mut DoctorReport) {
+/// kept, forgotten or adopted object, or one of Supatype's the schema changed. `recorded` is every
+/// key the ledger has a row for.
+fn classify(action: &Action, recorded: &BTreeSet<&ObjectKey>, out: &mut DoctorReport) {
     match action {
         Action::Create { key, .. } => out.missing.push(DoctorItem::about(
             key,
@@ -165,19 +210,38 @@ fn classify(action: &Action, out: &mut DoctorReport) {
             live_def,
             security_relevant,
             ..
-        } => {
+        } => out.drifted.push(drifted_item(
+            key,
+            *security_relevant,
+            recorded_def,
+            live_def,
+        )),
+        // Changed by hand and by the schema: the push overwrites the hand edit, so it is drift.
+        Action::Replace {
+            key,
+            drifted: Some(edit),
+            ..
+        } => out.drifted.push(drifted_item(
+            key,
+            crate::desired::security_relevant(key.kind),
+            &edit.recorded_def,
+            &edit.live_def,
+        )),
+        // No row: Supatype's own object from an earlier engine, which its name or location makes
+        // ours (a policy or grant named for its table, an object in the engine's own schemas).
+        // The push records it with the schema's definition rather than refusing, as it does on
+        // every upgrade, so it is reported apart from the conflicts and fails nothing. One changed
+        // by hand since is a `Replace` with `drifted` set, reported above.
+        Action::Replace {
+            key, previous_sql, ..
+        } if !recorded.contains(key) => {
             let mut item = DoctorItem::about(
                 key,
-                if *security_relevant {
-                    "was changed outside Supatype: `supatype push` puts it back, after asking, \
-                     since it decides who may read or write"
-                } else {
-                    "was changed outside Supatype: `supatype push` puts it back"
-                },
+                "is Supatype's own from an earlier engine and not recorded yet: the next \
+                 `supatype push` records it, with the schema's definition",
             );
-            item.recorded = Some(recorded_def.clone());
-            item.live = Some(live_def.clone());
-            out.drifted.push(item);
+            item.live = Some(previous_sql.clone());
+            out.claimed.push(item);
         }
         Action::Drop { key, .. } => out.stale_managed.push(DoctorItem::about(
             key,
@@ -329,7 +393,7 @@ fn undeclared_tables(db: &DatabaseState, schema_tables: &HashSet<&str>, out: &mu
 }
 
 /// Whether the report has something a push would change or refuse: what `doctor --strict` fails
-/// on. Unmanaged objects and released ones are reported, not failures.
+/// on. Unmanaged, released and claimed objects are reported, not failures.
 pub fn has_strict_issues(report: &DoctorReport) -> bool {
     !report.missing.is_empty()
         || !report.stale_managed.is_empty()

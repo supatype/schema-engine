@@ -1,5 +1,8 @@
 use super::annotations::FieldAnnotations;
-use super::ast::{AccessAst, FieldAst, ModelAst, RelationCardinality, SchemaAst, VersionsAst};
+use super::ast::{
+    AccessAst, FieldAst, IndexAst, IndexMethod, ModelAst, RelationCardinality, SchemaAst,
+    VersionsAst,
+};
 use super::resolver::to_snake_case;
 
 pub fn db_table_name(model: &ModelAst) -> &str {
@@ -223,9 +226,11 @@ pub fn default_foreign_key_column(field_name: &str) -> String {
 /// Suffix on a versioned model's snapshot table.
 pub const VERSIONS_SUFFIX: &str = "_versions";
 
-/// The snapshot table for a model's table.
+/// The snapshot table for a model's table: `{table}_versions`, fitted to the identifier limit as
+/// Postgres fits the names it chooses ([`crate::managed::make_object_name`]), so a long table's
+/// snapshot table is created under the name everything else looks for.
 pub fn versions_table_name(table: &str) -> String {
-    format!("{table}{VERSIONS_SUFFIX}")
+    crate::managed::make_object_name(table, None, &VERSIONS_SUFFIX[1..])
 }
 
 /// A model's `versions` declaration, when it has one.
@@ -297,4 +302,121 @@ pub fn column_names_for(field_name: &str, field: &FieldAst) -> Vec<String> {
         FieldAst::SoftDelete => vec!["deleted_at".into()],
         _ => vec![field_name.to_string()],
     }
+}
+
+/// Returns Some(true) if the field has an `index: true` flag, None otherwise.
+/// The indexes a model gets without declaring any.
+///
+/// Three rules, all of which emit a managed comment: a btree for a field marked `index`, a btree
+/// on `deleted_at` for a soft-deleting model, and a GIN for an indexed `Blocks` column.
+///
+/// Public to the crate because the differ needs the identical list. It previously expected only
+/// the indexes a schema *declares*, so each of these read as a managed index nothing accounted
+/// for, and the differ proposed dropping it. The push dropped it, recreated it from the rules
+/// above, and the next diff proposed dropping it again: `supatype push` was never idempotent for
+/// any model with an indexed Blocks column. One definition, read by both, is the only version of
+/// this that stays true.
+pub fn implicit_model_indexes(model: &ModelAst) -> Vec<IndexAst> {
+    let table = model.table_name();
+    let mut indexes = Vec::new();
+
+    for (field_name, field) in &model.fields {
+        if let Some(true) = field_index_flag(field) {
+            indexes.push(IndexAst {
+                name: None,
+                fields: vec![field_name.clone()],
+                unique: false,
+                using: IndexMethod::Btree,
+            });
+        }
+    }
+
+    // Either spelling asks for the same index, and only one is emitted. The guard reads as a
+    // plain `or` now that both branches live here; it was two blocks, and the second excluded the
+    // first to avoid adding the index twice.
+    if model.fields.contains_key("softDelete") || model.options.soft_delete {
+        indexes.push(IndexAst {
+            name: None,
+            fields: vec!["deleted_at".into()],
+            unique: false,
+            using: IndexMethod::Btree,
+        });
+    }
+
+    for (field_name, field) in &model.fields {
+        if let FieldAst::Blocks(b) = field {
+            if b.index {
+                indexes.push(IndexAst {
+                    name: Some(crate::managed::make_object_name(
+                        table,
+                        Some(field_name),
+                        "gin_idx",
+                    )),
+                    fields: vec![field_name.clone()],
+                    unique: false,
+                    using: IndexMethod::Gin,
+                });
+            }
+        }
+    }
+
+    indexes
+}
+
+pub fn field_index_flag(field: &FieldAst) -> Option<bool> {
+    match field {
+        FieldAst::Text(f)
+        | FieldAst::Email(f)
+        | FieldAst::Uuid(f)
+        | FieldAst::Integer(f)
+        | FieldAst::Float(f)
+        | FieldAst::Boolean(f)
+        | FieldAst::Datetime(f)
+        | FieldAst::BigInt(f)
+        | FieldAst::Bytes(f)
+        | FieldAst::SmallInt(f)
+        | FieldAst::Date(f)
+        | FieldAst::Timestamp(f)
+        | FieldAst::Serial(f)
+        | FieldAst::BigSerial(f)
+        | FieldAst::Money(f)
+        | FieldAst::Url(f)
+        | FieldAst::Ip(f)
+        | FieldAst::Cidr(f)
+        | FieldAst::Macaddr(f)
+        | FieldAst::Interval(f)
+        | FieldAst::TsQuery(f)
+        | FieldAst::TsVector(f)
+        | FieldAst::Xml(f)
+        | FieldAst::RichText(f)
+        | FieldAst::Color(f) => {
+            if f.index {
+                Some(true)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Whether the column owns a sequence its database made for it: a `SERIAL` / `BIGSERIAL`, or an
+/// identity column, whose sequence Postgres names the same way (`{table}_{column}_seq`).
+pub fn owns_sequence(field: &FieldAst) -> bool {
+    matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_))
+        || super::ast::scalar_of(field).is_some_and(|f| f.identity.is_some())
+}
+
+/// Whether the database fills the column itself, so an insert may leave it out: a serial, an
+/// identity column, or a generated one.
+pub fn database_fills(field: &FieldAst) -> bool {
+    owns_sequence(field) || super::ast::scalar_of(field).is_some_and(|f| f.generated.is_some())
+}
+
+/// Whether no caller writes the column: a generated one, which Postgres refuses to write, or a
+/// `GENERATED ALWAYS` identity, which it refuses short of `OVERRIDING SYSTEM VALUE`.
+pub fn never_written(field: &FieldAst) -> bool {
+    super::ast::scalar_of(field).is_some_and(|f| {
+        f.generated.is_some() || f.identity == Some(super::ast::IdentityGeneration::Always)
+    })
 }

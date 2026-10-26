@@ -144,6 +144,66 @@ async fn adopt_offers_to_take_the_table_push_refuses() {
     .await;
 }
 
+/// `--adopt-none` adopts no conflict while still releasing what `--release` names, as HTTP
+/// `keys: []` does; with no `--key` at all every conflict is adopted. It cannot be combined with
+/// `--key`.
+#[tokio::test]
+async fn adopt_none_releases_without_adopting_any_conflict() {
+    common::with_integration_url(|url| async move {
+        assert!(push(&url).ok);
+        sql(
+            &url,
+            "DELETE FROM _supatype.managed_objects WHERE kind = 'table' AND name = 'widget';
+             COMMENT ON TABLE public.widget IS NULL;
+             CREATE INDEX widget_name_mine ON public.widget (name);",
+        )
+        .await;
+
+        let both = engine(
+            &url,
+            &["adopt", "--yes", "--adopt-none", "--key", "table:widget"],
+        );
+        assert!(!both.ok, "--adopt-none with --key must be refused");
+
+        let none = engine(
+            &url,
+            &[
+                "adopt",
+                "--yes",
+                "--adopt-none",
+                "--release",
+                "index:widget.widget_name_mine",
+            ],
+        );
+        assert!(none.ok, "{}", none.stderr);
+        let outcome: serde_json::Value = serde_json::from_str(&none.stdout).unwrap();
+        assert_eq!(outcome["adopt"], serde_json::json!([]), "{}", none.stdout);
+        assert_eq!(outcome["release"].as_array().map(Vec::len), Some(1));
+        let status = |name: &'static str| {
+            let url = url.clone();
+            async move {
+                let pool = sqlx::PgPool::connect(&url).await.unwrap();
+                let status: Option<String> = sqlx::query_scalar(
+                    "SELECT status FROM _supatype.managed_objects WHERE name = $1",
+                )
+                .bind(name)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+                pool.close().await;
+                status
+            }
+        };
+        assert_eq!(
+            status("widget_name_mine").await.as_deref(),
+            Some("released")
+        );
+        assert_eq!(status("widget").await, None, "the table was adopted");
+        assert!(!push(&url).ok, "the table is still a conflict");
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn push_restores_a_column_dropped_outside_supatype() {
     common::with_integration_url(|url| async move {
@@ -228,4 +288,106 @@ async fn a_non_interactive_push_refuses_to_overwrite_access_changed_by_hand() {
         assert!(rls_on(&url).await);
     })
     .await;
+}
+
+/// While another session holds the engine's lock, each writing command refuses, and says so on
+/// stdout as `{"status":"refused","reason":"engine_busy",...}`, where a caller reads the result,
+/// exiting non-zero.
+#[tokio::test]
+async fn a_writer_refuses_on_stdout_while_the_engine_is_busy() {
+    use sqlx::Connection;
+    common::with_integration_url(|url| async move {
+        let first = push(&url);
+        assert!(first.ok, "first push: {}", first.stderr);
+        let mut other = sqlx::PgConnection::connect(&url).await.unwrap();
+        sqlx::query("SELECT pg_advisory_lock(872014, 2)")
+            .execute(&mut other)
+            .await
+            .unwrap();
+        for args in [
+            &["push", "--force", "--non-interactive"][..],
+            &["adopt", "--yes"],
+            &["doctor", "--rebaseline"],
+            &["rollback"],
+        ] {
+            let run = engine(&url, args);
+            assert!(
+                !run.ok,
+                "{args:?} ran while the engine was busy: {}",
+                run.stdout
+            );
+            let refusal: serde_json::Value = run
+                .stdout
+                .lines()
+                .find_map(|l| serde_json::from_str(l).ok())
+                .unwrap_or_else(|| panic!("{args:?}: no JSON refusal on stdout: {}", run.stdout));
+            assert_eq!(refusal["status"], "refused", "{args:?}");
+            assert_eq!(refusal["reason"], "engine_busy", "{args:?}");
+            assert!(
+                refusal["message"].as_str().unwrap().contains("try again"),
+                "{args:?}: {refusal}"
+            );
+            assert!(run.stderr.contains("try again"), "{args:?}: {}", run.stderr);
+        }
+    })
+    .await;
+}
+
+/// Rebaselining drift on access takes `--accept-access-drift`; `--overwrite-drift`, the push's
+/// consent to put Supatype's definitions back, is refused by doctor with a pointer to it.
+#[tokio::test]
+async fn doctor_rebaselines_access_drift_with_its_own_consent() {
+    common::with_integration_url(|url| async move {
+        let first = push(&url);
+        assert!(first.ok, "first push: {}", first.stderr);
+        sql(&url, "ALTER TABLE public.widget DISABLE ROW LEVEL SECURITY").await;
+
+        let refused = engine(&url, &["doctor", "--rebaseline", "--overwrite-drift"]);
+        assert!(
+            !refused.ok,
+            "doctor took --overwrite-drift: {}",
+            refused.stdout
+        );
+        assert!(
+            refused.stderr.contains("--accept-access-drift"),
+            "{}",
+            refused.stderr
+        );
+
+        let without = engine(&url, &["doctor", "--rebaseline"]);
+        assert!(without.ok, "{}", without.stderr);
+        let report: serde_json::Value = serde_json::from_str(&without.stdout).unwrap();
+        let message = report["rebaselineRefused"][0]["message"].as_str().unwrap();
+        assert!(message.contains("--accept-access-drift"), "{report}");
+
+        let with = engine(&url, &["doctor", "--rebaseline", "--accept-access-drift"]);
+        assert!(with.ok, "{}", with.stderr);
+        let report: serde_json::Value = serde_json::from_str(&with.stdout).unwrap();
+        assert_eq!(
+            report["rebaselined"][0]["kind"], "rls_attributes",
+            "{report}"
+        );
+        assert!(report.get("rebaselineRefused").is_none(), "{report}");
+    })
+    .await;
+}
+
+/// `capabilities` needs no input and no database: the CLI asks it before relying on a flag.
+#[test]
+fn capabilities_prints_the_features_this_engine_supports() {
+    let out = Command::new(env!("CARGO_BIN_EXE_supatype-engine"))
+        .arg("capabilities")
+        .output()
+        .expect("run the engine");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({ "features": ["adopt_keys", "adopt_none", "release", "reclaim",
+            "rebaseline", "accept_access_drift", "overwrite_drift", "engine_busy", "identity_columns"] })
+    );
 }

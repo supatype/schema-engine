@@ -119,10 +119,11 @@ fn ast_primary_key(model: &ModelAst) -> Vec<String> {
 /// NULLs, and every masked write was permitted and written as NULL. Nothing failed loudly — the
 /// contract's requirement 5 kept passing for an unrelated reason.
 fn primary_key_columns(db: &DatabaseState, table: &str) -> Vec<String> {
-    // From the backing index, not from `db.constraints`: the constraint reader only emits foreign
-    // keys, so `DbConstraintType::PrimaryKey` is a variant nothing ever produces. Reading it there
-    // returned "no key" for every table, which skipped the trigger and left the view read-only —
-    // failing with `cannot update column "salary" of view` rather than anything about keys.
+    // From the backing index. When this was written the constraint reader emitted only foreign
+    // keys, so reading `db.constraints` returned "no key" for every table, which skipped the
+    // trigger and left the view read-only — failing with `cannot update column "salary" of view`
+    // rather than anything about keys. The reader reports primary keys now; the index is kept as
+    // the source because it is what identifies the row, and is read the same way either way.
     db.indexes
         .iter()
         .find(|i| i.table == table && i.is_primary)
@@ -229,6 +230,7 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
         return String::new();
     }
     let mut out = preamble();
+    let names = crate::managed::ObjectNames::for_schema(ast);
 
     for entry in plan {
         let Some(model) = ast.models.iter().find(|m| db_table_name(m) == entry.table) else {
@@ -286,7 +288,7 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
                 continue;
             }
             out.push_str(&render_write_trigger(
-                ast, model, schema, table, &entry.key, columns,
+                &names, ast, model, schema, table, &entry.key, columns,
             ));
         }
     }
@@ -300,6 +302,7 @@ pub fn render_field_views(ast: &SchemaAst, plan: &[FieldViewTable], schema: &str
 /// every write verb on any table that masks a column — a far worse regression than the masking is an
 /// improvement.
 fn render_write_trigger(
+    names: &crate::managed::ObjectNames,
     ast: &SchemaAst,
     model: &ModelAst,
     schema: &str,
@@ -308,7 +311,7 @@ fn render_write_trigger(
     all_columns: &[String],
 ) -> String {
     let columns: Vec<&str> = all_columns.iter().map(String::as_str).collect();
-    let fn_name = format!("{table}__write");
+    let fn_name = names.write_function(table);
     let access = platform_access(model);
 
     let mut guards = String::new();
@@ -361,6 +364,18 @@ fn render_write_trigger(
         ));
     }
 
+    // Never a column Postgres refuses to write (a generated one, a `GENERATED ALWAYS` identity):
+    // naming it, even with the value read back, fails the whole write.
+    let unwritten: Vec<String> = model
+        .fields
+        .iter()
+        .filter(|(_, f)| crate::parser::accessors::never_written(f))
+        .flat_map(|(n, f)| crate::parser::accessors::column_names_for(n, f))
+        .collect();
+    let columns: Vec<&str> = columns
+        .into_iter()
+        .filter(|c| !unwritten.iter().any(|u| u == c))
+        .collect();
     let assignments = columns
         .iter()
         .map(|c| format!("{} = NEW.{}", quoted(c), quoted(c)))
@@ -412,7 +427,7 @@ fn render_write_trigger(
         fn_quoted = quoted(&fn_name),
         schema_quoted = quoted(schema),
         table_quoted = quoted(table),
-        trigger_name = quoted(&format!("{table}_write")),
+        trigger_name = quoted(&names.write_trigger(table)),
         key_match = key
             .iter()
             .map(|c| format!("{q} = OLD.{q}", q = quoted(c)))

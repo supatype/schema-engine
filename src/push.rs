@@ -15,6 +15,8 @@
 //!    state), then [`plan`].
 //! 3. [`apply`]: everything that writes, in one transaction, or nothing: the migration body, the
 //!    reconcile's statements, the history row, the ledger rows for every object of a moved kind.
+//!    It first re-reads the ledger and the live objects inside that transaction and refuses if
+//!    they are not what [`plan`] decided against.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -67,6 +69,31 @@ pub const MOVED_KINDS: &[ObjectKind] = &[
 /// `packages/realtime`, `schema-push-lock`). Realtime skips WAL polls while this is held.
 const PUSH_LOCK_CLASS: i32 = 872014;
 const PUSH_LOCK_ID: i32 = 1;
+/// The engine's own mutual exclusion, on the same class and the next id: a push, a writing `adopt`
+/// and `doctor --rebaseline` each take it for their transaction and refuse while another holds it.
+/// Separate from [`PUSH_LOCK_ID`], which the CLI holds from another session around the push it
+/// runs, so refusing on that one would refuse every such push. Only this engine takes this key.
+const ENGINE_LOCK_ID: i32 = 2;
+
+/// Refused because another push, adopt, rebaseline or rollback holds [`ENGINE_LOCK_ID`]. A type, so a caller
+/// can tell it from a failed push and retry: the HTTP server answers it with 409 and
+/// [`ENGINE_BUSY`].
+#[derive(Debug)]
+pub struct EngineBusy;
+
+/// The HTTP refusal reason for [`EngineBusy`].
+pub const ENGINE_BUSY: &str = "engine_busy";
+
+impl std::fmt::Display for EngineBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "another push, adopt, rebaseline or rollback is running on this database; try again. \
+             Nothing was applied.",
+        )
+    }
+}
+
+impl std::error::Error for EngineBusy {}
 
 /// What a push has read and decided, before anything is written.
 pub struct Plan<'a> {
@@ -75,6 +102,72 @@ pub struct Plan<'a> {
     /// The CLI may edit this between `prepare` and `apply` (rename confirmations).
     pub diff: DiffOutput,
     pub reconcile: reconcile::Plan,
+    /// What `reconcile` was decided from, checked again inside the apply's transaction.
+    inputs: ReconcileInputs,
+}
+
+/// The ledger and the live objects a reconcile was decided from, each in key order.
+///
+/// The plan reads them on a pooled connection before the apply's transaction begins, and the CLI
+/// may wait on a confirmation between the two. A push or a hand edit landing in that gap would
+/// otherwise be overwritten by statements decided against a database that no longer exists: a
+/// drop of an object that has since become someone else's, a ledger row written over one just
+/// recorded. [`ReconcileInputs::assert_current`] compares them with a re-read inside the apply's
+/// transaction, once the push lock is taken, and refuses when they moved.
+struct ReconcileInputs {
+    ledger: Vec<LedgerRow>,
+    fingerprints: Vec<ObjectFingerprint>,
+}
+
+impl ReconcileInputs {
+    fn of(state: &State) -> ReconcileInputs {
+        let mut ledger = state.ledger.clone();
+        ledger.sort_by(|a, b| a.key.cmp(&b.key));
+        let mut fingerprints = state.fingerprints.clone();
+        fingerprints.sort();
+        ReconcileInputs {
+            ledger,
+            fingerprints,
+        }
+    }
+
+    /// Refuse when `now` is not what the plan was decided from, naming what moved.
+    fn assert_current(&self, now: &State) -> Result<()> {
+        let now = ReconcileInputs::of(now);
+        let mut moved: BTreeSet<String> = BTreeSet::new();
+        let ledger = |rows: &[LedgerRow]| -> BTreeMap<ObjectKey, LedgerRow> {
+            rows.iter().map(|r| (r.key.clone(), r.clone())).collect()
+        };
+        let (was, is) = (ledger(&self.ledger), ledger(&now.ledger));
+        for key in was.keys().chain(is.keys()) {
+            if was.get(key) != is.get(key) {
+                moved.insert(format!("{key} (ledger)"));
+            }
+        }
+        let live = |fps: &[ObjectFingerprint]| -> BTreeMap<ObjectKey, ObjectFingerprint> {
+            fps.iter().map(|f| (f.key(), f.clone())).collect()
+        };
+        let (was, is) = (live(&self.fingerprints), live(&now.fingerprints));
+        for key in was.keys().chain(is.keys()) {
+            if was.get(key) != is.get(key) {
+                moved.insert(key.to_string());
+            }
+        }
+        if moved.is_empty() {
+            return Ok(());
+        }
+        let shown: Vec<String> = moved.iter().take(10).cloned().collect();
+        bail!(
+            "The database changed after this push was planned, so nothing was applied: {}{}. \
+             Another push or a change outside Supatype landed in between. Run the push again to \
+             plan it against the database as it is now.",
+            shown.join(", "),
+            match moved.len() - shown.len() {
+                0 => String::new(),
+                more => format!(" and {more} more"),
+            }
+        )
+    }
 }
 
 impl Plan<'_> {
@@ -158,7 +251,18 @@ struct Live {
     fingerprints: Vec<ObjectFingerprint>,
 }
 
+/// Read under a pinned `search_path` (`introspector::pin_search_path`), so a fingerprint does not
+/// depend on the session's, and with the session's put back after, error or not.
 async fn live(conn: &mut PgConnection, schema: &str) -> Result<Live> {
+    let saved = introspector::pin_search_path(conn).await?;
+    let read = read_live(conn, schema).await;
+    let restored = introspector::restore_search_path(conn, &saved).await;
+    let live = read?;
+    restored?;
+    Ok(live)
+}
+
+async fn read_live(conn: &mut PgConnection, schema: &str) -> Result<Live> {
     let db = introspector::introspect_connection(conn, schema).await?;
     let catalog = catalog::read(conn, schema).await?;
     let fingerprints = fingerprints(&db, &catalog);
@@ -237,7 +341,7 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
     // Which tables are ours is the ledger's to say (Phase 4.11), so the table and column differs
     // drop, rename and attach rules only where it does: `read_state` puts that in the state.
     let (
-        _,
+        state,
         Decision {
             diff, reconcile, ..
         },
@@ -253,6 +357,7 @@ pub async fn plan<'a>(pool: &PgPool, ast: &'a SchemaAst, schema: &str) -> Result
         schema: schema.to_string(),
         diff,
         reconcile,
+        inputs: ReconcileInputs::of(&state),
     })
 }
 
@@ -269,6 +374,8 @@ pub struct Decision {
 /// would deparse to ours is still a conflict here. `previous` is the schema of the last push, for
 /// telling a renamed table or column from a dropped and added one.
 pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> Result<Decision> {
+    let kept = serials_kept(ast, &state.db);
+    let ast = kept.as_ref().unwrap_or(ast);
     // A state built by hand (a test) may not name its schema.
     let schema = match state.db.schema.as_str() {
         "" => "public",
@@ -276,22 +383,163 @@ pub fn decide(ast: &SchemaAst, state: &State, previous: Option<&SchemaAst>) -> R
     };
     let mut diff = differ::diff_with_previous(ast, &state.db, previous)?;
     // D4: the column differ drops only a column the ledger records as ours. One someone added to
-    // a managed table, or one an older engine made that this push has not recorded yet, stays.
-    let owned_columns: BTreeSet<(&str, &str)> = state
+    // a managed table, one released with `adopt --release`, or one an older engine made that this
+    // push has not recorded yet, stays.
+    // A column adopted with `supatype adopt --key column:<table>.<column>` while the schema does not
+    // declare it is kept: Supatype knows of it (and a narrowed write grant includes it), but has
+    // no definition to bring it to.
+    // A table this push renames still has its rows under its old name, so its columns are
+    // looked up there.
+    let renamed_from: BTreeMap<String, String> = diff
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            Operation::RenameTable { from, to, .. } => Some((to.clone(), from.clone())),
+            _ => None,
+        })
+        .collect();
+    let recorded_as = |table: &str| {
+        renamed_from
+            .get(table)
+            .cloned()
+            .unwrap_or_else(|| table.to_string())
+    };
+    let adopted: BTreeSet<(&str, &str)> = state
         .ledger
         .iter()
-        .filter(|r| r.key.kind == ObjectKind::Column && r.key.schema == schema)
+        .filter(|r| {
+            r.key.kind == ObjectKind::Column
+                && r.key.schema == schema
+                && r.status == ledger::Status::Adopted
+        })
         .map(|r| (r.key.parent.as_str(), r.key.name.as_str()))
         .collect();
-    diff.keep_columns_not_ours(|table, column| owned_columns.contains(&(table, column)));
-    let desired = desired_here(&diff, &state.catalog, schema, ast)?;
+    diff.operations.retain(|op| {
+        !matches!(op, Operation::DropColumn { table, column, .. }
+            if adopted.contains(&(recorded_as(table).as_str(), column.as_str())))
+    });
+    diff.summary = differ::DiffSummary::of(&diff.operations);
+    diff.leave_released_columns(|table, column| {
+        state.db.column_owned(&recorded_as(table), column) == Some(false)
+    });
+    diff.keep_columns_not_ours(|table, column| {
+        state.db.column_owned(&recorded_as(table), column) == Some(true)
+    });
+    let narrowed = NarrowedColumns::of(ast, state, &diff, schema);
+    diff.warnings.extend(narrowed.warnings());
+    let mut desired = desired_here(&diff, &state.catalog, schema, ast)?;
+    narrowed.grant_adopted(&mut desired, ast, &diff, schema);
     let live = with_grants_of_nothing(&state.fingerprints, state.ledger.iter().map(|r| &r.key));
-    let reconcile = reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast)?;
+    let named = named_by_the_engine(previous, &state.db, schema);
+    let mut reconcile =
+        reconcile_desired(&diff, &state.ledger, &live, &desired, schema, ast, &named)?;
+    reconcile.actions.extend(previously_declared_columns(
+        state, previous, &desired, schema,
+    ));
     Ok(Decision {
         diff,
         reconcile,
         desired,
     })
+}
+
+/// `ast` with each `AutoIncrement` field whose column is a live `SERIAL` declared as the serial it
+/// is, or `None` when there is none.
+///
+/// `AutoIncrement` made a serial before it meant an identity column generated by default, and a
+/// column made then satisfies it: the push, the ledger and doctor see the declaration that made it,
+/// so nothing about it changes, is re-recorded or is reported, on this push or any other. Only a
+/// new column is made an identity column. An explicit `Identity` is not this, and converts it.
+fn serials_kept(ast: &SchemaAst, db: &DatabaseState) -> Option<SchemaAst> {
+    use crate::parser::ast::FieldAst;
+    let is_serial = |table: &str, column: &str| {
+        db.tables
+            .iter()
+            .find(|t| t.name == table)
+            .and_then(|t| t.columns.iter().find(|c| c.name == column))
+            .is_some_and(|c| {
+                !c.is_identity
+                    && c.default
+                        .as_deref()
+                        .is_some_and(|d| d.starts_with("nextval("))
+            })
+    };
+    let mut kept = None;
+    for (m, model) in ast.models.iter().enumerate() {
+        for (name, field) in &model.fields {
+            let serial = match field {
+                FieldAst::Integer(f) if f.auto_increment => ("SERIAL", f),
+                FieldAst::BigInt(f) if f.auto_increment => ("BIGSERIAL", f),
+                _ => continue,
+            };
+            let columns = crate::parser::accessors::column_names_for(name, field);
+            if !columns.iter().any(|c| is_serial(model.table_name(), c)) {
+                continue;
+            }
+            let (pg_type, f) = serial;
+            let mut f = f.clone();
+            f.identity = None;
+            f.auto_increment = false;
+            f.pg_type = pg_type.to_string();
+            f.annotations.db.pg_type = pg_type.to_string();
+            let field = if pg_type == "SERIAL" {
+                FieldAst::Serial(f)
+            } else {
+                FieldAst::BigSerial(f)
+            };
+            let out = kept.get_or_insert_with(|| ast.clone());
+            out.models[m].fields.insert(name.clone(), field);
+        }
+    }
+    kept
+}
+
+/// The columns an older engine made that the schema has stopped declaring in the first push after
+/// an upgrade: no row records them, so this push withholds their drop (D4), but the last push's
+/// schema declared them on a table that is ours, so they are recorded here, with the `CREATE` that
+/// schema asked for, and the next push drops them. A column no schema declared is never claimed.
+fn previously_declared_columns(
+    state: &State,
+    previous: Option<&SchemaAst>,
+    desired: &[crate::desired::DesiredObject],
+    schema: &str,
+) -> Vec<reconcile::Action> {
+    let Some(previous) = previous else {
+        return Vec::new();
+    };
+    let Ok(before) = desired_objects_for(previous, schema, FieldEnforcement::Labels) else {
+        return Vec::new();
+    };
+    let wanted: BTreeSet<&ObjectKey> = desired.iter().map(|d| &d.key).collect();
+    let live: BTreeSet<ObjectKey> = state
+        .fingerprints
+        .iter()
+        .filter(|f| f.kind == ObjectKind::Column)
+        .map(ObjectFingerprint::key)
+        .collect();
+    before
+        .into_iter()
+        .filter(|d| {
+            let key = &d.key;
+            key.kind == ObjectKind::Column
+                && live.contains(key)
+                && !wanted.contains(key)
+                && state.db.column_owned(&key.parent, &key.name).is_none()
+                && state
+                    .db
+                    .tables
+                    .iter()
+                    .any(|t| t.name == key.parent && state.db.owns_table(t))
+        })
+        .map(|d| reconcile::Action::Adopt {
+            key: d.key,
+            reason: reconcile::AdoptReason::PreviouslyDeclared,
+            create_sql: d.create_sql,
+            comment: None,
+            renamed_from: None,
+            status: ledger::Status::Managed,
+        })
+        .collect()
 }
 
 /// Everything a push knows before it writes: [`read_state`] on `conn` (a transaction, for a caller
@@ -309,7 +557,10 @@ pub async fn read_and_decide(
 }
 
 /// [`decide`], then asking the database to settle what it can (`ledger::probe`): a same-named
-/// object it proves equivalent to ours is adopted rather than refused.
+/// object it proves equivalent to ours is adopted rather than refused. A probe the database cannot
+/// run (a read-only role or a standby, which cannot make the temporary table; a declared check on a
+/// column the table does not have yet) proves nothing, so those objects stay conflicts: `doctor`
+/// must still report, and a push still refuses them by name rather than failing on the probe.
 pub async fn decide_probed(
     conn: &mut PgConnection,
     ast: &SchemaAst,
@@ -317,9 +568,252 @@ pub async fn decide_probed(
     previous: Option<&SchemaAst>,
 ) -> Result<Decision> {
     let mut decision = decide(ast, state, previous)?;
-    let proven = probe::equivalent(conn, &decision.reconcile).await?;
+    let proven = match probe::equivalent(conn, &decision.reconcile).await {
+        Ok(proven) => proven,
+        Err(e) => {
+            tracing::warn!("equivalence probe not run, conflicts stand: {e:#}");
+            BTreeSet::new()
+        }
+    };
     decision.reconcile.adopt_equivalent(&proven);
+    upgrade_hand_edits(conn, state, &mut decision, previous).await;
     Ok(decision)
+}
+
+/// The first push after an upgrade finds every policy, grant, label and RLS attribute an older
+/// engine made with no ledger row, and replaces each with the schema's definition, as its name or
+/// location makes it ours. One edited by hand under the older engine would be overwritten silently,
+/// where the same edit made after the upgrade needs consent (plan 3.5). So each is compared with
+/// what the last push's schema makes of it: that schema's statements are run in a transaction that
+/// is always rolled back, each object read back, and one whose live fingerprint differs is a hand
+/// edit: its `Replace` carries it, so the push asks before overwriting it and doctor reports it as
+/// drift. One the last schema did not declare was not that engine's, and is taken over as before.
+/// Without a last schema there is nothing to compare with, and the push says so.
+///
+/// Grants are compared with what that engine left rather than with the exact set (D7) the last
+/// schema renders today. An older engine granted and revoked only the four privileges the rules
+/// govern, on top of the database's default privileges, so on the supatype image every API role it
+/// left also holds `REFERENCES`, `TRIGGER`, `TRUNCATE` (and `MAINTAIN`) from them. What it made is
+/// therefore the rendered set plus whatever else the defaults give that role on that table
+/// ([`older_engine_grant_sql`]); a clean upgrade matches it, and a privilege beyond it, or one
+/// taken away, is a hand edit and asks first.
+async fn upgrade_hand_edits(
+    conn: &mut PgConnection,
+    state: &State,
+    decision: &mut Decision,
+    previous: Option<&SchemaAst>,
+) {
+    let recorded: BTreeSet<&ObjectKey> = state.ledger.iter().map(|r| &r.key).collect();
+    let candidates: Vec<usize> = decision
+        .reconcile
+        .actions
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| {
+            matches!(a, reconcile::Action::Replace { key, drifted: None, .. }
+                if crate::desired::security_relevant(key.kind)
+                    && !recorded.contains(key))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let keys = |indices: &[usize]| {
+        indices
+            .iter()
+            .map(|&i| decision.reconcile.actions[i].key().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let Some(previous) = previous else {
+        let warning = format!(
+            "{} object(s) that decide who may read or write have no record and there is no \
+             earlier schema to compare them with, so they are replaced with the schema's \
+             definition without checking for changes made by hand: {}",
+            candidates.len(),
+            keys(&candidates)
+        );
+        decision.diff.warnings.push(warning);
+        return;
+    };
+    let schema = match state.db.schema.as_str() {
+        "" => "public",
+        named => named,
+    };
+    let plan = field_views::field_view_plan(previous, &state.db);
+    let fields = match decision.diff.field_masking {
+        FieldMaskingTier::Views => FieldEnforcement::Views(&plan),
+        FieldMaskingTier::None | FieldMaskingTier::Extension => FieldEnforcement::Labels,
+    };
+    let before: BTreeMap<ObjectKey, String> = match desired_objects_for(previous, schema, fields) {
+        Ok(objects) => objects.into_iter().map(|d| (d.key, d.create_sql)).collect(),
+        Err(e) => {
+            decision.diff.warnings.push(format!(
+                "the last push's schema could not be rendered ({e:#}), so {} are replaced \
+                 without checking for changes made by hand",
+                keys(&candidates)
+            ));
+            return;
+        }
+    };
+    let probes: Vec<(ObjectKey, String)> = candidates
+        .iter()
+        .filter_map(|&i| {
+            let key = decision.reconcile.actions[i].key();
+            let sql = before.get(key)?;
+            let mut probe = format!("{}\n{sql}", reset_sql(key));
+            // Under tier 2 that engine took every privilege off the base table, defaults included.
+            if key.kind == ObjectKind::TableGrant
+                && decision.diff.field_masking != FieldMaskingTier::Views
+            {
+                probe.push('\n');
+                probe.push_str(&older_engine_grant_sql(&key.schema, &key.parent, &key.name));
+            }
+            Some((key.clone(), probe))
+        })
+        .collect();
+    let (made, failed) = match made_by(conn, schema, &probes).await {
+        Ok(made) => made,
+        Err(e) => {
+            decision.diff.warnings.push(format!(
+                "{} could not be compared with the last push's schema ({e:#}): they are replaced \
+                 without checking for changes made by hand",
+                keys(&candidates)
+            ));
+            return;
+        }
+    };
+    let live: BTreeMap<ObjectKey, &ObjectFingerprint> =
+        state.fingerprints.iter().map(|f| (f.key(), f)).collect();
+    let mut unchecked = Vec::new();
+    for i in candidates {
+        let reconcile::Action::Replace { key, drifted, .. } = &mut decision.reconcile.actions[i]
+        else {
+            continue;
+        };
+        let Some(l) = live.get(key) else { continue };
+        // One the last push's schema did not declare is not an older engine's (a table adopted
+        // since, say, whose RLS the schema now asks for): taken over as before.
+        if !before.contains_key(key) {
+            continue;
+        }
+        if failed.contains(key) {
+            unchecked.push(key.to_string());
+            continue;
+        }
+        let expected = made.get(key).cloned();
+        let differs = expected
+            .as_ref()
+            .is_none_or(|e| e.fingerprint != l.fingerprint);
+        if differs {
+            *drifted = Some(reconcile::HandEdit {
+                recorded_def: expected.map(|e| e.definition).unwrap_or_else(|| {
+                    "(nothing: the schema of the last push makes no such object)".to_string()
+                }),
+                live_def: l.definition.clone(),
+                live_fp: l.fingerprint.clone(),
+            });
+        }
+    }
+    if !unchecked.is_empty() {
+        decision.diff.warnings.push(format!(
+            "{} could not be compared with the last push's schema: they are replaced without \
+             checking for changes made by hand",
+            unchecked.join(", ")
+        ));
+    }
+}
+
+/// What an older engine's grant to `role` on a table held beyond the four privileges the rules
+/// govern: what the database's default privileges give that role on a table its owner creates in
+/// its schema (`ALTER DEFAULT PRIVILEGES`, global and per schema), read from `pg_default_acl` as
+/// the table's `CREATE` applied them. That engine granted and revoked only `SELECT`, `INSERT`,
+/// `UPDATE` and `DELETE`, so everything else the defaults gave stayed. Granted after the last
+/// schema's statement, which revokes everything first; guarded on the role and the table, as the
+/// grant itself is.
+fn older_engine_grant_sql(schema: &str, table: &str, role: &str) -> String {
+    let target = format!(
+        "\"{}\".\"{}\"",
+        schema.replace('"', "\"\""),
+        table.replace('"', "\"\"")
+    );
+    let literal = |s: &str| s.replace('\'', "''");
+    format!(
+        "DO $defaults$\nDECLARE\n  privileges text;\nBEGIN\n  \
+         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{role_lit}') AND to_regclass('{target_lit}') IS NOT NULL THEN\n    \
+         SELECT string_agg(DISTINCT a.privilege_type, ', ')\n      INTO privileges\n      \
+         FROM pg_class c\n      \
+         JOIN pg_default_acl d ON d.defaclrole = c.relowner AND d.defaclobjtype = 'r'\n                           \
+         AND d.defaclnamespace IN (0, c.relnamespace)\n      \
+         CROSS JOIN LATERAL aclexplode(d.defaclacl) a\n     \
+         WHERE c.oid = to_regclass('{target_lit}')\n       \
+         AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = '{role_lit}')\n       \
+         AND a.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE');\n    \
+         IF privileges IS NOT NULL THEN\n      \
+         EXECUTE format('GRANT %s ON %s TO %I', privileges, '{target_lit}', '{role_lit}');\n    \
+         END IF;\n  \
+         END IF;\nEND\n$defaults$;",
+        role_lit = literal(role),
+        target_lit = literal(&target),
+    )
+}
+
+/// What clears an object before the last schema's statement for it runs: its drop, or for row-level
+/// security, both attributes off, since that statement only turns on what it asks for.
+fn reset_sql(key: &ObjectKey) -> String {
+    match key.kind {
+        ObjectKind::RlsAttributes => format!(
+            "ALTER TABLE \"{s}\".\"{t}\" NO FORCE ROW LEVEL SECURITY;\n\
+             ALTER TABLE \"{s}\".\"{t}\" DISABLE ROW LEVEL SECURITY;",
+            s = key.schema,
+            t = key.parent
+        ),
+        _ => key.drop_sql().unwrap_or_default(),
+    }
+}
+
+/// Each probe's statements run in a transaction that is always rolled back, every one in a
+/// savepoint of its own, and the objects read back as a push reads them: the fingerprints found,
+/// and the keys whose statements the database refused.
+async fn made_by(
+    conn: &mut PgConnection,
+    schema: &str,
+    probes: &[(ObjectKey, String)],
+) -> Result<(BTreeMap<ObjectKey, ObjectFingerprint>, BTreeSet<ObjectKey>)> {
+    use sqlx::Connection;
+    let mut tx = conn.begin().await.context("begin the upgrade comparison")?;
+    let result = async {
+        // Never wait on a table someone is using: a comparison that cannot lock is skipped.
+        sqlx::query("SET LOCAL lock_timeout = '2s'")
+            .execute(&mut *tx)
+            .await?;
+        let mut failed = BTreeSet::new();
+        for (key, sql) in probes {
+            let mut one = (*tx).begin().await?;
+            match (&mut *one).execute(sqlx::raw_sql(sql)).await {
+                Ok(_) => one.commit().await?,
+                Err(e) => {
+                    tracing::debug!("{key} not compared with the last push's schema: {e}");
+                    one.rollback().await?;
+                    failed.insert(key.clone());
+                }
+            }
+        }
+        let after = live(&mut tx, schema).await?;
+        let made = after
+            .fingerprints
+            .into_iter()
+            .map(|f| (f.key(), f))
+            .filter(|(k, _)| probes.iter().any(|(p, _)| p == k))
+            .collect();
+        anyhow::Ok((made, failed))
+    }
+    .await;
+    tx.rollback()
+        .await
+        .context("roll the upgrade comparison back")?;
+    result
 }
 
 /// The reconcile for this push: the desired set against `ledger` and `live`, knowing which
@@ -334,7 +828,7 @@ fn reconcile_with(
 ) -> Result<reconcile::Plan> {
     let desired = desired_here(diff, catalog, schema, ast)?;
     let live = with_grants_of_nothing(live, ledger.iter().map(|r| &r.key));
-    reconcile_desired(diff, ledger, &live, &desired, schema, ast)
+    reconcile_desired(diff, ledger, &live, &desired, schema, ast, &BTreeSet::new())
 }
 
 /// What a push of `ast` desires on this database. What the database can hold decides it (plan
@@ -357,7 +851,206 @@ fn desired_here(
         ObjectKind::TableGrant => catalog.granted_roles.contains(&d.key.name),
         _ => true,
     });
+    sequences_as_created(&mut desired, &catalog.sequences, schema);
     Ok(desired)
+}
+
+/// The desired sequences under the names Postgres actually gave them. A serial's sequence is
+/// named by Postgres when its column is created, free of whatever the schema held at that moment,
+/// so the name the engine predicts from the schema alone can be another serial's: `order.item_id`
+/// and `order_item.id` both make `order_item_id_seq`, and which one has it depends on which table
+/// was created first, possibly pushes apart. A sequence is known by the column that owns it, so
+/// one whose column exists takes its live name; one still to be made, whose predicted name a live
+/// sequence holds, is predicted again free of every name in use, as Postgres will choose it. The
+/// push then records each under the name it found ([`record_ledger`]).
+fn sequences_as_created(
+    desired: &mut [crate::desired::DesiredObject],
+    live: &[catalog::DbSequence],
+    schema: &str,
+) {
+    let live: Vec<&catalog::DbSequence> = live.iter().filter(|s| s.schema == schema).collect();
+    let live_name = |owner: &str| {
+        live.iter()
+            .find(|s| s.owned_by.as_deref() == Some(owner))
+            .map(|s| s.name.clone())
+    };
+    let owner = |d: &crate::desired::DesiredObject| d.structure.get("owned_by").cloned();
+    let mut unresolved = Vec::new();
+    for (i, d) in desired.iter_mut().enumerate() {
+        if d.key.kind != ObjectKind::Sequence || d.key.schema != schema {
+            continue;
+        }
+        let Some(owner) = owner(d) else { continue };
+        match live_name(&owner) {
+            Some(name) => rename_sequence(d, schema, &owner, &name),
+            None => unresolved.push(i),
+        }
+    }
+    let mut taken = crate::managed::NameChooser::default();
+    for s in &live {
+        taken.claim(&s.name);
+    }
+    for (i, d) in desired.iter().enumerate() {
+        let relation = matches!(
+            d.key.kind,
+            ObjectKind::Table | ObjectKind::Index | ObjectKind::Sequence | ObjectKind::View
+        );
+        if relation && d.key.schema == schema && !unresolved.contains(&i) {
+            taken.claim(&d.key.name);
+        }
+    }
+    for i in unresolved {
+        let d = &mut desired[i];
+        let Some(owner) = owner(d) else { continue };
+        let Some((table, column)) = owner.split_once('.') else {
+            continue;
+        };
+        if live.iter().all(|s| s.name != d.key.name) {
+            taken.claim(&d.key.name);
+            continue;
+        }
+        let name = taken.choose(table, Some(column), "seq");
+        rename_sequence(d, schema, &owner, &name);
+    }
+}
+
+fn rename_sequence(d: &mut crate::desired::DesiredObject, schema: &str, owner: &str, name: &str) {
+    let Some((table, column)) = owner.split_once('.') else {
+        return;
+    };
+    d.key.name = name.to_string();
+    d.create_sql = crate::desired::sequence_owned_by_sql(schema, name, table, column);
+}
+
+/// The `table.column` a sequence's recorded `ALTER SEQUENCE ... OWNED BY` names.
+fn sequence_owner(create_sql: &str) -> Option<String> {
+    let (_, target) = create_sql.rsplit_once(" OWNED BY ")?;
+    let parts: Vec<&str> = target
+        .trim_end()
+        .trim_end_matches(';')
+        .split("\".\"")
+        .collect();
+    match parts.as_slice() {
+        [_, table, column] => Some(format!(
+            "{}.{}",
+            table.trim_matches('"'),
+            column.trim_matches('"')
+        )),
+        _ => None,
+    }
+}
+
+/// The columns of model tables whose write privilege a field rule narrows that the schema does not
+/// declare (#63). A narrowed grant names the declared columns, so such a column gets no write
+/// privilege for the narrowed role: one the ledger has no row for was added outside Supatype and
+/// is reported, with how to include it; one adopted (`supatype adopt --key column:<table>.<column>`) is
+/// granted beside the declared ones.
+pub struct NarrowedColumns {
+    /// `(table, column)` adopted while undeclared, in the table's column order.
+    adopted: Vec<(String, String)>,
+    /// `(table, column, roles)` with no row, and the narrowed roles it gets no write grant for.
+    pub ungranted: Vec<(String, String, Vec<&'static str>)>,
+}
+
+impl NarrowedColumns {
+    pub fn of(ast: &SchemaAst, state: &State, diff: &DiffOutput, schema: &str) -> NarrowedColumns {
+        let status = |table: &str, column: &str| {
+            state
+                .ledger
+                .iter()
+                .find(|r| {
+                    r.key.kind == ObjectKind::Column
+                        && r.key.schema == schema
+                        && r.key.parent == table
+                        && r.key.name == column
+                })
+                .map(|r| r.status)
+        };
+        let mut adopted = Vec::new();
+        let mut ungranted: Vec<(String, String, Vec<&'static str>)> = Vec::new();
+        for grant in grants::table_grants(ast, views(diff)) {
+            if grant.narrowed.is_empty() {
+                continue;
+            }
+            let Some(table) = state.db.tables.iter().find(|t| t.name == grant.table) else {
+                continue;
+            };
+            for column in &table.columns {
+                if grant.columns.contains(&column.name) {
+                    continue;
+                }
+                let at = (grant.table.clone(), column.name.clone());
+                match status(&grant.table, &column.name) {
+                    Some(ledger::Status::Adopted) if !adopted.contains(&at) => adopted.push(at),
+                    None => match ungranted
+                        .iter_mut()
+                        .find(|(t, c, _)| (t, c) == (&at.0, &at.1))
+                    {
+                        Some((_, _, roles)) => roles.push(grant.role),
+                        None => ungranted.push((at.0, at.1, vec![grant.role])),
+                    },
+                    _ => {}
+                }
+            }
+        }
+        NarrowedColumns { adopted, ungranted }
+    }
+
+    /// One line per column added outside Supatype that a narrowed grant leaves unwritable.
+    pub fn warnings(&self) -> Vec<String> {
+        self.ungranted
+            .iter()
+            .map(|(table, column, roles)| ungranted_message(table, column, roles))
+            .collect()
+    }
+
+    /// The narrowed grants of `desired` with the adopted columns of their table added to the
+    /// columns they grant on.
+    fn grant_adopted(
+        &self,
+        desired: &mut [crate::desired::DesiredObject],
+        ast: &SchemaAst,
+        diff: &DiffOutput,
+        schema: &str,
+    ) {
+        if self.adopted.is_empty() {
+            return;
+        }
+        for mut grant in grants::table_grants(ast, views(diff)) {
+            if grant.narrowed.is_empty() {
+                continue;
+            }
+            let extra = self
+                .adopted
+                .iter()
+                .filter(|(t, _)| *t == grant.table)
+                .map(|(_, c)| c.clone());
+            grant.columns.extend(extra);
+            if let Some(d) = desired.iter_mut().find(|d| {
+                d.key.kind == ObjectKind::TableGrant
+                    && d.key.schema == schema
+                    && d.key.parent == grant.table
+                    && d.key.name == grant.role
+            }) {
+                d.create_sql = grant.create_sql(schema);
+            }
+        }
+    }
+}
+
+/// What push and doctor say of a column added outside Supatype on a table whose write grant a
+/// field rule narrows.
+pub fn ungranted_message(table: &str, column: &str, roles: &[&str]) -> String {
+    format!(
+        "column {table}.{column} was added outside Supatype and has no write grant for {}; run \
+         `supatype adopt --key column:{table}.{column}` to include it",
+        roles.join(", ")
+    )
+}
+
+/// Whether field rules are enforced by the `api` views, whose base tables hold nothing.
+fn views(diff: &DiffOutput) -> bool {
+    matches!(diff.field_masking, FieldMaskingTier::Views)
 }
 
 fn reconcile_desired(
@@ -367,6 +1060,7 @@ fn reconcile_desired(
     desired: &[crate::desired::DesiredObject],
     schema: &str,
     ast: &SchemaAst,
+    named_by_the_engine: &BTreeSet<ObjectKey>,
 ) -> Result<reconcile::Plan> {
     let created_by_parent = created_by_parent(diff, schema, ast)?;
     let dropped_tables = dropped_tables(diff, schema);
@@ -377,8 +1071,45 @@ fn reconcile_desired(
         created_by_parent: &created_by_parent,
         dropped_tables: &dropped_tables,
         location,
+        named_by_the_engine,
         kinds: MOVED_KINDS,
     }))
+}
+
+/// Legacy ownership by engine naming (section 7): an older engine stamped nothing and the ledger
+/// has no row, so an object it made is known only by its name. The functions, triggers and views
+/// a push of the last push's schema would create, under either field enforcement, in the engine's
+/// own schemas; and in the project schema, the triggers and the `can_*` affordance functions,
+/// whose names the engine derives from a model's table. The last push's schema, not this one's:
+/// the engine made what that schema asked for, while a name only this schema asks for may be a
+/// user's object, which still refuses the push. A user's object under any other name
+/// (`can_do_things`, a `_platform` helper of their own) is never among them.
+fn named_by_the_engine(
+    previous: Option<&SchemaAst>,
+    db: &DatabaseState,
+    schema: &str,
+) -> BTreeSet<ObjectKey> {
+    let engine_named = |key: &ObjectKey| match key.kind {
+        ObjectKind::Function | ObjectKind::Trigger | ObjectKind::View
+            if catalog::OWNED_SCHEMAS.contains(&key.schema.as_str()) =>
+        {
+            true
+        }
+        ObjectKind::Trigger => key.schema == schema,
+        ObjectKind::Function => key.schema == schema && key.name.starts_with("can_"),
+        _ => false,
+    };
+    let mut named = BTreeSet::new();
+    let Some(previous) = previous else {
+        return named;
+    };
+    let plan = field_views::field_view_plan(previous, db);
+    for fields in [FieldEnforcement::Labels, FieldEnforcement::Views(&plan)] {
+        if let Ok(objects) = desired_objects_for(previous, schema, fields) {
+            named.extend(objects.into_iter().map(|d| d.key).filter(engine_named));
+        }
+    }
+    named
 }
 
 /// `live`, plus a fingerprint of "holds nothing" for every grant among `keys` the catalog has no
@@ -532,24 +1263,36 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
     // Rendered before anything is applied, so a schema whose versioned models have no stated
     // visibility fails the push rather than half-applying it.
     let versions_sql = versions::render_versions_layer(plan.ast, &plan.schema)?;
-    sqlx::raw_sql(&storage::generate(plan.ast)?)
-        .execute(pool)
-        .await
-        .context("Failed to apply storage schema/policies")?;
-    if !versions_sql.trim().is_empty() {
-        sqlx::raw_sql(&versions_sql)
-            .execute(pool)
-            .await
-            .context("Failed to apply drafts and publishing layer")?;
-    }
-
+    let storage_sql = storage::generate(plan.ast)?;
     // AST-only changes (widgets, labels) still need admin_config and the snapshot so Studio and
     // tooling see the latest schema without a DDL migration.
     let admin_cfg = admin::generate(plan.ast)?;
     let schema_snap = serde_json::to_value(plan.ast)?;
-    migration_history::refresh_metadata_on_up_to_date_push(pool, &admin_cfg, &schema_snap)
+
+    // These are writes too: under the engine's lock like any other, and only to the database the
+    // plan found up to date.
+    let mut tx = pool.begin().await.context("begin up-to-date push")?;
+    take_engine_lock(&mut tx).await?;
+    take_push_lock(&mut tx).await?;
+    let now = read_state(&mut tx, &plan.schema)
+        .await
+        .context("Failed to re-read the database before applying")?;
+    plan.inputs.assert_current(&now)?;
+
+    (&mut *tx)
+        .execute(sqlx::raw_sql(&storage_sql))
+        .await
+        .context("Failed to apply storage schema/policies")?;
+    if !versions_sql.trim().is_empty() {
+        (&mut *tx)
+            .execute(sqlx::raw_sql(&versions_sql))
+            .await
+            .context("Failed to apply drafts and publishing layer")?;
+    }
+    migration_history::refresh_metadata_on_up_to_date_push(&mut tx, &admin_cfg, &schema_snap)
         .await
         .context("Failed to refresh Studio metadata on up-to-date push")?;
+    tx.commit().await.context("commit up-to-date push")?;
     Ok(Outcome::UpToDate {
         warnings: plan.diff.warnings,
     })
@@ -560,8 +1303,9 @@ async fn up_to_date(pool: &PgPool, plan: Plan<'_>) -> Result<Outcome> {
 struct Rendered {
     name: String,
     migration: Migration,
-    /// What runs inside the transaction `apply` owns: the migration between the re-asserted
-    /// layers.
+    /// What runs inside the transaction `apply` owns: the migration after the re-asserted storage
+    /// layer. What the history stores as `sql_up`, on success and on failure alike, so the record
+    /// holds the statement that failed.
     apply_body: String,
     sources: migration_history::AppliedMigrationSources,
 }
@@ -572,7 +1316,7 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions) -> Result<Rendered> {
     let name = opts
         .name
         .unwrap_or_else(|| format!("push_{}", chrono::Utc::now().format("%Y%m%d_%H%M%S_%3f")));
-    let apply_body = migration.apply_body(&storage::generate(plan.ast)?);
+    let apply_body = migration.apply_body();
     Ok(Rendered {
         name,
         apply_body,
@@ -589,6 +1333,8 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
     let strict = opts.strict;
     let rendered = render(&plan, opts)?;
     let mut tx = pool.begin().await.context("begin migration transaction")?;
+    // Before anything is written, so a refusal records no failed migration.
+    take_engine_lock(&mut tx).await?;
     let applied = match within_transaction(&mut tx, &plan, strict, &rendered).await {
         Ok(applied) => applied,
         Err(e) => {
@@ -597,7 +1343,7 @@ async fn apply_migration(pool: &PgPool, plan: Plan<'_>, opts: ApplyOptions) -> R
                 pool,
                 &rendered.name,
                 &rendered.migration.hash,
-                &rendered.migration.up(),
+                &rendered.apply_body,
                 &e.to_string(),
             )
             .await;
@@ -641,6 +1387,12 @@ async fn within_transaction(
     rendered: &Rendered,
 ) -> Result<Applied> {
     take_push_lock(tx).await?;
+    // The reconcile's inputs, read again inside this transaction: what it decided is applied only
+    // to the database it decided it against.
+    let now = read_state(tx, &plan.schema)
+        .await
+        .context("Failed to re-read the database before applying")?;
+    plan.inputs.assert_current(&now)?;
 
     if let Err(e) = (&mut **tx)
         .execute(sqlx::raw_sql(&rendered.apply_body))
@@ -666,13 +1418,21 @@ async fn within_transaction(
         &rendered.migration.hash,
         schema_snap.clone(),
         admin_cfg.clone(),
-        &rendered.migration.up(),
+        &rendered.apply_body,
         &rendered.sources,
     )
     .await
     .context("Failed to record migration in history")?;
 
-    record_ledger(tx, &plan.reconcile, &after.fingerprints, migration_id).await?;
+    record_ledger(
+        tx,
+        &plan.reconcile,
+        &after.fingerprints,
+        &after.catalog.sequences,
+        &plan.schema,
+        migration_id,
+    )
+    .await?;
 
     migration_history::save_schema_state(&mut **tx, &after.db)
         .await
@@ -746,6 +1506,8 @@ async fn record_ledger(
     tx: &mut Transaction<'_, Postgres>,
     plan: &reconcile::Plan,
     after: &[ObjectFingerprint],
+    sequences: &[catalog::DbSequence],
+    schema: &str,
     migration_id: i32,
 ) -> Result<()> {
     if plan.actions.is_empty() {
@@ -761,6 +1523,14 @@ async fn record_ledger(
         let key = action.key();
         match action.row_after() {
             reconcile::RowAfter::Write { create_sql, status } => {
+                // A sequence this push made is recorded under the name Postgres gave it, found by
+                // its column: the name predicted for it may be another serial's.
+                let (key, create_sql) = match created_sequence(key, create_sql, sequences, schema) {
+                    Some((key, sql)) => (std::borrow::Cow::Owned(key), sql),
+                    None => (std::borrow::Cow::Borrowed(key), create_sql.to_string()),
+                };
+                let key = key.as_ref();
+                let create_sql = create_sql.as_str();
                 let fp = live.get(key).with_context(|| {
                     format!("{key} was not found in the catalog after the push applied it")
                 })?;
@@ -789,16 +1559,274 @@ async fn record_ledger(
     ledger::delete(tx, &removed).await
 }
 
+/// For a sequence row, the key and statement naming the sequence its column owns after apply,
+/// when that is not the one the plan named.
+fn created_sequence(
+    key: &ObjectKey,
+    create_sql: &str,
+    sequences: &[catalog::DbSequence],
+    schema: &str,
+) -> Option<(ObjectKey, String)> {
+    if key.kind != ObjectKind::Sequence {
+        return None;
+    }
+    let owner = sequence_owner(create_sql)?;
+    let actual = sequences
+        .iter()
+        .find(|s| s.schema == key.schema && s.owned_by.as_deref() == Some(owner.as_str()))?;
+    if actual.name == key.name {
+        return None;
+    }
+    let (table, column) = owner.split_once('.')?;
+    let key = ObjectKey {
+        name: actual.name.clone(),
+        ..key.clone()
+    };
+    let sql = crate::desired::sequence_owned_by_sql(schema, &actual.name, table, column);
+    Some((key, sql))
+}
+
 /// A signal to realtime, which skips WAL polls while anyone holds this transaction-level lock;
 /// not mutual exclusion. The CLI may already hold it as a session lock from its own backend, so
 /// the lock is tried rather than waited for: free, this push holds it until commit; held, the
-/// holder is already keeping realtime away and this push proceeds.
-async fn take_push_lock(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+/// holder is already keeping realtime away and this push proceeds. `adopt` and
+/// `doctor --rebaseline` take it too, for their ledger writes.
+pub(crate) async fn take_push_lock(tx: &mut PgConnection) -> Result<()> {
     sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock($1, $2)")
         .bind(PUSH_LOCK_CLASS)
         .bind(PUSH_LOCK_ID)
-        .fetch_one(&mut **tx)
+        .fetch_one(&mut *tx)
         .await
         .context("try the schema-push advisory lock")?;
     Ok(())
+}
+
+/// [`ENGINE_LOCK_ID`] for this transaction, or [`EngineBusy`] when another session holds it. Tried,
+/// never waited for: a second writer refuses at once rather than queueing behind the first.
+pub(crate) async fn take_engine_lock(tx: &mut PgConnection) -> Result<()> {
+    let taken = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_xact_lock($1, $2)")
+        .bind(PUSH_LOCK_CLASS)
+        .bind(ENGINE_LOCK_ID)
+        .fetch_one(&mut *tx)
+        .await
+        .context("try the engine's advisory lock")?;
+    if !taken {
+        return Err(EngineBusy.into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sequence(name: &str, owned_by: Option<&str>) -> catalog::DbSequence {
+        catalog::DbSequence {
+            schema: "public".into(),
+            name: name.into(),
+            owned_by: owned_by.map(String::from),
+            comment: None,
+        }
+    }
+
+    /// `order_item.id` was created first and holds `order_item_id_seq`: the desired sequence of
+    /// that column is known by its live name, and `order.item_id`'s, still to be created, is
+    /// predicted free of it.
+    #[test]
+    fn a_desired_sequence_takes_the_name_its_column_has() {
+        let doc = serde_json::json!({ "astVersion": 2, "models": [
+            { "name": "Order", "fields": {
+                "id": { "kind": "integer", "primaryKey": true, "required": true },
+                "item_id": { "kind": "serial", "required": true } },
+              "options": { "timestamps": false, "softDelete": false, "singleton": false },
+              "annotations": { "db": { "tableName": "order", "indexes": [] }, "platform": {} } },
+            { "name": "OrderItem", "fields": {
+                "id": { "kind": "serial", "primaryKey": true, "required": true } },
+              "options": { "timestamps": false, "softDelete": false, "singleton": false },
+              "annotations": { "db": { "tableName": "order_item", "indexes": [] }, "platform": {} } }
+        ]});
+        let ast = crate::parser::parse(&doc.to_string()).unwrap();
+        let mut desired = desired_objects_for(&ast, "public", FieldEnforcement::Labels).unwrap();
+        sequences_as_created(
+            &mut desired,
+            &[sequence("order_item_id_seq", Some("order_item.id"))],
+            "public",
+        );
+        let mut sequences: Vec<(String, String)> = desired
+            .iter()
+            .filter(|d| d.key.kind == ObjectKind::Sequence)
+            .map(|d| (d.key.name.clone(), sequence_owner(&d.create_sql).unwrap()))
+            .collect();
+        sequences.sort();
+        assert_eq!(
+            sequences,
+            [
+                ("order_item_id_seq".to_string(), "order_item.id".to_string()),
+                (
+                    "order_item_id_seq1".to_string(),
+                    "order.item_id".to_string()
+                ),
+            ]
+        );
+    }
+    use crate::introspector::tables::{DbColumn, DbTable};
+    use crate::ledger::Status;
+
+    /// `posts` with a field rule that narrows `authenticated`'s update to every column but
+    /// `locked`, on a database that can load the masking extension.
+    fn narrowed() -> SchemaAst {
+        crate::parser::parse(
+            r#"{"astVersion":2,"models":[{"name":"Post","fields":{
+                "id":{"kind":"integer","primaryKey":true,"required":true,"annotations":{"db":{"pgType":"INTEGER","unique":false}}},
+                "title":{"kind":"text","required":true,"annotations":{"db":{"pgType":"TEXT","unique":false}}},
+                "locked":{"kind":"text","annotations":{"db":{"pgType":"TEXT","unique":false}}}
+              },"options":{"timestamps":false,"softDelete":false,"singleton":false},
+              "annotations":{"db":{"tableName":"posts","indexes":[]},"platform":{"access":{
+                "read":{"type":"public"},"update":{"type":"authenticated"},
+                "fields":{"locked":{"write":{"type":"private"}}}}}}}]}"#,
+        )
+        .unwrap()
+    }
+
+    fn row(kind: ObjectKind, parent: &str, name: &str, status: Status) -> LedgerRow {
+        LedgerRow {
+            key: ObjectKey {
+                kind,
+                schema: "public".into(),
+                parent: parent.into(),
+                name: name.into(),
+            },
+            desired_fp: String::new(),
+            desired_sql: String::new(),
+            live_fp: String::new(),
+            live_def: String::new(),
+            status,
+            migration_id: Some(1),
+        }
+    }
+
+    /// `posts` live with the declared columns and `extra`, which the schema does not declare.
+    fn state(extra: Option<Status>) -> State {
+        let column = |name: &str| DbColumn {
+            name: name.into(),
+            data_type: "text".into(),
+            udt_name: "text".into(),
+            nullable: true,
+            ..Default::default()
+        };
+        let db = DatabaseState {
+            schema: "public".into(),
+            tables: vec![DbTable {
+                schema: "public".into(),
+                name: "posts".into(),
+                columns: ["id", "title", "locked", "extra"]
+                    .into_iter()
+                    .map(column)
+                    .collect(),
+                comment: None,
+            }],
+            extensions: vec![rls::MASK_EXTENSION.to_string()],
+            ..Default::default()
+        };
+        let catalog = CatalogState {
+            granted_roles: ["anon", "authenticated"].map(String::from).into(),
+            ..Default::default()
+        };
+        let mut ledger = vec![row(ObjectKind::Table, "", "posts", Status::Managed)];
+        ledger.extend(extra.map(|status| row(ObjectKind::Column, "posts", "extra", status)));
+        State::of(db, catalog, ledger)
+    }
+
+    fn update_grant(decision: &Decision) -> &str {
+        &decision
+            .desired
+            .iter()
+            .find(|d| {
+                d.key.kind == ObjectKind::TableGrant
+                    && d.key.parent == "posts"
+                    && d.key.name == "authenticated"
+            })
+            .expect("authenticated's grant")
+            .create_sql
+    }
+
+    /// #63: a narrowed write grant names the declared columns, so a column added outside
+    /// Supatype gets no write privilege from it. Push and doctor say so and how to include it;
+    /// adopted, it is granted beside the declared ones, kept rather than dropped, and no longer
+    /// reported.
+    #[test]
+    fn a_column_added_outside_supatype_is_flagged_until_adopted_then_granted() {
+        let ast = narrowed();
+        let flag = "column posts.extra was added outside Supatype and has no write grant for \
+                    authenticated; run `supatype adopt --key column:posts.extra` to include it";
+
+        let found = state(None);
+        let decision = decide(&ast, &found, None).unwrap();
+        assert!(
+            decision.diff.warnings.iter().any(|w| w == flag),
+            "{:?}",
+            decision.diff.warnings
+        );
+        assert!(!update_grant(&decision).contains("'extra'"));
+        let report = crate::differ::doctor::report_of(&ast, &found, &decision);
+        assert!(
+            report
+                .unmanaged_drift
+                .iter()
+                .any(|i| i.name == "extra" && i.message == flag),
+            "{report:#?}"
+        );
+        // Not ours: never dropped.
+        assert!(!decision
+            .diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::DropColumn { column, .. } if column == "extra")));
+
+        let adopted = state(Some(Status::Adopted));
+        let decision = decide(&ast, &adopted, None).unwrap();
+        assert!(
+            !decision
+                .diff
+                .warnings
+                .iter()
+                .any(|w| w.contains("posts.extra")),
+            "{:?}",
+            decision.diff.warnings
+        );
+        let grant = update_grant(&decision);
+        assert!(
+            grant.contains("'id', 'title', 'extra'"),
+            "the adopted column is granted after the declared ones: {grant}"
+        );
+        assert!(!grant.contains("'locked'"), "{grant}");
+        assert!(!decision
+            .diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::DropColumn { column, .. } if column == "extra")));
+        assert!(
+            decision.reconcile.actions.iter().any(|a| matches!(
+                a,
+                reconcile::Action::Keep { key, .. } if key.kind == ObjectKind::Column && key.name == "extra"
+            )),
+            "the adopted column's row is kept: {:?}",
+            decision.reconcile.actions
+        );
+        let report = crate::differ::doctor::report_of(&ast, &adopted, &decision);
+        assert!(
+            !report.unmanaged_drift.iter().any(|i| i.name == "extra"),
+            "{report:#?}"
+        );
+
+        // Ours by a managed row, undeclared: still the differ's to drop, and not flagged.
+        let managed = state(Some(Status::Managed));
+        let decision = decide(&ast, &managed, None).unwrap();
+        assert!(decision
+            .diff
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::DropColumn { column, .. } if column == "extra")));
+        assert!(!decision.diff.warnings.iter().any(|w| w == flag));
+    }
 }

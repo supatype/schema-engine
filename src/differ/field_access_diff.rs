@@ -51,17 +51,13 @@ fn writable_on_insert(rule: &AccessRule) -> bool {
 
 /// Whether a row can acquire a value for this column without the caller supplying one.
 ///
-/// Three of the four sources a row can get a value from are visible in the AST: a column
-/// `DEFAULT`, and the identity-like `Serial` / `BigSerial` types. (The AST has no
-/// `GENERATED` concept.) The fourth — a `BEFORE INSERT` trigger — is in the database, and is
-/// handled by the caller.
+/// The sources a row can get a value from that are visible in the AST: a column `DEFAULT`, a
+/// `Serial` / `BigSerial` or identity column's sequence, and a generated column's expression. The
+/// other one, a `BEFORE INSERT` trigger, is in the database, and is handled by the caller.
 fn has_value_source(field: &FieldAst) -> bool {
-    // `Serial` / `BigSerial` carry an implicit sequence default, and a `Slug` is populated by
-    // a generated BEFORE INSERT trigger — both are value sources the caller need not supply.
-    if matches!(
-        field,
-        FieldAst::Serial(_) | FieldAst::BigSerial(_) | FieldAst::Slug(_)
-    ) {
+    // A sequence or an expression fills the column, and a `Slug` is populated by a generated
+    // BEFORE INSERT trigger: value sources the caller need not supply.
+    if matches!(field, FieldAst::Slug(_)) || crate::parser::accessors::database_fills(field) {
         return true;
     }
     // An enum default is a plain variant name rather than a `DefaultValueAst`.
