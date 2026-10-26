@@ -167,6 +167,43 @@ pub fn create_studio_audit_table_sql() -> String {
     )
 }
 
+/// Which project user a Supatype Cloud account acts as when Studio runs as them.
+///
+/// Cloud signs a short-lived project token for the linked user, so RLS and field masks apply to a
+/// member exactly as the app applies them to that user. The control plane writes a row only after
+/// the member has signed in to this project's own auth and the two emails matched.
+///
+/// A table of its own rather than a second id on a `studio_members` row: a membership row still
+/// names exactly one identity, so self-host's lookups by `user_id` are unchanged, and an org owner,
+/// who holds no membership row, can still link. Deleting the project user deletes the link, so the
+/// member fails closed. The foreign key is added once `auth.users` exists, since a project can be
+/// pushed before its auth schema is.
+pub fn create_studio_identity_links_table_sql() -> String {
+    format!(
+        r#"DO $$
+BEGIN
+    CREATE TABLE IF NOT EXISTS {SCHEMA}.studio_identity_links (
+        platform_user_id  UUID PRIMARY KEY,
+        user_id           UUID NOT NULL UNIQUE,
+        email             TEXT NOT NULL,
+        linked_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    IF to_regclass('auth.users') IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conrelid = '{SCHEMA}.studio_identity_links'::regclass
+           AND conname = 'studio_identity_links_user_id_fkey'
+    ) THEN
+        DELETE FROM {SCHEMA}.studio_identity_links l
+         WHERE NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id = l.user_id);
+        ALTER TABLE {SCHEMA}.studio_identity_links
+            ADD CONSTRAINT studio_identity_links_user_id_fkey
+            FOREIGN KEY (user_id) REFERENCES auth.users (id) ON DELETE CASCADE;
+    END IF;
+END $$"#
+    )
+}
+
 /// Bring an audit table created for membership changes only up to the shape that
 /// also records elevated access.
 pub fn ensure_studio_audit_columns_sql() -> String {
@@ -1382,6 +1419,10 @@ fn bootstrap_statements() -> Vec<(&'static str, String)> {
         ),
         ("studio_audit table", create_studio_audit_table_sql()),
         ("studio_audit columns", ensure_studio_audit_columns_sql()),
+        (
+            "studio_identity_links table",
+            create_studio_identity_links_table_sql(),
+        ),
         ("schema_state table", create_schema_state_table_sql()),
         (
             "schema_state Studio columns",
