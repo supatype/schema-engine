@@ -27,6 +27,31 @@ jobs:
       # Verify the lib compiles to WASM (no DB deps, no tokio)
       - run: cargo check --lib --target wasm32-unknown-unknown
 
+  licences:
+    name: Licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Nothing is compiled here, but both tools read every dependency's sources.
+      - uses: Swatinem/rust-cache@v2
+      # Pinned so THIRD-PARTY-NOTICES regenerates byte for byte: a newer cargo-about may lay it out
+      # differently. Bump the pin and the committed file together.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2,cargo-about@0.9.2
+      # The engine ships under BUSL-1.1, so no dependency may be copyleft. deny.toml is the list.
+      - run: cargo deny check licenses
+      # The notices ship beside the binary; a dependency change that leaves them stale fails here.
+      - name: THIRD-PARTY-NOTICES is current
+        run: |
+          cargo about generate about.hbs -o THIRD-PARTY-NOTICES
+          git diff --exit-code -- THIRD-PARTY-NOTICES \
+            || { echo "::error::THIRD-PARTY-NOTICES is stale. Run: cargo about generate about.hbs -o THIRD-PARTY-NOTICES"; exit 1; }
+      # release.yml refuses a tag whose LICENSE lacks its version and Change Date, using the script
+      # release-please.yml writes them with. Prove both directions here, before a release needs it.
+      - name: The licence parameters can be set and checked
+        run: bash scripts/licence-parameters.sh selftest
+
   test:
     name: Unit & Evolution Tests
     runs-on: ubuntu-latest
@@ -44,6 +69,7 @@ jobs:
         run: |
           cargo test --lib \
             --test ci_coverage_tests \
+            --test licence_tests \
             --test parser_tests \
             --test differ_tests \
             --test migration_tests \

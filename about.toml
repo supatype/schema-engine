@@ -1,0 +1,25 @@
+# cargo-about: the third-party notices that ship beside the engine binary (THIRD-PARTY-NOTICES).
+#
+# Regenerate after any dependency change:
+#   cargo about generate about.hbs -o THIRD-PARTY-NOTICES
+# CI regenerates it and fails if the committed file differs. deny.toml holds the same allow list
+# for `cargo deny check licenses`.
+
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# Dev dependencies (test containers and the like) are never compiled into a shipped binary.
+ignore-dev-dependencies = true
+# The engine itself is not a third party.
+private = { ignore = true }

@@ -3,8 +3,9 @@ name = "supatype-engine"
 version = "0.6.0"
 edition = "2021"
 authors = ["Supatype"]
-description = "Supatype schema engine, a closed source binary"
-# No license field: proprietary, all rights reserved
+description = "Supatype schema engine: turns a declared schema into Postgres migrations, policies and typed clients"
+license = "BUSL-1.1"
+publish = false
 
 [[bin]]
 name = "supatype-engine"

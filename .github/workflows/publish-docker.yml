@@ -35,9 +35,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Platform pair slug
+      - name: Platform pair slug and revision
         id: slug
-        run: echo "pair=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+        # The revision is the tag's commit, which on a manual dispatch is not `github.sha`.
+        run: |
+          echo "pair=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         id: build
@@ -47,6 +50,11 @@ jobs:
           # A release build reports the crate version; build.rs refuses one that differs.
           build-args: |
             SUPATYPE_ENGINE_RELEASE=${{ inputs.version }}
+          # The Dockerfile sets the title, vendor and licence (BUSL-1.1); these name the build.
+          labels: |
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.revision=${{ steps.slug.outputs.revision }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=${{ steps.slug.outputs.pair }}
           cache-to: type=gha,mode=max,scope=${{ steps.slug.outputs.pair }}
           outputs: type=image,name=supatype/schema-engine,push-by-digest=true,name-canonical=true,push=true

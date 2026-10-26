@@ -119,26 +119,23 @@ fn authenticated_keeps_columns_some_caller_can_write() {
     assert!(!has(&excluded, "open"), "{excluded:?}");
 }
 
-// On INSERT there is no row, so the extension evaluates a row-dependent write predicate
-// against `NULL::t` and it yields NULL for every caller. Nobody can write the column on that
-// path, which makes the privilege provably unusable. On UPDATE it is not.
+// On INSERT a write rule judges the row being inserted (MASK-N1), so a row-dependent rule is
+// satisfiable there as on UPDATE: a user creating their own row may write their own column.
+// Revoking it on INSERT, as when the rule was judged against a row of NULLs, would refuse them.
 #[test]
-fn authenticated_loses_row_dependent_columns_on_insert_only() {
-    let insert = excluded_for("INSERT", "authenticated");
-    let update = excluded_for("UPDATE", "authenticated");
-
-    assert!(
-        has(&insert, "mine"),
-        "a row-dependent rule is unsatisfiable on INSERT: {insert:?}"
-    );
-    assert!(
-        !has(&update, "mine"),
-        "the same rule is satisfiable on UPDATE, so the privilege must stay: {update:?}"
-    );
-    assert!(
-        !has(&insert, "admin_only"),
-        "an identity-only rule is satisfiable on INSERT too: {insert:?}"
-    );
+fn authenticated_keeps_row_dependent_columns_on_insert_and_update() {
+    for op in ["INSERT", "UPDATE"] {
+        let excluded = excluded_for(op, "authenticated");
+        assert!(
+            !has(&excluded, "mine"),
+            "{op}: the owner can write their own row's column: {excluded:?}"
+        );
+        assert!(
+            !has(&excluded, "admin_only"),
+            "{op}: an identity-only rule is satisfiable: {excluded:?}"
+        );
+        assert!(has(&excluded, "locked"), "{op}: {excluded:?}");
+    }
 }
 
 // The granted columns are the declared ones the role may write, named in the statement, so a
