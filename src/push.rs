@@ -2167,7 +2167,7 @@ fn created_sequence(
 const WRITER_IDLE_TIMEOUT: &str = "60s";
 
 /// How often a writer's backend checks, while a statement runs, that its client is still there
-/// (Postgres 14 and later, on platforms that support it).
+/// (Postgres 14 and later, on platforms that support it: see [`bound_client_check`]).
 const WRITER_CLIENT_CHECK: &str = "5s";
 
 /// A writer's transaction: bounded by the timeouts above, holding [`ENGINE_LOCK_ID`] (or refused
@@ -2201,17 +2201,43 @@ pub(crate) async fn begin_watched_writer(
 pub(crate) async fn bound_writer(tx: &mut PgConnection, lock_timeout: &str) -> Result<()> {
     sqlx::query(
         "SELECT set_config('idle_in_transaction_session_timeout', $1, true),
-                set_config('lock_timeout', $2, true),
-                CASE WHEN current_setting('server_version_num')::int >= 140000
-                     THEN set_config('client_connection_check_interval', $3, true) END",
+                set_config('lock_timeout', $2, true)",
     )
     .bind(WRITER_IDLE_TIMEOUT)
     .bind(lock_timeout)
-    .bind(WRITER_CLIENT_CHECK)
     .execute(&mut *tx)
     .await
     .context("bound the writer's transaction")?;
+    bound_client_check(tx).await
+}
+
+/// `SET LOCAL client_connection_check_interval` for the writer, where the server can honour it.
+/// Postgres refuses any value but 0 with `invalid_parameter_value` on a platform that cannot tell
+/// a closed socket from an idle one (Windows among them), and the refusal would abort the writer's
+/// transaction, so it is tried in a savepoint. Refused, the writer is bounded by its idle and lock
+/// timeouts alone. The server is asked rather than the platform guessed: the engine and the
+/// database it pushes to need not run on the same one.
+async fn bound_client_check(tx: &mut PgConnection) -> Result<()> {
+    use sqlx::Connection;
+    let mut savepoint = tx.begin().await?;
+    let set = sqlx::query(
+        "SELECT CASE WHEN current_setting('server_version_num')::int >= 140000
+                     THEN set_config('client_connection_check_interval', $1, true) END",
+    )
+    .bind(WRITER_CLIENT_CHECK)
+    .execute(&mut *savepoint)
+    .await;
+    match set {
+        Ok(_) => savepoint.commit().await?,
+        Err(e) if client_check_refused(&e) => savepoint.rollback().await?,
+        Err(e) => return Err(e).context("bound the writer's transaction"),
+    }
     Ok(())
+}
+
+/// Whether `e` is the server refusing a non-zero `client_connection_check_interval`.
+fn client_check_refused(e: &sqlx::Error) -> bool {
+    migration_history::sql_state(e).as_deref() == Some("22023")
 }
 
 /// Whether another session holds the engine's own key, [`ENGINE_LOCK_ID`], in this database. Read

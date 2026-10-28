@@ -346,6 +346,56 @@ async fn the_engines_connections_ask_postgres_to_probe_a_lost_client() {
     .await;
 }
 
+/// Whether this server accepts a non-zero `client_connection_check_interval`, asked with a plain
+/// `SET LOCAL` rather than the engine's own code. Postgres refuses it with `invalid_parameter_value`
+/// on a platform that cannot tell a closed socket from an idle one (Windows).
+async fn server_checks_clients(pool: &PgPool) -> bool {
+    let mut tx = pool.begin().await.unwrap();
+    let set = sqlx::query("SET LOCAL client_connection_check_interval = '5s'")
+        .execute(&mut *tx)
+        .await;
+    tx.rollback().await.unwrap();
+    match set {
+        Ok(_) => true,
+        Err(e) => {
+            let code = e.as_database_error().and_then(|d| d.code());
+            assert_eq!(code.as_deref(), Some("22023"), "{e}");
+            false
+        }
+    }
+}
+
+/// A writer's transaction asks its backend to check, while a statement runs, that the client is
+/// still there, on a server that can; on one that cannot (Postgres on Windows refuses any value
+/// but 0), the writer still begins, bounded by its idle and lock timeouts alone. Every native push
+/// on Windows failed here with "invalid value for parameter client_connection_check_interval".
+#[tokio::test]
+async fn a_writer_checks_its_client_where_the_server_can_and_begins_where_it_cannot() {
+    common::with_integration_pool(|pool| async move {
+        let supported = server_checks_clients(&pool).await;
+        let mut session = supatype_engine::online::EngineSession::open(&pool)
+            .await
+            .unwrap();
+        let mut tx = session
+            .begin(supatype_engine::online::PUSH_LOCK_TIMEOUT)
+            .await
+            .expect("the writer's transaction began");
+        let interval: String = sqlx::query_scalar("SHOW client_connection_check_interval")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        let idle: String = sqlx::query_scalar("SHOW idle_in_transaction_session_timeout")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        session.close().await;
+        assert_eq!(interval, if supported { "5s" } else { "0" });
+        assert_eq!(idle, "1min");
+    })
+    .await;
+}
+
 /// Refused with `engine_busy`, and within a second: a writer that queues instead holds up everyone
 /// who comes after it (A4-N1).
 async fn refused_at_once<T: std::fmt::Debug>(
