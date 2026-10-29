@@ -1,6 +1,6 @@
 use super::ast::{
     FieldAst, JunctionTableAst, ModelAst, RelationCardinality, RelationFieldAst, SchemaAst,
-    StorageAccessMode, StorageBucketAst,
+    StorageBucketAst,
 };
 use crate::managed::clip_identifier;
 use anyhow::{bail, Result};
@@ -179,9 +179,6 @@ fn resolve_storage_buckets(ast: &mut SchemaAst) -> Result<()> {
         .map(|b| (b.id.clone(), b))
         .collect();
     add_field_only_buckets(&ast.models, &mut by_id);
-    for b in by_id.values_mut() {
-        normalize_storage_bucket_row(b);
-    }
     align_field_access_modes(&mut ast.models, &by_id);
 
     let mut list: Vec<StorageBucketAst> = by_id.into_values().collect();
@@ -199,14 +196,13 @@ fn add_field_only_buckets(models: &[ModelAst], by_id: &mut HashMap<String, Stora
                 .entry(s.bucket.clone())
                 .or_insert_with(|| StorageBucketAst {
                     id: s.bucket.clone(),
-                    // No mode is private; the normalisation after this writes it down.
-                    public: false,
+                    // The field's mode, if it names one, is the bucket's; no mode is private.
+                    public: None,
                     allowed_mime_types: None,
                     file_size_limit: None,
                     access_mode: s.access_mode,
                     access: None,
                     s3_bucket_policy: None,
-                    visibility_declared: s.access_mode.is_some(),
                 });
         }
     }
@@ -221,13 +217,6 @@ fn align_field_access_modes(models: &mut [ModelAst], by_id: &HashMap<String, Sto
             }
         }
     }
-}
-
-/// A concrete mode on every bucket, and `public` true exactly when that mode is `public`.
-fn normalize_storage_bucket_row(bucket: &mut StorageBucketAst) {
-    let mode = bucket.effective_access_mode();
-    bucket.access_mode = Some(mode);
-    bucket.public = mode == StorageAccessMode::Public;
 }
 
 // Used by the storage generator, which the wasm build does not compile.

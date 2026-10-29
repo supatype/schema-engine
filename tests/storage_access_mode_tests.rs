@@ -86,15 +86,13 @@ async fn a_push_gives_every_older_bucket_row_a_mode_that_agrees_with_its_flag() 
 fn a_bucket_with_no_mode_is_written_with_the_one_its_flag_implies() {
     let bucket = |id: &str, public: bool| StorageBucketAst {
         id: id.to_string(),
-        public,
+        public: Some(public),
         allowed_mime_types: None,
         file_size_limit: None,
         access_mode: None,
         access: None,
         s3_bucket_policy: None,
-        visibility_declared: true,
     };
-    // Built by hand: the parser fills a missing mode in, so only an AST made without it has none.
     let mut ast: SchemaAst = supatype_engine::parser::parse(r#"{ "astVersion": 2, "models": [] }"#)
         .expect("schema parses");
     ast.storage_buckets = vec![bucket("open", true), bucket("shut", false)];
@@ -222,4 +220,40 @@ async fn a_bucket_that_names_nothing_is_made_private() {
         assert_eq!(modes, expected);
     })
     .await;
+}
+
+/// A bucket built without the parser, here from its wire format, says whether it names its
+/// visibility by the fields themselves, so a push reasserts exactly what it names.
+#[test]
+fn a_bucket_built_without_the_parser_reasserts_only_the_visibility_it_names() {
+    let bucket = |json: serde_json::Value| -> StorageBucketAst {
+        serde_json::from_value(json).expect("bucket deserializes")
+    };
+    let mut ast: SchemaAst = supatype_engine::parser::parse(r#"{ "astVersion": 2, "models": [] }"#)
+        .expect("schema parses");
+    ast.storage_buckets = vec![
+        bucket(serde_json::json!({ "id": "moded", "accessMode": "public" })),
+        bucket(serde_json::json!({ "id": "flagged", "public": true })),
+        bucket(serde_json::json!({ "id": "silent" })),
+    ];
+    let sql = storage::generate(&ast).expect("storage sql generates");
+    let upsert = |id: &str| -> String {
+        let start = sql
+            .find(&format!("VALUES ('{id}'"))
+            .unwrap_or_else(|| panic!("no upsert for {id}: {sql}"));
+        let end = start + sql[start..].find(";\n").expect("statement ends");
+        sql[start..end].to_string()
+    };
+    for id in ["moded", "flagged"] {
+        let stmt = upsert(id);
+        assert!(stmt.contains("'public', NULL)"), "{stmt}");
+        assert!(
+            stmt.contains("access_mode = EXCLUDED.access_mode"),
+            "{stmt}"
+        );
+        assert!(stmt.contains("public = EXCLUDED.public"), "{stmt}");
+    }
+    let silent = upsert("silent");
+    assert!(silent.contains("'private', NULL)"), "{silent}");
+    assert!(silent.contains("ON CONFLICT (id) DO NOTHING"), "{silent}");
 }

@@ -1,7 +1,5 @@
 use crate::generator::sql::rls::{role_matches, AUTH_ROLE, AUTH_UID};
-use crate::parser::ast::{
-    AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageAccessMode, StorageBucketAst,
-};
+use crate::parser::ast::{AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageBucketAst};
 use crate::parser::resolver::{bucket_uses_declared_storage_rls, storage_policy_label};
 use crate::sql_quote::{comment_text, quote_ident, quote_literal};
 use anyhow::Result;
@@ -159,7 +157,7 @@ fn mime_types_sql(bucket: &StorageBucketAst) -> String {
 /// it is rather than resetting it.
 fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
     let mode = bucket.effective_access_mode();
-    let public = mode == StorageAccessMode::Public;
+    let public = bucket.is_public();
     let mime = mime_types_sql(bucket);
     let size_limit = bucket
         .file_size_limit
@@ -181,25 +179,22 @@ fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
 
 /// What a push rewrites on a bucket that already exists: the columns the schema names, or nothing.
 fn on_conflict_sql(bucket: &StorageBucketAst) -> String {
-    let named = [
-        (bucket.visibility_declared, "public"),
-        (bucket.visibility_declared, "access_mode"),
-        (bucket.allowed_mime_types.is_some(), "allowed_mime_types"),
-        (bucket.file_size_limit.is_some(), "file_size_limit"),
-        (bucket.s3_bucket_policy.is_some(), "s3_bucket_policy"),
+    let named: [(bool, &[&str]); 4] = [
+        (bucket.names_visibility(), &["public", "access_mode"]),
+        (bucket.allowed_mime_types.is_some(), &["allowed_mime_types"]),
+        (bucket.file_size_limit.is_some(), &["file_size_limit"]),
+        (bucket.s3_bucket_policy.is_some(), &["s3_bucket_policy"]),
     ];
     let sets: Vec<String> = named
-        .iter()
+        .into_iter()
         .filter(|(named, _)| *named)
-        .map(|(_, column)| format!("\n  {column:<18} = EXCLUDED.{column}"))
+        .flat_map(|(_, columns)| columns)
+        .map(|column| format!("\n  {column} = EXCLUDED.{column}"))
         .collect();
     if sets.is_empty() {
         return "DO NOTHING".to_string();
     }
-    format!(
-        "DO UPDATE SET{},\n  updated_at         = NOW()",
-        sets.join(",")
-    )
+    format!("DO UPDATE SET{},\n  updated_at = NOW()", sets.join(","))
 }
 
 /// Storage policies run on storage.objects, so owner checks must reference the
@@ -505,7 +500,7 @@ pub fn rule_warnings(ast: &SchemaAst) -> Vec<String> {
     let sets = object_policy_sets(ast);
     let mut warnings = Vec::new();
     for bucket in &ast.storage_buckets {
-        let public = matches!(bucket.access_mode, Some(StorageAccessMode::Public));
+        let public = bucket.is_public();
         for (i, op) in ObjectOp::ALL.into_iter().enumerate() {
             let allowed = sets
                 .iter()
