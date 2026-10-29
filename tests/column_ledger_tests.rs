@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
@@ -17,8 +18,6 @@ use supatype_engine::{
     parser::ast::SchemaAst,
     push,
 };
-
-use common::{exec, push};
 
 fn text() -> Value {
     json!({ "kind": "text", "annotations": { "db": { "pgType": "TEXT", "unique": false } } })
@@ -75,10 +74,6 @@ async fn live_columns(pool: &PgPool) -> Vec<String> {
     .fetch_all(pool)
     .await
     .unwrap()
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 fn warned_about(outcome: &push::Outcome, needle: &str) -> bool {

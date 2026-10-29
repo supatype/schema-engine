@@ -7,6 +7,7 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::json;
 use sqlx::PgPool;
 use supatype_engine::{
@@ -16,8 +17,6 @@ use supatype_engine::{
     parser::ast::SchemaAst,
     push,
 };
-
-use common::{exec, push};
 
 fn posts() -> SchemaAst {
     let doc = json!({
@@ -56,10 +55,6 @@ async fn recorded(pool: &PgPool) -> Vec<String> {
         .filter(|r| r.key.kind == ObjectKind::RlsAttributes && r.key.schema == "public")
         .map(|r| r.key.parent)
         .collect()
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 fn rls_actions(plan: &push::Plan<'_>) -> Vec<Action> {

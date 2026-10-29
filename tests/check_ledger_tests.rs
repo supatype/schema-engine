@@ -10,6 +10,7 @@
 
 mod common;
 
+use common::{applied, exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
@@ -67,8 +68,6 @@ fn price_at_least(n: i64) -> Value {
             "left": { "kind": "column", "name": "price" }, "right": { "kind": "literal", "value": n } })
 }
 
-use common::{exec, push};
-
 async fn check_rows(pool: &PgPool) -> Vec<LedgerRow> {
     let mut conn = pool.acquire().await.unwrap();
     ledger::load(&mut conn)
@@ -89,14 +88,6 @@ async fn live_checks(pool: &PgPool) -> Vec<(String, String, Option<String>)> {
     .fetch_all(pool)
     .await
     .unwrap()
-}
-
-fn applied(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::Applied { .. })
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 #[tokio::test]

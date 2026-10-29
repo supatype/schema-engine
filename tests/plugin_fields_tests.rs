@@ -7,11 +7,11 @@
 
 mod common;
 
+use common::{applied, exec, push, up_to_date};
 use serde_json::{json, Value};
 use supatype_engine::generator::typescript::admin;
 use supatype_engine::parser::v2::{deserialize_schema, serialize_schema};
 use supatype_engine::parser::{self, ast::SchemaAst};
-use supatype_engine::push;
 
 const PHONE_CHECK: &str = "\"{name}\" ~ '^\\+[0-9]{7,15}$'";
 
@@ -140,16 +140,6 @@ fn a_plugin_fields_check_and_composite_membership_survive_the_ast_round_trip() {
         fields["meta_title"]["annotations"]["platform"]["composite"]["name"],
         json!("seo")
     );
-}
-
-use common::{exec, push};
-
-fn applied(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::Applied { .. })
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 #[tokio::test]

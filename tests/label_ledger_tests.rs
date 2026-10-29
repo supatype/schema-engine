@@ -10,6 +10,7 @@
 
 mod common;
 
+use common::{applied, exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
@@ -19,8 +20,6 @@ use supatype_engine::{
     parser::ast::SchemaAst,
     push,
 };
-
-use common::{exec, push};
 
 /// `salary` readable only by its owner, writable only by its owner, or with no field rule.
 #[derive(Clone, Copy)]
@@ -95,14 +94,6 @@ async fn live_label(pool: &PgPool, column: &str) -> Option<String> {
     .fetch_optional(pool)
     .await
     .unwrap()
-}
-
-fn applied(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::Applied { .. })
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 fn is_label(action: &Action) -> bool {

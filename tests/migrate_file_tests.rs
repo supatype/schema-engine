@@ -8,13 +8,10 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::json;
 use sqlx::PgPool;
-use supatype_engine::{
-    migrate_file, parser, parser::ast::SchemaAst, push, state::migration_history,
-};
-
-use common::{exec, push};
+use supatype_engine::{migrate_file, parser, parser::ast::SchemaAst, state::migration_history};
 
 /// `supatype migrate --record`: the file a push writes, history and ledger included (E17).
 const RECORD: migrate_file::Options = migrate_file::Options {
@@ -85,10 +82,6 @@ async fn exists_function(pool: &PgPool, signature: &str) -> bool {
         .fetch_one(pool)
         .await
         .unwrap()
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 #[tokio::test]

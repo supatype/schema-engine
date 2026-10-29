@@ -8,14 +8,13 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
-    introspector::fingerprint::ObjectKind, ledger, parser, parser::ast::SchemaAst, push,
+    introspector::fingerprint::ObjectKind, ledger, parser, parser::ast::SchemaAst,
     state::migration_history,
 };
-
-use common::{exec, push};
 
 const READABLE: [&str; 2] = ["chat_message_body_min_length", "chat_message_lo_lte_hi"];
 const POSITIONAL: [&str; 2] = ["chat_message_check_1", "chat_message_check_2"];
@@ -138,10 +137,6 @@ async fn last_sql_up(pool: &PgPool) -> String {
     .fetch_one(pool)
     .await
     .unwrap()
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 /// Each readable constraint back under its positional name, as an engine before CK1 named it.
