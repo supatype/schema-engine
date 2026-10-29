@@ -8,7 +8,7 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -527,8 +527,40 @@ async fn strong_locks(pool: &PgPool) -> Vec<String> {
     .unwrap()
 }
 
+/// Every session of this database waiting for a lock, and the statement it is waiting in.
+async fn lock_waits(pool: &PgPool) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT pid::text || ': ' || query FROM pg_stat_activity
+          WHERE datname = current_database() AND wait_event_type = 'Lock'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Doctor's report, with every strong lock and every lock wait seen in the database while it ran.
+async fn doctor_watched(pool: &PgPool, ast: &SchemaAst) -> (DoctorReport, Vec<String>) {
+    let run = tokio::spawn({
+        let (pool, ast) = (pool.clone(), ast.clone());
+        async move { doctor(&pool, &ast).await }
+    });
+    let mut seen = std::collections::BTreeSet::new();
+    while !run.is_finished() {
+        seen.extend(strong_locks(pool).await);
+        seen.extend(lock_waits(pool).await);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    (run.await.unwrap(), seen.into_iter().collect())
+}
+
 /// F16, E09: doctor on a database an older engine left reads it; it never takes a lock that would
 /// stop an application, and an application's read does not stop it.
+///
+/// "Does not stop it" is watched for, not timed. The test used to require doctor to finish within
+/// 1.5 s, but doctor is about 60 catalog reads one after another, and on a loaded machine they
+/// took 2 to 3 s while nothing waited on anything. A wait shows in `pg_stat_activity`, and the
+/// application's read here lasts until doctor has finished, so a doctor that waited on it would be
+/// seen waiting for as long as it waited.
 #[tokio::test]
 async fn doctor_after_an_upgrade_takes_no_lock_an_application_waits_on() {
     common::with_integration_pool(|pool| async move {
@@ -537,24 +569,9 @@ async fn doctor_after_an_upgrade_takes_no_lock_an_application_waits_on() {
         exec(&pool, FORGET_THE_ACCESS_ROWS).await.unwrap();
         let reader = reading_posts(&pool).await;
 
-        let started = Instant::now();
-        let doctor_run = tokio::spawn({
-            let (pool, ast) = (pool.clone(), ast.clone());
-            async move { doctor(&pool, &ast).await }
-        });
-        let mut seen = Vec::new();
-        while !doctor_run.is_finished() {
-            seen.extend(strong_locks(&pool).await);
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        let report = doctor_run.await.unwrap();
+        let (report, seen) = doctor_watched(&pool, &ast).await;
         drop(reader);
         assert!(seen.is_empty(), "doctor took or waited on {seen:?}");
-        assert!(
-            started.elapsed() < Duration::from_millis(1500),
-            "doctor waited on an application's read: {:?}",
-            started.elapsed()
-        );
         assert!(report.drifted.is_empty(), "{report:#?}");
         assert!(
             has(&report.claimed, "policy posts.posts_select"),
