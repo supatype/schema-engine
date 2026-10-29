@@ -154,7 +154,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         })
         .collect();
 
-    let config = json!({
+    let mut config = json!({
         "name": model.name,
         "tableName": model.table_name(),
         // The project's own words for the model, null when it left them to Studio, which then
@@ -187,7 +187,8 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         "primaryKey": primary_key,
         "fields": fields,
     });
-    super::admin_plugins::with_composite_groups(config, model)
+    super::admin_plugins::add_composite_groups(&mut config, model);
+    config
 }
 
 /// The order a Studio list opens in: the first of these rules that applies.

@@ -22,19 +22,18 @@ pub fn plugin_field(field: &FieldAst) -> Option<Value> {
     }))
 }
 
-/// The model's config with `compositeGroups` added when it uses a plugin composite. Left out
+/// Adds `compositeGroups` to the model's config when it uses a plugin composite. Left out
 /// otherwise, so a schema without plugins produces the admin config it always did.
-pub fn with_composite_groups(mut config: Value, model: &ModelAst) -> Value {
+pub fn add_composite_groups(config: &mut Value, model: &ModelAst) {
     let groups = composite_groups(model);
     if !groups.is_empty() {
         config["compositeGroups"] = Value::Array(groups);
     }
-    config
 }
 
 /// One entry per plugin composite the model uses, its columns in declaration order. Studio looks
 /// the composite's editor up by its name, as for a field type.
-pub fn composite_groups(model: &ModelAst) -> Vec<Value> {
+fn composite_groups(model: &ModelAst) -> Vec<Value> {
     let mut groups: Vec<(CompositeMembership, Vec<String>)> = Vec::new();
     for (name, field) in &model.fields {
         let Some(member) = field_annotations(field).platform.composite.as_ref() else {
