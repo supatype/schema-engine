@@ -2166,9 +2166,20 @@ fn created_sequence(
 /// table lock it took (E33: 15 minutes to over 2 hours).
 const WRITER_IDLE_TIMEOUT: &str = "60s";
 
-/// How often a writer's backend checks, while a statement runs, that its client is still there
-/// (Postgres 14 and later, on platforms that support it: see [`crate::db::checks_clients`]).
-pub(crate) const WRITER_CLIENT_CHECK: &str = "5s";
+/// Asks a writer's backend to check every 5 s, while a statement runs, that its client is still
+/// there (Postgres 14 and later). Postgres refuses any value but 0 with `invalid_parameter_value`
+/// on a platform that cannot tell a closed socket from an idle one (Windows among them), and a
+/// refusal would abort the writer's transaction, so the block absorbs it: refused, the writer is
+/// bounded by its idle and lock timeouts alone. A `set_config` local to the transaction and made in
+/// the block's protected section outlives the block when nothing fails there. The server is asked
+/// rather than the platform guessed, since the engine and the database need not run on the same
+/// one.
+const WRITER_CLIENT_CHECK: &str = "DO $$ BEGIN
+    IF current_setting('server_version_num')::int >= 140000 THEN
+        PERFORM set_config('client_connection_check_interval', '5s', true);
+    END IF;
+EXCEPTION WHEN invalid_parameter_value THEN NULL;
+END $$";
 
 /// A writer's transaction: bounded by the timeouts above, holding [`ENGINE_LOCK_ID`] (or refused
 /// with [`EngineBusy`]) and then [`PUSH_LOCK_ID`]. Push, adopt, rebaseline, rollback and the
@@ -2177,12 +2188,19 @@ pub(crate) const WRITER_CLIENT_CHECK: &str = "5s";
 /// lock cannot see that its client was killed, and every application query on that table queues
 /// behind it while it waits.
 pub(crate) async fn begin_writer(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
-    let checks_clients = crate::db::checks_clients(pool).await?;
-    let mut tx = pool
-        .begin()
+    begin_writer_on(pool, crate::online::PUSH_LOCK_TIMEOUT).await
+}
+
+/// A writer's transaction on `on` (a pool, or the session that holds the engine's lock), bounded
+/// by [`bound_writer`] and holding both lock keys, waiting at most `lock_timeout` for each lock.
+pub(crate) async fn begin_writer_on<'c>(
+    on: impl sqlx::Acquire<'c, Database = Postgres>,
+    lock_timeout: &str,
+) -> Result<Transaction<'c, Postgres>> {
+    let mut tx = sqlx::Acquire::begin(on)
         .await
         .context("begin the writer's transaction")?;
-    bound_writer(&mut tx, crate::online::PUSH_LOCK_TIMEOUT, checks_clients).await?;
+    bound_writer(&mut tx, lock_timeout).await?;
     take_engine_lock(&mut tx).await?;
     take_push_lock(&mut tx).await?;
     Ok(tx)
@@ -2198,26 +2216,20 @@ pub(crate) async fn begin_watched_writer(
 }
 
 /// `SET LOCAL` for the writer's timeouts, so they end with its transaction: `lock_timeout` is how
-/// long each statement waits for a lock. The client check is set only where `checks_clients`, the
-/// server's own answer remembered for its pool ([`crate::db::checks_clients`]), says it can be:
-/// elsewhere the writer is bounded by its idle and lock timeouts alone.
-pub(crate) async fn bound_writer(
-    tx: &mut PgConnection,
-    lock_timeout: &str,
-    checks_clients: bool,
-) -> Result<()> {
+/// long each statement waits for a lock, and [`WRITER_CLIENT_CHECK`] where the server allows it.
+async fn bound_writer(tx: &mut PgConnection, lock_timeout: &str) -> Result<()> {
     sqlx::query(
         "SELECT set_config('idle_in_transaction_session_timeout', $1, true),
-                set_config('lock_timeout', $2, true),
-                CASE WHEN $3 THEN set_config('client_connection_check_interval', $4, true) END",
+                set_config('lock_timeout', $2, true)",
     )
     .bind(WRITER_IDLE_TIMEOUT)
     .bind(lock_timeout)
-    .bind(checks_clients)
-    .bind(WRITER_CLIENT_CHECK)
     .execute(&mut *tx)
     .await
     .context("bound the writer's transaction")?;
+    tx.execute(WRITER_CLIENT_CHECK)
+        .await
+        .context("ask the writer's backend to check its client")?;
     Ok(())
 }
 

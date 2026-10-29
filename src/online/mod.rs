@@ -45,14 +45,11 @@ const FIRST_PAUSE: Duration = Duration::from_millis(1_000);
 pub struct EngineSession {
     conn: Option<PoolConnection<Postgres>>,
     pid: i32,
-    /// Whether its server can check its client ([`crate::db::checks_clients`]), asked once.
-    checks_clients: bool,
 }
 
 impl EngineSession {
     /// The session, or [`crate::push::EngineBusy::Running`] when another writer holds the lock.
     pub async fn open(pool: &PgPool) -> Result<EngineSession> {
-        let checks_clients = crate::db::checks_clients(pool).await?;
         let mut conn = pool.acquire().await.context("acquire the push's session")?;
         let (taken, pid): (bool, i32) =
             sqlx::query_as("SELECT pg_try_advisory_lock($1, $2), pg_backend_pid()")
@@ -67,7 +64,6 @@ impl EngineSession {
         Ok(EngineSession {
             conn: Some(conn),
             pid,
-            checks_clients,
         })
     }
 
@@ -83,16 +79,7 @@ impl EngineSession {
 
     /// A writer's transaction on this session, waiting at most `lock_timeout` for each lock.
     pub async fn begin(&mut self, lock_timeout: &str) -> Result<Transaction<'_, Postgres>> {
-        let checks_clients = self.checks_clients;
-        let mut tx = self
-            .conn()
-            .begin()
-            .await
-            .context("begin the writer's transaction")?;
-        crate::push::bound_writer(&mut tx, lock_timeout, checks_clients).await?;
-        crate::push::take_engine_lock(&mut tx).await?;
-        crate::push::take_push_lock(&mut tx).await?;
-        Ok(tx)
+        crate::push::begin_writer_on(self.conn(), lock_timeout).await
     }
 
     /// Releases the lock. A session that cannot say so is closed instead, which releases it.
