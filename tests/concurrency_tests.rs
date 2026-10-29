@@ -500,22 +500,13 @@ async fn engine(url: &str, doc: &str, args: &[&str]) -> (bool, String, Duration)
     (out.status.success(), stdout, ran)
 }
 
-/// When the engine says it started: the timestamp of its first log line, colours removed.
+/// When the engine says it started: the timestamp of its first log line. Piped, the engine
+/// writes no colour, so the line starts with the timestamp.
 fn engine_started_at(stderr: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     let line = stderr
         .lines()
         .find(|l| l.contains("supatype-engine starting"))?;
-    let mut plain = String::new();
-    let mut in_escape = false;
-    for c in line.chars() {
-        match (in_escape, c) {
-            (false, '\u{1b}') => in_escape = true,
-            (true, 'm') => in_escape = false,
-            (false, c) => plain.push(c),
-            (true, _) => {}
-        }
-    }
-    let stamp = plain.split_whitespace().next()?;
+    let stamp = line.split_whitespace().next()?;
     chrono::DateTime::parse_from_rfc3339(stamp)
         .ok()
         .map(|t| t.with_timezone(&chrono::Utc))
