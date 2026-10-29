@@ -1556,20 +1556,22 @@ pub(super) fn field_to_column_def(
             let req = if f.required { " NOT NULL" } else { "" };
             Ok(format!("{qname} vector({}){req}", f.dimensions))
         }
-        // Plugin-defined custom field type: use the declared pg_type directly.
-        FieldAst::Custom(f) => {
-            let req = if f.required { " NOT NULL" } else { "" };
-            let uniq = unique_clause(names, table, name, f.unique);
-            let default = f
-                .default
-                .as_ref()
-                .map(|d| format!(" DEFAULT {}", render_default(d)))
-                .unwrap_or_default();
-            Ok(format!(
-                "{qname} {pg}{req}{uniq}{default}",
-                pg = f.pg_type.to_uppercase()
-            ))
-        }
+        // A plugin-defined column: the plugin's Postgres type, and its CHECK as the column's named
+        // bounds constraint, rendered as any scalar column's so a later push reconciles it the same way.
+        FieldAst::Custom(f) => Ok(scalar_col(
+            names,
+            table,
+            name,
+            &f.pg_type.to_uppercase(),
+            &ScalarFieldAst {
+                required: f.required,
+                unique: f.unique,
+                default: f.default.clone(),
+                check: f.check.clone(),
+                ..Default::default()
+            },
+            false,
+        )),
         // Composites are expanded at the table level, never called here individually
         FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete => {
             anyhow::bail!("composite field '{name}' must be expanded at table level")
@@ -1663,6 +1665,9 @@ pub fn field_check_expression(field: &FieldAst, name: &str) -> Option<String> {
             "JSONB".to_string(),
             true,
         ),
+        // A plugin's check: never localized, and carrying no `validation`, since the plugin's own
+        // validate function is what Studio and the SDKs run.
+        FieldAst::Custom(f) => (f.check.as_deref(), None, false, f.pg_type.clone(), false),
         other => {
             let f = scalar_of(other)?;
             (

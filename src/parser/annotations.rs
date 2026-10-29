@@ -116,6 +116,28 @@ pub struct PlatformFieldAnnotations {
     pub editor: Option<String>,
     #[serde(default)]
     pub read_only: bool,
+    /// The plugin composite this column came from, which Studio renders the composite's columns
+    /// together under. Absent for a column the model declares itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composite: Option<CompositeMembership>,
+}
+
+/// A column's place in a plugin composite (`WithPluginComposite<"seo", ...>`), as the CLI writes it
+/// on every column the composite adds.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositeMembership {
+    /// npm package of the plugin, e.g. `@supatype/plugin-seo`.
+    pub plugin: String,
+    /// The composite's name, e.g. `seo`.
+    pub name: String,
+    /// The composite's label, e.g. `SEO Meta`.
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub collapsible: bool,
+    #[serde(default)]
+    pub default_collapsed: bool,
 }
 
 /// The old names a rename declares, newest first: `renamedFrom` as one name or a list. A list is

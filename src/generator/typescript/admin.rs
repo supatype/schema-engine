@@ -154,7 +154,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         })
         .collect();
 
-    json!({
+    let config = json!({
         "name": model.name,
         "tableName": model.table_name(),
         // The project's own words for the model, null when it left them to Studio, which then
@@ -186,7 +186,8 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         "defaultSort": default_sort,
         "primaryKey": primary_key,
         "fields": fields,
-    })
+    });
+    super::admin_plugins::with_composite_groups(config, model)
 }
 
 /// The order a Studio list opens in: the first of these rules that applies.
@@ -612,6 +613,9 @@ fn build_fields_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) 
                 if read_only {
                     entry["readOnly"] = json!(true);
                 }
+                if let Some(plugin) = super::admin_plugins::plugin_field(other) {
+                    entry["plugin"] = plugin;
+                }
 
                 // Build per-kind options object (all field-specific data lives here so the
                 // studio widget can read it from config.options without knowing the root keys).
@@ -937,6 +941,9 @@ fn field_required_flag(field: &FieldAst) -> bool {
         FieldAst::Geo(f) => f.required,
         FieldAst::Vector(f) => f.required,
         FieldAst::Blocks(f) => f.required,
+        // A plugin field's column is NOT NULL when required, so Studio must ask for it rather than
+        // send a blank the database refuses.
+        FieldAst::Custom(f) => f.required,
         _ => false,
     }
 }

@@ -1164,6 +1164,12 @@ pub struct CustomFieldAst {
     pub read_only: bool,
     #[serde(default)]
     pub annotations: FieldAnnotations,
+    /// The plugin's CHECK constraints on this column, joined into one expression with `{name}` for
+    /// the column, rendered and reconciled like any field's bounds check. The CLI writes it from
+    /// the field type's `constraints`; without it a plugin's declared check never reached the
+    /// database.
+    #[serde(default)]
+    pub check: Option<String>,
 }
 
 /// A plugin registered for this schema via supatype.config.ts.
