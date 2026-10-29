@@ -433,6 +433,17 @@ pub enum StorageAccessMode {
     Custom,
 }
 
+impl StorageAccessMode {
+    /// The mode as `storage.buckets.access_mode` holds it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StorageAccessMode::Public => "public",
+            StorageAccessMode::Private => "private",
+            StorageAccessMode::Custom => "custom",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageFieldAst {
@@ -1127,8 +1138,12 @@ pub struct JunctionTableAst {
 #[serde(rename_all = "camelCase")]
 pub struct StorageBucketAst {
     pub id: String,
+    /// Left out, the bucket is private unless `access_mode` says otherwise.
+    #[serde(default)]
     pub public: bool,
+    /// `None` when the schema names none, which leaves a live bucket's own list as it is.
     pub allowed_mime_types: Option<Vec<String>>,
+    /// `None` when the schema names none, which leaves a live bucket's own limit as it is.
     pub file_size_limit: Option<u64>,
     /// Correlates with `storage.buckets.access_mode` and S3 provisioning (`public` | `private` | `custom`).
     #[serde(default)]
@@ -1139,6 +1154,24 @@ pub struct StorageBucketAst {
     /// Raw S3 bucket policy JSON; overrides default public-read policy when supplied.
     #[serde(default)]
     pub s3_bucket_policy: Option<String>,
+    /// Whether the schema names this bucket's visibility (`accessMode`, or `public`), set by the
+    /// parser from the input before anything fills a default in. A push reasserts the visibility
+    /// of a bucket that names it, and otherwise leaves a live bucket's as it is, so a change made
+    /// at runtime survives. Not part of the wire format.
+    #[serde(skip)]
+    pub visibility_declared: bool,
+}
+
+impl StorageBucketAst {
+    /// The bucket's access mode: the one it names, or else the one its `public` flag implies, as
+    /// the storage service reads a row with no mode.
+    pub fn effective_access_mode(&self) -> StorageAccessMode {
+        self.access_mode.unwrap_or(if self.public {
+            StorageAccessMode::Public
+        } else {
+            StorageAccessMode::Private
+        })
+    }
 }
 
 /// A plugin-defined custom field type. The Postgres column uses `pg_type`;

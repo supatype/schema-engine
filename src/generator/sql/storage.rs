@@ -23,6 +23,8 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
 
     out.push_str(storage_schema_ddl());
     out.push('\n');
+    out.push_str(access_mode_backfill_sql());
+    out.push('\n');
 
     out.push_str("-- Bucket registrations\n\n");
     for bucket in &ast.storage_buckets {
@@ -118,10 +120,24 @@ $storage_version$;
 "#
 }
 
-/// Produces an UPSERT statement that registers (or updates) a single bucket.
-fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
-    let public = if bucket.public { "true" } else { "false" };
-    let mime = match &bucket.allowed_mime_types {
+/// Every bucket row brought into line with what the storage service and the CLI read: a row with
+/// no mode gets the one its `public` flag implies, which is how they read it already, and `public`
+/// follows a mode they know. A row already in line is not matched, so a second run writes nothing.
+/// It runs over every row, a bucket made at runtime included: neither change alters who can read.
+fn access_mode_backfill_sql() -> &'static str {
+    "-- Every bucket has a mode, and `public` is true exactly when it is `public`.\n\
+     UPDATE storage.buckets\n   \
+        SET access_mode = CASE WHEN public THEN 'public' ELSE 'private' END\n \
+      WHERE access_mode IS NULL;\n\
+     UPDATE storage.buckets\n   \
+        SET public = (access_mode = 'public')\n \
+      WHERE access_mode IN ('public', 'private', 'custom')\n   \
+        AND public IS DISTINCT FROM (access_mode = 'public');\n"
+}
+
+/// A bucket's allowed MIME types as a SQL array, or `NULL` for any.
+fn mime_types_sql(bucket: &StorageBucketAst) -> String {
+    match &bucket.allowed_mime_types {
         Some(types) if !types.is_empty() => {
             let arr = types
                 .iter()
@@ -131,18 +147,25 @@ fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
             format!("ARRAY[{arr}]::TEXT[]")
         }
         _ => "NULL".to_string(),
-    };
+    }
+}
+
+/// Produces an UPSERT statement that registers (or updates) a single bucket. The mode is always
+/// written, and `public` is derived from it, so the row says one thing.
+///
+/// A new bucket gets every column. An existing one gets only what the schema names, so a change
+/// made at runtime (in Studio, or through the storage API) to anything the schema leaves out
+/// survives a push. The cost is that removing a setting from the schema leaves the live value as
+/// it is rather than resetting it.
+fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
+    let mode = bucket.effective_access_mode();
+    let public = mode == StorageAccessMode::Public;
+    let mime = mime_types_sql(bucket);
     let size_limit = bucket
         .file_size_limit
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "NULL".to_string());
+        .map_or_else(|| "NULL".to_string(), |s| s.to_string());
     let id = quote_literal(&bucket.id);
-    let access_mode = match &bucket.access_mode {
-        Some(StorageAccessMode::Public) => quote_literal("public"),
-        Some(StorageAccessMode::Private) => quote_literal("private"),
-        Some(StorageAccessMode::Custom) => quote_literal("custom"),
-        None => "NULL".to_string(),
-    };
+    let access_mode = quote_literal(mode.as_str());
     let policy = bucket
         .s3_bucket_policy
         .as_deref()
@@ -151,13 +174,31 @@ fn bucket_upsert_sql(bucket: &StorageBucketAst) -> String {
     format!(
         "INSERT INTO storage.buckets (id, name, public, allowed_mime_types, file_size_limit, access_mode, s3_bucket_policy)\n\
          VALUES ({id}, {id}, {public}, {mime}, {size_limit}, {access_mode}, {policy})\n\
-         ON CONFLICT (id) DO UPDATE SET\n  \
-           public             = EXCLUDED.public,\n  \
-           allowed_mime_types = EXCLUDED.allowed_mime_types,\n  \
-           file_size_limit    = EXCLUDED.file_size_limit,\n  \
-           access_mode        = EXCLUDED.access_mode,\n  \
-           s3_bucket_policy   = EXCLUDED.s3_bucket_policy,\n  \
-           updated_at         = NOW();\n"
+         ON CONFLICT (id) {};\n",
+        on_conflict_sql(bucket)
+    )
+}
+
+/// What a push rewrites on a bucket that already exists: the columns the schema names, or nothing.
+fn on_conflict_sql(bucket: &StorageBucketAst) -> String {
+    let named = [
+        (bucket.visibility_declared, "public"),
+        (bucket.visibility_declared, "access_mode"),
+        (bucket.allowed_mime_types.is_some(), "allowed_mime_types"),
+        (bucket.file_size_limit.is_some(), "file_size_limit"),
+        (bucket.s3_bucket_policy.is_some(), "s3_bucket_policy"),
+    ];
+    let sets: Vec<String> = named
+        .iter()
+        .filter(|(named, _)| *named)
+        .map(|(_, column)| format!("\n  {column:<18} = EXCLUDED.{column}"))
+        .collect();
+    if sets.is_empty() {
+        return "DO NOTHING".to_string();
+    }
+    format!(
+        "DO UPDATE SET{},\n  updated_at         = NOW()",
+        sets.join(",")
     )
 }
 

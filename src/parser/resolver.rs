@@ -174,69 +174,15 @@ pub fn legacy_junction_names(ast: &SchemaAst) -> Vec<(String, String)> {
 /// Merge declarative `storageBuckets` from the CLI input with buckets inferred from image/file fields.
 /// Declarative rows win for `public`, mime allowlist, size limit, bucket RLS `access`, S3 policy JSON, and `access_mode`.
 fn resolve_storage_buckets(ast: &mut SchemaAst) -> Result<()> {
-    let mut by_id: HashMap<String, StorageBucketAst> = HashMap::new();
-
-    for b in std::mem::take(&mut ast.storage_buckets) {
-        let mut b = b;
-        normalize_storage_bucket_row(&mut b);
-        by_id.insert(b.id.clone(), b);
-    }
-
-    // ── Buckets referenced only by models (no `Bucket<>` export) ───────────────
-    let mut referenced: Vec<(String, Option<StorageAccessMode>)> = Vec::new();
-    for model in &ast.models {
-        for field in model.fields.values() {
-            if let FieldAst::Image(s) | FieldAst::File(s) = field {
-                referenced.push((s.bucket.clone(), s.access_mode));
-            }
-        }
-    }
-
-    for (bucket_id, field_access_mode) in referenced {
-        use std::collections::hash_map::Entry;
-        match by_id.entry(bucket_id.clone()) {
-            Entry::Occupied(_) => {
-                // Declarative config takes precedence, so do not patch from fields.
-            }
-            Entry::Vacant(v) => {
-                let public = matches!(field_access_mode.as_ref(), Some(StorageAccessMode::Public));
-                let access_mode = Some(match field_access_mode {
-                    Some(m) => m,
-                    None => {
-                        if public {
-                            StorageAccessMode::Public
-                        } else {
-                            StorageAccessMode::Private
-                        }
-                    }
-                });
-                v.insert(StorageBucketAst {
-                    id: bucket_id,
-                    public,
-                    allowed_mime_types: None,
-                    file_size_limit: None,
-                    access_mode,
-                    access: None,
-                    s3_bucket_policy: None,
-                });
-            }
-        }
-    }
-
+    let mut by_id: HashMap<String, StorageBucketAst> = std::mem::take(&mut ast.storage_buckets)
+        .into_iter()
+        .map(|b| (b.id.clone(), b))
+        .collect();
+    add_field_only_buckets(&ast.models, &mut by_id);
     for b in by_id.values_mut() {
         normalize_storage_bucket_row(b);
     }
-
-    // Keep field-level `access_mode` aligned with the resolved bucket visibility.
-    for model in &mut ast.models {
-        for field in model.fields.values_mut() {
-            if let FieldAst::Image(s) | FieldAst::File(s) = field {
-                if let Some(b) = by_id.get(&s.bucket) {
-                    s.access_mode = Some(bucket_to_field_access_mode(b));
-                }
-            }
-        }
-    }
+    align_field_access_modes(&mut ast.models, &by_id);
 
     let mut list: Vec<StorageBucketAst> = by_id.into_values().collect();
     list.sort_by(|a, b| a.id.cmp(&b.id));
@@ -244,26 +190,44 @@ fn resolve_storage_buckets(ast: &mut SchemaAst) -> Result<()> {
     Ok(())
 }
 
-fn normalize_storage_bucket_row(bucket: &mut StorageBucketAst) {
-    match bucket.access_mode {
-        Some(StorageAccessMode::Public) => bucket.public = true,
-        Some(StorageAccessMode::Private) | Some(StorageAccessMode::Custom) => bucket.public = false,
-        None => {
-            bucket.access_mode = Some(if bucket.public {
-                StorageAccessMode::Public
-            } else {
-                StorageAccessMode::Private
-            });
+/// A bucket for each one a model's image or file field names and no `Bucket<>` export declares.
+/// A declared bucket takes precedence, and the first field to name a bucket gives it its mode.
+fn add_field_only_buckets(models: &[ModelAst], by_id: &mut HashMap<String, StorageBucketAst>) {
+    for field in models.iter().flat_map(|m| m.fields.values()) {
+        if let FieldAst::Image(s) | FieldAst::File(s) = field {
+            by_id
+                .entry(s.bucket.clone())
+                .or_insert_with(|| StorageBucketAst {
+                    id: s.bucket.clone(),
+                    // No mode is private; the normalisation after this writes it down.
+                    public: false,
+                    allowed_mime_types: None,
+                    file_size_limit: None,
+                    access_mode: s.access_mode,
+                    access: None,
+                    s3_bucket_policy: None,
+                    visibility_declared: s.access_mode.is_some(),
+                });
         }
     }
 }
 
-fn bucket_to_field_access_mode(bucket: &StorageBucketAst) -> StorageAccessMode {
-    bucket.access_mode.unwrap_or(if bucket.public {
-        StorageAccessMode::Public
-    } else {
-        StorageAccessMode::Private
-    })
+/// Each image and file field's `access_mode` set to its bucket's resolved one.
+fn align_field_access_modes(models: &mut [ModelAst], by_id: &HashMap<String, StorageBucketAst>) {
+    for field in models.iter_mut().flat_map(|m| m.fields.values_mut()) {
+        if let FieldAst::Image(s) | FieldAst::File(s) = field {
+            if let Some(b) = by_id.get(&s.bucket) {
+                s.access_mode = Some(b.effective_access_mode());
+            }
+        }
+    }
+}
+
+/// A concrete mode on every bucket, and `public` true exactly when that mode is `public`.
+fn normalize_storage_bucket_row(bucket: &mut StorageBucketAst) {
+    let mode = bucket.effective_access_mode();
+    bucket.access_mode = Some(mode);
+    bucket.public = mode == StorageAccessMode::Public;
 }
 
 // Used by the storage generator, which the wasm build does not compile.

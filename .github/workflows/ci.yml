@@ -242,6 +242,7 @@ jobs:
             --test live_state_tests \
             --test engine_version_tests \
             --test storage_policy_sweep_tests \
+            --test storage_access_mode_tests \
             --test table_ownership_tests \
             --test field_access_contract_tests \
             --test field_access_tamper_tests \

@@ -5,6 +5,40 @@ one-line entries say. Newest first.
 
 ## Unreleased
 
+### A push leaves a bucket's runtime settings alone unless the schema names them
+
+A push used to rewrite every column of every bucket the schema has, on every push, up-to-date ones
+included. A bucket made public in Studio, or given a size limit through the storage API, went back
+to what the schema said, and for a bucket that said nothing, back to private with no limit.
+
+A push now creates a missing bucket as before, private unless the schema says otherwise. On a bucket
+that exists it rewrites only what the schema names:
+
+| The bucket's entry names | A push rewrites |
+|---|---|
+| `accessMode`, or `public` | `access_mode` and `public` |
+| `allowedMimeTypes` | `allowed_mime_types` |
+| `fileSizeLimit` | `file_size_limit` |
+| `s3BucketPolicy` | `s3_bucket_policy` |
+| none of them | nothing |
+
+A bucket only a file or image field names counts as naming its visibility when the field has an
+`accessMode`.
+
+What changes for an existing project:
+
+- **Removing `accessMode` no longer reverts a bucket to private.** Nor does removing a size limit,
+  a MIME list or an S3 policy clear it. To change a live bucket from the schema, name the new value;
+  to undo a runtime change, name the value you want back.
+- **Every row gets a concrete `access_mode`.** A row with none, from an earlier engine or the
+  storage service, gets the mode its `public` flag implies, and `public` is set to match a known
+  mode (a `custom` bucket is never flagged public). The storage service already read them this
+  way, so who can read a bucket does not change. A mode the engine does not know is left alone.
+- **`public` may be left out** of a `storageBuckets` entry. It reads as false.
+- **The CLI has to stop filling a mode in.** Today it sends `accessMode: "private"` and
+  `public: false` for a `Bucket<>` with no `accessMode`, which counts as naming them, so such a
+  bucket is still reasserted until a CLI that leaves both out.
+
 ### A field write rule judges the row being inserted (MASK-N1)
 
 On `INSERT`, a field's write rule (or its read rule, where it has no write rule) used to be judged

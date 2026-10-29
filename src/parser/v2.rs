@@ -3,7 +3,8 @@ use super::ast::{
     scalar_of, ArrayFieldAst, BlockDefinitionAst, BlocksFieldAst, CustomFieldAst, DecimalFieldAst,
     DefaultValueAst, EnumFieldAst, FieldAst, GeneratedColumnAst, GeoFieldAst, IdentityGeneration,
     JsonFieldAst, ModelAst, ModelOptions, RelationCardinality, RelationFieldAst, ScalarFieldAst,
-    SchemaAst, SlugFieldAst, StorageAccessMode, StorageFieldAst, ValidationAst, VectorFieldAst,
+    SchemaAst, SlugFieldAst, StorageAccessMode, StorageBucketAst, StorageFieldAst, ValidationAst,
+    VectorFieldAst,
 };
 use anyhow::{bail, Context, Result};
 use indexmap::IndexMap;
@@ -38,7 +39,7 @@ pub fn deserialize_schema(value: &Value) -> Result<SchemaAst> {
         ast_version: 2,
         models,
         junction_tables: deserialize_optional_vec(value, "junctionTables")?,
-        storage_buckets: deserialize_optional_vec(value, "storageBuckets")?,
+        storage_buckets: deserialize_storage_buckets(value)?,
         locales: deserialize_optional_string_vec(value, "locales"),
         default_locale: value
             .get("defaultLocale")
@@ -67,6 +68,21 @@ fn deserialize_optional_vec<T: for<'de> Deserialize<'de>>(
         None => Ok(Vec::new()),
         Some(v) => Ok(serde_json::from_value(v.clone())?),
     }
+}
+
+/// The declared buckets, each marked with whether its input names its visibility: a non-null
+/// `accessMode`, or a `public` flag. Read from the input because the resolver fills both in.
+fn deserialize_storage_buckets(value: &Value) -> Result<Vec<StorageBucketAst>> {
+    let Some(raw) = value.get("storageBuckets") else {
+        return Ok(Vec::new());
+    };
+    let mut buckets: Vec<StorageBucketAst> = serde_json::from_value(raw.clone())?;
+    let inputs = raw.as_array().map(Vec::as_slice).unwrap_or_default();
+    for (bucket, input) in buckets.iter_mut().zip(inputs) {
+        let names = |key: &str| input.get(key).is_some_and(|v| !v.is_null());
+        bucket.visibility_declared = names("accessMode") || names("public");
+    }
+    Ok(buckets)
 }
 
 fn deserialize_optional_string_vec(value: &Value, key: &str) -> Vec<String> {
