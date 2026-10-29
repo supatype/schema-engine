@@ -1557,21 +1557,20 @@ pub(super) fn field_to_column_def(
             Ok(format!("{qname} vector({}){req}", f.dimensions))
         }
         // A plugin-defined column: the plugin's Postgres type, and its CHECK as the column's named
-        // bounds constraint, rendered as any scalar column's so a later push reconciles it the same way.
-        FieldAst::Custom(f) => Ok(scalar_col(
-            names,
-            table,
-            name,
-            &f.pg_type.to_uppercase(),
-            &ScalarFieldAst {
-                required: f.required,
-                unique: f.unique,
-                default: f.default.clone(),
-                check: f.check.clone(),
-                ..Default::default()
-            },
-            false,
-        )),
+        // bounds constraint. The check comes from `render_check`, the one source the ledger and
+        // the differ also read, so the constraint a push creates is the one the next push expects.
+        FieldAst::Custom(f) => {
+            let pg = f.pg_type.to_uppercase();
+            let req = if f.required { " NOT NULL" } else { "" };
+            let uniq = unique_clause(names, table, name, f.unique);
+            let default = f
+                .default
+                .as_ref()
+                .map(|d| format!(" DEFAULT {}", render_default(d)))
+                .unwrap_or_default();
+            let check = render_check(names, table, name, field);
+            Ok(format!("{qname} {pg}{req}{uniq}{default}{check}"))
+        }
         // Composites are expanded at the table level, never called here individually
         FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete => {
             anyhow::bail!("composite field '{name}' must be expanded at table level")
@@ -1582,12 +1581,6 @@ pub(super) fn field_to_column_def(
     }
 }
 
-/// The `CHECK` expression a column carries, or `None`.
-///
-/// One function rather than a clause built inside each `field_to_column_def` arm, because the same
-/// answer is needed twice: once to render the column, and once to stamp the constraint's comment
-/// with a fingerprint of it. Two derivations of the same expression would drift, and a comment that
-/// disagrees with its constraint is worse than no comment, since the differ trusts it.
 /// The expression itself, from already-decomposed parts.
 ///
 /// `scalar_col` is handed synthesized `ScalarFieldAst` values for image, file and blocks columns and
@@ -1606,6 +1599,12 @@ fn check_expression_parts(
     check.map(|c| c.replace("{name}", name))
 }
 
+/// The `CHECK` expression a column carries, or `None`.
+///
+/// One function rather than a clause built inside each `field_to_column_def` arm, because the same
+/// answer is needed twice: once to render the column, and once to stamp the constraint's comment
+/// with a fingerprint of it. Two derivations of the same expression would drift, and a comment that
+/// disagrees with its constraint is worse than no comment, since the differ trusts it.
 pub fn field_check_expression(field: &FieldAst, name: &str) -> Option<String> {
     let (check, validation, localized, pg_type, rich_text) = match field {
         FieldAst::Slug(f) => (
@@ -1666,8 +1665,11 @@ pub fn field_check_expression(field: &FieldAst, name: &str) -> Option<String> {
             true,
         ),
         // A plugin's check: never localized, and carrying no `validation`, since the plugin's own
-        // validate function is what Studio and the SDKs run.
-        FieldAst::Custom(f) => (f.check.as_deref(), None, false, f.pg_type.clone(), false),
+        // validate function is what Studio and the SDKs run. Handed over directly: with nothing
+        // localized the type is never read, so there is no owned copy of it to make.
+        FieldAst::Custom(f) => {
+            return check_expression_parts(f.check.as_deref(), None, name, false, &f.pg_type, false)
+        }
         other => {
             let f = scalar_of(other)?;
             (
@@ -2611,5 +2613,35 @@ mod tests {
         let sql = render_operation(&op, "public", &ast).unwrap();
         assert!(sql.starts_with("ALTER TABLE \"public\".\"posts\" ALTER COLUMN \"score\" TYPE"));
         assert!(!sql.contains("POLICY"), "{sql}");
+    }
+
+    /// A plugin column's DDL and the ledger read its CHECK from one place, so the constraint a
+    /// push creates is byte for byte the expression the next push compares it with. The plugin's
+    /// type is lowercase here on purpose: the column renders it uppercased, the check never reads it.
+    #[test]
+    fn a_plugin_columns_ddl_check_is_the_ledgers_expression() {
+        let field = FieldAst::Custom(crate::parser::ast::CustomFieldAst {
+            pg_type: "text".into(),
+            required: true,
+            unique: true,
+            default: Some(DefaultValueAst::Value {
+                value: serde_json::json!("+440"),
+            }),
+            check: Some(r#""{name}" ~ '^\+'"#.into()),
+            ..Default::default()
+        });
+        let names = ObjectNames::default();
+        let ddl = field_to_column_def(&names, "contacts", "phone", &field).unwrap();
+        let expr = field_check_expression(&field, "phone").expect("the plugin's check");
+        let bounds = quote_ident(&names.bounds("contacts", "phone"));
+        let unique = quote_ident(&names.unique("contacts", "phone"));
+        assert_eq!(
+            ddl,
+            format!(
+                "\"phone\" TEXT NOT NULL CONSTRAINT {unique} UNIQUE DEFAULT '+440' \
+                 CONSTRAINT {bounds} CHECK ({expr})"
+            )
+        );
+        assert_eq!(expr, r#""phone" ~ '^\+'"#);
     }
 }

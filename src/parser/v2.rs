@@ -760,10 +760,7 @@ fn custom_from_v2(
         default: default_val,
         read_only,
         annotations: annotations.clone(),
-        check: value
-            .get("check")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        check: check_from_v2(value),
     })
 }
 
