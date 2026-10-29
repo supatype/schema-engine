@@ -1352,19 +1352,25 @@ async fn forget_released_on_missing_tables(
         .map(|m| m.table_name())
         .chain(ast.junction_tables.iter().map(|j| j.name.as_str()))
         .collect();
-    let declared = &declared;
-    crate::online::retrying("push", || async {
-        let (mut tx, pid) = begin_watched_writer(pool).await?;
-        let work = async move {
-            migration_history::assert_project_schema_on(&mut tx, schema).await?;
-            ledger::forget_released_on_missing_tables(&mut tx, schema, declared).await?;
-            tx.commit()
-                .await
-                .context("commit the removal of released ledger rows")
-        };
-        crate::online::fail_fast(pool, pid, "push", work).await
-    })
-    .await
+    crate::online::retrying(pool, &ForgetReleased { schema, declared }).await
+}
+
+/// One attempt of [`forget_released_on_missing_tables`], committed by
+/// [`crate::online::with_retries`].
+struct ForgetReleased<'a> {
+    schema: &'a str,
+    declared: Vec<&'a str>,
+}
+
+impl crate::online::Attempt for ForgetReleased<'_> {
+    type Out = ();
+
+    fn run<'t>(&'t self, tx: &'t mut PgConnection) -> crate::online::Running<'t, ()> {
+        Box::pin(async move {
+            migration_history::assert_project_schema_on(tx, self.schema).await?;
+            ledger::forget_released_on_missing_tables(tx, self.schema, &self.declared).await
+        })
+    }
 }
 
 /// Refuses a plan with a conflict: an object under a name the schema needs that Supatype did not
