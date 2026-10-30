@@ -3,7 +3,7 @@ mod seed_command;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use owo_colors::OwoColorize;
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use tracing::info;
 
 /// `--schema` and `--auth-schema`: a plain identifier, refused before anything is read or
@@ -305,6 +305,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(&cli.log)
         .with_writer(io::stderr)
+        .with_ansi(io::stderr().is_terminal())
         .init();
 
     info!(

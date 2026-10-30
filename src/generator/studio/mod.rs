@@ -60,7 +60,7 @@ pub fn generate(ast: &SchemaAst) -> Result<Value> {
         .map(|b| {
             json!({
                 "id": b.id,
-                "public": b.public,
+                "public": b.is_public(),
                 "allowedMimeTypes": b.allowed_mime_types,
                 "fileSizeLimit": b.file_size_limit,
             })

@@ -92,6 +92,17 @@ async fn waits_on_a_lock(pool: &PgPool, pid: i32) -> bool {
     .unwrap()
 }
 
+/// Whether the backend `pid` is idle with no transaction open.
+async fn idle_outside_a_transaction(pool: &PgPool, pid: i32) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1 AND state = 'idle')",
+    )
+    .bind(pid)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 async fn backend_alive(pool: &PgPool, pid: i32) -> bool {
     sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)")
         .bind(pid)
@@ -165,6 +176,9 @@ const OPEN: u8 = 0;
 const SILENT: u8 = 1;
 /// Both sockets closed: the client process is gone.
 const KILLED: u8 = 2;
+/// Nothing is read either way and nothing is lost: bytes wait in the sockets until the relay is
+/// open again. A client paused, with its server none the wiser.
+const HELD: u8 = 3;
 
 /// A TCP relay between the engine and Postgres that a test can silence or cut, to lose a client
 /// mid-push without losing the test's own connections.
@@ -208,6 +222,11 @@ async fn pump(
 ) {
     let mut buf = vec![0u8; 16 * 1024];
     loop {
+        if mode.load(Ordering::SeqCst) == HELD {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            continue;
+        }
+        // Bytes read just before the relay is held are still passed on below.
         let read = tokio::select! {
             read = from.read(&mut buf) => read,
             _ = tokio::time::sleep(Duration::from_millis(100)) => Ok(usize::MAX),
@@ -270,6 +289,33 @@ impl InFlight {
             blocker,
             push,
         }
+    }
+
+    /// Keep the push in flight for as long as the test needs, however slow the machine.
+    ///
+    /// A push waiting on a lock is not in flight for long: each attempt waits 3 s, and after four
+    /// (15 to 25 s with the pauses) it gives up and lets the engine's lock go. So the relay is held
+    /// while the push's session sits between two attempts: idle, outside a transaction, holding
+    /// the engine's lock at session level, which nothing on the server times out. Held at any
+    /// other moment the server would time the session out, so the hold is only kept once the
+    /// session is seen idle after it.
+    async fn hold_between_attempts(&self, pool: &PgPool) {
+        let held = within(Duration::from_secs(60), || async {
+            if !idle_outside_a_transaction(pool, self.pid).await {
+                return false;
+            }
+            self.relay.set(HELD);
+            // Longer than the pump's own wait, so any read already under way has gone through.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let kept = idle_outside_a_transaction(pool, self.pid).await
+                && engine_lock_holder(pool).await == Some(self.pid);
+            if !kept {
+                self.relay.set(OPEN);
+            }
+            kept
+        })
+        .await;
+        assert!(held.is_some(), "the push was never seen between attempts");
     }
 
     /// Abandon the push and end both sessions, whatever the test found.
@@ -420,73 +466,102 @@ async fn refused_at_once<T: std::fmt::Debug>(
 
 /// The engine binary with `args` on `url` and the AST document `doc`, killed after 20 s. Its
 /// exit status, stdout and how long it ran.
+///
+/// How long it ran is counted from the engine's own first log line, not from the spawn: the
+/// operating system loading a debug binary is not the engine's time, and on a busy machine (or
+/// the first run of a fresh build, which Windows scans) it alone took over 2 s.
 async fn engine(url: &str, doc: &str, args: &[&str]) -> (bool, String, Duration) {
     let input = std::env::temp_dir().join(common::ephemeral_name("concurrency_ast") + ".json");
     std::fs::write(&input, doc).unwrap();
-    let started = Instant::now();
     let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_supatype-engine"))
         .env_remove("DATABASE_URL")
         .arg("-i")
         .arg(&input)
         .args(args)
-        .args(["--database-url", url])
+        .args(["--database-url", url, "--log", "info"])
         .kill_on_drop(true)
         .output();
     let out = tokio::time::timeout(Duration::from_secs(20), child).await;
-    let elapsed = started.elapsed();
+    let exited = chrono::Utc::now();
     let _ = std::fs::remove_file(&input);
-    match out {
-        Ok(out) => {
-            let out = out.expect("run the engine");
-            let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-            (out.status.success(), stdout, elapsed)
+    let Ok(out) = out else {
+        return (
+            false,
+            "<still running after 20 s>".into(),
+            Duration::from_secs(20),
+        );
+    };
+    let out = out.expect("run the engine");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let started = engine_started_at(&stderr)
+        .unwrap_or_else(|| panic!("the engine logged no start line: {stderr}"));
+    let ran = (exited - started).to_std().unwrap_or_default();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    (out.status.success(), stdout, ran)
+}
+
+/// When the engine says it started: the timestamp of its first log line. Piped, the engine
+/// writes no colour, so the line starts with the timestamp.
+fn engine_started_at(stderr: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let line = stderr
+        .lines()
+        .find(|l| l.contains("supatype-engine starting"))?;
+    let stamp = line.split_whitespace().next()?;
+    chrono::DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+/// ENG-CONC: a push waiting on a lock holds the engine's lock between its attempts as well as
+/// during them. Before a push plans, it clears the ledger rows of released tables that are gone;
+/// that step took the lock per attempt, so for the pause after each failed attempt nobody held it
+/// and a second writer arriving then waited behind the same lock instead of being refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_waiting_push_holds_the_engine_lock_through_every_pause() {
+    common::with_integration_pool(|pool| async move {
+        push(&pool, &tables("t1:a")).await.unwrap();
+        let blocker = hold_the_ledger(&pool, 60).await;
+        let waiting = tokio::spawn({
+            let pool = pool.clone();
+            async move { push(&pool, &tables("t1:a,b")).await }
+        });
+        let first = within(Duration::from_secs(20), || async {
+            engine_lock_holder(&pool).await.is_some()
+        })
+        .await;
+        assert!(first.is_some(), "the push never took the engine's lock");
+        let holder = engine_lock_holder(&pool).await;
+        // Two attempts and the pause between them.
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(8) {
+            let now = engine_lock_holder(&pool).await;
+            assert_eq!(now, holder, "after {:?}", started.elapsed());
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        Err(_) => (false, "<still running after 20 s>".into(), elapsed),
-    }
+        waiting.abort();
+        end_backend(&pool, blocker).await;
+    })
+    .await;
 }
 
 /// A4-N1, the CONC matrix: with a push in flight, every other writer is refused with
 /// `engine_busy` within a second, through the library and through the binary. Each used to queue:
 /// a push and an adopt on the bootstrap's `ALTER TABLE _supatype.migrations`, behind the push.
+///
+/// The push is held between two of its attempts for the whole test, so it is still in flight
+/// however long the eight refusals take. Left to run, it gave up after its four attempts while a
+/// loaded machine was still getting through them, and the last writers found no push to refuse.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_writer_is_refused_at_once_while_a_push_is_in_flight() {
     common::with_integration_url(|url| async move {
         let pool = PgPool::connect(&url).await.unwrap();
         let in_flight = InFlight::start(&pool, 120).await;
-        let ast = tables("t1:a");
-        refused_at_once("push", push(&pool, &tables("t1:a,c"))).await;
-        let adopt = adopt::Request {
-            apply: true,
-            ..Default::default()
-        };
-        refused_at_once("adopt", adopt::run(&pool, &ast, "public", adopt)).await;
-        refused_at_once(
-            "rebaseline",
-            inspect::rebaseline(&pool, &ast, "public", true),
-        )
-        .await;
-        refused_at_once(
-            "rollback",
-            migration_history::apply_rollback(&pool, "public"),
-        )
-        .await;
-
-        for args in [
-            &["push", "--non-interactive"][..],
-            &["adopt", "--yes"],
-            &["doctor", "--rebaseline", "--accept-access-drift"],
-            &["rollback"],
-        ] {
-            let (ok, stdout, elapsed) = engine(&url, &tables_doc("t1:a,c"), args).await;
-            assert!(!ok, "{args:?} ran while a push was in flight: {stdout}");
-            assert!(stdout.contains("engine_busy"), "{args:?}: {stdout}");
-            assert!(
-                elapsed <= Duration::from_secs(2),
-                "{args:?} took {elapsed:?}"
-            );
-        }
+        in_flight.hold_between_attempts(&pool).await;
+        library_writers_are_refused(&pool).await;
+        binary_writers_are_refused(&url).await;
 
         // The push in flight is untouched by all of it, and applies once the ledger is free.
+        in_flight.relay.set(OPEN);
         end_backend(&pool, in_flight.blocker).await;
         let applied = tokio::time::timeout(Duration::from_secs(60), in_flight.push)
             .await
@@ -498,6 +573,45 @@ async fn every_writer_is_refused_at_once_while_a_push_is_in_flight() {
         );
     })
     .await;
+}
+
+/// Push, adopt, rebaseline and rollback through the library, each refused at once.
+async fn library_writers_are_refused(pool: &PgPool) {
+    let ast = tables("t1:a");
+    refused_at_once("push", push(pool, &tables("t1:a,c"))).await;
+    let adopt = adopt::Request {
+        apply: true,
+        ..Default::default()
+    };
+    refused_at_once("adopt", adopt::run(pool, &ast, "public", adopt)).await;
+    refused_at_once(
+        "rebaseline",
+        inspect::rebaseline(pool, &ast, "public", true),
+    )
+    .await;
+    refused_at_once(
+        "rollback",
+        migration_history::apply_rollback(pool, "public"),
+    )
+    .await;
+}
+
+/// The same four writers through the engine binary, each refused at once with `engine_busy`.
+async fn binary_writers_are_refused(url: &str) {
+    for args in [
+        &["push", "--non-interactive"][..],
+        &["adopt", "--yes"],
+        &["doctor", "--rebaseline", "--accept-access-drift"],
+        &["rollback"],
+    ] {
+        let (ok, stdout, elapsed) = engine(url, &tables_doc("t1:a,c"), args).await;
+        assert!(!ok, "{args:?} ran while a push was in flight: {stdout}");
+        assert!(stdout.contains("engine_busy"), "{args:?}: {stdout}");
+        assert!(
+            elapsed <= Duration::from_secs(2),
+            "{args:?} took {elapsed:?}"
+        );
+    }
 }
 
 /// E14a: two first pushes on a fresh database at the same moment. One applies; the other is
