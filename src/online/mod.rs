@@ -79,15 +79,7 @@ impl EngineSession {
 
     /// A writer's transaction on this session, waiting at most `lock_timeout` for each lock.
     pub async fn begin(&mut self, lock_timeout: &str) -> Result<Transaction<'_, Postgres>> {
-        let mut tx = self
-            .conn()
-            .begin()
-            .await
-            .context("begin the writer's transaction")?;
-        crate::push::bound_writer(&mut tx, lock_timeout).await?;
-        crate::push::take_engine_lock(&mut tx).await?;
-        crate::push::take_push_lock(&mut tx).await?;
-        Ok(tx)
+        crate::push::begin_writer_on(self.conn(), lock_timeout).await
     }
 
     /// Releases the lock. A session that cannot say so is closed instead, which releases it.
