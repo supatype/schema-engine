@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::up_to_date;
 use serde_json::{json, Value};
 use supatype_engine::generator::typescript::{admin, types};
 use supatype_engine::parser::{self, ast::SchemaAst};
@@ -184,10 +185,6 @@ fn generated_types_and_the_admin_config_name_the_kept_table() {
 }
 
 // ── Against a database ────────────────────────────────────────────────────────
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
-}
 
 /// Pushes `ast` twice: the first applies it and the second finds nothing to do.
 async fn push_twice(pool: &sqlx::PgPool, ast: &SchemaAst) {

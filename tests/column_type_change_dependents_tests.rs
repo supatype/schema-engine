@@ -8,11 +8,10 @@
 
 mod common;
 
+use common::{applied, exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{parser, parser::ast::SchemaAst, push};
-
-use common::{exec, push};
 
 fn field(kind: &str, required: bool) -> Value {
     json!({ "kind": kind, "required": required })
@@ -74,14 +73,6 @@ fn behind_the_api_view(kind: &str) -> SchemaAst {
         json!({ "score": field(kind, true), "notes": field("text", false) }),
         json!({ "read": { "type": "public" }, "fields": { "notes": notes } }),
     )
-}
-
-fn applied(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::Applied { .. })
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 /// Pushed and applied, then a second push of the same schema has nothing to do.

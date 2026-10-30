@@ -474,6 +474,16 @@ pub async fn push_with(
     supatype_engine::push::apply(pool, plan, options).await
 }
 
+/// Whether a push changed the database.
+pub fn applied(outcome: &supatype_engine::push::Outcome) -> bool {
+    matches!(outcome, supatype_engine::push::Outcome::Applied { .. })
+}
+
+/// Whether a push found nothing to do.
+pub fn up_to_date(outcome: &supatype_engine::push::Outcome) -> bool {
+    matches!(outcome, supatype_engine::push::Outcome::UpToDate { .. })
+}
+
 /// What a push reads of `public` before it decides: the live state under the pinned
 /// `search_path`, its fingerprints and the ledger. A test that compares fingerprints, or hands a
 /// state to the doctor, reads through here; the differ's unpinned `introspector::introspect`

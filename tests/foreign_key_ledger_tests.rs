@@ -11,6 +11,7 @@
 
 mod common;
 
+use common::{applied, exec, push, push_with, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
@@ -91,8 +92,6 @@ fn posts_unrelated() -> Value {
     )
 }
 
-use common::{exec, push, push_with};
-
 async fn fk_rows(pool: &PgPool) -> Vec<LedgerRow> {
     let mut conn = pool.acquire().await.unwrap();
     ledger::load(&mut conn)
@@ -126,14 +125,6 @@ async fn table_exists(pool: &PgPool, table: &str) -> bool {
     .fetch_one(pool)
     .await
     .unwrap()
-}
-
-fn applied(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::Applied { .. })
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 async fn force_push(pool: &PgPool, ast: &SchemaAst) -> push::Outcome {

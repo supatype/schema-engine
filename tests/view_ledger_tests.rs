@@ -10,6 +10,7 @@
 
 mod common;
 
+use common::{applied, exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
@@ -17,7 +18,6 @@ use supatype_engine::{
     ledger::{self, LedgerRow},
     parser,
     parser::ast::SchemaAst,
-    push,
 };
 
 fn uuid_pk() -> Value {
@@ -90,8 +90,6 @@ fn schema(models: Vec<Value>) -> SchemaAst {
     parser::parse(&doc.to_string()).expect("fixture parses")
 }
 
-use common::{exec, push};
-
 async fn rows(pool: &PgPool, kind: ObjectKind) -> Vec<LedgerRow> {
     let mut conn = pool.acquire().await.unwrap();
     ledger::load(&mut conn)
@@ -117,14 +115,6 @@ async fn view_exists(pool: &PgPool, schema: &str, view: &str) -> bool {
     .fetch_one(pool)
     .await
     .unwrap()
-}
-
-fn applied(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::Applied { .. })
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 #[tokio::test]

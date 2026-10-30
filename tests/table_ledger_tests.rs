@@ -8,13 +8,12 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
     introspector::fingerprint::ObjectKind, ledger, parser, parser::ast::SchemaAst, push,
 };
-
-use common::{exec, push};
 
 fn field(pg_type: &str, unique: bool) -> Value {
     json!({ "kind": "text", "annotations": { "db": { "pgType": pg_type, "unique": unique } } })
@@ -105,10 +104,6 @@ async fn constraints_on_posts(pool: &PgPool) -> Vec<String> {
     .fetch_all(pool)
     .await
     .unwrap()
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 #[tokio::test]

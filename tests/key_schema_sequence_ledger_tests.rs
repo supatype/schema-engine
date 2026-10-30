@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
@@ -17,8 +18,6 @@ use supatype_engine::{
     parser::ast::SchemaAst,
     push,
 };
-
-use common::{exec, push};
 
 fn int_pk() -> Value {
     json!({ "kind": "integer", "primaryKey": true, "required": true,
@@ -88,10 +87,6 @@ async fn exists(pool: &PgPool, sql: &str) -> bool {
         .fetch_one(pool)
         .await
         .unwrap()
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 #[tokio::test]

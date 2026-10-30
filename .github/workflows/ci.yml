@@ -268,6 +268,7 @@ jobs:
             --test refused_push_tests \
             --test extension_schema_tests \
             --test check_ledger_tests \
+            --test plugin_fields_tests \
             --test model_constraint_names_tests \
             --test phase3_acceptance_tests \
             --test one_migration_tests \

@@ -4,11 +4,10 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{differ::doctor::DoctorReport, parser, parser::ast::SchemaAst, push};
-
-use common::{exec, push};
 
 fn int(extra: Value) -> Value {
     let mut f = json!({ "kind": "integer", "required": true,
@@ -57,10 +56,6 @@ fn with_id(id: Value, title_lower: Option<&str>) -> SchemaAst {
 
 fn identity(how: &str) -> Value {
     int(json!({ "primaryKey": true, "identity": how }))
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 fn is_clean(report: &DoctorReport) -> bool {

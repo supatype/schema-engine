@@ -8,14 +8,13 @@
 
 mod common;
 
+use common::{exec, push, up_to_date};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use supatype_engine::{
     introspector::fingerprint::ObjectKind, ledger, parser, parser::ast::SchemaAst, push,
     state::migration_history,
 };
-
-use common::{exec, push};
 
 fn text(unique: bool) -> Value {
     json!({ "kind": "text", "annotations": { "db": { "pgType": "TEXT", "unique": unique } } })
@@ -50,10 +49,6 @@ fn forced() -> push::ApplyOptions {
         force: true,
         ..Default::default()
     }
-}
-
-fn up_to_date(outcome: &push::Outcome) -> bool {
-    matches!(outcome, push::Outcome::UpToDate { .. })
 }
 
 /// The names of the recorded rows of `kind` in `public`.

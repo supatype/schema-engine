@@ -128,6 +128,7 @@ fn carried_check(field: &FieldAst) -> Option<&str> {
         FieldAst::Json(f) | FieldAst::Button(f) => f.check.as_deref(),
         FieldAst::Array(f) => f.check.as_deref(),
         FieldAst::Blocks(f) => f.check.as_deref(),
+        FieldAst::Custom(f) => f.check.as_deref(),
         other => scalar_of(other).and_then(|f| f.check.as_deref()),
     }
 }
@@ -744,38 +745,32 @@ fn custom_from_v2(
     value: &Value,
     read_only: bool,
 ) -> Result<CustomFieldAst> {
-    let plugin = value
-        .get("plugin")
-        .and_then(|v| v.as_str())
-        .context("custom field missing \"plugin\"")?
-        .to_string();
-    let field_type = value
-        .get("fieldType")
-        .and_then(|v| v.as_str())
-        .context("custom field missing \"fieldType\"")?
-        .to_string();
-    let ts_type = value
-        .get("tsType")
-        .and_then(|v| v.as_str())
-        .context("custom field missing \"tsType\"")?
-        .to_string();
-    let pg_type = pg_type_or_default(&annotations.db, "custom");
     let default_val: Option<DefaultValueAst> = value
         .get("default")
         .map(|v| serde_json::from_value(v.clone()))
         .transpose()?;
     Ok(CustomFieldAst {
-        plugin,
-        field_type,
-        pg_type,
-        ts_type,
+        plugin: custom_key(value, "plugin")?,
+        field_type: custom_key(value, "fieldType")?,
+        pg_type: pg_type_or_default(&annotations.db, "custom"),
+        ts_type: custom_key(value, "tsType")?,
         required,
         unique: annotations.db.unique,
         index: annotations.db.index,
         default: default_val,
         read_only,
         annotations: annotations.clone(),
+        check: check_from_v2(value),
     })
+}
+
+/// A string a custom field must carry, or the error naming the one it lacks.
+fn custom_key(value: &Value, key: &str) -> Result<String> {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .with_context(|| format!("custom field missing \"{key}\""))
 }
 
 /// The literal behind an enum field's `default`, or None when there is not one.
@@ -1050,6 +1045,9 @@ fn serialize_field(field: &FieldAst) -> Value {
             });
             if let Some(ref d) = c.default {
                 v["default"] = serde_json::to_value(d).unwrap_or(Value::Null);
+            }
+            if let Some(ref check) = c.check {
+                v["check"] = Value::String(check.clone());
             }
             if c.read_only {
                 v.as_object_mut().and_then(|o| {
