@@ -1746,19 +1746,30 @@ pub async fn bootstrap_internal_state(pool: &PgPool) -> Result<()> {
     }
     // A push or `dev` runs it, and nobody is at a prompt: a lock it cannot take is tried again,
     // as a push's is (LK1).
-    let version = version.as_str();
-    crate::online::retrying("bootstrap", || async {
-        let (mut tx, pid) = crate::push::begin_watched_writer(pool).await?;
-        let work = async move {
+    crate::online::retrying(pool, &Bootstrap { version }).await
+}
+
+/// One attempt of the bootstrap, committed by [`crate::online::with_retries`].
+struct Bootstrap {
+    version: String,
+}
+
+impl crate::online::Attempt for Bootstrap {
+    type Out = ();
+
+    fn run<'t>(&'t self, tx: &'t mut PgConnection) -> crate::online::Running<'t, ()> {
+        Box::pin(async move {
             // Another writer may have run it between the read and the lock.
-            if recorded_bootstrap(&mut tx).await?.as_deref() != Some(version) {
-                run_bootstrap(&mut tx, version).await?;
+            if recorded_bootstrap(tx).await?.as_deref() != Some(self.version.as_str()) {
+                run_bootstrap(tx, &self.version).await?;
             }
-            tx.commit().await.context("commit the bootstrap")
-        };
-        crate::online::fail_fast(pool, pid, "bootstrap", work).await
-    })
-    .await
+            Ok(())
+        })
+    }
+
+    fn what(&self) -> &'static str {
+        "bootstrap"
+    }
 }
 
 /// The bootstrap, run in `tx`, recorded as `version`. `migrate_file` runs it too, in the

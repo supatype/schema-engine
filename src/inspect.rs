@@ -102,7 +102,7 @@ fn missing_studio_object(kind: &str, signature: &str) -> DoctorItem {
         format!(
             "The Studio {kind} {signature} is missing, so the Studio features that use it fail. \
              The engine's setup makes it, and runs again only when the engine changes: to make it \
-             now, run `DELETE FROM _supatype.engine_bootstrap;` and push again"
+             now, run `DELETE FROM _supatype.engine_bootstrap WHERE true;` and push again"
         ),
     )
 }
@@ -512,7 +512,22 @@ fn rebaselined<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::cron_runs_elsewhere;
+    use super::{cron_runs_elsewhere, missing_studio_object};
+
+    /// The hint for a missing Studio object is SQL a person pastes. `pg_safeupdate`, preloaded in
+    /// the Docker image and in native dev, refuses a `DELETE` with no `WHERE`, so the hint carries
+    /// one.
+    #[test]
+    fn the_missing_studio_object_hint_is_sql_safeupdate_accepts() {
+        let item = missing_studio_object("table", "_supatype.studio_state");
+        assert!(
+            item.message.contains(
+                "run `DELETE FROM _supatype.engine_bootstrap WHERE true;` and push again"
+            ),
+            "{}",
+            item.message
+        );
+    }
 
     /// CC5: the note appears only where pg_cron is installed and runs another database's jobs.
     #[test]

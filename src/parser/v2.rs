@@ -65,7 +65,7 @@ fn deserialize_optional_vec<T: for<'de> Deserialize<'de>>(
 ) -> Result<Vec<T>> {
     match value.get(key) {
         None => Ok(Vec::new()),
-        Some(v) => Ok(serde_json::from_value(v.clone())?),
+        Some(v) => Ok(Vec::<T>::deserialize(v)?),
     }
 }
 

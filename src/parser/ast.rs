@@ -433,6 +433,17 @@ pub enum StorageAccessMode {
     Custom,
 }
 
+impl StorageAccessMode {
+    /// The mode as `storage.buckets.access_mode` holds it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StorageAccessMode::Public => "public",
+            StorageAccessMode::Private => "private",
+            StorageAccessMode::Custom => "custom",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageFieldAst {
@@ -1123,14 +1134,23 @@ pub struct JunctionTableAst {
     pub fk_b: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A declared bucket. Serialized with its effective `public` flag and `accessMode` filled in,
+/// because the CLI provisions buckets from what `parse` returns; the struct itself keeps what the
+/// schema names, so a bucket built or deserialized without the parser behaves the same.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageBucketAst {
     pub id: String,
-    pub public: bool,
+    /// `None` when the schema names no flag. Read through `is_public`, which falls back to
+    /// `access_mode`; with neither named, the bucket is private.
+    #[serde(default)]
+    pub public: Option<bool>,
+    /// `None` when the schema names none, which leaves a live bucket's own list as it is.
     pub allowed_mime_types: Option<Vec<String>>,
+    /// `None` when the schema names none, which leaves a live bucket's own limit as it is.
     pub file_size_limit: Option<u64>,
     /// Correlates with `storage.buckets.access_mode` and S3 provisioning (`public` | `private` | `custom`).
+    /// `None` when the schema names none. Read through `effective_access_mode`.
     #[serde(default)]
     pub access_mode: Option<StorageAccessMode>,
     /// Bucket-scoped RLS on `storage.objects`; when set, overrides model-derived policies for this bucket id.
@@ -1139,6 +1159,59 @@ pub struct StorageBucketAst {
     /// Raw S3 bucket policy JSON; overrides default public-read policy when supplied.
     #[serde(default)]
     pub s3_bucket_policy: Option<String>,
+}
+
+impl StorageBucketAst {
+    /// The bucket's access mode: the one it names, or else the one its `public` flag implies, as
+    /// the storage service reads a row with no mode.
+    pub fn effective_access_mode(&self) -> StorageAccessMode {
+        self.access_mode.unwrap_or(if self.public == Some(true) {
+            StorageAccessMode::Public
+        } else {
+            StorageAccessMode::Private
+        })
+    }
+
+    /// Whether anyone reads the bucket's files through its public URL: exactly when its
+    /// effective mode is `public`, so a custom bucket is never public whatever its flag says.
+    pub fn is_public(&self) -> bool {
+        self.effective_access_mode() == StorageAccessMode::Public
+    }
+
+    /// Whether the schema names this bucket's visibility, by a mode or a `public` flag. A push
+    /// reasserts the visibility of a bucket that names it, and otherwise leaves a live bucket's
+    /// as it is, so a change made at runtime survives.
+    pub fn names_visibility(&self) -> bool {
+        self.access_mode.is_some() || self.public.is_some()
+    }
+}
+
+/// `StorageBucketAst` as it goes out, with its visibility resolved.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolvedBucket<'a> {
+    id: &'a str,
+    public: bool,
+    allowed_mime_types: &'a Option<Vec<String>>,
+    file_size_limit: Option<u64>,
+    access_mode: StorageAccessMode,
+    access: &'a Option<AccessAst>,
+    s3_bucket_policy: &'a Option<String>,
+}
+
+impl Serialize for StorageBucketAst {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        ResolvedBucket {
+            id: &self.id,
+            public: self.is_public(),
+            allowed_mime_types: &self.allowed_mime_types,
+            file_size_limit: self.file_size_limit,
+            access_mode: self.effective_access_mode(),
+            access: &self.access,
+            s3_bucket_policy: &self.s3_bucket_policy,
+        }
+        .serialize(serializer)
+    }
 }
 
 /// A plugin-defined custom field type. The Postgres column uses `pg_type`;

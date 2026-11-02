@@ -2451,9 +2451,10 @@ fn test_storage_generator_emits_ddl_and_bucket_upsert() {
         "must create storage.objects"
     );
     assert!(sql.contains("posts_avatar"), "must upsert the bucket by id");
+    // The field names no mode, so an existing bucket keeps whatever it was given at runtime.
     assert!(
-        sql.contains("ON CONFLICT (id) DO UPDATE"),
-        "upsert must handle existing bucket"
+        sql.contains("ON CONFLICT (id) DO NOTHING"),
+        "an existing bucket the schema names nothing about is left alone"
     );
 }
 

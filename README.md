@@ -337,9 +337,19 @@ rot.
 }
 ```
 
-The top-level document also carries `junctionTables` and `storageBuckets` (both inferred by the
-resolver rather than written by the user), `locales` and `defaultLocale`, `plugins`, `sso`,
-`publishing` and `warnings`.
+The top-level document also carries `junctionTables` (inferred by the resolver), `storageBuckets`
+(the CLI's `Bucket<>` exports, plus one the resolver infers for each bucket only a file or image
+field names), `locales` and `defaultLocale`, `plugins`, `sso`, `publishing` and `warnings`.
+
+**Buckets and runtime changes.** A push creates a missing bucket with everything the schema says,
+and a bucket with no `accessMode` (or `public`) is created private. On a bucket that already exists,
+a push rewrites only what its entry names: its visibility when it has `accessMode` or `public`, and
+`allowedMimeTypes`, `fileSizeLimit` and `s3BucketPolicy` when each is present. Anything left out
+keeps its live value, so a bucket opened or resized in Studio or through the storage API stays that
+way. The other side of that: removing `accessMode` (or a limit) from the schema no longer resets the
+bucket. A bucket made public at runtime stays public until the schema names `accessMode: "private"`.
+Every push also gives a row with no `access_mode` the one its `public` flag implies, and sets
+`public` to match a known mode, which changes nothing about who can read it.
 
 **Field kinds** are a closed registry, defined as `FIELD_KINDS` in the CLI's `schema-ast-v2.ts`:
 

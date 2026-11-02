@@ -238,3 +238,73 @@ async fn a_fresh_push_is_still_up_to_date_with_primary_keys_in_the_state() {
     })
     .await;
 }
+
+/// A project whose role owns its own tables and not `auth.users`, which is how a project connects.
+/// The key is made as the admin, since only a role allowed to reference `auth.users` can make it.
+const PROFILES_TO_AUTH_USERS: &str = "CREATE SCHEMA IF NOT EXISTS auth;
+     CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY);
+     REVOKE ALL ON auth.users FROM PUBLIC;
+     CREATE TABLE public.profiles (id uuid PRIMARY KEY, user_id uuid,
+       CONSTRAINT profiles_user_id_fkey FOREIGN KEY (user_id)
+         REFERENCES auth.users (id) ON DELETE CASCADE);";
+
+/// A pool on the same database as `pool`, connected as a new login role that owns
+/// `public.profiles` and nothing in `auth`.
+async fn project_role_pool(pool: &sqlx::PgPool, role: &str) -> sqlx::PgPool {
+    exec(
+        pool,
+        &format!(
+            "CREATE ROLE {role} LOGIN PASSWORD 'project';
+             ALTER TABLE public.profiles OWNER TO {role};"
+        ),
+    )
+    .await;
+    let options = (*pool.connect_options())
+        .clone()
+        .username(role)
+        .password("project");
+    sqlx::PgPool::connect_with(options)
+        .await
+        .expect("connect as the project role")
+}
+
+/// The tables `information_schema` says the key points at, as the role sees them.
+async fn usage_rows(pool: &sqlx::PgPool) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT table_schema::text, table_name::text
+           FROM information_schema.constraint_column_usage
+          WHERE constraint_name = 'profiles_user_id_fkey'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_key_to_a_table_the_role_does_not_own_is_read_with_its_schema() {
+    common::with_integration_pool(|pool| async move {
+        exec(&pool, PROFILES_TO_AUTH_USERS).await;
+        let role = common::ephemeral_name("pull_reader");
+        let project = project_role_pool(&pool, &role).await;
+        let usage = usage_rows(&project).await;
+        let db = introspector::introspect(&project, "public").await;
+        project.close().await;
+        exec(&pool, &format!("DROP OWNED BY {role}; DROP ROLE {role};")).await;
+
+        // Why the key is read from the catalog: `information_schema` hides it from this role.
+        assert!(usage.is_empty(), "{usage:?}");
+        let db = db.expect("introspect as the project role");
+        let fk = db
+            .constraints
+            .iter()
+            .find(|c| c.name == "profiles_user_id_fkey")
+            .expect("the key is read");
+        let json = serde_json::to_value(fk).unwrap();
+        assert_eq!(json["foreignSchema"], "auth", "{json}");
+        assert_eq!(json["foreignTable"], "users", "{json}");
+        assert_eq!(json["foreignColumns"], serde_json::json!(["id"]), "{json}");
+        assert_eq!(json["columns"], serde_json::json!(["user_id"]), "{json}");
+        assert_eq!(json["onDelete"], "CASCADE", "{json}");
+    })
+    .await;
+}

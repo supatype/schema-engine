@@ -251,40 +251,18 @@ pub async fn fail_fast<T>(
     })
 }
 
-/// Runs `once` until it does not give up on a lock, [`PUSH_ATTEMPTS`] times at most with a
-/// [`pause`] between, as a push's attempts run: for a writer no person waits on (the bootstrap a
-/// push or `dev` runs). The last failure names what it waited for when `once` said so
-/// ([`fail_fast`]).
-pub async fn retrying<T, F, Fut>(what: &'static str, mut once: F) -> Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    for tried in 1..=PUSH_ATTEMPTS {
-        let e = match once().await {
-            Ok(out) => return Ok(out),
-            Err(e) => e,
-        };
-        let gave_up = e.downcast_ref::<LockNotAvailable>().is_some() || retryable(&e);
-        if !gave_up {
-            return Err(e);
-        }
-        if tried == PUSH_ATTEMPTS {
-            let wait = e
-                .downcast::<LockNotAvailable>()
-                .ok()
-                .and_then(|failed| failed.wait);
-            return Err(LockNotAvailable {
-                what,
-                attempts: tried,
-                wait,
-            }
-            .into());
-        }
-        tracing::warn!("{what} attempt {tried} gave up on a lock; trying again");
-        tokio::time::sleep(pause(tried)).await;
-    }
-    unreachable!("the last attempt returns")
+/// Runs `attempt` as a push's attempts run ([`with_retries`]), for a writer no person waits on:
+/// the bootstrap a push or `dev` runs, and the ledger clean-up a push runs before it plans.
+///
+/// On a session of its own holding the engine's lock across every attempt and every pause between
+/// them. Each attempt used to take the lock for its own transaction only, so for the whole of every
+/// pause no writer held it: a second writer arriving then was not refused with `engine_busy`, and
+/// went on to wait behind the lock the first was waiting for.
+pub async fn retrying<A: Attempt + Sync>(pool: &PgPool, attempt: &A) -> Result<A::Out> {
+    let mut session = EngineSession::open(pool).await?;
+    let out = with_retries(pool, &mut session, attempt).await;
+    session.close().await;
+    out
 }
 
 /// Watches one backend while it runs a statement, keeping the last relation lock it was seen
@@ -365,6 +343,11 @@ pub type Running<'t, T> =
 pub trait Attempt {
     type Out: Send;
     fn run<'t>(&'t self, tx: &'t mut PgConnection) -> Running<'t, Self::Out>;
+
+    /// What a refusal calls the writer: `push` unless it says otherwise.
+    fn what(&self) -> &'static str {
+        "push"
+    }
 }
 
 /// Whether an attempt gave up on a lock and may be tried again.
@@ -391,13 +374,16 @@ pub async fn with_retries<A: Attempt + Sync>(
         }
         if tried == PUSH_ATTEMPTS {
             return Err(LockNotAvailable {
-                what: "push",
+                what: attempt.what(),
                 attempts: tried,
                 wait,
             }
             .into());
         }
-        tracing::warn!("push attempt {tried} gave up on a lock; trying again");
+        tracing::warn!(
+            "{} attempt {tried} gave up on a lock; trying again",
+            attempt.what()
+        );
         tokio::time::sleep(pause(tried)).await;
     }
     unreachable!("the last attempt returns")
