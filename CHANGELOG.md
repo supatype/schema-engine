@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.8.0](https://github.com/supatype/schema-engine/compare/v0.7.0...v0.8.0) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** a push no longer resets an existing bucket's visibility, MIME list, size limit or S3 policy unless the schema names it. Removing accessMode, or a limit, from the schema leaves the live bucket as it is; set the value explicitly to change it.
+
+### Bug Fixes
+
+* **doctor:** make the missing Studio object hint SQL that pg_safeupdate accepts ([0b7fe25](https://github.com/supatype/schema-engine/commit/0b7fe25cc0b539e54403aed4136cec976bffb0b2))
+* **engine:** write log colour only to a terminal ([e5a4152](https://github.com/supatype/schema-engine/commit/e5a4152a6f6b945e0f69289b3542b7af2ab92a14))
+* **push:** begin a writer on Postgres servers that cannot check their client ([b533cf6](https://github.com/supatype/schema-engine/commit/b533cf6531cc9081be4e50bc7f164aa189be71d4))
+* **push:** begin a writer on Postgres servers that cannot check their client ([6388678](https://github.com/supatype/schema-engine/commit/6388678004625462479c87f86b6395982dcf4690))
+* **push:** hold the engine's lock through the pauses between a writer's attempts ([aa97e5a](https://github.com/supatype/schema-engine/commit/aa97e5ac85f777addc95856797f9b36563ee3f45))
+* **storage:** keep runtime bucket settings the schema does not name, and give every row a mode ([db08330](https://github.com/supatype/schema-engine/commit/db0833068cb1cac1dbebebfa897057a0635e9e8c))
+
+
+### Performance
+
+* **push:** ask once per pool whether the server can check its client ([8fb9667](https://github.com/supatype/schema-engine/commit/8fb96670208977ba26e98d31d34ea8c7cbd87c32))
+
+
+### Refactors
+
+* **push:** let the writer's own statement absorb a refused client check ([94e07c7](https://github.com/supatype/schema-engine/commit/94e07c77e93418bfda1bfa8e2d7a5d0588cb9f7d))
+* **storage:** read a bucket's declared visibility from its own fields ([0de9ecc](https://github.com/supatype/schema-engine/commit/0de9ecc9d4589688fa0ca11ab58afbc647c98103))
+
+
+### Chores
+
+* release the next engine as 0.8.0 ([8af3cde](https://github.com/supatype/schema-engine/commit/8af3cdef31adc4a9e88117e96e2be0c667394292))
+
 ## [0.7.0](https://github.com/supatype/schema-engine/compare/v0.6.0...v0.7.0) (2026-10-26)
 
 
