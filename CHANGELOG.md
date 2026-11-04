@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0](https://github.com/supatype/schema-engine/compare/v0.8.0...v0.9.0) (2026-11-04)
+
+
+### Features
+
+* **hooks:** skip after-hooks for seed writes and push data migrations ([8aa5e15](https://github.com/supatype/schema-engine/commit/8aa5e15f90812c5ae3dcb3fb6dc182354fb22312))
+* **hooks:** skip after-hooks for seed writes and push data migrations ([5054fc0](https://github.com/supatype/schema-engine/commit/5054fc0fe50927112d89fbc32212caad792fe2ac))
+
+
+### Bug Fixes
+
+* **engine:** carry Default&lt;&gt; on JSON and other non-scalar columns ([83a9614](https://github.com/supatype/schema-engine/commit/83a9614d46a530ae7bedfc3c1514595ee9539da1))
+* **grants:** grant anon what a Rows membership lets it reach ([75232b7](https://github.com/supatype/schema-engine/commit/75232b7d68cf0cb0c84ec89d1d8cfcaee81041fe))
+* JSON defaults, anon access through Rows rules, and looping access rules ([8b3fccb](https://github.com/supatype/schema-engine/commit/8b3fccb7d39dc699767fad48a607edb637fbca00))
+* **push:** refuse access rules that read each other in a loop ([d398f5a](https://github.com/supatype/schema-engine/commit/d398f5a21f2bc07fd80d85e0632ade0c8f692cc8))
+
 ## [0.8.0](https://github.com/supatype/schema-engine/compare/v0.7.0...v0.8.0) (2026-11-02)
 
 
