@@ -310,35 +310,9 @@ fn emit_soft_delete(mode: Mode, out: &mut String, ind: &str) {
 
 fn field_has_default(field: &FieldAst) -> bool {
     match field {
-        FieldAst::Text(f)
-        | FieldAst::Color(f)
-        | FieldAst::Email(f)
-        | FieldAst::Url(f)
-        | FieldAst::Ip(f)
-        | FieldAst::Cidr(f)
-        | FieldAst::Macaddr(f)
-        | FieldAst::Bytes(f)
-        | FieldAst::Xml(f)
-        | FieldAst::RichText(f)
-        | FieldAst::Integer(f)
-        | FieldAst::Float(f)
-        | FieldAst::BigInt(f)
-        | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f)
-        | FieldAst::Uuid(f)
-        | FieldAst::SmallInt(f)
-        | FieldAst::Date(f)
-        | FieldAst::Timestamp(f)
-        | FieldAst::Interval(f)
-        | FieldAst::TsQuery(f)
-        | FieldAst::TsVector(f)
-        | FieldAst::Money(f) => f.default.is_some(),
-        FieldAst::Serial(_) | FieldAst::BigSerial(_) => true,
-        FieldAst::Slug(_) => true,
+        FieldAst::Serial(_) | FieldAst::BigSerial(_) | FieldAst::Slug(_) => true,
         FieldAst::Enum(f) => f.default.is_some(),
-        FieldAst::Custom(f) => f.default.is_some(),
-        FieldAst::Array(f) => f.default.is_some(),
-        _ => false,
+        other => crate::parser::ast::declared_default(other).is_some(),
     }
 }
 

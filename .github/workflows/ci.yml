@@ -80,6 +80,7 @@ jobs:
             --test owner_relation_rules_tests \
             --test schema_name_boundary_tests \
             --test column_type_match_tests \
+            --test field_default_tests \
             --test standup_regression_tests \
             --test field_access_tests \
             --test field_access_validation_tests \

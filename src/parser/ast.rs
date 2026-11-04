@@ -167,6 +167,24 @@ pub fn scalar_of(field: &FieldAst) -> Option<&ScalarFieldAst> {
     }
 }
 
+/// The DEFAULT a field declares, for every kind that holds one as a [`DefaultValueAst`]: all but an
+/// enum, whose default is the bare name of one of its values, and the kinds the parser refuses a
+/// default on.
+///
+/// One list, for the same reason as [`scalar_of`]: a kind that renders its default in one place and
+/// is forgotten in the generated types or the differ is a column that disagrees with its schema.
+pub fn declared_default(field: &FieldAst) -> Option<&DefaultValueAst> {
+    match field {
+        FieldAst::Json(f) | FieldAst::Button(f) => f.default.as_ref(),
+        FieldAst::Decimal(f) => f.default.as_ref(),
+        FieldAst::Array(f) => f.default.as_ref(),
+        FieldAst::Geo(f) => f.default.as_ref(),
+        FieldAst::Vector(f) => f.default.as_ref(),
+        FieldAst::Custom(f) => f.default.as_ref(),
+        other => scalar_of(other).and_then(|f| f.default.as_ref()),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FieldAst {
@@ -397,6 +415,10 @@ pub struct JsonFieldAst {
     pub localized: bool,
     #[serde(default)]
     pub read_only: bool,
+    /// The column's DEFAULT: JSON text, checked to parse when the schema is read, or an
+    /// expression. Rendered as a `jsonb` literal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<DefaultValueAst>,
     /// The TypeScript the column holds, when the schema said: `JSON<T>`'s `T` written out, or
     /// the shape of a kind stored as JSON (`Duration`, `Code`, `Currency`). Read only by the
     /// TypeScript generators; the column is JSONB either way.
@@ -421,6 +443,9 @@ pub struct DecimalFieldAst {
     pub localized: bool,
     #[serde(default)]
     pub read_only: bool,
+    /// The column's DEFAULT, rendered as the scalar kinds render theirs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<DefaultValueAst>,
     #[serde(default)]
     pub annotations: FieldAnnotations,
 }
@@ -470,6 +495,9 @@ pub struct GeoFieldAst {
     pub srid: Option<u32>,
     #[serde(default)]
     pub read_only: bool,
+    /// The column's DEFAULT, rendered as the scalar kinds render theirs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<DefaultValueAst>,
     #[serde(default)]
     pub annotations: FieldAnnotations,
 }
@@ -482,6 +510,9 @@ pub struct VectorFieldAst {
     pub dimensions: u32,
     #[serde(default)]
     pub read_only: bool,
+    /// The column's DEFAULT, rendered as the scalar kinds render theirs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<DefaultValueAst>,
     #[serde(default)]
     pub annotations: FieldAnnotations,
 }
