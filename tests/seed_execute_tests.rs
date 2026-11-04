@@ -735,3 +735,64 @@ async fn a_default_value_writes_the_column_default() {
         assert_eq!(seats, None, "the update reset seats to its default");
     });
 }
+
+// ─── The hooks marker ────────────────────────────────────────────────────────
+
+/// Asserts the seed wrote `organiser` in one transaction, which opens with the skip-hooks marker
+/// and carries no other.
+fn one_seed_transaction_skipping_hooks(changes: &[serde_json::Value]) {
+    let seeded = common::transactions_writing(changes, "organiser");
+    assert_eq!(seeded.len(), 1, "{changes:#?}");
+    assert!(
+        common::opens_with_one_skip_marker(&seeded[0]),
+        "one marker per transaction, first: {changes:#?}"
+    );
+}
+
+/// The server's change-log listener runs after-hooks for every committed write, and a seed must
+/// not fire them. Each seed transaction says so first, with the marker the listener honours.
+#[tokio::test]
+async fn a_seed_transaction_opens_with_the_skip_hooks_marker() {
+    with_seeded_schema!(|pool, ast| {
+        let slot = common::open_slot(&pool).await;
+        run(
+            &pool,
+            &ast,
+            r#"[{"op":"createMany","model":"Organiser","rows":[
+                {"slug":"a","name":"A"},
+                {"slug":"b","name":"B"}
+            ]}]"#,
+        )
+        .await
+        .expect("the seed applies");
+        let changes = common::drain_slot(&pool, &slot).await;
+        one_seed_transaction_skipping_hooks(&changes);
+    });
+}
+
+/// `seed --atomic` runs every document in one transaction: it carries one marker, not one each.
+#[tokio::test]
+async fn documents_sharing_a_transaction_share_one_marker() {
+    use supatype_engine::seed::execute::{begin_seed, execute_in, Context};
+    with_seeded_schema!(|pool, ast| {
+        let slot = common::open_slot(&pool).await;
+        let constraints = constraint_index_for(&ast);
+        let cx = Context {
+            ast: &ast,
+            constraints: &constraints,
+            schema: "public",
+            environment: None,
+        };
+        let mut tx = begin_seed(&pool).await.expect("begins");
+        for slug in ["a", "b"] {
+            let document = format!(
+                r#"[{{"op":"createMany","model":"Organiser","rows":[{{"slug":"{slug}","name":"N"}}]}}]"#
+            );
+            let planned = plan(&ir(&document), &ast).expect("plans");
+            execute_in(&mut tx, &planned, cx).await.expect("applies");
+        }
+        tx.commit().await.expect("commits");
+        let changes = common::drain_slot(&pool, &slot).await;
+        one_seed_transaction_skipping_hooks(&changes);
+    });
+}

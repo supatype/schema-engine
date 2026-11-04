@@ -43,6 +43,9 @@ pub const FEATURES: &[&str] = &[
     // `pushed_by_verified` (`--pushed-by`, ...), recorded on the migration row with the renames
     // the push applied from the schema's rename journal (`renameJournal`).
     "push_audit",
+    // `push` with `run_hooks` / `--run-hooks`: after-hooks run on the rows the push rewrites. Without
+    // it the push's transaction carries the skip-hooks marker (`hooks_marker`), as a seed's does.
+    "run_hooks",
 ];
 
 /// The capabilities document. `version` is the build's own (`build.rs`): the crate version for a
@@ -58,7 +61,7 @@ mod tests {
         assert_eq!(
             super::capabilities().to_string(),
             format!(
-                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns","migrate_record","online_ddl","push_audit"]}}"#,
+                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns","migrate_record","online_ddl","push_audit","run_hooks"]}}"#,
                 env!("ENGINE_VERSION")
             )
         );

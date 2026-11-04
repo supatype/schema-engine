@@ -140,6 +140,11 @@ enum Command {
             help = "Put back policies, grants, labels and RLS changed outside Supatype without asking"
         )]
         overwrite_drift: bool,
+        #[arg(
+            long,
+            help = "Run after-hooks on the rows this push rewrites (they are skipped by default)"
+        )]
+        run_hooks: bool,
         #[command(flatten)]
         audit: AuditArgs,
     },
@@ -392,6 +397,7 @@ async fn run(command: Command, input: String) -> Result<()> {
             schema_sources_gz,
             schema_sources_manifest,
             overwrite_drift,
+            run_hooks,
             audit,
         } => {
             use supatype_engine::push;
@@ -444,6 +450,7 @@ async fn run(command: Command, input: String) -> Result<()> {
                 schema_sources,
                 schema_sources_manifest,
                 overwrite_drift,
+                run_hooks,
                 audit: audit.into(),
             };
             // A refusal goes on stdout too (`main`), so the CLI can show the objects and ask

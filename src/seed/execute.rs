@@ -600,7 +600,8 @@ fn outside_a_statement(message: String) -> SeedError {
 /// Separate from [`execute`] so a caller can do more in the same transaction than run one
 /// document: write the ledger row beside the writes it describes, which is what makes the
 /// ledger trustworthy, and run several documents together under `--atomic`. Neither is
-/// possible if the only entry point commits before returning.
+/// possible if the only entry point commits before returning. The caller opens `tx` with
+/// [`begin_seed`], so it carries the marker that skips after-hooks.
 pub async fn execute_in(
     tx: &mut Transaction<'_, Postgres>,
     plan: &Plan,
@@ -609,14 +610,24 @@ pub async fn execute_in(
     run_steps(plan, tx, cx).await
 }
 
+/// A transaction for seed writes, the skip-hooks marker ([`crate::hooks_marker`]) already its
+/// first statement: a seed loads data, and is not a change anyone's hooks should act on.
+///
+/// Every seed write goes through one of these, and a transaction gets exactly one marker however
+/// many documents run in it, so the only way to begin a seed transaction is here.
+pub async fn begin_seed(pool: &PgPool) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    crate::hooks_marker::skip_hooks(&mut tx).await?;
+    Ok(tx)
+}
+
 /// Run a plan in a transaction of its own.
 ///
 /// One transaction: it commits or it rolls back. A seed that dies halfway leaving rows
 /// behind is worse than one that fails, because seeds are re-run and that partial state is
 /// what the next run collides with.
 pub async fn execute(pool: &PgPool, plan: &Plan, cx: Context<'_>) -> Result<Report, SeedError> {
-    let mut tx: Transaction<'_, Postgres> = pool
-        .begin()
+    let mut tx = begin_seed(pool)
         .await
         .map_err(|e| outside_a_statement(format!("could not start a transaction: {e}")))?;
 
