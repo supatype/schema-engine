@@ -1475,8 +1475,9 @@ pub(super) fn field_to_column_def(
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = unique_clause(names, table, name, f.unique);
             let elem = f.element_type.to_uppercase();
+            let default = default_clause(field);
             let check = render_check(names, table, name, field);
-            Ok(format!("{qname} {elem}[]{req}{uniq}{check}"))
+            Ok(format!("{qname} {elem}[]{req}{uniq}{default}{check}"))
         }
         FieldAst::Slug(f) => {
             let unique = unique_clause(names, table, name, f.unique);
@@ -1498,15 +1499,11 @@ pub(super) fn field_to_column_def(
                 "{qname} TEXT{req}{uniq} CONSTRAINT {check_name} CHECK ({check}){default}"
             ))
         }
-        FieldAst::Json(f) => {
+        FieldAst::Json(f) | FieldAst::Button(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
+            let default = default_clause(field);
             let check = render_check(names, table, name, field);
-            Ok(format!("{qname} JSONB{req}{check}"))
-        }
-        FieldAst::Button(f) => {
-            let req = if f.required { " NOT NULL" } else { "" };
-            let check = render_check(names, table, name, field);
-            Ok(format!("{qname} JSONB{req}{check}"))
+            Ok(format!("{qname} JSONB{req}{default}{check}"))
         }
         FieldAst::Decimal(f) => {
             let pg = match (f.precision, f.scale) {
@@ -1515,8 +1512,9 @@ pub(super) fn field_to_column_def(
                 _ => "NUMERIC".into(),
             };
             let req = if f.required { " NOT NULL" } else { "" };
+            let default = default_clause(field);
             let check = render_check(names, table, name, field);
-            Ok(format!("{qname} {pg}{req}{check}"))
+            Ok(format!("{qname} {pg}{req}{default}{check}"))
         }
         FieldAst::Image(f) | FieldAst::File(f) => Ok(scalar_col(
             names,
@@ -1550,21 +1548,21 @@ pub(super) fn field_to_column_def(
             let geo_type = f.geo_type.to_uppercase();
             let srid = f.srid.unwrap_or(4326);
             let req = if f.required { " NOT NULL" } else { "" };
-            Ok(format!("{qname} GEOGRAPHY({geo_type}, {srid}){req}"))
+            let default = default_clause(field);
+            Ok(format!(
+                "{qname} GEOGRAPHY({geo_type}, {srid}){req}{default}"
+            ))
         }
         FieldAst::Vector(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
-            Ok(format!("{qname} vector({}){req}", f.dimensions))
+            let default = default_clause(field);
+            Ok(format!("{qname} vector({}){req}{default}", f.dimensions))
         }
         // Plugin-defined custom field type: use the declared pg_type directly.
         FieldAst::Custom(f) => {
             let req = if f.required { " NOT NULL" } else { "" };
             let uniq = unique_clause(names, table, name, f.unique);
-            let default = f
-                .default
-                .as_ref()
-                .map(|d| format!(" DEFAULT {}", render_default(d)))
-                .unwrap_or_default();
+            let default = default_clause(field);
             Ok(format!(
                 "{qname} {pg}{req}{uniq}{default}",
                 pg = f.pg_type.to_uppercase()
@@ -1868,6 +1866,51 @@ fn unique_clause(names: &ObjectNames, table: &str, column: &str, unique: bool) -
         )
     } else {
         String::new()
+    }
+}
+
+/// ` DEFAULT <expr>` for a column `scalar_col` does not render, or nothing when the field declares
+/// no default.
+fn default_clause(field: &FieldAst) -> String {
+    declared_default_sql(field)
+        .map(|expr| format!(" DEFAULT {expr}"))
+        .unwrap_or_default()
+}
+
+/// The SQL of the default `field` declares, as `CREATE TABLE` writes it and the differ compares it:
+/// a JSON column's as a `jsonb` literal, every other kind's through [`render_default`].
+pub(crate) fn declared_default_sql(field: &FieldAst) -> Option<String> {
+    let default = crate::parser::ast::declared_default(field)?;
+    Some(match field {
+        FieldAst::Json(_) | FieldAst::Button(_) => render_json_default(default),
+        FieldAst::Geo(_) => render_geo_default(default),
+        _ => render_default(default),
+    })
+}
+
+/// A geography column's default: its text through `ST_GeogFromText`, not as a `geography` literal.
+/// Postgres stores a literal in its binary form and reads it back as hex, which the differ cannot
+/// compare with the declared text, so a changed point would never reach an existing column. The
+/// call is stored as written and reads back as itself.
+fn render_geo_default(d: &DefaultValueAst) -> String {
+    match d {
+        DefaultValueAst::Value {
+            value: serde_json::Value::String(text),
+        } => format!("ST_GeogFromText({})", quote_literal(text)),
+        other => render_default(other),
+    }
+}
+
+/// A JSON column's default: its JSON text as a `jsonb` literal. A string is that text already (the
+/// parser checked it parses); any other value is written as its JSON. An expression is the
+/// schema's own SQL and is written as it is.
+fn render_json_default(d: &DefaultValueAst) -> String {
+    match d {
+        DefaultValueAst::Value {
+            value: serde_json::Value::String(text),
+        } => format!("{}::jsonb", quote_literal(text)),
+        DefaultValueAst::Value { value } => format!("{}::jsonb", quote_literal(&value.to_string())),
+        other => render_default(other),
     }
 }
 

@@ -118,3 +118,58 @@ fn each_role_holds_exactly_the_set_the_rules_allow() {
     }
     assert!(!sql.contains("TRUNCATE"), "{sql}");
 }
+
+// ─── Rules that read another table's rows (issue 16) ────────────────────────
+
+const ROWS_FIXTURE: &str = include_str!("fixtures/rls_anon_rows.json");
+
+fn rows_grant(table: &str, role: &str) -> TableGrant {
+    let ast = parser::parse(ROWS_FIXTURE).expect("rows fixture parses");
+    grants::table_grants(&ast, false)
+        .into_iter()
+        .find(|g| g.table == table && g.role == role)
+        .unwrap_or_else(|| panic!("no grant for {role} on {table}"))
+}
+
+// `question.read` admits a question whose form is published. Nothing in that branch needs a
+// caller, and anon may read a published form, so an anonymous visitor can read the questions of a
+// published form and needs SELECT for the policy to be consulted at all.
+#[test]
+fn a_rows_source_anon_can_read_keeps_anon_select() {
+    let anon = rows_grant("question", "anon");
+    assert!(anon.privileges.contains(&"SELECT"), "{anon:?}");
+}
+
+// `response.create` is `In<"form_id", Rows<"form", "id", NotNull<"published_at">>>`: anyone may
+// answer a published form.
+#[test]
+fn a_rows_source_anon_can_read_keeps_anon_insert() {
+    let anon = rows_grant("response", "anon");
+    assert!(anon.privileges.contains(&"INSERT"), "{anon:?}");
+}
+
+// `draft` reads `form` rows filtered to the caller's own, which no anonymous caller has.
+#[test]
+fn a_rows_filter_comparing_against_the_caller_revokes_anon() {
+    let anon = rows_grant("draft", "anon");
+    assert!(!anon.privileges.contains(&"SELECT"), "{anon:?}");
+    assert!(!anon.privileges.contains(&"INSERT"), "{anon:?}");
+}
+
+// `secret_note` reads `secret` rows with a filter anon could pass, but `secret` itself is readable
+// only when signed in: the policy's subquery runs as the caller, so anon finds no row.
+#[test]
+fn a_rows_source_anon_cannot_read_revokes_anon() {
+    let anon = rows_grant("secret_note", "anon");
+    assert!(!anon.privileges.contains(&"SELECT"), "{anon:?}");
+}
+
+// `node` reads its own table and `ping`/`pong` read each other: the analysis has to stop. A cycle
+// cannot be proved unreachable, so the grant survives, as every undecided case does.
+#[test]
+fn a_rows_source_that_reads_itself_terminates() {
+    for table in ["node", "ping", "pong"] {
+        let anon = rows_grant(table, "anon");
+        assert!(anon.privileges.contains(&"SELECT"), "{anon:?}");
+    }
+}

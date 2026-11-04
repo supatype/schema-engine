@@ -28,38 +28,7 @@ fn has_value_source(field: &FieldAst) -> bool {
     if let FieldAst::Enum(f) = field {
         return f.default.is_some();
     }
-    field_default(field).is_some()
-}
-
-fn field_default(field: &FieldAst) -> Option<&crate::parser::ast::DefaultValueAst> {
-    match field {
-        FieldAst::Text(f)
-        | FieldAst::RichText(f)
-        | FieldAst::Email(f)
-        | FieldAst::Url(f)
-        | FieldAst::Uuid(f)
-        | FieldAst::Integer(f)
-        | FieldAst::Float(f)
-        | FieldAst::Boolean(f)
-        | FieldAst::Datetime(f)
-        | FieldAst::BigInt(f)
-        | FieldAst::SmallInt(f)
-        | FieldAst::Date(f)
-        | FieldAst::Timestamp(f)
-        | FieldAst::Serial(f)
-        | FieldAst::BigSerial(f)
-        | FieldAst::Money(f)
-        | FieldAst::Ip(f)
-        | FieldAst::Cidr(f)
-        | FieldAst::Macaddr(f)
-        | FieldAst::Interval(f)
-        | FieldAst::TsQuery(f)
-        | FieldAst::TsVector(f)
-        | FieldAst::Xml(f)
-        | FieldAst::Bytes(f)
-        | FieldAst::Color(f) => f.default.as_ref(),
-        _ => None,
-    }
+    crate::parser::ast::declared_default(field).is_some()
 }
 
 fn field_is_required(field: &FieldAst) -> bool {
