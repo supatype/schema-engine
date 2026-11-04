@@ -595,6 +595,7 @@ fn render_view(view: &ModelView<'_>, plan: &[FieldViewTable]) -> String {
         plan,
     ));
     out.push_str(&crate::generator::sql::grants::view_grants(
+        ast,
         model,
         VIEW_SCHEMA,
     ));

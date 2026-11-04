@@ -1,0 +1,586 @@
+{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Form",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "user_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMPTZ",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "form",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "any",
+              "rules": [
+                {
+                  "type": "owner",
+                  "field": "user_id"
+                },
+                {
+                  "type": "nullCheck",
+                  "operand": {
+                    "kind": "column",
+                    "name": "published_at"
+                  },
+                  "isNull": false
+                }
+              ]
+            },
+            "create": {
+              "type": "authenticated"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Question",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "form_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "question",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "any",
+              "rules": [
+                {
+                  "type": "in",
+                  "column": "form_id",
+                  "source": {
+                    "kind": "rows",
+                    "table": "form",
+                    "column": "id",
+                    "where": {
+                      "type": "compare",
+                      "op": "eq",
+                      "left": {
+                        "kind": "column",
+                        "name": "user_id"
+                      },
+                      "right": {
+                        "kind": "authUid"
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "in",
+                  "column": "form_id",
+                  "source": {
+                    "kind": "rows",
+                    "table": "form",
+                    "column": "id",
+                    "where": {
+                      "type": "nullCheck",
+                      "operand": {
+                        "kind": "column",
+                        "name": "published_at"
+                      },
+                      "isNull": false
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Response",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "form_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "response",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "create": {
+              "type": "in",
+              "column": "form_id",
+              "source": {
+                "kind": "rows",
+                "table": "form",
+                "column": "id",
+                "where": {
+                  "type": "nullCheck",
+                  "operand": {
+                    "kind": "column",
+                    "name": "published_at"
+                  },
+                  "isNull": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Draft",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "form_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "draft",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "in",
+              "column": "form_id",
+              "source": {
+                "kind": "rows",
+                "table": "form",
+                "column": "id",
+                "where": {
+                  "type": "compare",
+                  "op": "eq",
+                  "left": {
+                    "kind": "column",
+                    "name": "user_id"
+                  },
+                  "right": {
+                    "kind": "authUid"
+                  }
+                }
+              }
+            },
+            "create": {
+              "type": "in",
+              "column": "form_id",
+              "source": {
+                "kind": "rows",
+                "table": "form",
+                "column": "id",
+                "where": {
+                  "type": "compare",
+                  "op": "eq",
+                  "left": {
+                    "kind": "column",
+                    "name": "user_id"
+                  },
+                  "right": {
+                    "kind": "authUid"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Secret",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMPTZ",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "secret",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "SecretNote",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "secret_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "secret_note",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "in",
+              "column": "secret_id",
+              "source": {
+                "kind": "rows",
+                "table": "secret",
+                "column": "id",
+                "where": {
+                  "type": "nullCheck",
+                  "operand": {
+                    "kind": "column",
+                    "name": "published_at"
+                  },
+                  "isNull": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Node",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "parent_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMPTZ",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "node",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "in",
+              "column": "parent_id",
+              "source": {
+                "kind": "rows",
+                "table": "node",
+                "column": "id",
+                "where": {
+                  "type": "nullCheck",
+                  "operand": {
+                    "kind": "column",
+                    "name": "published_at"
+                  },
+                  "isNull": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Ping",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "pong_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "ping",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "in",
+              "column": "pong_id",
+              "source": {
+                "kind": "rows",
+                "table": "pong",
+                "column": "id"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Pong",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "default": {
+            "kind": "genRandomUuid"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        },
+        "ping_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": false
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": false,
+        "softDelete": false
+      },
+      "annotations": {
+        "db": {
+          "tableName": "pong",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "in",
+              "column": "ping_id",
+              "source": {
+                "kind": "rows",
+                "table": "ping",
+                "column": "id"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -757,9 +757,9 @@ pub enum AccessRule {
 pub enum MembershipSource {
     /// A JWT claim holding an array, e.g. `app_metadata.sites`.
     Claim { path: String },
-    /// Rows of another table, typically a join table. `where` narrows it to the
-    /// caller's own rows, which is what makes it a membership check rather than a
-    /// lookup of everything.
+    /// Rows of another table, typically a join table. `where` narrows which rows count: often
+    /// to the caller's own (`Eq<"user_id", AuthUid>`), but it may test anything about the row,
+    /// such as `NotNull<"published_at">`, which asks nothing of the caller.
     Rows {
         table: String,
         column: String,
