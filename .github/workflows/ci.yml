@@ -256,6 +256,7 @@ jobs:
             --test drafts_edit_tests \
             --test versions_doctor_tests \
             --test junction_access_tests \
+            --test policy_loop_tests \
             --test ownership_evidence_tests \
             --test owner_scalar_field_tests \
             --test introspection_coverage_tests \

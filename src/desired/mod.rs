@@ -17,11 +17,14 @@
 
 pub mod attributed;
 pub mod identity;
+mod policy_loops;
 pub mod statements;
 
 use std::collections::BTreeMap;
 
 use anyhow::Result;
+
+pub(crate) use policy_loops::refuse_policy_loops;
 
 use crate::differ::{
     column_diff::expected_udt, constraint_diff::expected_column_uniques,
