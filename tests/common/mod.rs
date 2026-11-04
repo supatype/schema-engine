@@ -547,3 +547,87 @@ pub async fn apply_with_consent(
     .await
     .expect("with consent the push puts it back");
 }
+
+// The change-log probe: what a wal2json slot decodes, to see which transactions carry the
+// skip-hooks marker.
+
+/// A logical slot on a test database, decoded with `wal2json`, the one plugin `supatype/postgres`
+/// lets a slot use and the one the change-log listener reads.
+pub const SLOT: &str = "seed_hooks_probe";
+
+pub async fn open_slot(pool: &sqlx::PgPool) {
+    sqlx::query("SELECT pg_create_logical_replication_slot($1, 'wal2json')")
+        .bind(SLOT)
+        .execute(pool)
+        .await
+        .expect("a logical slot is created");
+}
+
+/// Every change the slot saw, one `wal2json` format 2 record each, the slot dropped after so the
+/// database can be too.
+pub async fn drain_slot(pool: &sqlx::PgPool) -> Vec<serde_json::Value> {
+    let changes: Vec<String> = sqlx::query_scalar(
+        "SELECT data FROM pg_logical_slot_get_changes($1, NULL, NULL, 'format-version', '2')",
+    )
+    .bind(SLOT)
+    .fetch_all(pool)
+    .await
+    .expect("the slot decodes");
+    sqlx::query("SELECT pg_drop_replication_slot($1)")
+        .bind(SLOT)
+        .execute(pool)
+        .await
+        .expect("the slot is dropped");
+    changes
+        .iter()
+        .map(|c| serde_json::from_str(c).expect("wal2json writes JSON"))
+        .collect()
+}
+
+/// The transactions that wrote `table`, each as its records between `B` and `C`.
+pub fn transactions_writing(
+    changes: &[serde_json::Value],
+    table: &str,
+) -> Vec<Vec<serde_json::Value>> {
+    let mut out = Vec::new();
+    let mut current = Vec::new();
+    for change in changes {
+        match change["action"].as_str() {
+            Some("B") => current.clear(),
+            Some("C") => {
+                if current
+                    .iter()
+                    .any(|c: &serde_json::Value| c["table"] == table)
+                {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(change.clone()),
+        }
+    }
+    out
+}
+
+/// The prefix of every message the change-log listener reads as a hooks marker.
+const HOOKS_PREFIX: &str = "supatype.hooks";
+
+/// Whether `change` is the marker that tells the listener to skip a transaction's hooks.
+pub fn is_skip_marker(change: &serde_json::Value) -> bool {
+    change["action"] == "M"
+        && change["transactional"] == true
+        && change["prefix"] == HOOKS_PREFIX
+        && change["content"] == "skip"
+}
+
+/// How many hooks markers of any kind `transaction` carries.
+pub fn hooks_markers(transaction: &[serde_json::Value]) -> usize {
+    transaction
+        .iter()
+        .filter(|c| c["prefix"] == HOOKS_PREFIX)
+        .count()
+}
+
+/// Whether `transaction` opens with the skip marker and carries no other hooks marker.
+pub fn opens_with_one_skip_marker(transaction: &[serde_json::Value]) -> bool {
+    transaction.first().is_some_and(is_skip_marker) && hooks_markers(transaction) == 1
+}

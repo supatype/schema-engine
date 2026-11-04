@@ -294,6 +294,11 @@ pub struct ApplyOptions {
     /// Put back a policy, grant, label or RLS attribute changed or removed outside Supatype (plan
     /// 3.5). Without it the push refuses with [`drift::SecurityDrift`].
     pub overwrite_drift: bool,
+    /// Let the server's after-hooks run on the rows this push rewrites (a column conversion, a
+    /// flat block move, a baseline version). Without it the migration's transaction carries the
+    /// skip marker ([`crate::hooks_marker`]), because a schema change is not a change anyone's
+    /// hooks should act on.
+    pub run_hooks: bool,
     /// Who pushed, through what and from where: recorded on the migration row, applied or failed
     /// (`state::audit`), with the renames the push applies.
     pub audit: crate::state::audit::PushAudit,
@@ -1666,6 +1671,8 @@ struct Rendered {
     /// holds the statement that failed.
     apply_body: String,
     sources: migration_history::AppliedMigrationSources,
+    /// [`ApplyOptions::run_hooks`]: without it the transaction opens with the skip-hooks marker.
+    run_hooks: bool,
 }
 
 /// The push's migration, with what runs online after commit (`online`) or all of it in the
@@ -1684,6 +1691,7 @@ fn render(plan: &Plan<'_>, opts: ApplyOptions, online: bool) -> Result<Rendered>
     Ok(Rendered {
         name,
         apply_body,
+        run_hooks: opts.run_hooks,
         sources: migration_history::AppliedMigrationSources {
             sql_down: Some(migration.down()),
             schema_sources: opts.schema_sources,
@@ -1863,6 +1871,12 @@ async fn within_transaction(
     strict: bool,
     rendered: &Rendered,
 ) -> Result<Applied> {
+    // First, so the listener knows before it meets a row: a conversion's UPDATE, a block move or a
+    // baseline version would otherwise run after-hooks once per row. A transaction that rewrites
+    // nothing carries it to no effect, so it is not worth predicting which ones will.
+    if !rendered.run_hooks {
+        crate::hooks_marker::skip_hooks(tx).await?;
+    }
     // Counted in this transaction, before the move, so what is reported is what it moved.
     let mut converted = crate::flat_blocks::converted(tx, &plan.block_moves, &plan.schema).await?;
     converted.extend(crate::baseline_versions::created(tx, &plan.baselines, &plan.schema).await?);

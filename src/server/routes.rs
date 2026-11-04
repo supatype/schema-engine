@@ -120,6 +120,7 @@ pub async fn push(Json(req): Json<DbRequest>) -> EngineResponse<serde_json::Valu
         schema_sources,
         schema_sources_manifest: req.schema_sources_manifest.clone(),
         overwrite_drift: req.overwrite_drift,
+        run_hooks: req.run_hooks,
         audit: req.audit.clone(),
     };
     let outcome = push::apply(&pool, plan, options)
@@ -553,6 +554,17 @@ mod tests {
         for refused in ["Public", "a$b", "my-app", "", "public;DROP", "1public"] {
             assert!(parse(refused).is_err(), "{refused} is refused");
         }
+    }
+
+    /// `run_hooks` arrives in the push body as the CLI and the control plane send it. A body
+    /// without it skips after-hooks on the rows the push rewrites.
+    #[test]
+    fn a_push_body_says_whether_after_hooks_run() {
+        let parse = |body: serde_json::Value| {
+            serde_json::from_value::<DbRequest>(body).expect("the body parses")
+        };
+        assert!(parse(serde_json::json!({ "run_hooks": true })).run_hooks);
+        assert!(!parse(serde_json::json!({})).run_hooks);
     }
 
     /// Another writer holding the engine's lock is a 409 a caller can retry on, told apart by its

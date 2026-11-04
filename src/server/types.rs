@@ -48,6 +48,10 @@ pub struct DbRequest {
     /// would have to refuses instead. Push only: `doctor` refuses it.
     #[serde(default)]
     pub overwrite_drift: bool,
+    /// For `push`: let the server's after-hooks run on the rows the push rewrites. Without it a
+    /// push that converts or moves rows tells the change-log listener to skip them.
+    #[serde(default)]
+    pub run_hooks: bool,
     /// For `migrate`: rehearse the push so the file also records the history and the ledger,
     /// under the table locks a push takes. Without it the file is planned with no such lock.
     #[serde(default)]

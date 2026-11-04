@@ -11,7 +11,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use std::time::Instant;
 use supatype_engine::parser::ast::SchemaAst;
 use supatype_engine::seed::errors::{constraint_index_for, SeedError, SeedFailure};
-use supatype_engine::seed::execute::{execute_in, rolling_back, Context, Report};
+use supatype_engine::seed::execute::{begin_seed, execute_in, rolling_back, Context, Report};
 use supatype_engine::seed::ledger::{
     already_applied, has_drifted, ir_hash, latest_per_file, record, record_rolled_back, RunStatus,
     SeedRun,
@@ -300,8 +300,10 @@ async fn atomically(
     Ok(0)
 }
 
+/// A seed transaction, opened with the marker that keeps the server's after-hooks from running on
+/// what it writes: one per transaction, so one per document, or one for an `--atomic` run.
 async fn begin(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
-    pool.begin()
+    begin_seed(pool)
         .await
         .context("Failed to start a transaction for the seed")
 }
