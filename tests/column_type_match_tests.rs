@@ -1,4 +1,5 @@
-//! Column type matching — Postgres `information_schema` shapes vs schema AST fields.
+//! Column type matching: how Postgres `information_schema` reports a column, against the schema
+//! AST field that declares it.
 //!
 //! Guards against false drift (e.g. PostGIS `USER-DEFINED` + `udt_name=geography`).
 
@@ -32,6 +33,7 @@ fn decimal_field(precision: Option<u32>, scale: Option<u32>) -> FieldAst {
         validation: None,
         localized: false,
         read_only: false,
+        default: None,
         annotations: Default::default(),
     })
 }

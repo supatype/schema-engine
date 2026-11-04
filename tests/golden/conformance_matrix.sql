@@ -392,17 +392,17 @@ CREATE TABLE IF NOT EXISTS "public"."every_defaulted" (
     "color_def" TEXT DEFAULT 'x',
     "slug_def" TEXT CONSTRAINT "every_defaulted_slug_def_key" UNIQUE,
     "enum_def" TEXT CONSTRAINT "every_defaulted_enum_def_check" CHECK ("enum_def" IN ('a', 'b', 'c')) DEFAULT 'x',
-    "json_def" JSONB,
-    "button_def" JSONB,
-    "decimal_def" NUMERIC(18, 4),
+    "json_def" JSONB DEFAULT '"x"'::jsonb,
+    "button_def" JSONB DEFAULT '"x"'::jsonb,
+    "decimal_def" NUMERIC(18, 4) DEFAULT 1,
     "image_def" JSONB,
     "file_def" JSONB,
     "blocks_def" JSONB,
     "serial_def" SERIAL,
     "bigSerial_def" BIGSERIAL,
-    "array_def" TEXT[],
-    "geo_def" GEOGRAPHY(POINT, 4326),
-    "vector_def" vector(8)
+    "array_def" TEXT[] DEFAULT 'x',
+    "geo_def" GEOGRAPHY(POINT, 4326) DEFAULT ST_GeogFromText('x'),
+    "vector_def" vector(8) DEFAULT 'x'
 );
 
 CREATE INDEX IF NOT EXISTS "every_defaulted_blocks_def_gin_idx" ON "public"."every_defaulted" USING gin ("blocks_def");

@@ -846,6 +846,7 @@ fn desired_here(
         FieldMaskingTier::None | FieldMaskingTier::Extension => FieldEnforcement::Labels,
     };
     let mut desired = desired_objects_for(ast, schema, fields)?;
+    crate::desired::refuse_policy_loops(&desired, schema)?;
     desired.retain(|d| match d.key.kind {
         ObjectKind::CronJob => catalog.cron_available,
         // The views' owner is made by the very push that grants to it, so it is desired wherever

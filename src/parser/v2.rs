@@ -1,9 +1,10 @@
 use super::annotations::{DbFieldAnnotations, FieldAnnotations, ModelAnnotations};
 use super::ast::{
-    scalar_of, ArrayFieldAst, BlockDefinitionAst, BlocksFieldAst, CustomFieldAst, DecimalFieldAst,
-    DefaultValueAst, EnumFieldAst, FieldAst, GeneratedColumnAst, GeoFieldAst, IdentityGeneration,
-    JsonFieldAst, ModelAst, ModelOptions, RelationCardinality, RelationFieldAst, ScalarFieldAst,
-    SchemaAst, SlugFieldAst, StorageAccessMode, StorageFieldAst, ValidationAst, VectorFieldAst,
+    declared_default, scalar_of, ArrayFieldAst, BlockDefinitionAst, BlocksFieldAst, CustomFieldAst,
+    DecimalFieldAst, DefaultValueAst, EnumFieldAst, FieldAst, GeneratedColumnAst, GeoFieldAst,
+    IdentityGeneration, JsonFieldAst, ModelAst, ModelOptions, RelationCardinality,
+    RelationFieldAst, ScalarFieldAst, SchemaAst, SlugFieldAst, StorageAccessMode, StorageFieldAst,
+    ValidationAst, VectorFieldAst,
 };
 use anyhow::{bail, Context, Result};
 use indexmap::IndexMap;
@@ -165,6 +166,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?
     };
+    let declares_default = default_val.is_some();
 
     let parsed: Result<FieldAst> = match kind {
         "text" => Ok(FieldAst::Text(scalar_from_v2(
@@ -367,34 +369,20 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
             localized,
             default_val,
         )?)),
-        "json" => {
-            let pg_type = pg_type_or_default(&annotations.db, kind);
-            Ok(FieldAst::Json(JsonFieldAst {
-                pg_type,
+        "json" | "button" => {
+            let f = json_from_v2(
+                &annotations,
                 required,
-                check: check_from_v2(value),
-                validation: validation_from_v2(value),
-                localized,
+                value,
                 read_only,
-                ts_type: value
-                    .get("tsType")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                annotations: annotations.clone(),
-            }))
-        }
-        "button" => {
-            let pg_type = pg_type_or_default(&annotations.db, kind);
-            Ok(FieldAst::Button(JsonFieldAst {
-                pg_type,
-                required,
-                check: check_from_v2(value),
-                validation: validation_from_v2(value),
                 localized,
-                read_only,
-                ts_type: None,
-                annotations: annotations.clone(),
-            }))
+                default_val,
+            )?;
+            Ok(if kind == "json" {
+                FieldAst::Json(f)
+            } else {
+                FieldAst::Button(f)
+            })
         }
         "slug" => {
             let from = value
@@ -451,6 +439,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 validation: validation_from_v2(value),
                 localized,
                 read_only,
+                default: default_val,
                 annotations,
             }))
         }
@@ -512,6 +501,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                     .to_string(),
                 srid: value.get("srid").and_then(|v| v.as_u64()).map(|n| n as u32),
                 read_only,
+                default: default_val,
                 annotations,
             }))
         }
@@ -523,6 +513,7 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1536) as u32,
             read_only,
+            default: default_val,
             annotations,
         })),
         "blocks" => {
@@ -604,6 +595,12 @@ fn deserialize_field(value: &Value) -> Result<FieldAst> {
         );
     }
 
+    // The same for a `default`, which is how `Default<JSON<string[]>, "[]">` came to create a
+    // column with none, so every insert that left it out failed.
+    if declares_default && declared_default(&field).is_none() {
+        bail!("{}", default_refusal(kind));
+    }
+
     // The same for `identity` and `generated`: only a scalar column renders them.
     let declares = |key: &str| value.get(key).is_some_and(|v| !v.is_null());
     let generates = matches!(field, FieldAst::Serial(_) | FieldAst::BigSerial(_))
@@ -669,6 +666,75 @@ fn scalar_from_v2(
         generated,
         annotations: annotations.clone(),
     })
+}
+
+/// A field stored as JSON (`json`, `button`). Only `json` declares the TypeScript it holds.
+fn json_from_v2(
+    annotations: &FieldAnnotations,
+    required: bool,
+    value: &Value,
+    read_only: bool,
+    localized: bool,
+    default_val: Option<DefaultValueAst>,
+) -> Result<JsonFieldAst> {
+    let kind = value.get("kind").and_then(|v| v.as_str()).unwrap_or("json");
+    let ts_type = match kind {
+        "json" => value
+            .get("tsType")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        _ => None,
+    };
+    Ok(JsonFieldAst {
+        pg_type: pg_type_or_default(&annotations.db, kind),
+        required,
+        check: check_from_v2(value),
+        validation: validation_from_v2(value),
+        localized,
+        read_only,
+        ts_type,
+        default: json_default_from_v2(kind, default_val)?,
+        annotations: annotations.clone(),
+    })
+}
+
+/// A JSON column's default, refused here where Postgres would refuse it at push time with a cast
+/// error that names no field: text that is not JSON, or a timestamp or uuid generator.
+fn json_default_from_v2(
+    kind: &str,
+    default_val: Option<DefaultValueAst>,
+) -> Result<Option<DefaultValueAst>> {
+    match &default_val {
+        Some(DefaultValueAst::Value {
+            value: Value::String(text),
+        }) => {
+            if let Err(e) = serde_json::from_str::<Value>(text) {
+                bail!(
+                    "the default of a {kind} field is not valid JSON: {text:?} ({e}). A JSON \
+                     field's default is JSON text, so a string default keeps its own quotes: \
+                     \"\\\"draft\\\"\", not \"draft\""
+                );
+            }
+        }
+        Some(DefaultValueAst::Now | DefaultValueAst::GenRandomUuid) => bail!(
+            "a {kind} field cannot default to a generated timestamp or uuid: its column holds \
+             JSON. Give the default as JSON text, or as an expression that returns jsonb"
+        ),
+        _ => {}
+    }
+    Ok(default_val)
+}
+
+/// Why a field of `kind` cannot hold the `default` it declares.
+fn default_refusal(kind: &str) -> String {
+    let why = match kind {
+        "slug" => "a slug is generated from its source while it is empty, so a default would stop it ever being generated",
+        "image" | "file" => "its column holds a reference to an uploaded object, which a schema cannot name in advance",
+        "relation" => "its foreign key column is rendered at table level, which renders no default",
+        "blocks" => "the engine renders no default for a blocks column",
+        _ => "that kind has nowhere to store one",
+    };
+    format!("a field of kind '{kind}' cannot have a default: {why}. Remove the Default<> from it")
 }
 
 /// The kinds an identity column can have: Postgres numbers only integer columns.
@@ -908,7 +974,7 @@ fn serialize_model(model: &ModelAst) -> Value {
 }
 
 fn serialize_field(field: &FieldAst) -> Value {
-    match field {
+    let v = match field {
         FieldAst::Text(s) => scalar_to_v2("text", s),
         FieldAst::RichText(s) => scalar_to_v2("richText", s),
         FieldAst::Integer(s) => scalar_to_v2("integer", s),
@@ -1072,7 +1138,19 @@ fn serialize_field(field: &FieldAst) -> Value {
         FieldAst::Timestamps => serde_json::json!({ "kind": "timestamps" }),
         FieldAst::Publishable => serde_json::json!({ "kind": "publishable" }),
         FieldAst::SoftDelete => serde_json::json!({ "kind": "softDelete" }),
+    };
+    with_default(v, field)
+}
+
+/// `v` with the default `field` declares. Every kind that renders a default round-trips it; the
+/// scalars and custom fields have written theirs already, in their own place among the keys.
+fn with_default(mut v: Value, field: &FieldAst) -> Value {
+    if v.get("default").is_none() {
+        if let Some(d) = declared_default(field) {
+            v["default"] = serde_json::to_value(d).unwrap_or(Value::Null);
+        }
     }
+    v
 }
 
 fn scalar_to_v2(kind: &str, s: &ScalarFieldAst) -> Value {

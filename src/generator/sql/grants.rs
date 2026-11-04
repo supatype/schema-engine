@@ -32,8 +32,16 @@ pub const GRANTS_TAG: &str = "grants";
 /// Whether an unauthenticated caller could ever satisfy a rule.
 ///
 /// Only a proof of *unreachability* is acted on, so every uncertain case answers
-/// true and the grant survives.
-fn reachable_by_anon(rule: &AccessRule) -> bool {
+/// true and the grant survives. `ast` is where a `Rows` source's own read rule is
+/// looked up.
+fn reachable_by_anon(ast: &SchemaAst, rule: &AccessRule) -> bool {
+    anon_reaches(ast, rule, &[])
+}
+
+/// [`reachable_by_anon`], with `reading` the source tables whose read rules are already being
+/// asked about further up, so rules that read each other's rows cannot recurse forever.
+fn anon_reaches(ast: &SchemaAst, rule: &AccessRule, reading: &[&str]) -> bool {
+    let reaches = |inner: &AccessRule| anon_reaches(ast, inner, reading);
     match rule {
         // Constraint-only. `Matches` is refused inside an `access` rule by the CLI, so this arm is
         // reached only if an AST is hand-written; treating it as caller-independent is the safe
@@ -52,8 +60,8 @@ fn reachable_by_anon(rule: &AccessRule) -> bool {
         // `anon`, so only a rule naming it is reachable.
         AccessRule::Role { roles } => roles.iter().any(|r| r == "anon"),
 
-        AccessRule::Any { rules } => rules.iter().any(reachable_by_anon),
-        AccessRule::All { rules } => rules.iter().all(reachable_by_anon),
+        AccessRule::Any { rules } => rules.iter().any(reaches),
+        AccessRule::All { rules } => rules.iter().all(reaches),
 
         // Negation of an unreachable rule is reachable, but proving that needs the
         // rule to be total; not worth the risk of a wrong revoke.
@@ -64,13 +72,49 @@ fn reachable_by_anon(rule: &AccessRule) -> bool {
         }
         AccessRule::NullCheck { operand, .. } => operand_reachable_by_anon(operand),
 
-        // Membership is against the caller's own rows, so an anonymous caller
-        // matches nothing -- unless the source is a fixed list, which is the same
-        // for everyone.
         AccessRule::In { source, .. } | AccessRule::Exists { source } => {
-            matches!(source, MembershipSource::Literal { .. })
+            source_reachable_by_anon(ast, source, reading)
         }
     }
+}
+
+/// Whether an anonymous caller could find a member in `source`.
+///
+/// A fixed list is the same for everyone. A claim is absent without a token. A `Rows` source is
+/// read by a subquery inside the policy, which runs as the caller, so it finds a row only when its
+/// filter admits anon (a filter such as `Eq<"user_id", AuthUid>` never does) and the source
+/// table's own read rule lets anon see that row at all.
+fn source_reachable_by_anon(ast: &SchemaAst, source: &MembershipSource, reading: &[&str]) -> bool {
+    match source {
+        MembershipSource::Literal { .. } => true,
+        MembershipSource::Claim { .. } => false,
+        MembershipSource::Rows { table, filter, .. } => {
+            let filtered = filter
+                .as_deref()
+                .is_none_or(|rule| anon_reaches(ast, rule, reading));
+            filtered && source_table_readable_by_anon(ast, table, reading)
+        }
+    }
+}
+
+/// Whether anon may read rows of `table`, the source of a `Rows` membership.
+///
+/// A table that is no model (a junction) has no read rule to consult, and a table already being
+/// asked about further up is a cycle that proves nothing either way: both are undecided, so both
+/// answer true and the grant survives.
+fn source_table_readable_by_anon(ast: &SchemaAst, table: &str, reading: &[&str]) -> bool {
+    if reading.contains(&table) {
+        return true;
+    }
+    let Some(model) = ast.models.iter().find(|m| db_table_name(m) == table) else {
+        return true;
+    };
+    let Some(read) = platform_access(model).read.as_ref() else {
+        return false;
+    };
+    let mut deeper = reading.to_vec();
+    deeper.push(table);
+    anon_reaches(ast, read, &deeper)
 }
 
 fn operand_reachable_by_anon(operand: &Operand) -> bool {
@@ -257,10 +301,15 @@ pub const PUBLIC: &str = "PUBLIC";
 /// a view with no write trigger inserts through the table's own default, which draws the value as
 /// the caller. An identity column needs none of this, since Postgres draws its value without
 /// checking the caller's privileges on its sequence. A many-to-many junction has no serial key.
-pub fn sequence_grant(model: &ModelAst, sequence: &str, role: &'static str) -> TableGrant {
+pub fn sequence_grant(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    sequence: &str,
+    role: &'static str,
+) -> TableGrant {
     let create = platform_access(model).create.as_ref();
     TableGrant {
-        privileges: if allowed(role, create) {
+        privileges: if allowed(ast, role, create) {
             vec!["USAGE"]
         } else {
             Vec::new()
@@ -277,7 +326,7 @@ pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
             out.push(if views {
                 TableGrant::nothing(table, role)
             } else {
-                model_grant(model, role)
+                model_grant(ast, model, role)
             });
         }
         out.push(TableGrant::nothing(table, PUBLIC));
@@ -306,7 +355,7 @@ fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGra
             let privileges = RULED
                 .into_iter()
                 .filter(|&privilege| {
-                    junction_allows(&access, role, privilege)
+                    junction_allows(ast, &access, role, privilege)
                         || (privilege == "SELECT" && read_by_a_rule)
                 })
                 .collect();
@@ -320,16 +369,21 @@ fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGra
 
 /// Whether a junction's policies can admit `role` to `privilege`: for a linked junction, reading
 /// both ends and, for a write, updating either.
-fn junction_allows(access: &JunctionAccess<'_>, role: &str, privilege: &str) -> bool {
+fn junction_allows(
+    ast: &SchemaAst,
+    access: &JunctionAccess<'_>,
+    role: &str,
+    privilege: &str,
+) -> bool {
     match access {
-        JunctionAccess::Intersected(derived) => allowed(role, rule_for(derived, privilege)),
+        JunctionAccess::Intersected(derived) => allowed(ast, role, rule_for(derived, privilege)),
         JunctionAccess::Linked(ends) => {
             let reads = ends
                 .iter()
-                .all(|end| allowed(role, platform_access(end.model).read.as_ref()));
+                .all(|end| allowed(ast, role, platform_access(end.model).read.as_ref()));
             let updates = ends
                 .iter()
-                .any(|end| allowed(role, platform_access(end.model).update.as_ref()));
+                .any(|end| allowed(ast, role, platform_access(end.model).update.as_ref()));
             reads && (privilege == "SELECT" || updates)
         }
     }
@@ -373,10 +427,10 @@ fn rule_for<'a>(access: &'a AccessAst, privilege: &str) -> Option<&'a AccessRule
 
 /// Whether `role` keeps the privilege a `rule` governs: `authenticated` whenever the operation is
 /// declared, `anon` only where the rule can reach it.
-fn allowed(role: &str, rule: Option<&AccessRule>) -> bool {
+fn allowed(ast: &SchemaAst, role: &str, rule: Option<&AccessRule>) -> bool {
     match (role, rule) {
         (_, None) => false,
-        ("anon", Some(rule)) => reachable_by_anon(rule),
+        ("anon", Some(rule)) => reachable_by_anon(ast, rule),
         (_, Some(_)) => true,
     }
 }
@@ -385,15 +439,15 @@ fn allowed(role: &str, rule: Option<&AccessRule>) -> bool {
 /// whenever the operation is declared at all: which *rows* it may touch is the policy's business,
 /// and revoking here would stop the policy ever being consulted. `anon` holds it only where the
 /// rule can reach it.
-fn model_grant(model: &ModelAst, role: &'static str) -> TableGrant {
+fn model_grant(ast: &SchemaAst, model: &ModelAst, role: &'static str) -> TableGrant {
     let access = platform_access(model);
     let mut privileges = Vec::new();
     let mut narrowed = Vec::new();
     for privilege in RULED {
-        if !allowed(role, rule_for(access, privilege)) {
+        if !allowed(ast, role, rule_for(access, privilege)) {
             continue;
         }
-        let mut excluded = unwritable_columns(model, privilege, role);
+        let mut excluded = unwritable_columns(ast, model, privilege, role);
         if excluded.is_empty() {
             privileges.push(privilege);
         } else {
@@ -452,7 +506,7 @@ fn declared_columns(model: &ModelAst) -> Vec<String> {
 /// express `Role<"admin">`; a column privilege cannot, because an application role is a JWT
 /// claim and an admin still connects as `authenticated`. So only what a *database role*
 /// provably can never write is excluded here.
-pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String> {
+pub fn unwritable_columns(ast: &SchemaAst, model: &ModelAst, op: &str, role: &str) -> Vec<String> {
     if !matches!(op, "INSERT" | "UPDATE") {
         return Vec::new();
     }
@@ -463,7 +517,7 @@ pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String>
             rules
                 .write
                 .as_ref()
-                .is_some_and(|write| !write_satisfiable(role, write))
+                .is_some_and(|write| !write_satisfiable(ast, role, write))
         })
         .map(|(column, _)| column.clone())
         .collect()
@@ -473,9 +527,9 @@ pub fn unwritable_columns(model: &ModelAst, op: &str, role: &str) -> Vec<String>
 /// `service_role` every row verb, as on a model table. Made with the view, which a push makes again
 /// every time, and recorded on the ledger with it (F14). The base tables hold nothing for these
 /// roles then ([`table_grants`]).
-pub fn view_grants(model: &ModelAst, view_schema: &str) -> String {
+pub fn view_grants(ast: &SchemaAst, model: &ModelAst, view_schema: &str) -> String {
     grants_on_view(view_schema, db_table_name(model), |role| {
-        let grant = model_grant(model, role);
+        let grant = model_grant(ast, model, role);
         RULED
             .into_iter()
             .filter(|privilege| {
@@ -573,9 +627,9 @@ END
 /// Conservative in one direction only, like the table grants: a wrong revoke breaks a working
 /// app, a missed one just leaves today's behaviour. So this answers true unless the rule
 /// *proves* otherwise.
-fn write_satisfiable(role: &str, write: &AccessRule) -> bool {
+fn write_satisfiable(ast: &SchemaAst, role: &str, write: &AccessRule) -> bool {
     if role == "anon" {
-        return reachable_by_anon(write);
+        return reachable_by_anon(ast, write);
     }
 
     // `authenticated` is every signed-in caller, so an application-role or ownership rule is

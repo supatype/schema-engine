@@ -17,11 +17,14 @@
 
 pub mod attributed;
 pub mod identity;
+mod policy_loops;
 pub mod statements;
 
 use std::collections::BTreeMap;
 
 use anyhow::Result;
+
+pub(crate) use policy_loops::refuse_policy_loops;
 
 use crate::differ::{
     column_diff::expected_udt, constraint_diff::expected_column_uniques,
@@ -1045,7 +1048,8 @@ impl<'a> Builder<'a> {
     /// change by hand is drift that decides access.
     fn sequence_grants(&mut self, model: &ModelAst, sequence: &str, sequence_key: ObjectKey) {
         for role in crate::generator::sql::grants::GRANTED_ROLES {
-            let grant = crate::generator::sql::grants::sequence_grant(model, sequence, role);
+            let grant =
+                crate::generator::sql::grants::sequence_grant(self.ast, model, sequence, role);
             let key = self.key(ObjectKind::TableGrant, sequence, role);
             let structure = BTreeMap::from([("privileges", grant.privilege_set())]);
             let create = grant.create_sql(self.schema);

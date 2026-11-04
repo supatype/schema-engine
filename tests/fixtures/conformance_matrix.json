@@ -947,10 +947,6 @@
               "pgType": "TEXT",
               "unique": true
             }
-          },
-          "default": {
-            "kind": "value",
-            "value": "x"
           }
         },
         "enum_def": {
@@ -981,7 +977,7 @@
           },
           "default": {
             "kind": "value",
-            "value": "x"
+            "value": "\"x\""
           }
         },
         "button_def": {
@@ -994,7 +990,7 @@
           },
           "default": {
             "kind": "value",
-            "value": "x"
+            "value": "\"x\""
           }
         },
         "decimal_def": {
@@ -1020,10 +1016,6 @@
             "db": {
               "pgType": "JSONB"
             }
-          },
-          "default": {
-            "kind": "value",
-            "value": "x"
           }
         },
         "file_def": {
@@ -1034,10 +1026,6 @@
             "db": {
               "pgType": "JSONB"
             }
-          },
-          "default": {
-            "kind": "value",
-            "value": "x"
           }
         },
         "blocks_def": {
@@ -1061,10 +1049,6 @@
             "db": {
               "pgType": "JSONB"
             }
-          },
-          "default": {
-            "kind": "value",
-            "value": "x"
           }
         },
         "serial_def": {

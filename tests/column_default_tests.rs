@@ -12,40 +12,66 @@ use serde_json::{json, Value};
 use supatype_engine::differ::Operation;
 use supatype_engine::parser::{self, ast::SchemaAst};
 
-fn note(default: Option<Value>) -> SchemaAst {
-    let mut label = json!({ "kind": "text", "required": false,
-                            "annotations": { "db": { "pgType": "TEXT", "unique": false } } });
+/// The model of each fixture: its name, table and whether it carries timestamps.
+struct Model {
+    name: &'static str,
+    table: &'static str,
+    timestamps: bool,
+}
+
+/// A one-model schema of `model`: a uuid `id` and the one field `name`, declared by `field`, with
+/// `default` when one is given.
+fn one_field(model: &Model, name: &str, mut field: Value, default: Option<Value>) -> SchemaAst {
     if let Some(default) = default {
-        label["default"] = default;
+        field["default"] = default;
     }
+    let mut fields = json!({
+        "id": { "kind": "uuid", "primaryKey": true, "required": true,
+                "default": { "kind": "genRandomUuid" },
+                "annotations": { "db": { "pgType": "UUID", "unique": false } } }
+    });
+    fields[name] = field;
     let model = json!({
-        "name": "Note",
-        "fields": {
-            "id": { "kind": "uuid", "primaryKey": true, "required": true,
-                    "default": { "kind": "genRandomUuid" },
-                    "annotations": { "db": { "pgType": "UUID", "unique": false } } },
-            "label": label
-        },
-        "options": { "timestamps": true, "softDelete": false },
-        "annotations": { "db": { "tableName": "cd_note", "indexes": [] },
+        "name": model.name,
+        "fields": fields,
+        "options": { "timestamps": model.timestamps, "softDelete": false },
+        "annotations": { "db": { "tableName": model.table, "indexes": [] },
                          "platform": { "access": { "read": { "type": "public" } } } }
     });
     let doc = json!({ "astVersion": 2, "models": [model] });
     parser::parse(&doc.to_string()).expect("the fixture parses")
 }
 
+fn note(default: Option<Value>) -> SchemaAst {
+    let label = json!({ "kind": "text", "required": false,
+                        "annotations": { "db": { "pgType": "TEXT", "unique": false } } });
+    let model = Model {
+        name: "Note",
+        table: "cd_note",
+        timestamps: true,
+    };
+    one_field(&model, "label", label, default)
+}
+
 fn literal(text: &str) -> Option<Value> {
     Some(json!({ "kind": "value", "value": text }))
 }
 
-async fn label_default(pool: &sqlx::PgPool) -> Option<String> {
+/// The DEFAULT of `column` on `table`, as Postgres deparses it.
+async fn column_default(pool: &sqlx::PgPool, table: &str, column: &str) -> Option<String> {
     sqlx::query_scalar(
         "SELECT column_default::text FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'cd_note' AND column_name = 'label'",
+          WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2",
     )
+    .bind(table)
+    .bind(column)
     .fetch_one(pool)
     .await
     .expect("the column exists")
+}
+
+async fn label_default(pool: &sqlx::PgPool) -> Option<String> {
+    column_default(pool, "cd_note", "label").await
 }
 
 /// The column operations a push of `ast` would plan now.
@@ -144,6 +170,97 @@ async fn an_existing_owner_column_gains_the_caller_default() {
         .await
         .expect("the column exists");
         assert_eq!(default.as_deref(), Some("_supatype.jwt_uid()"));
+    })
+    .await;
+}
+
+fn settings(default: Option<Value>) -> SchemaAst {
+    let settings = json!({ "kind": "json", "required": false,
+                           "annotations": { "db": { "pgType": "JSONB", "unique": false } } });
+    let model = Model {
+        name: "Profile",
+        table: "cd_profile",
+        timestamps: false,
+    };
+    one_field(&model, "settings", settings, default)
+}
+
+async fn settings_default(pool: &sqlx::PgPool) -> Option<String> {
+    column_default(pool, "cd_profile", "settings").await
+}
+
+/// A JSON column's default converges like a scalar's (issue 17). Postgres stores `jsonb` with its
+/// keys reordered and spaced, so `{"bb":1,"a":2}` reads back as `{"a": 2, "bb": 1}`: the same
+/// value, which must not be planned again on every push.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_json_default_is_added_changed_and_dropped_on_an_existing_column() {
+    common::with_integration_pool(|pool| async move {
+        push_and_settle(&pool, &settings(None)).await;
+        assert_eq!(settings_default(&pool).await, None);
+
+        push_and_settle(&pool, &settings(literal("[]"))).await;
+        assert_eq!(
+            settings_default(&pool).await.as_deref(),
+            Some("'[]'::jsonb")
+        );
+
+        push_and_settle(&pool, &settings(literal(r#"{"bb":1,"a":"it's"}"#))).await;
+        assert_eq!(
+            settings_default(&pool).await.as_deref(),
+            Some(r#"'{"a": "it''s", "bb": 1}'::jsonb"#)
+        );
+
+        push_and_settle(&pool, &settings(None)).await;
+        assert_eq!(settings_default(&pool).await, None);
+    })
+    .await;
+}
+
+fn place(default: Option<Value>) -> SchemaAst {
+    let location = json!({ "kind": "geo", "required": false, "geoType": "point",
+                           "annotations": { "db": { "pgType": "GEOGRAPHY", "unique": false } } });
+    let model = Model {
+        name: "Place",
+        table: "cd_place",
+        timestamps: false,
+    };
+    one_field(&model, "location", location, default)
+}
+
+/// The point a new row of `cd_place` defaults to, as Postgres reads the stored default back.
+async fn location_default(pool: &sqlx::PgPool) -> Option<String> {
+    sqlx::query_scalar(
+        "WITH added AS (INSERT INTO cd_place DEFAULT VALUES RETURNING location) \
+         SELECT ST_AsEWKT(location) FROM added",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("a row is added")
+}
+
+/// A geography default converges too. Postgres keeps a geography literal in its binary form, which
+/// reads back as nothing like the declared text, so it must still settle after one push and move
+/// when the declared point does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_geography_default_is_added_changed_and_dropped_on_an_existing_column() {
+    common::with_integration_pool(|pool| async move {
+        push_and_settle(&pool, &place(None)).await;
+        assert_eq!(location_default(&pool).await, None);
+
+        push_and_settle(&pool, &place(literal("SRID=4326;POINT(1 2)"))).await;
+        assert_eq!(
+            location_default(&pool).await.as_deref(),
+            Some("SRID=4326;POINT(1 2)")
+        );
+
+        push_and_settle(&pool, &place(literal("SRID=4326;POINT(3 4)"))).await;
+        assert_eq!(
+            location_default(&pool).await.as_deref(),
+            Some("SRID=4326;POINT(3 4)")
+        );
+
+        push_and_settle(&pool, &place(None)).await;
+        assert_eq!(location_default(&pool).await, None);
     })
     .await;
 }
