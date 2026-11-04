@@ -754,7 +754,7 @@ fn one_seed_transaction_skipping_hooks(changes: &[serde_json::Value]) {
 #[tokio::test]
 async fn a_seed_transaction_opens_with_the_skip_hooks_marker() {
     with_seeded_schema!(|pool, ast| {
-        common::open_slot(&pool).await;
+        let slot = common::open_slot(&pool).await;
         run(
             &pool,
             &ast,
@@ -765,7 +765,7 @@ async fn a_seed_transaction_opens_with_the_skip_hooks_marker() {
         )
         .await
         .expect("the seed applies");
-        let changes = common::drain_slot(&pool).await;
+        let changes = common::drain_slot(&pool, &slot).await;
         one_seed_transaction_skipping_hooks(&changes);
     });
 }
@@ -775,7 +775,7 @@ async fn a_seed_transaction_opens_with_the_skip_hooks_marker() {
 async fn documents_sharing_a_transaction_share_one_marker() {
     use supatype_engine::seed::execute::{begin_seed, execute_in, Context};
     with_seeded_schema!(|pool, ast| {
-        common::open_slot(&pool).await;
+        let slot = common::open_slot(&pool).await;
         let constraints = constraint_index_for(&ast);
         let cx = Context {
             ast: &ast,
@@ -792,7 +792,7 @@ async fn documents_sharing_a_transaction_share_one_marker() {
             execute_in(&mut tx, &planned, cx).await.expect("applies");
         }
         tx.commit().await.expect("commits");
-        let changes = common::drain_slot(&pool).await;
+        let changes = common::drain_slot(&pool, &slot).await;
         one_seed_transaction_skipping_hooks(&changes);
     });
 }

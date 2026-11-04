@@ -65,12 +65,12 @@ async fn conversion_transaction(pool: &sqlx::PgPool, options: ApplyOptions) -> V
     common::exec(pool, INSERT_NOTE)
         .await
         .expect("a row to convert");
-    common::open_slot(pool).await;
+    let slot = common::open_slot(pool).await;
     common::push_with(pool, &note(rich_text_body()), options)
         .await
         .expect("the conversion pushes");
     marked_insert(pool).await;
-    let changes = common::drain_slot(pool).await;
+    let changes = common::drain_slot(pool, &slot).await;
     let mut written = common::transactions_writing(&changes, "hm_note");
     assert_eq!(
         written.len(),
@@ -110,6 +110,20 @@ async fn run_hooks_keeps_a_push_from_skipping_them() {
         };
         let rewrite = conversion_transaction(&pool, options).await;
         assert_eq!(common::hooks_markers(&rewrite), 0, "{rewrite:#?}");
+    })
+    .await;
+}
+
+/// Slot names are the cluster's, not the database's, and these tests run side by side against one
+/// cluster in CI: two probes open at once must not take the same name.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_probes_can_be_open_at_once() {
+    common::with_integration_pool(|pool| async move {
+        let first = common::open_slot(&pool).await;
+        let second = common::open_slot(&pool).await;
+        assert_ne!(first, second);
+        common::drain_slot(&pool, &first).await;
+        common::drain_slot(&pool, &second).await;
     })
     .await;
 }

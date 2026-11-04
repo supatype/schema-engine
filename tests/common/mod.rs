@@ -551,30 +551,37 @@ pub async fn apply_with_consent(
 // The change-log probe: what a wal2json slot decodes, to see which transactions carry the
 // skip-hooks marker.
 
-/// A logical slot on a test database, decoded with `wal2json`, the one plugin `supatype/postgres`
-/// lets a slot use and the one the change-log listener reads.
-pub const SLOT: &str = "seed_hooks_probe";
+/// The probes this test process has opened, so each slot gets a name of its own.
+static SLOTS_OPENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-pub async fn open_slot(pool: &sqlx::PgPool) {
+/// A logical slot on a test database, decoded with `wal2json`, the one plugin `supatype/postgres`
+/// lets a slot use and the one the change-log listener reads. Returns its name.
+///
+/// A slot name belongs to the whole cluster, and in CI the tests share one cluster and run side by
+/// side, so a fixed name collides: each slot is named after the process and a count instead.
+pub async fn open_slot(pool: &sqlx::PgPool) -> String {
+    let n = SLOTS_OPENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let slot = format!("hooks_probe_{}_{n}", std::process::id());
     sqlx::query("SELECT pg_create_logical_replication_slot($1, 'wal2json')")
-        .bind(SLOT)
+        .bind(&slot)
         .execute(pool)
         .await
         .expect("a logical slot is created");
+    slot
 }
 
-/// Every change the slot saw, one `wal2json` format 2 record each, the slot dropped after so the
+/// Every change `slot` saw, one `wal2json` format 2 record each, the slot dropped after so the
 /// database can be too.
-pub async fn drain_slot(pool: &sqlx::PgPool) -> Vec<serde_json::Value> {
+pub async fn drain_slot(pool: &sqlx::PgPool, slot: &str) -> Vec<serde_json::Value> {
     let changes: Vec<String> = sqlx::query_scalar(
         "SELECT data FROM pg_logical_slot_get_changes($1, NULL, NULL, 'format-version', '2')",
     )
-    .bind(SLOT)
+    .bind(slot)
     .fetch_all(pool)
     .await
     .expect("the slot decodes");
     sqlx::query("SELECT pg_drop_replication_slot($1)")
-        .bind(SLOT)
+        .bind(slot)
         .execute(pool)
         .await
         .expect("the slot is dropped");
