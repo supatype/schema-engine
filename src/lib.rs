@@ -16,6 +16,8 @@ pub mod sql_quote;
 
 // DB-dependent modules, not needed in WASM context
 #[cfg(not(target_arch = "wasm32"))]
+pub mod access_summary;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod adopt;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod baseline_versions;
