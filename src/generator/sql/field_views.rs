@@ -37,13 +37,12 @@
 //!   can reach the divergence; only direct SQL against these views. The contract test asserts the
 //!   difference per tier so it cannot drift silently.
 //!
-//! * **Each rule runs in a helper, not inline.** The view and its write trigger call a rule helper
-//!   per masked column ([`RuleHelpers`]) with the base row, so the rule runs with the setting that
-//!   keeps the Studio policies out of it. Inlined, a rule asking which rows of another table the
-//!   caller may read (`Rows<teams, id>`) was answered by Studio's read-everything policy. An older
-//!   `supatype_mask` refused a whole-row reference to a masked table, which is why the rule was
-//!   once inlined; a tier 2 table carries no mask label, and the current extension masks such a
-//!   reference instead of refusing it, so both tiers still coexist in one database, as the
+//! * **Reads of other tables run in a set helper.** A rule on roles, claims or the row's own
+//!   columns is inlined in the view and its write trigger. A read of another table
+//!   (`Rows<teams, id>`) runs in a set helper ([`super::field_rules`]) with the setting that keeps
+//!   the Studio policies out of it: inlined, it was answered by Studio's read-everything policy. A
+//!   tier 2 table carries no mask label, and the current `supatype_mask` masks a whole-row reference
+//!   to a masked table instead of refusing it, so both tiers still coexist in one database, as the
 //!   contract test requires.
 //!
 //! * **`IS NOT TRUE`, never `NOT`.** A write predicate returning NULL (an unset `current_setting`,

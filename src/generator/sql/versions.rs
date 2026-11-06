@@ -50,7 +50,7 @@ pub const HELPER_SCHEMA: &str = "_supatype";
 pub const RLS_ON_TAG: &str = "versions_rls";
 
 /// The setting `publish` and `unpublish` turn on around their writes to the live row, which a
-/// drafts model's `drafts_only` trigger admits ([`drafts_only_function_sql`]).
+/// drafts model's `drafts_only` trigger admits (`drafts_only_function_sql`).
 pub const PUBLISHING_SETTING: &str = "supatype.publishing";
 
 /// Every model that declares `versions`, in declaration order.
@@ -984,8 +984,9 @@ fn drafts_only_trigger_sql(
 /// **The helper is `SECURITY DEFINER`, and that is the whole point of it.** The policy asks a
 /// question about drafts, and answering it means reading the snapshot table, which `anon`
 /// deliberately holds no privilege on. Written inline, as an `EXISTS` over that table, the policy
-/// therefore failed for every anonymous caller with `42501 permission denied for table
-/// <table>_versions`, on ordinary reads of *published* content. A blog served nothing to the public.
+/// therefore failed for every anonymous caller with
+/// `42501 permission denied for table <table>_versions`, on ordinary reads of *published* content.
+/// A blog served nothing to the public.
 ///
 /// Row level security is not what withholds drafts here; the predicate inside is. So the helper may
 /// read the table on the caller's behalf and return one boolean, which discloses nothing beyond what

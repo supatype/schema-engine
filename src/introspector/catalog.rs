@@ -43,7 +43,7 @@ pub struct CatalogState {
     /// leaves out: see [`indexes::DbIndexes`] for why they are kept apart. An engine schema's are
     /// in [`Self::engine_tables`] with the rest of its indexes, so between them every swept schema
     /// whose tables are read is covered; `auth` and `storage` tables are never read
-    /// ([`HELPER_ONLY_SCHEMAS`]).
+    /// (`HELPER_ONLY_SCHEMAS`).
     pub expression_indexes: Vec<DbIndex>,
     pub triggers: Vec<DbCatalogTrigger>,
     pub functions: Vec<DbFunction>,
