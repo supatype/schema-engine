@@ -345,7 +345,7 @@ async fn reader_role(pool: &sqlx::PgPool) {
     common::exec(
         pool,
         &format!(
-            "DO $$ BEGIN CREATE ROLE {READER}; EXCEPTION WHEN duplicate_object THEN NULL; END $$; \
+            "DO $$ BEGIN CREATE ROLE {READER}; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$; \
              GRANT USAGE ON SCHEMA public TO {READER};"
         ),
     )
