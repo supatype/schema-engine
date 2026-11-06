@@ -89,7 +89,7 @@ pub(crate) const ENGINE_LOCK_ID: i32 = 2;
 /// from a failed push and retry: the HTTP server answers it with 409 and [`ENGINE_BUSY`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineBusy {
-    /// Another writer holds [`ENGINE_LOCK_ID`].
+    /// Another writer holds `ENGINE_LOCK_ID`.
     Running,
     /// Another writer committed after this push was planned and before it took the lock: the plan
     /// was decided against a ledger that no longer exists.

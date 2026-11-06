@@ -255,7 +255,7 @@ impl ObjectKey {
 #[derive(Debug, Clone)]
 pub struct DesiredObject {
     pub key: ObjectKey,
-    /// The labelled parts a push can predict exactly, a subset of [`ObjectKind::labels`]. These are
+    /// The labelled parts a push can predict exactly, a subset of `ObjectKind::labels`. These are
     /// what desired-versus-live comparison and auto-adopt (D2) are allowed to read.
     pub structure: BTreeMap<&'static str, String>,
     pub create_sql: String,

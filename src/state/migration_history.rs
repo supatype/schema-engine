@@ -1004,7 +1004,7 @@ pub struct AppliedMigrationSources {
     pub schema_sources_manifest: Option<serde_json::Value>,
     /// Who pushed, through what and from where.
     pub audit: PushAudit,
-    /// The renames the push applied, with who declared each ([`PushAudit::applied_renames`]).
+    /// The renames the push applied, with who declared each ([`crate::state::audit::applied_renames`]).
     pub renames: Option<serde_json::Value>,
 }
 

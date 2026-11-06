@@ -290,7 +290,7 @@ pub const PUBLIC: &str = "PUBLIC";
 /// `views` is tier 2 of field masking: the API reads the `api` views, so the privileges follow
 /// them and the base table holds nothing for the API roles, or `Accept-Profile` walks straight
 /// round the mask. Schema exposure is PostgREST configuration, not a boundary. The views' own
-/// privileges are re-asserted with them ([`generate_view_grants`]).
+/// privileges are re-asserted with them ([`view_grants`]).
 ///
 /// `service_role` keeps its base-table access: tier 1 masks a `service_role` caller like any other
 /// (the read predicate simply fails for it), while under tier 2 that caller reads the table
@@ -341,7 +341,8 @@ pub fn table_grants(ast: &SchemaAst, views: bool) -> Vec<TableGrant> {
 /// What each API role may do on a many-to-many junction table (E27): what its policies can admit
 /// the role to (`junction_access`), which no default privilege widens. Without these the table kept
 /// whatever the database's default privileges gave, `TRUNCATE` included. A junction has no fields of
-/// its own, so nothing is narrowed to columns, and tier 2 changes nothing: no view is made over it.
+/// its own, so nothing is narrowed to columns. Under tier 2 its `api` view passes both key columns
+/// through and carries these same privileges ([`junction_view_grants`]).
 ///
 /// `SELECT` stays wherever another rule reads the junction as a membership source (`Rows`), since
 /// a policy's subquery reads it as the caller and would fail rather than find no row; its own
@@ -541,7 +542,7 @@ pub fn view_grants(ast: &SchemaAst, model: &ModelAst, view_schema: &str) -> Stri
 }
 
 /// Tier 2's privileges on a many-to-many junction's `api` view: for each API role what it holds on
-/// the junction under tier 1 ([`junction_grants`]), and for `service_role` every row verb.
+/// the junction under tier 1 (`junction_grants`), and for `service_role` every row verb.
 pub fn junction_view_grants(
     ast: &SchemaAst,
     junction: &JunctionTableAst,

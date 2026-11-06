@@ -25,12 +25,12 @@ const KEEPALIVES: &str = "SELECT set_config('tcp_keepalives_idle', '30', false),
 /// timeout with `SET LOCAL`, which wins over this one.
 const PREVIEW_LOCK_TIMEOUT: &str = "5s";
 
-/// A pool on `url` whose every connection runs with [`KEEPALIVES`].
+/// A pool on `url` whose every connection runs with `KEEPALIVES`.
 pub async fn connect(url: &str) -> Result<PgPool> {
     pool(url, KEEPALIVES.to_string()).await
 }
 
-/// [`connect`], with [`PREVIEW_LOCK_TIMEOUT`] on every connection.
+/// [`connect`], with `PREVIEW_LOCK_TIMEOUT` on every connection.
 pub async fn connect_for_preview(url: &str) -> Result<PgPool> {
     let session =
         format!("{KEEPALIVES}, set_config('lock_timeout', '{PREVIEW_LOCK_TIMEOUT}', false)");
