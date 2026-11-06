@@ -78,7 +78,7 @@ pub(crate) fn junction_access<'a>(
 }
 
 /// Whether `rule` reads `table` as a membership source, at any depth.
-fn reads_table(rule: &AccessRule, table: &str) -> bool {
+pub(crate) fn reads_table(rule: &AccessRule, table: &str) -> bool {
     let source_reads = |source: &MembershipSource| match source {
         MembershipSource::Rows {
             table: t, filter, ..

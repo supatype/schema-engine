@@ -528,3 +528,49 @@ async fn an_authored_posts_links_follow_the_post_and_the_tag() {
     })
     .await;
 }
+
+/// `membership()` with the project read through `Exists<Rows<"project_members", ...>>` rather than
+/// `In<"id", Rows<...>>`: a rule that reaches the junction only through `Exists`.
+fn membership_by_exists() -> SchemaAst {
+    let mut doc: Value = serde_json::to_value(membership()).expect("the fixture serializes");
+    let mine = json!({
+        "type": "exists",
+        "source": { "kind": "rows", "table": "project_members", "column": "project_id",
+                    "where": { "type": "compare", "op": "eq",
+                               "left": { "kind": "column", "name": "member_id" },
+                               "right": { "kind": "authUid" } } }
+    });
+    let project = &mut doc["models"][1]["annotations"]["platform"]["access"];
+    project["read"] = mine.clone();
+    project["update"] = mine;
+    parser::parse(&doc.to_string()).expect("the Exists fixture parses")
+}
+
+// The project's read policy reads the junction as the caller, so the junction keeps SELECT for
+// both API roles however it is reached: without it every read of a project fails with
+// "permission denied for table project_members" instead of finding no rows.
+#[test]
+fn a_junction_read_only_through_exists_keeps_select() {
+    let ast = membership_by_exists();
+    for role in supatype_engine::generator::sql::grants::GRANTED_ROLES {
+        let grant = supatype_engine::generator::sql::grants::table_grants(&ast, false)
+            .into_iter()
+            .find(|g| g.table == "project_members" && g.role == role)
+            .expect("a grant for the junction");
+        assert!(grant.privileges.contains(&"SELECT"), "{grant:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_project_read_through_exists_on_its_junction_is_not_refused() {
+    common::with_integration_pool(|pool| async move {
+        prepare(&pool).await;
+        common::push(&pool, &membership_by_exists())
+            .await
+            .expect("push");
+        let read = "SELECT id::text AS line FROM public.projects";
+        let rows = as_caller(&pool, Caller::Reader, read).await;
+        assert!(rows.is_ok(), "{rows:?}");
+    })
+    .await;
+}

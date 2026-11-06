@@ -19,7 +19,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use crate::generator::sql::junction_access::{junction_access, JunctionAccess};
+use crate::generator::sql::junction_access::{junction_access, reads_table, JunctionAccess};
 use crate::parser::accessors::{column_names_for, db_table_name, platform_access};
 use crate::parser::ast::{
     AccessAst, AccessRule, JunctionTableAst, MembershipSource, ModelAst, Operand, SchemaAst,
@@ -408,11 +408,8 @@ fn read_as_membership(ast: &SchemaAst, table: &str) -> bool {
         .into_iter()
         .chain(fields)
         .flatten()
-        .any(|rule| {
-            crate::generator::sql::rls::membership_index_targets(rule)
-                .iter()
-                .any(|(source, _)| source == table)
-        })
+        // `In` and `Exists` alike: both read the source as the caller.
+        .any(|rule| reads_table(rule, table))
     })
 }
 
@@ -530,15 +527,22 @@ pub fn unwritable_columns(ast: &SchemaAst, model: &ModelAst, op: &str, role: &st
 /// roles then ([`table_grants`]).
 pub fn view_grants(ast: &SchemaAst, model: &ModelAst, view_schema: &str) -> String {
     grants_on_view(view_schema, db_table_name(model), |role| {
-        let grant = model_grant(ast, model, role);
-        RULED
-            .into_iter()
-            .filter(|privilege| {
-                grant.privileges.contains(privilege)
-                    || grant.narrowed.iter().any(|(op, _)| op == privilege)
-            })
-            .collect()
+        api_privileges(ast, model, role)
     })
+}
+
+/// The row verbs `role` may use on `model` through the API, in [`RULED`] order: those granted on
+/// the whole table and those narrowed to some of its columns. The same in both tiers, since tier
+/// 2's view is granted exactly these.
+pub fn api_privileges(ast: &SchemaAst, model: &ModelAst, role: &'static str) -> Vec<&'static str> {
+    let grant = model_grant(ast, model, role);
+    RULED
+        .into_iter()
+        .filter(|privilege| {
+            grant.privileges.contains(privilege)
+                || grant.narrowed.iter().any(|(op, _)| op == privilege)
+        })
+        .collect()
 }
 
 /// Tier 2's privileges on a many-to-many junction's `api` view: for each API role what it holds on
@@ -556,6 +560,20 @@ pub fn junction_view_grants(
             .map(|g| g.privileges.clone())
             .unwrap_or_default()
     })
+}
+
+/// The row verbs `role` holds on a many-to-many junction, in [`RULED`] order: the same in both
+/// tiers, since tier 2's view is granted exactly these ([`junction_view_grants`]).
+pub fn junction_privileges(
+    ast: &SchemaAst,
+    junction: &JunctionTableAst,
+    role: &str,
+) -> Vec<&'static str> {
+    junction_grants(ast, junction)
+        .into_iter()
+        .find(|g| g.role == role)
+        .map(|g| g.privileges)
+        .unwrap_or_default()
 }
 
 /// Each API role granted exactly what `held` says it holds on a view and refused the rest of the

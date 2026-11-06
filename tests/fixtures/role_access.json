@@ -1,0 +1,497 @@
+{
+  "astVersion": 2,
+  "models": [
+    {
+      "name": "Profile",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "authUserId": true,
+              "unique": true,
+              "index": false
+            }
+          }
+        },
+        "display_name": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "profile",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "authenticated"
+            },
+            "create": {
+              "type": "owner",
+              "field": "id"
+            },
+            "update": {
+              "type": "owner",
+              "field": "id"
+            },
+            "delete": {
+              "type": "owner",
+              "field": "id"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Notice",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          },
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "body": {
+          "kind": "text",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        }
+      },
+      "options": {},
+      "annotations": {
+        "db": {
+          "tableName": "notice",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "public"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Form",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          },
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "owner_id": {
+          "kind": "uuid",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "authUserId": true,
+              "authUserOnDelete": "cascade",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "check": "char_length(\"{name}\") <= 200",
+          "validation": {
+            "maxLength": 200
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "published_at": {
+          "kind": "datetime",
+          "required": false,
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "questions": {
+          "kind": "relation",
+          "cardinality": "hasMany",
+          "target": "Question"
+        },
+        "responses": {
+          "kind": "relation",
+          "cardinality": "hasMany",
+          "target": "Response"
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "form",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "any",
+              "rules": [
+                {
+                  "type": "owner",
+                  "field": "owner_id"
+                },
+                {
+                  "type": "nullCheck",
+                  "operand": {
+                    "kind": "column",
+                    "name": "published_at"
+                  },
+                  "isNull": false
+                }
+              ]
+            },
+            "create": {
+              "type": "owner",
+              "field": "owner_id"
+            },
+            "update": {
+              "type": "owner",
+              "field": "owner_id"
+            },
+            "delete": {
+              "type": "owner",
+              "field": "owner_id"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Question",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          },
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "form": {
+          "kind": "relation",
+          "required": true,
+          "cardinality": "belongsTo",
+          "target": "Form",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "form_id"
+            }
+          }
+        },
+        "position": {
+          "kind": "smallInt",
+          "required": true,
+          "annotations": {
+            "db": {
+              "pgType": "SMALLINT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "title": {
+          "kind": "text",
+          "required": true,
+          "check": "char_length(\"{name}\") <= 500",
+          "validation": {
+            "maxLength": 500
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TEXT",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "question",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "any",
+              "rules": [
+                {
+                  "type": "owner",
+                  "field": "form"
+                },
+                {
+                  "type": "in",
+                  "column": "form_id",
+                  "source": {
+                    "kind": "rows",
+                    "table": "form",
+                    "column": "id",
+                    "where": {
+                      "type": "nullCheck",
+                      "operand": {
+                        "kind": "column",
+                        "name": "published_at"
+                      },
+                      "isNull": false
+                    }
+                  }
+                }
+              ]
+            },
+            "create": {
+              "type": "owner",
+              "field": "form"
+            },
+            "update": {
+              "type": "owner",
+              "field": "form"
+            },
+            "delete": {
+              "type": "owner",
+              "field": "form"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "Response",
+      "fields": {
+        "id": {
+          "kind": "uuid",
+          "required": true,
+          "primaryKey": true,
+          "annotations": {
+            "db": {
+              "pgType": "UUID",
+              "unique": true,
+              "index": false
+            }
+          },
+          "default": {
+            "kind": "genRandomUuid"
+          }
+        },
+        "form": {
+          "kind": "relation",
+          "required": true,
+          "cardinality": "belongsTo",
+          "target": "Form",
+          "onDelete": "cascade",
+          "annotations": {
+            "db": {
+              "foreignKey": "form_id"
+            }
+          }
+        },
+        "answers": {
+          "kind": "json",
+          "required": true,
+          "tsType": "{ [key: string]: string }",
+          "annotations": {
+            "db": {
+              "pgType": "JSONB",
+              "unique": false,
+              "index": false
+            }
+          }
+        },
+        "created_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        },
+        "updated_at": {
+          "kind": "datetime",
+          "required": true,
+          "default": {
+            "kind": "now"
+          },
+          "annotations": {
+            "db": {
+              "pgType": "TIMESTAMP WITH TIME ZONE",
+              "unique": false,
+              "index": false,
+              "serverGenerated": true
+            }
+          }
+        }
+      },
+      "options": {
+        "timestamps": true
+      },
+      "annotations": {
+        "db": {
+          "tableName": "response",
+          "indexes": []
+        },
+        "platform": {
+          "access": {
+            "read": {
+              "type": "owner",
+              "field": "form"
+            },
+            "create": {
+              "type": "in",
+              "column": "form_id",
+              "source": {
+                "kind": "rows",
+                "table": "form",
+                "column": "id",
+                "where": {
+                  "type": "nullCheck",
+                  "operand": {
+                    "kind": "column",
+                    "name": "published_at"
+                  },
+                  "isNull": false
+                }
+              }
+            },
+            "delete": {
+              "type": "owner",
+              "field": "form"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
