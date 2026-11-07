@@ -659,13 +659,30 @@ pub fn required_field_existing_table_warning(table: &str, column: &str) -> Strin
     )
 }
 
+/// True when adding the column fills a table's existing rows with no backfill default.
+///
+/// The database fills an identity column from its sequence and a generated one from its
+/// expression, and Postgres refuses a `DEFAULT` beside either (`both default and identity
+/// specified`). A declared default fills the rows itself, and a second `DEFAULT` beside it is
+/// refused too (`multiple default values specified`).
+pub fn fills_existing_rows(field: &FieldAst) -> bool {
+    crate::parser::accessors::database_fills(field)
+        || crate::parser::accessors::declares_default(field)
+}
+
+/// Whether adding `field` as a required column to a table with rows may fail: nothing fills the
+/// rows it already has, neither the column itself nor a backfill default.
+pub fn needs_backfill_warning(field: &FieldAst) -> bool {
+    crate::differ::column_diff::field_is_required(field) == Some(true)
+        && !fills_existing_rows(field)
+        && add_column_backfill_default(field).is_none()
+}
+
 /// DEFAULT expression for ADD COLUMN on a table that already has rows (required, no schema default).
 ///
-/// None for a column the database fills itself: an identity column numbers the existing rows from
-/// its sequence and a generated one computes them, and Postgres refuses a `DEFAULT` beside either
-/// (`both default and identity specified`).
+/// None for a column that [`fills_existing_rows`] by itself.
 pub fn add_column_backfill_default(field: &FieldAst) -> Option<String> {
-    if crate::parser::accessors::database_fills(field) {
+    if fills_existing_rows(field) {
         return None;
     }
     match field {
@@ -716,7 +733,9 @@ pub fn using_expr_for_alter(strategy: &ConversionStrategy, column: &str, to_pg: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ast::{GeneratedColumnAst, IdentityGeneration, ScalarFieldAst};
+    use crate::parser::ast::{
+        DecimalFieldAst, GeneratedColumnAst, IdentityGeneration, JsonFieldAst, ScalarFieldAst,
+    };
 
     fn rich_text(localized: bool) -> FieldAst {
         let mut scalar = ScalarFieldAst {
@@ -810,6 +829,68 @@ mod tests {
         ] {
             assert_eq!(add_column_backfill_default(&field), None, "{field:?}");
         }
+    }
+
+    /// A required column that declares its own default fills the existing rows with it, so no
+    /// backfill default goes beside it: Postgres refuses two (`multiple default values specified`),
+    /// and the backfill's `DROP DEFAULT` would then take the declared one away too.
+    #[test]
+    fn a_column_with_its_own_default_has_no_backfill_default() {
+        let declared = || {
+            Some(DefaultValueAst::Value {
+                value: serde_json::json!("[]"),
+            })
+        };
+        let json = |default| {
+            FieldAst::Json(JsonFieldAst {
+                pg_type: "JSONB".into(),
+                required: true,
+                check: None,
+                validation: None,
+                localized: false,
+                read_only: false,
+                default,
+                ts_type: None,
+                annotations: Default::default(),
+            })
+        };
+        let decimal = |default| {
+            FieldAst::Decimal(DecimalFieldAst {
+                pg_type: "NUMERIC".into(),
+                required: true,
+                precision: None,
+                scale: None,
+                check: None,
+                validation: None,
+                localized: false,
+                read_only: false,
+                default,
+                annotations: Default::default(),
+            })
+        };
+        let money = |default| {
+            FieldAst::Money(ScalarFieldAst {
+                pg_type: "NUMERIC(19,4)".into(),
+                required: true,
+                default,
+                ..Default::default()
+            })
+        };
+        for field in [json(declared()), decimal(declared()), money(declared())] {
+            assert_eq!(add_column_backfill_default(&field), None, "{field:?}");
+        }
+        assert_eq!(
+            add_column_backfill_default(&json(None)).as_deref(),
+            Some("'{}'::jsonb")
+        );
+        assert_eq!(
+            add_column_backfill_default(&decimal(None)).as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            add_column_backfill_default(&money(None)).as_deref(),
+            Some("0")
+        );
     }
 
     #[test]

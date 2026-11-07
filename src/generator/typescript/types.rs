@@ -309,11 +309,10 @@ fn emit_soft_delete(mode: Mode, out: &mut String, ind: &str) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn field_has_default(field: &FieldAst) -> bool {
-    match field {
-        FieldAst::Serial(_) | FieldAst::BigSerial(_) | FieldAst::Slug(_) => true,
-        FieldAst::Enum(f) => f.default.is_some(),
-        other => crate::parser::ast::declared_default(other).is_some(),
-    }
+    matches!(
+        field,
+        FieldAst::Serial(_) | FieldAst::BigSerial(_) | FieldAst::Slug(_)
+    ) || crate::parser::accessors::declares_default(field)
 }
 
 /// One block's entry: its name under `type`, its fields under `data`, each typed as the same field

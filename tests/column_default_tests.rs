@@ -25,12 +25,20 @@ fn one_field(model: &Model, name: &str, mut field: Value, default: Option<Value>
     if let Some(default) = default {
         field["default"] = default;
     }
-    let mut fields = json!({
-        "id": { "kind": "uuid", "primaryKey": true, "required": true,
-                "default": { "kind": "genRandomUuid" },
-                "annotations": { "db": { "pgType": "UUID", "unique": false } } }
-    });
+    let mut fields = json!({ "id": id_field() });
     fields[name] = field;
+    schema_of(model, fields)
+}
+
+/// The uuid primary key every fixture has.
+fn id_field() -> Value {
+    json!({ "kind": "uuid", "primaryKey": true, "required": true,
+            "default": { "kind": "genRandomUuid" },
+            "annotations": { "db": { "pgType": "UUID", "unique": false } } })
+}
+
+/// A one-model schema of `model` with exactly `fields`.
+fn schema_of(model: &Model, fields: Value) -> SchemaAst {
     let model = json!({
         "name": model.name,
         "fields": fields,
@@ -273,6 +281,40 @@ async fn a_json_default_added_to_an_existing_table_lets_the_insert_through() {
         );
         push_and_settle(&pool, &ast).await;
         assert_eq!(insert_without_options(&pool).await, Ok("[]".to_string()));
+    })
+    .await;
+}
+
+/// `options` added to a `cd_question` that already holds a row (issue 60): the declared default
+/// fills the row, and stays. A backfill `DEFAULT '{}'` went beside it, which Postgres refuses
+/// (`multiple default values specified`), and its `DROP DEFAULT` would have removed the declared one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_required_json_column_with_a_default_is_added_to_a_table_with_rows() {
+    common::with_integration_pool(|pool| async move {
+        let id_only = Model {
+            name: "Question",
+            table: "cd_question",
+            timestamps: false,
+        };
+        let before = schema_of(&id_only, json!({ "id": id_field() }));
+        push_and_settle(&pool, &before).await;
+        sqlx::query("INSERT INTO public.cd_question DEFAULT VALUES")
+            .execute(&pool)
+            .await
+            .expect("a row");
+
+        push_and_settle(&pool, &question(literal("[]"))).await;
+        let stored: String = sqlx::query_scalar("SELECT options::text FROM public.cd_question")
+            .fetch_one(&pool)
+            .await
+            .expect("the row");
+        assert_eq!(stored, "[]");
+        assert_eq!(
+            column_default(&pool, "cd_question", "options")
+                .await
+                .as_deref(),
+            Some("'[]'::jsonb")
+        );
     })
     .await;
 }
