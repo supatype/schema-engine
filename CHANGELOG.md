@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.10.0](https://github.com/supatype/schema-engine/compare/v0.9.0...v0.10.0) (2026-11-08)
+
+
+### Features
+
+* **diff,push:** carry each API role's access, links included, in the plan and push answer ([2a19e98](https://github.com/supatype/schema-engine/commit/2a19e988e8c950b78ec37969bed1eb7bff7d9fb0))
+
+
+### Bug Fixes
+
+* **push:** a required column with its own default is added with that default alone ([97cd8ee](https://github.com/supatype/schema-engine/commit/97cd8ee663fd3d501e46e1ecb648effcd978168d))
+* **push:** a required column with its own default is added with that default alone ([3d2f380](https://github.com/supatype/schema-engine/commit/3d2f38019f519ef9420e12957f683c798c0bf9ac))
+* **rls:** compare a claim with a boolean or number literal as that JSON type ([2f2e021](https://github.com/supatype/schema-engine/commit/2f2e02197d1dad4f9344b2b333c22cad8a59b023))
+
 ## [0.9.0](https://github.com/supatype/schema-engine/compare/v0.8.0...v0.9.0) (2026-11-04)
 
 
