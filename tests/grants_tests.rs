@@ -4,7 +4,10 @@
 //! the only thing standing between an unauthenticated caller and every row of every table. These
 //! grants are the second layer: a policy that fails to apply then meets a privilege that was never
 //! granted. Each role's privileges on a model table are one ledger object since Phase 4.7c (D7),
-//! applied as the exact set: `tests/grant_ledger_tests.rs` proves them against Postgres.
+//! applied as the exact set: `tests/grant_ledger_tests.rs` proves them against Postgres. The
+//! issue 16 cases at the end are also run against Postgres here, as an anonymous caller.
+
+mod common;
 
 use supatype_engine::{
     generator::sql::grants::{self, TableGrant},
@@ -172,4 +175,146 @@ fn a_rows_source_that_reads_itself_terminates() {
         let anon = rows_grant(table, "anon");
         assert!(anon.privileges.contains(&"SELECT"), "{anon:?}");
     }
+}
+
+// The workaround tried in issue 16, `All<[Public, In<...>]>`. `Public` is login-free, so the rule
+// is as reachable as its `In` branch, and anon keeps SELECT.
+#[test]
+fn public_all_with_a_rows_source_anon_can_read_keeps_anon_select() {
+    let mut doc: serde_json::Value = serde_json::from_str(ROWS_FIXTURE).expect("rows fixture");
+    let question = model_mut(&mut doc, "question");
+    let membership = question["annotations"]["platform"]["access"]["read"]["rules"][1].clone();
+    question["annotations"]["platform"]["access"]["read"] =
+        serde_json::json!({ "type": "all", "rules": [{ "type": "public" }, membership] });
+    let ast = parser::parse(&doc.to_string()).expect("the edited fixture parses");
+    let anon = grants::table_grants(&ast, false)
+        .into_iter()
+        .find(|g| g.table == "question" && g.role == "anon")
+        .expect("a grant for anon on question");
+    assert!(anon.privileges.contains(&"SELECT"), "{anon:?}");
+}
+
+/// The model of `doc` whose table is `table`.
+fn model_mut<'a>(doc: &'a mut serde_json::Value, table: &str) -> &'a mut serde_json::Value {
+    doc["models"]
+        .as_array_mut()
+        .expect("models")
+        .iter_mut()
+        .find(|m| m["annotations"]["db"]["tableName"] == table)
+        .unwrap_or_else(|| panic!("no model for {table}"))
+}
+
+// ─── The same rules against Postgres, as anon (issue 16) ────────────────────
+//
+// The unit tests above prove which privileges are computed. These prove what an anonymous
+// caller can then do, as PostgREST runs it: `SET LOCAL ROLE anon` with anon's claims. A
+// REST-level probe needs a PostgREST in front of the database, which this harness does not run,
+// and a missing privilege fails here with the same 42501 PostgREST passes back.
+
+const PUBLISHED: &str = "aaaaaaaa-0000-0000-0000-00000000000a";
+const UNPUBLISHED: &str = "aaaaaaaa-0000-0000-0000-00000000000b";
+
+/// The rows fixture without the models whose rules read each other in a loop, which a push
+/// refuses: a form, its questions and responses, and a note on a signed-in-only `secret`.
+fn pushable_rows_fixture() -> supatype_engine::parser::ast::SchemaAst {
+    let mut doc: serde_json::Value = serde_json::from_str(ROWS_FIXTURE).expect("rows fixture");
+    let keep = ["form", "question", "response", "secret", "secret_note"];
+    doc["models"].as_array_mut().expect("models").retain(|m| {
+        keep.iter()
+            .any(|t| m["annotations"]["db"]["tableName"] == *t)
+    });
+    parser::parse(&doc.to_string()).expect("the trimmed fixture parses")
+}
+
+/// Pushes the trimmed fixture and seeds a published and an unpublished form, a question on each
+/// and a note on a secret.
+async fn pushed_with_forms(pool: &sqlx::PgPool) {
+    common::push(pool, &pushable_rows_fixture())
+        .await
+        .unwrap_or_else(|e| panic!("the push applies: {e:#}"));
+    let owner = "cccccccc-0000-0000-0000-00000000000c";
+    common::exec(
+        pool,
+        &format!(
+            "INSERT INTO public.form (id, user_id, published_at) VALUES
+               ('{PUBLISHED}', '{owner}', now()), ('{UNPUBLISHED}', '{owner}', NULL);
+             INSERT INTO public.question (form_id) VALUES ('{PUBLISHED}'), ('{UNPUBLISHED}');
+             INSERT INTO public.secret (id, published_at) VALUES ('{owner}', now());
+             INSERT INTO public.secret_note (secret_id) VALUES ('{owner}');"
+        ),
+    )
+    .await
+    .expect("seed the forms");
+}
+
+/// Runs `sql` as an anonymous caller, as PostgREST does, rolled back, and returns the form ids
+/// it selects, or the SQLSTATE and message it fails with.
+async fn as_anon(pool: &sqlx::PgPool, sql: &str) -> Result<Vec<String>, String> {
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::raw_sql(
+        "SELECT set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);
+         SET LOCAL ROLE anon;",
+    )
+    .execute(&mut *tx)
+    .await
+    .expect("become anon");
+    let rows = sqlx::query_scalar::<_, String>(sql)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| match e.as_database_error() {
+            Some(db) => format!("{} {}", db.code().unwrap_or_default(), db.message()),
+            None => e.to_string(),
+        });
+    let _ = tx.rollback().await;
+    rows
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn anon_reads_the_questions_of_a_published_form_only() {
+    common::with_integration_pool(|pool| async move {
+        pushed_with_forms(&pool).await;
+        let read = as_anon(&pool, "SELECT form_id::text FROM public.question").await;
+        assert_eq!(read, Ok(vec![PUBLISHED.to_string()]));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn anon_answers_a_published_form_and_not_an_unpublished_one() {
+    common::with_integration_pool(|pool| async move {
+        pushed_with_forms(&pool).await;
+        let insert = |form: &str| {
+            format!("INSERT INTO public.response (form_id) VALUES ('{form}') RETURNING 'inserted'")
+        };
+        // `RETURNING` reads the row back, which needs SELECT; `response` has no read rule, so
+        // the probe asks for a constant, which the INSERT privilege alone allows.
+        assert_eq!(
+            as_anon(&pool, &insert(PUBLISHED)).await,
+            Ok(vec!["inserted".to_string()])
+        );
+        let refused = as_anon(&pool, &insert(UNPUBLISHED)).await;
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.starts_with("42501") && e.contains("row-level security")),
+            "an answer to an unpublished form was not refused by its policy: {refused:?}"
+        );
+    })
+    .await;
+}
+
+// The revoke side: `secret` is readable only when signed in, so anon holds no SELECT on the note
+// that reads it, and is refused by the privilege before any policy runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn anon_cannot_read_rows_whose_source_it_cannot_read() {
+    common::with_integration_pool(|pool| async move {
+        pushed_with_forms(&pool).await;
+        let read = as_anon(&pool, "SELECT secret_id::text FROM public.secret_note").await;
+        assert!(
+            read.as_ref()
+                .is_err_and(|e| e == "42501 permission denied for table secret_note"),
+            "{read:?}"
+        );
+    })
+    .await;
 }

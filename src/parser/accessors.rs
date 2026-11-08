@@ -457,6 +457,15 @@ pub fn database_fills(field: &FieldAst) -> bool {
     owns_sequence(field) || super::ast::scalar_of(field).is_some_and(|f| f.generated.is_some())
 }
 
+/// Whether the field declares a default: a [`DefaultValueAst`](super::ast::declared_default), or an
+/// enum's, which is the bare name of one of its values.
+pub fn declares_default(field: &FieldAst) -> bool {
+    match field {
+        FieldAst::Enum(f) => f.default.is_some(),
+        other => super::ast::declared_default(other).is_some(),
+    }
+}
+
 /// Whether no caller writes the column: a generated one, which Postgres refuses to write, or a
 /// `GENERATED ALWAYS` identity, which it refuses short of `OVERRIDING SYSTEM VALUE`.
 pub fn never_written(field: &FieldAst) -> bool {

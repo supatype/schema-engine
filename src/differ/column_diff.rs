@@ -1,6 +1,6 @@
 use super::{renames, ColumnDependencySnapshot, Operation, Risk};
 use crate::generator::sql::column_conversion::{
-    self, add_column_backfill_default, plan_type_conversion, required_field_existing_table_warning,
+    self, needs_backfill_warning, plan_type_conversion, required_field_existing_table_warning,
     supports_kind_data_migration, ConversionStrategyKind,
 };
 use crate::introspector::constraints::{DbConstraint, DbConstraintType};
@@ -1017,13 +1017,7 @@ pub fn diff(
     for col in &added {
         if !renamed.contains_key(*col) {
             if let Some((_, field)) = schema_columns.get(*col) {
-                // A serial or identity column fills existing rows from its own sequence, and a
-                // generated one from its expression, so they need no backfill.
-                let fills_itself = crate::parser::accessors::database_fills(field);
-                if field_is_required(field) == Some(true)
-                    && add_column_backfill_default(field).is_none()
-                    && !fills_itself
-                {
+                if needs_backfill_warning(field) {
                     warnings.push(required_field_existing_table_warning(
                         model.table_name(),
                         col,
@@ -1207,9 +1201,7 @@ pub fn diff(
                 .and_then(|n| n.get("to"))
                 .and_then(|v| v.as_str())
                 == Some("not_null")
-                && field_is_required(field) == Some(true)
-                && add_column_backfill_default(field).is_none()
-                && !crate::parser::accessors::database_fills(field)
+                && needs_backfill_warning(field)
             {
                 warnings.push(required_field_existing_table_warning(
                     model.table_name(),

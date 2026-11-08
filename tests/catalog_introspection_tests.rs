@@ -258,7 +258,7 @@ async fn grants_are_aggregated_per_grantee_and_sorted() {
         exec(
             &pool,
             "CREATE TABLE public.ledger (id int PRIMARY KEY, amount int, note text);
-             DO $$ BEGIN CREATE ROLE reporting; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+             DO $$ BEGIN CREATE ROLE reporting; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
              GRANT SELECT, INSERT ON public.ledger TO reporting;
              GRANT SELECT ON public.ledger TO PUBLIC;
              GRANT UPDATE (note) ON public.ledger TO reporting;",

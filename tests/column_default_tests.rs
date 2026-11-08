@@ -25,12 +25,20 @@ fn one_field(model: &Model, name: &str, mut field: Value, default: Option<Value>
     if let Some(default) = default {
         field["default"] = default;
     }
-    let mut fields = json!({
-        "id": { "kind": "uuid", "primaryKey": true, "required": true,
-                "default": { "kind": "genRandomUuid" },
-                "annotations": { "db": { "pgType": "UUID", "unique": false } } }
-    });
+    let mut fields = json!({ "id": id_field() });
     fields[name] = field;
+    schema_of(model, fields)
+}
+
+/// The uuid primary key every fixture has.
+fn id_field() -> Value {
+    json!({ "kind": "uuid", "primaryKey": true, "required": true,
+            "default": { "kind": "genRandomUuid" },
+            "annotations": { "db": { "pgType": "UUID", "unique": false } } })
+}
+
+/// A one-model schema of `model` with exactly `fields`.
+fn schema_of(model: &Model, fields: Value) -> SchemaAst {
     let model = json!({
         "name": model.name,
         "fields": fields,
@@ -212,6 +220,101 @@ async fn a_json_default_is_added_changed_and_dropped_on_an_existing_column() {
 
         push_and_settle(&pool, &settings(None)).await;
         assert_eq!(settings_default(&pool).await, None);
+    })
+    .await;
+}
+
+/// `options: Default<JSON<string[]>, "[]">` as the CLI sends it: required, so `NOT NULL`, and
+/// optional in the generated `Insert` type because of its default.
+fn question(default: Option<Value>) -> SchemaAst {
+    let options = json!({ "kind": "json", "required": true, "jsonArray": true,
+                          "tsType": "string[]",
+                          "annotations": { "db": { "pgType": "JSONB", "unique": false,
+                                                    "index": false } } });
+    let model = Model {
+        name: "Question",
+        table: "cd_question",
+        timestamps: false,
+    };
+    one_field(&model, "options", options, default)
+}
+
+/// What an insert that leaves `options` out stores there, or how it fails.
+async fn insert_without_options(pool: &sqlx::PgPool) -> Result<String, String> {
+    sqlx::query_scalar("INSERT INTO public.cd_question DEFAULT VALUES RETURNING options::text")
+        .fetch_one(pool)
+        .await
+        .map_err(|e| match e.as_database_error() {
+            Some(db) => format!("{} {}", db.code().unwrap_or_default(), db.message()),
+            None => e.to_string(),
+        })
+}
+
+/// The insert the generated types allow, leaving the required JSON column out, succeeds on a
+/// table the push creates (issue 17): it was `23502` while the default was dropped.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_insert_leaving_out_a_required_json_column_takes_its_default() {
+    common::with_integration_pool(|pool| async move {
+        push_and_settle(&pool, &question(literal("[]"))).await;
+        assert_eq!(insert_without_options(&pool).await, Ok("[]".to_string()));
+    })
+    .await;
+}
+
+/// The same insert on a table an earlier push created without the default: the next push sets
+/// it with `ALTER COLUMN ... SET DEFAULT`, and the insert then succeeds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_json_default_added_to_an_existing_table_lets_the_insert_through() {
+    common::with_integration_pool(|pool| async move {
+        push_and_settle(&pool, &question(None)).await;
+        let refused = insert_without_options(&pool).await;
+        assert!(
+            refused.as_ref().is_err_and(|e| e.starts_with("23502")),
+            "{refused:?}"
+        );
+
+        let ast = question(literal("[]"));
+        let planned = planned_column_ops(&pool, &ast).await;
+        assert!(
+            planned.len() == 1 && planned[0].contains("'[]'::jsonb"),
+            "expected one ALTER COLUMN setting the default, planned: {planned:?}"
+        );
+        push_and_settle(&pool, &ast).await;
+        assert_eq!(insert_without_options(&pool).await, Ok("[]".to_string()));
+    })
+    .await;
+}
+
+/// `options` added to a `cd_question` that already holds a row (issue 60): the declared default
+/// fills the row, and stays. A backfill `DEFAULT '{}'` went beside it, which Postgres refuses
+/// (`multiple default values specified`), and its `DROP DEFAULT` would have removed the declared one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_required_json_column_with_a_default_is_added_to_a_table_with_rows() {
+    common::with_integration_pool(|pool| async move {
+        let id_only = Model {
+            name: "Question",
+            table: "cd_question",
+            timestamps: false,
+        };
+        let before = schema_of(&id_only, json!({ "id": id_field() }));
+        push_and_settle(&pool, &before).await;
+        sqlx::query("INSERT INTO public.cd_question DEFAULT VALUES")
+            .execute(&pool)
+            .await
+            .expect("a row");
+
+        push_and_settle(&pool, &question(literal("[]"))).await;
+        let stored: String = sqlx::query_scalar("SELECT options::text FROM public.cd_question")
+            .fetch_one(&pool)
+            .await
+            .expect("the row");
+        assert_eq!(stored, "[]");
+        assert_eq!(
+            column_default(&pool, "cd_question", "options")
+                .await
+                .as_deref(),
+            Some("'[]'::jsonb")
+        );
     })
     .await;
 }

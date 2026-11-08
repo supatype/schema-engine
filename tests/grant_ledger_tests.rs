@@ -158,7 +158,7 @@ async fn a_grant_to_another_role_is_never_ours() {
         push(&pool, &readable()).await.unwrap();
         exec(
             &pool,
-            "DO $$ BEGIN CREATE ROLE report_reader; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+            "DO $$ BEGIN CREATE ROLE report_reader; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
              GRANT SELECT ON public.posts TO report_reader;",
         )
         .await

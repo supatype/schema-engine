@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{bail, Context, Result};
 use sqlx::{Executor, PgConnection, PgPool, Postgres, Transaction};
 
+use crate::access_summary::{self, RoleAccess};
 use crate::baseline_versions::Baseline;
 use crate::desired::{
     desired_objects_for, security_relevant, statements, FieldEnforcement, ObjectKey,
@@ -89,7 +90,7 @@ pub(crate) const ENGINE_LOCK_ID: i32 = 2;
 /// from a failed push and retry: the HTTP server answers it with 409 and [`ENGINE_BUSY`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineBusy {
-    /// Another writer holds [`ENGINE_LOCK_ID`].
+    /// Another writer holds `ENGINE_LOCK_ID`.
     Running,
     /// Another writer committed after this push was planned and before it took the lock: the plan
     /// was decided against a ledger that no longer exists.
@@ -138,6 +139,9 @@ pub struct Plan<'a> {
     /// The drafts models with records lacking a version, which the migration gives version 1
     /// after the block moves, so a version holds the moved shape.
     pub baselines: Vec<Baseline>,
+    /// What each API role may do on each model's table now and once this plan applies: what
+    /// `diff` shows, so a rule meant to be public that gives `anon` nothing is seen (issue 16).
+    pub access: Vec<RoleAccess>,
 }
 
 /// The heading of the migration's section that moves flat block entries.
@@ -224,6 +228,7 @@ impl Plan<'_> {
         json["reconcile"] = serde_json::to_value(&self.reconcile.actions)?;
         json["blockConversions"] = self.block_moves.iter().map(BlockMove::to_json).collect();
         json["baselineVersions"] = self.baselines.iter().map(Baseline::to_json).collect();
+        json["access"] = serde_json::to_value(&self.access)?;
         Ok(json)
     }
 
@@ -313,6 +318,9 @@ pub enum Outcome {
         operations: usize,
         /// The schema's own warnings, then what the database looked like once applied.
         warnings: Vec<String>,
+        /// Each API role's access before and after, as the plan had it: what `supatype dev` prints
+        /// of it is the lines that changed.
+        access: Vec<RoleAccess>,
     },
 }
 
@@ -331,11 +339,13 @@ impl Outcome {
                 name,
                 operations,
                 warnings,
+                access,
             } => serde_json::json!({
                 "status": "applied",
                 "name": name,
                 "operations": operations,
                 "warnings": warnings,
+                "access": access,
             }),
         }
     }
@@ -477,6 +487,7 @@ pub(crate) async fn plan_on<'a>(
         online,
         block_moves,
         baselines,
+        access: access_summary::summarize(ast, &state.catalog, schema),
         // Rendered with the names the ledger records, as the decision was (F2d).
         ast: with_recorded_names(ast, &state.ledger, schema),
         schema: schema.to_string(),
@@ -1749,6 +1760,7 @@ fn applied_outcome(plan: Plan<'_>, rendered: Rendered, applied: Applied) -> Outc
         name: rendered.name,
         operations,
         warnings,
+        access: plan.access,
     }
 }
 

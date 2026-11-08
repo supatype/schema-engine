@@ -607,7 +607,7 @@ async fn a_user_grant_on_a_managed_table_survives_a_push() {
         push(&pool, &ast, false).await.expect("first push applies");
         exec(
             &pool,
-            "DO $$ BEGIN CREATE ROLE reporting; EXCEPTION WHEN duplicate_object THEN NULL; END $$; \
+            "DO $$ BEGIN CREATE ROLE reporting; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$; \
              GRANT SELECT ON public.widgets TO reporting",
         )
         .await

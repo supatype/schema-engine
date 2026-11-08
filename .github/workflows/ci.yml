@@ -290,6 +290,7 @@ jobs:
             --test label_ledger_tests \
             --test policy_ledger_tests \
             --test grant_ledger_tests \
+            --test role_access_tests \
             --test rls_ledger_tests \
             --test column_ledger_tests \
             --test long_table_names_tests \
@@ -321,4 +322,5 @@ jobs:
             --test api_owner_role_tests \
             --test doctor_notes_tests \
             --test sequence_grant_tests \
+            --test registered_claim_rule_tests \
             --test database_owner_tests

@@ -452,9 +452,9 @@ pub fn access_rule_to_expr(
         AccessRule::Compare { left, op, right } => {
             format!(
                 "{} {} {}",
-                operand_to_expr(left),
+                compared_operand_expr(left, right),
                 op.sql(),
-                operand_to_expr(right)
+                compared_operand_expr(right, left)
             )
         }
         AccessRule::NullCheck { operand, is_null } => {
@@ -788,6 +788,38 @@ fn interval_literal(spec: &IntervalSpec) -> String {
         .map(|(amount, unit)| format!("{amount} {}", unit.sql()))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Renders `operand` as one side of a comparison whose other side is `other`.
+///
+/// A claim reads as text, which compares with a column or a string literal but not with a boolean
+/// or a number: `jwt_claim_text('is_anonymous') = FALSE` is `text = boolean`, which Postgres
+/// refuses, so a schema writing `Eq<Claim<"is_anonymous">, Literal<false>>` failed to push. Against
+/// such a literal the claim is read as that JSON type instead ([`typed_claim_expr`]).
+fn compared_operand_expr(operand: &Operand, other: &Operand) -> String {
+    match (operand, other) {
+        (Operand::Claim { path }, Operand::Literal { value }) => match value {
+            LiteralValue::Bool(_) => typed_claim_expr(path, "boolean", "boolean"),
+            LiteralValue::Number(_) => typed_claim_expr(path, "number", "numeric"),
+            LiteralValue::Text(_) => operand_to_expr(operand),
+        },
+        _ => operand_to_expr(operand),
+    }
+}
+
+/// The claim at `path` as `sql_type`, or NULL unless the token holds a JSON `json_type` there.
+///
+/// NULL for a claim of another type, as for a missing one, so the comparison denies rather than
+/// failing the query on a cast: a token carrying `"is_anonymous": "no"` is not a registered user,
+/// and it must not break the request either. One scalar subquery, so the planner reads the claim
+/// once per query, as it does the caller's user id.
+fn typed_claim_expr(path: &str, json_type: &str, sql_type: &str) -> String {
+    format!(
+        "(SELECT CASE WHEN jsonb_typeof(c) = {} THEN c::{sql_type} END \
+         FROM {CLAIMS_SCHEMA}.jwt_claim({}) AS c)",
+        quote_literal(json_type),
+        quote_literal(path)
+    )
 }
 
 /// Renders one side of a comparison.
@@ -1565,6 +1597,54 @@ mod tests {
             operand_to_expr(&operand),
             "(SELECT now() - INTERVAL '30 days')"
         );
+    }
+
+    fn claim(path: &str) -> Operand {
+        Operand::Claim {
+            path: path.to_string(),
+        }
+    }
+
+    fn literal(value: LiteralValue) -> Operand {
+        Operand::Literal { value }
+    }
+
+    // A string literal compares with the claim as text, as it always has.
+    #[test]
+    fn a_claim_against_a_string_literal_reads_as_text() {
+        let right = literal(LiteralValue::Text("false".to_string()));
+        assert_eq!(
+            compared_operand_expr(&claim("is_anonymous"), &right),
+            "_supatype.jwt_claim_text('is_anonymous')"
+        );
+        assert_eq!(
+            compared_operand_expr(&right, &claim("is_anonymous")),
+            "'false'"
+        );
+    }
+
+    // `text = boolean` does not exist in Postgres, so the claim is read as a boolean instead.
+    #[test]
+    fn a_claim_against_a_boolean_literal_reads_as_a_boolean() {
+        let left = claim("is_anonymous");
+        let right = literal(LiteralValue::Bool(false));
+        assert_eq!(
+            compared_operand_expr(&left, &right),
+            "(SELECT CASE WHEN jsonb_typeof(c) = 'boolean' THEN c::boolean END \
+             FROM _supatype.jwt_claim('is_anonymous') AS c)"
+        );
+        assert_eq!(compared_operand_expr(&right, &left), "FALSE");
+    }
+
+    // `text >= integer` does not exist either, so a numeric claim is read as a number.
+    #[test]
+    fn a_claim_against_a_number_literal_reads_as_a_number() {
+        let level = claim("app_metadata.level");
+        let three = literal(LiteralValue::Number(3.0));
+        let typed = "(SELECT CASE WHEN jsonb_typeof(c) = 'number' THEN c::numeric END \
+                     FROM _supatype.jwt_claim('app_metadata.level') AS c)";
+        assert_eq!(compared_operand_expr(&level, &three), typed);
+        assert_eq!(compared_operand_expr(&three, &level), "3");
     }
 
     // The composition the single-unit operands could not express.

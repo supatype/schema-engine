@@ -21,14 +21,9 @@ use anyhow::{bail, Result};
 fn has_value_source(field: &FieldAst) -> bool {
     // A sequence or an expression fills the column, and a `Slug` is populated by a generated
     // BEFORE INSERT trigger: value sources the caller need not supply.
-    if matches!(field, FieldAst::Slug(_)) || crate::parser::accessors::database_fills(field) {
-        return true;
-    }
-    // An enum default is a plain variant name rather than a `DefaultValueAst`.
-    if let FieldAst::Enum(f) = field {
-        return f.default.is_some();
-    }
-    crate::parser::ast::declared_default(field).is_some()
+    matches!(field, FieldAst::Slug(_))
+        || crate::parser::accessors::database_fills(field)
+        || crate::parser::accessors::declares_default(field)
 }
 
 fn field_is_required(field: &FieldAst) -> bool {
