@@ -15,9 +15,10 @@ use super::errors::{database_failure_from, map_failure, ConstraintIndex, SeedErr
 use super::params::{bind_all, resolve, Resolved};
 use super::plan::{Batch, ConnectLookup, Plan, PlannedStep, PlannedWrite, WriteKind};
 use super::{Condition, Value};
+use crate::differ::column_diff::field_pg_type;
 use crate::generator::sql::column_conversion::lexical_normalise_expr;
 use crate::generator::sql::rls::{access_rule_to_expr, operand_to_expr};
-use crate::parser::ast::{ModelAst, Operand, SchemaAst};
+use crate::parser::ast::{FieldAst, ModelAst, Operand, SchemaAst};
 use crate::sql_quote::quote_ident;
 use indexmap::IndexMap;
 use sqlx::postgres::PgRow;
@@ -467,31 +468,57 @@ fn encode_text_array(values: &[Option<String>]) -> String {
 
 /// Each column's Postgres type, so a bound text value can be cast back to it.
 ///
-/// Read from the serialised field for the same reason the fingerprint does: `FieldAst` has
-/// thirty-odd variants, and a match would omit whatever is added next.
+/// The type the column was created with, as `field_pg_type` gives it to the differ and the
+/// migration. It was read from the field's `pgType`, falling back to `text`, which is not the
+/// column's type for every field: an array field has no `pgType` (0.9.1 release test, FF5),
+/// nor does a blocks field, and a localized field keeps its base type's while its column is a
+/// JSONB locale map. Each was cast to the wrong type and refused with 42804, "column \"tags\"
+/// is of type text[] but expression is of type text".
 fn column_types_for(ast: &SchemaAst, model: &str) -> HashMap<String, String> {
     let mut types = HashMap::new();
     let Some(model_ast) = ast.models.iter().find(|m| m.name == model) else {
         return types;
     };
     for (name, field) in &model_ast.fields {
-        let json = serde_json::to_value(field).unwrap_or(serde_json::Value::Null);
-        let pg_type = json
-            .get("pgType")
-            .and_then(|v| v.as_str())
-            .filter(|t| !t.is_empty())
-            .unwrap_or("text")
-            .to_string();
-        types.insert(name.clone(), pg_type.clone());
+        types.insert(name.clone(), field_pg_type(field));
         // A relation's foreign key is writable under its own name too, and carries the
         // referenced key's type rather than the relation's.
-        if let crate::parser::ast::FieldAst::Relation(_) = field {
+        if let FieldAst::Relation(_) = field {
             if let Some(fk) = crate::parser::accessors::db_foreign_key(field, name) {
                 types.insert(fk, "uuid".to_string());
             }
         }
     }
     types
+}
+
+/// Lists for array columns, bound as the Postgres array literal the column's cast reads.
+///
+/// The IR carries a list as JSON, and a bound value travels as text, so without this a list
+/// reached the cast as `["a","b"]`, which Postgres refuses as a malformed array literal. Only
+/// array columns: a `json` column holding a list keeps it as JSON. Each element is quoted, so a
+/// comma, a brace or a quote inside one stays inside it. A string element goes in as its text,
+/// and any other as its JSON text, which is what a number or a boolean reads from; in a `json`
+/// or `jsonb` array every element is JSON text, a string included, so `"a"` is the JSON string
+/// rather than input the cast refuses.
+fn encode_arrays(write: &mut PlannedWrite, types: &HashMap<String, String>) {
+    for (column, value) in write.data.iter_mut() {
+        let Some(element_type) = types.get(column).and_then(|t| t.strip_suffix("[]")) else {
+            continue;
+        };
+        let json_elements = matches!(element_type.to_ascii_lowercase().as_str(), "json" | "jsonb");
+        if let Value::Scalar(serde_json::Value::Array(items)) = value {
+            let elements: Vec<Option<String>> = items
+                .iter()
+                .map(|item| match item {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(text) if !json_elements => Some(text.clone()),
+                    other => Some(other.to_string()),
+                })
+                .collect();
+            *value = Value::Scalar(serde_json::Value::String(encode_text_array(&elements)));
+        }
+    }
 }
 
 /// Which models a batch's rows belong to, for the report.
@@ -843,6 +870,7 @@ impl Target {
     fn prepare(&self, row: &PlannedWrite, resolved: &Resolved) -> PlannedWrite {
         let mut row = row.clone();
         encode_prose(&mut row, &self.typing.rich_text);
+        encode_arrays(&mut row, &self.typing.types);
         resolve_refs(&mut row, resolved);
         row
     }
@@ -1237,5 +1265,39 @@ mod tests {
             Some(r#"has "quotes""#.to_string()),
         ]);
         assert_eq!(encoded, r#"{"plain",NULL,"has \"quotes\""}"#);
+    }
+
+    /// An array column is cast to its own array type, and its list bound as an array literal.
+    #[test]
+    fn an_array_column_is_cast_to_its_array_type() {
+        let ast = crate::parser::parse(
+            r#"{"astVersion": 2, "models": [{"name": "Note", "fields": {
+                "id": {"kind": "uuid", "required": true, "primaryKey": true},
+                "tags": {"kind": "array", "required": false,
+                         "annotations": {"db": {"elementType": "INTEGER"}}},
+                "meta": {"kind": "json", "required": false}
+            }, "annotations": {"db": {"tableName": "note"}}}]}"#,
+        )
+        .expect("the schema parses");
+        let types = column_types_for(&ast, "Note");
+        assert_eq!(types.get("tags").map(String::as_str), Some("INTEGER[]"));
+
+        let planned = build_plan(
+            &ir(r#"[{"op":"create","model":"Note","data":{"tags":[1,null,"a,b"],"meta":[1,2]}}]"#),
+            &ast,
+        )
+        .expect("plans");
+        let mut write = planned.batches[0].rows[0].clone();
+        encode_arrays(&mut write, &types);
+        let text = |column: &str| match &write.data[column] {
+            Value::Scalar(json) => json.clone(),
+            other => panic!("{column} is not a scalar: {other:?}"),
+        };
+        assert_eq!(text("tags"), serde_json::json!(r#"{"1",NULL,"a,b"}"#));
+        assert_eq!(
+            text("meta"),
+            serde_json::json!([1, 2]),
+            "a json column keeps its list"
+        );
     }
 }

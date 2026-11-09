@@ -200,13 +200,48 @@ pub enum Value {
     /// Imported rather than redefined. Forking a second expression vocabulary for seeds
     /// would need a second validator and a second SQL renderer, and would re-litigate the
     /// `clock_timestamp()` decision the engine documents on `Operand::Now`.
-    Operand(Operand),
+    ///
+    /// Read only from an object: see [`operand_object`].
+    Operand(#[serde(deserialize_with = "operand_object")] Operand),
 
     /// A bare JSON scalar, the common case: `"Alex Rivera"`, `42`, `true`, `null`.
     ///
     /// Last, so every tagged shape above is tried first. An untagged enum takes the first
     /// variant that deserialises, and this one accepts almost anything.
     Scalar(serde_json::Value),
+}
+
+/// An operand, read only from a JSON object.
+///
+/// serde reads an internally tagged enum from a sequence as well, taking the first element as
+/// the variant's index, so as a plain `Operand` the list `[1]` was `AuthUid` and an
+/// `integer[]` column was written with `_supatype.jwt_uid()`. Every operand the IR carries is
+/// an object with a `kind`, so a list is left to fall through to [`Value::Scalar`].
+///
+/// A visitor rather than a read into `serde_json::Value` first, which deep-copied every value
+/// the untagged [`Value`] tried here before looking at its shape, a list or a scalar included.
+fn operand_object<'de, D>(deserializer: D) -> Result<Operand, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct ObjectOnly;
+
+    impl<'de> serde::de::Visitor<'de> for ObjectOnly {
+        type Value = Operand;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an operand, which is an object with a `kind`")
+        }
+
+        fn visit_map<A>(self, map: A) -> Result<Operand, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            Operand::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(ObjectOnly)
 }
 
 /// A `$ref`'s label and the column it names, as Postgres keeps that column's name.
@@ -241,6 +276,28 @@ mod tests {
     // variant order load-bearing and the failure silent: a money string landing in
     // `Scalar` instead of `Numeric` does not error, it just stops being a decimal. Every
     // shape is pinned here for that reason.
+
+    /// A list of numbers is a list. serde reads an internally tagged enum from a sequence too,
+    /// taking the first element as the variant's index, so `[1]` was read as `Operand::AuthUid`
+    /// and an `integer[]` column was written with the caller's user id (found by the 0.9.1
+    /// release test's FF5 fix, writing `scores: [1]`).
+    #[test]
+    fn a_list_is_never_read_as_an_operand() {
+        for json in [
+            "[0, \"name\"]",
+            "[1]",
+            "[2]",
+            "[3, \"a.b\"]",
+            "[6]",
+            "[1, 2, 3]",
+        ] {
+            assert_eq!(
+                value(json),
+                Value::Scalar(serde_json::from_str(json).expect("parses")),
+                "{json}"
+            );
+        }
+    }
 
     #[test]
     fn a_numeric_is_not_read_as_a_scalar_string() {

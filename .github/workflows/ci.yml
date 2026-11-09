@@ -283,6 +283,8 @@ jobs:
             --test junction_name_tests \
             --test owner_caller_default_tests \
             --test seed_rich_text_tests \
+            --test seed_array_tests \
+            --test seed_column_type_tests \
             --test trigger_ledger_tests \
             --test index_ledger_tests \
             --test versions_ledger_tests \
