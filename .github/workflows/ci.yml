@@ -114,7 +114,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Not ubuntu-latest: that moved to 26.04, which setup-swift@v2 refuses to install on.
+        os: [ubuntu-24.04, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -283,6 +284,8 @@ jobs:
             --test junction_name_tests \
             --test owner_caller_default_tests \
             --test seed_rich_text_tests \
+            --test seed_array_tests \
+            --test seed_column_type_tests \
             --test trigger_ledger_tests \
             --test index_ledger_tests \
             --test versions_ledger_tests \

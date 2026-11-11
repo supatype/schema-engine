@@ -285,8 +285,12 @@ pub(crate) fn field_pg_type(field: &FieldAst) -> String {
         | FieldAst::Enum(_) => "TEXT".into(),
         // Matches `migration.rs`, which renders this column as XML. See `expected_udt` above.
         FieldAst::Xml(_) => "XML".into(),
+        // A button is stored as `json` is (`migration.rs` renders both as JSONB). It was missing
+        // here and fell to TEXT, which a seed cast its value to once it took column types from
+        // this function.
         FieldAst::RichText(_)
         | FieldAst::Json(_)
+        | FieldAst::Button(_)
         | FieldAst::Image(_)
         | FieldAst::File(_)
         | FieldAst::Blocks(_) => "JSONB".into(),
