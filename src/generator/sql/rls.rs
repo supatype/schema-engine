@@ -107,21 +107,24 @@ pub fn generate_auth_helpers() -> String {
     // `auth.roles()` has no reader of its own and is referenced by hand-written policies, so it
     // stays here rather than disappearing. It reads the claims through the guarded reader: its own
     // cast raised `22P02` on an empty claims setting instead of answering an empty array.
-    sql.push_str(&format!(
-        r#"
-
--- auth.roles(): the `roles` claim as a text array.
-CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
+    let roles = format!(
+        r#"CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
   LANGUAGE sql STABLE AS $$
     SELECT ARRAY(
       SELECT jsonb_array_elements_text(
         COALESCE({CLAIMS_SCHEMA}.jwt_claims() -> 'roles', '[]'::jsonb)
       )
     );
-  $$;
-
-"#
+  $$;"#
+    );
+    sql.push_str("\n\n-- auth.roles(): the `roles` claim as a text array.\n");
+    sql.push_str(&crate::generator::sql::auth_functions::when_role_may_write(
+        AUTH_SCHEMA,
+        "roles",
+        "",
+        &roles,
     ));
+    sql.push_str("\n\n");
     sql
 }
 

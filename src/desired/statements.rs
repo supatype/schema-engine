@@ -843,6 +843,14 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
         };
         return attribute(schema, &h[at..], &mut Context::default());
     }
+    if tagged(auth_functions::AUTH_ALIAS_TAG) {
+        // One `auth.*` helper, created where the role may: the statement it executes names it.
+        let Some(at) = h.find("CREATE OR REPLACE FUNCTION ") else {
+            return Attribution::Unknown;
+        };
+        let executed = h[at..].replace("''", "'");
+        return attribute(schema, &executed, &mut Context::default());
+    }
     if tagged(auth_functions::AUTH_SCHEMA_USAGE_TAG) {
         return Attribution::Object(key(ObjectKind::Schema, "auth", "", "auth"));
     }

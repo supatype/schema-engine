@@ -72,6 +72,49 @@ pub const CLAIMS_ACCESS_TAG: &str = "claims_access";
 /// The dollar tag of the block granting the API roles usage on the `auth` schema.
 pub const AUTH_SCHEMA_USAGE_TAG: &str = "auth_schema_usage";
 
+/// The dollar tag of the block creating one `auth.*` helper where the role may. Statement
+/// attribution recognises the block by it.
+pub const AUTH_ALIAS_TAG: &str = "auth_alias";
+
+/// `create_sql`, the `CREATE OR REPLACE FUNCTION` of `{schema}.{name}({arg_types})`, run only
+/// where the current role may: when the function is absent and the role can create in the schema,
+/// or when the role holds the privileges of its owner. Otherwise a notice says it was skipped.
+///
+/// The `auth` schema is the database image's on a hosted project, and its functions belong to the
+/// image's role. A customer's role that replaced one, even with an identical body, is refused with
+/// `must be owner of function`, and that refusal fails the whole push. The generated rules call the
+/// readers in the engine's own schema and never these, so skipping one the role does not own costs
+/// a hand-written rule nothing the image's own copy does not give it. A superuser holds every
+/// role's privileges, so a self-hosted database replaces them all as before.
+pub(crate) fn when_role_may_write(
+    schema: &str,
+    name: &str,
+    arg_types: &str,
+    create_sql: &str,
+) -> String {
+    let signature = format!("{}.{name}({arg_types})", quote_ident(schema));
+    let target = quote_literal(&signature);
+    let schema_literal = quote_literal(schema);
+    let skipped = quote_literal(&format!(
+        "skipping {signature}: another role owns it, and this one cannot replace it"
+    ));
+    let create = quote_literal(create_sql);
+    let tag = AUTH_ALIAS_TAG;
+    format!(
+        "DO ${tag}$\n\
+         DECLARE\n  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure({target});\n  \
+         may boolean;\n\
+         BEGIN\n  \
+         IF existing IS NULL THEN\n    \
+         may := pg_catalog.has_schema_privilege({schema_literal}, 'CREATE');\n  \
+         ELSE\n    \
+         SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc\n      \
+         WHERE oid = existing::pg_catalog.oid;\n  END IF;\n  \
+         IF may THEN\n    EXECUTE {create};\n  ELSE\n    RAISE NOTICE {skipped};\n  END IF;\n\
+         END\n${tag}$;"
+    )
+}
+
 /// One `DO` block running `statements(role)` for each API role that exists.
 ///
 /// Guarded on role existence, as `grants.rs` guards its own statements: `anon` and `authenticated`
@@ -213,10 +256,12 @@ pub fn generate_auth_aliases(config: &AuthFunctionConfig) -> String {
     );
     let aliases = AUTH_ALIASES.iter().map(|(name, args, returns, body)| {
         let body = body.replace("{s}", CLAIMS_SCHEMA);
-        format!(
+        let arg_types = args.split_whitespace().last().unwrap_or("");
+        let create = format!(
             "CREATE OR REPLACE FUNCTION {auth}.{name}({args}) RETURNS {returns} AS $$\n  \
              SELECT {body};\n$$ LANGUAGE sql STABLE;"
-        )
+        );
+        when_role_may_write(auth, name, arg_types, &create)
     });
     [header, grant_auth_schema_usage(auth)]
         .into_iter()

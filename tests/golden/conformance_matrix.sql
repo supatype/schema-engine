@@ -124,39 +124,158 @@ BEGIN
 END
 $auth_schema_usage$;
 
-CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb AS $$
+DO $auth_alias$
+DECLARE
+  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure('"auth".jwt()');
+  may boolean;
+BEGIN
+  IF existing IS NULL THEN
+    may := pg_catalog.has_schema_privilege('auth', 'CREATE');
+  ELSE
+    SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc
+      WHERE oid = existing::pg_catalog.oid;
+  END IF;
+  IF may THEN
+    EXECUTE 'CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb AS $$
   SELECT _supatype.jwt_claims();
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE;';
+  ELSE
+    RAISE NOTICE 'skipping "auth".jwt(): another role owns it, and this one cannot replace it';
+  END IF;
+END
+$auth_alias$;
 
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$
+DO $auth_alias$
+DECLARE
+  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure('"auth".uid()');
+  may boolean;
+BEGIN
+  IF existing IS NULL THEN
+    may := pg_catalog.has_schema_privilege('auth', 'CREATE');
+  ELSE
+    SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc
+      WHERE oid = existing::pg_catalog.oid;
+  END IF;
+  IF may THEN
+    EXECUTE 'CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$
   SELECT _supatype.jwt_uid();
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE;';
+  ELSE
+    RAISE NOTICE 'skipping "auth".uid(): another role owns it, and this one cannot replace it';
+  END IF;
+END
+$auth_alias$;
 
-CREATE OR REPLACE FUNCTION auth.role() RETURNS text AS $$
+DO $auth_alias$
+DECLARE
+  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure('"auth".role()');
+  may boolean;
+BEGIN
+  IF existing IS NULL THEN
+    may := pg_catalog.has_schema_privilege('auth', 'CREATE');
+  ELSE
+    SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc
+      WHERE oid = existing::pg_catalog.oid;
+  END IF;
+  IF may THEN
+    EXECUTE 'CREATE OR REPLACE FUNCTION auth.role() RETURNS text AS $$
   SELECT _supatype.jwt_role();
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE;';
+  ELSE
+    RAISE NOTICE 'skipping "auth".role(): another role owns it, and this one cannot replace it';
+  END IF;
+END
+$auth_alias$;
 
-CREATE OR REPLACE FUNCTION auth.email() RETURNS text AS $$
-  SELECT COALESCE(_supatype.jwt_claims() ->> 'email', '');
-$$ LANGUAGE sql STABLE;
+DO $auth_alias$
+DECLARE
+  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure('"auth".email()');
+  may boolean;
+BEGIN
+  IF existing IS NULL THEN
+    may := pg_catalog.has_schema_privilege('auth', 'CREATE');
+  ELSE
+    SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc
+      WHERE oid = existing::pg_catalog.oid;
+  END IF;
+  IF may THEN
+    EXECUTE 'CREATE OR REPLACE FUNCTION auth.email() RETURNS text AS $$
+  SELECT COALESCE(_supatype.jwt_claims() ->> ''email'', '''');
+$$ LANGUAGE sql STABLE;';
+  ELSE
+    RAISE NOTICE 'skipping "auth".email(): another role owns it, and this one cannot replace it';
+  END IF;
+END
+$auth_alias$;
 
-CREATE OR REPLACE FUNCTION auth.claim(claim_path text) RETURNS jsonb AS $$
+DO $auth_alias$
+DECLARE
+  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure('"auth".claim(text)');
+  may boolean;
+BEGIN
+  IF existing IS NULL THEN
+    may := pg_catalog.has_schema_privilege('auth', 'CREATE');
+  ELSE
+    SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc
+      WHERE oid = existing::pg_catalog.oid;
+  END IF;
+  IF may THEN
+    EXECUTE 'CREATE OR REPLACE FUNCTION auth.claim(claim_path text) RETURNS jsonb AS $$
   SELECT _supatype.jwt_claim(claim_path);
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE;';
+  ELSE
+    RAISE NOTICE 'skipping "auth".claim(text): another role owns it, and this one cannot replace it';
+  END IF;
+END
+$auth_alias$;
 
-CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text) RETURNS text AS $$
+DO $auth_alias$
+DECLARE
+  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure('"auth".claim_text(text)');
+  may boolean;
+BEGIN
+  IF existing IS NULL THEN
+    may := pg_catalog.has_schema_privilege('auth', 'CREATE');
+  ELSE
+    SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc
+      WHERE oid = existing::pg_catalog.oid;
+  END IF;
+  IF may THEN
+    EXECUTE 'CREATE OR REPLACE FUNCTION auth.claim_text(claim_path text) RETURNS text AS $$
   SELECT _supatype.jwt_claim_text(claim_path);
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE;';
+  ELSE
+    RAISE NOTICE 'skipping "auth".claim_text(text): another role owns it, and this one cannot replace it';
+  END IF;
+END
+$auth_alias$;
 
 -- auth.roles(): the `roles` claim as a text array.
-CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
+DO $auth_alias$
+DECLARE
+  existing pg_catalog.regprocedure := pg_catalog.to_regprocedure('"auth".roles()');
+  may boolean;
+BEGIN
+  IF existing IS NULL THEN
+    may := pg_catalog.has_schema_privilege('auth', 'CREATE');
+  ELSE
+    SELECT pg_catalog.pg_has_role(proowner, 'USAGE') INTO may FROM pg_catalog.pg_proc
+      WHERE oid = existing::pg_catalog.oid;
+  END IF;
+  IF may THEN
+    EXECUTE 'CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
   LANGUAGE sql STABLE AS $$
     SELECT ARRAY(
       SELECT jsonb_array_elements_text(
-        COALESCE(_supatype.jwt_claims() -> 'roles', '[]'::jsonb)
+        COALESCE(_supatype.jwt_claims() -> ''roles'', ''[]''::jsonb)
       )
     );
-  $$;
+  $$;';
+  ELSE
+    RAISE NOTICE 'skipping "auth".roles(): another role owns it, and this one cannot replace it';
+  END IF;
+END
+$auth_alias$;
 
 BEGIN;
 
