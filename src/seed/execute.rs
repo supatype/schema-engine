@@ -77,6 +77,19 @@ fn render(value: &Value) -> Rendered {
     }
 }
 
+/// The SQL a write puts inline, column by column: `None` for a bound column.
+///
+/// Two rows may share a statement only when this matches, because an inline expression is
+/// written once per statement while a bound value is carried per row.
+pub(super) fn inline_shape(data: &super::DataMap) -> Vec<Option<String>> {
+    data.values()
+        .map(|value| match render(value) {
+            Rendered::Inline(expression) => Some(expression),
+            Rendered::Bound(_) => None,
+        })
+        .collect()
+}
+
 /// One column of an insert: its name, and the SQL its value comes from.
 struct Column {
     name: String,
@@ -99,7 +112,8 @@ struct Parts {
 ///
 /// Columns whose value is inline rather than bound are lifted out of the `UNNEST` array
 /// set and into the `SELECT` list, because every row in a batch shares the same expression
-/// by construction: a batch is only formed from rows with the same column set.
+/// by construction: a batch is only formed from rows with the same column set and the same
+/// inline SQL for each column (`group` compares `inline_shape`).
 ///
 /// **Every bound column is cast to its real type.** Values travel as `text[]` so one
 /// parameter carries a whole column whatever it holds, but Postgres does not implicitly
@@ -1225,6 +1239,58 @@ mod tests {
             !sql.contains("$2"),
             "the expression is not a parameter: {sql}"
         );
+    }
+
+    /// Rows that differ only in an inline expression must not share a statement: the
+    /// expression is written once per statement, so the first row's would reach them all.
+    #[test]
+    fn rows_with_different_inline_expressions_are_not_batched_together() {
+        let planned = build_plan(
+            &ir(r#"[{"op":"createMany","model":"Event","rows":[
+                {"title":"A","created_at":{"kind":"ago","amount":1,"unit":"minutes"}},
+                {"title":"B","created_at":{"kind":"ago","amount":2,"unit":"minutes"}},
+                {"title":"C","created_at":{"kind":"ago","amount":3,"unit":"minutes"}},
+                {"title":"D","created_at":{"kind":"ago","amount":4,"unit":"minutes"}}
+            ]}]"#),
+            &schema(),
+        )
+        .expect("plans");
+        assert_eq!(
+            planned.batches.len(),
+            4,
+            "one statement per distinct expression"
+        );
+        for (index, expected) in ["1 minutes", "2 minutes", "3 minutes", "4 minutes"]
+            .iter()
+            .enumerate()
+        {
+            let (sql, _) = batch_sql(
+                &planned.batches[index],
+                "event",
+                &HashMap::new(),
+                &HashMap::new(),
+            );
+            assert!(sql.contains(expected), "row {index}: {sql}");
+        }
+    }
+
+    /// A bound value in an earlier row must not turn a later row's expression into NULL.
+    #[test]
+    fn a_bound_value_then_an_expression_keeps_the_expression() {
+        let planned = build_plan(
+            &ir(r#"[{"op":"createMany","model":"Event","rows":[
+                {"title":"A","created_at":"2026-01-01T00:00:00Z"},
+                {"title":"B","created_at":{"kind":"now"}}
+            ]}]"#),
+            &schema(),
+        )
+        .expect("plans");
+        let sql: String = planned
+            .batches
+            .iter()
+            .map(|b| batch_sql(b, "event", &HashMap::new(), &HashMap::new()).0)
+            .collect();
+        assert!(sql.contains("now()"), "{sql}");
     }
 
     /// Rendering goes through the same function that compiles a policy predicate, so a

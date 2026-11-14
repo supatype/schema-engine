@@ -9,6 +9,7 @@
 //! conditional group's membership is fixed: an operation inside one may not run at all, so
 //! moving anything across that boundary would change the outcome rather than the schedule.
 
+use super::execute::inline_shape;
 use super::{reference_parts, Condition, DataMap, Operation, SeedIr, Value};
 use crate::generator::seed_model::{describe, RelationKind, SeedModel, SeedRelation, SeedSchema};
 use crate::parser::ast::SchemaAst;
@@ -769,9 +770,10 @@ fn condition_model(condition: &Condition) -> Option<&str> {
 /// Collapse adjacent writes that share a shape into one statement.
 ///
 /// Adjacency comes from the ordering, so grouping can never reorder across a dependency:
-/// it only ever merges neighbours. Three things must match, and the third is the one that
+/// it only ever merges neighbours. Four things must match, and the third is the one that
 /// is easy to miss: the enclosing guards, because one statement cannot run for some of its
-/// rows and not others.
+/// rows and not others. The fourth is each column's inline SQL (`now()`, `ago`, `DEFAULT`),
+/// which is written once per statement, so rows that differ there cannot share one.
 pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
     let mut batches: Vec<Batch> = Vec::new();
 
@@ -798,6 +800,10 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 && last.model == write.model
                 && last.kind == write.kind
                 && last.columns == columns
+                && last
+                    .rows
+                    .last()
+                    .is_some_and(|prev| inline_shape(&prev.data) == inline_shape(&write.data))
                 && last.conflict == write.conflict
                 && last.match_existing == write.match_existing
                 && last.lookups == write.lookups

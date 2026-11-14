@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::generator::sql::junction_access::{junction_access, JunctionAccess};
 use crate::introspector::rls::DbRlsPolicy;
-use crate::parser::ast::{AccessAst, AccessRule, SchemaAst};
+use crate::parser::ast::{AccessAst, AccessRule, MembershipSource, ModelAst, SchemaAst};
 use crate::state::database_state::DatabaseState;
 use anyhow::Result;
 
@@ -93,6 +93,8 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, warnings: &mut Vec<String>) -> 
             unrestricted.push(table.to_string());
         }
 
+        warnings.extend(uncorrelated_exists_warnings(model));
+
         let ours = engine_policy_names(model);
         for db_pol in db_policies_by_table.get(table).into_iter().flatten() {
             if !db.owns_policy(db_pol) && !ours.contains(&db_pol.name) {
@@ -121,6 +123,49 @@ pub fn diff(ast: &SchemaAst, db: &DatabaseState, warnings: &mut Vec<String>) -> 
 
     junction_diff(ast, warnings);
     Ok(())
+}
+
+// ─── Uncorrelated Exists on a write rule ─────────────────────────────────────
+
+/// Whether a rule contains an `Exists` over another table's rows, looking through `Any`, `All` and
+/// `Not`.
+///
+/// `Exists<Rows<...>>` asks "does the source have any row", and the `where` inside it is evaluated
+/// against the source's rows, so nothing in it can name the row being written. It reads the same
+/// for every row, which is rarely what a write rule means.
+fn has_uncorrelated_exists(rule: &AccessRule) -> bool {
+    match rule {
+        AccessRule::Exists {
+            source: MembershipSource::Rows { .. },
+        } => true,
+        AccessRule::Any { rules } | AccessRule::All { rules } => {
+            rules.iter().any(has_uncorrelated_exists)
+        }
+        AccessRule::Not { rule } => has_uncorrelated_exists(rule),
+        _ => false,
+    }
+}
+
+/// A warning for each write rule on `model` that holds an `Exists<Rows<...>>`.
+fn uncorrelated_exists_warnings(model: &ModelAst) -> Vec<String> {
+    let access = model.access();
+    [
+        ("create", access.create.as_ref()),
+        ("update", access.update.as_ref()),
+        ("update check", access.update_check.as_ref()),
+        ("delete", access.delete.as_ref()),
+    ]
+    .into_iter()
+    .filter_map(|(op, rule)| rule.filter(|r| has_uncorrelated_exists(r)).map(|_| op))
+    .map(|op| {
+        format!(
+            "Model \"{}\": the {op} rule contains `Exists<Rows<...>>`, which cannot refer to the \
+             row being written, so it gives the same answer for every row. To tie the rule to the \
+             row, use `In<\"column\", Rows<...>>` instead.",
+            model.name,
+        )
+    })
+    .collect()
 }
 
 // ─── Junction tables ─────────────────────────────────────────────────────────
@@ -324,5 +369,45 @@ mod tests {
     fn intersect_denies_when_either_parent_omits_the_operation() {
         assert!(intersect_rule(None, Some(&AccessRule::Public)).is_none());
         assert!(intersect_rule(Some(&AccessRule::Public), None).is_none());
+    }
+}
+
+#[cfg(test)]
+mod uncorrelated_exists_tests {
+    use super::uncorrelated_exists_warnings;
+    use crate::parser::ast::ModelAst;
+
+    fn model(access: &str) -> ModelAst {
+        serde_json::from_str(&format!(
+            r#"{{"name":"Bid","fields":{{}},
+                "annotations":{{"platform":{{"access":{access}}}}}}}"#
+        ))
+        .expect("the model fixture parses")
+    }
+
+    const EXISTS: &str =
+        r#"{"type":"exists","source":{"kind":"rows","table":"member","column":"user_id"}}"#;
+
+    #[test]
+    fn exists_over_rows_in_a_write_rule_warns_and_suggests_in() {
+        let m = model(&format!(
+            r#"{{"create":{{"type":"any","rules":[{EXISTS}]}},"delete":{EXISTS}}}"#
+        ));
+        let warnings = uncorrelated_exists_warnings(&m);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings[0].contains("create rule"), "{warnings:?}");
+        assert!(warnings[1].contains("delete rule"), "{warnings:?}");
+        assert!(
+            warnings[0].contains("In<\"column\", Rows<...>>"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
+    fn exists_in_a_read_rule_or_a_claim_exists_does_not_warn() {
+        let m = model(&format!(
+            r#"{{"read":{EXISTS},"create":{{"type":"exists","source":{{"kind":"claim","path":"sites"}}}}}}"#
+        ));
+        assert!(uncorrelated_exists_warnings(&m).is_empty());
     }
 }

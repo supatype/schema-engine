@@ -23,9 +23,10 @@ use serde::Serialize;
 use crate::generator::sql::field_views::VIEW_SCHEMA;
 use crate::generator::sql::grants::{api_privileges, junction_privileges, GRANTED_ROLES, PUBLIC};
 use crate::generator::sql::junction_access::{junction_access, JunctionAccess};
+use crate::generator::sql::rls::access_rule_to_expr;
 use crate::introspector::catalog::CatalogState;
 use crate::parser::accessors::{db_table_name, platform_access};
-use crate::parser::ast::{AccessAst, AccessRule, JunctionTableAst, SchemaAst};
+use crate::parser::ast::{AccessAst, AccessRule, JunctionTableAst, ModelAst, SchemaAst};
 
 /// One API role's access to one table, as rule verbs in [`VERBS`] order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -41,10 +42,28 @@ pub struct RoleAccess {
     pub before: Vec<&'static str>,
     /// What the role may do once the push applies.
     pub after: Vec<&'static str>,
+    /// What the role can reach once the push applies, from the rules: `after` says which
+    /// privileges are granted, but a rule that renders `FALSE` (`Private`) leaves a grant that
+    /// reaches no row. Verbs the rules shut out are left out here.
+    pub effective: Vec<Effective>,
     /// What a link denies because its access could not be derived, and why. Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub denied: Option<Denied>,
 }
+
+/// One operation a role can reach, and which rows it reaches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Effective {
+    pub verb: &'static str,
+    /// [`ALL_ROWS`] or [`BY_RULE`].
+    pub rows: &'static str,
+}
+
+/// The rule renders `TRUE`: every row.
+pub const ALL_ROWS: &str = "all rows";
+
+/// The rule decides row by row, from the caller or the row's data.
+pub const BY_RULE: &str = "rows decided by rule";
 
 /// Operations of a link denied to every API role because the engine could not derive them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -74,17 +93,7 @@ pub fn summarize(ast: &SchemaAst, catalog: &CatalogState, schema: &str) -> Vec<R
     let mut out: Vec<RoleAccess> = ast
         .models
         .iter()
-        .flat_map(|model| {
-            GRANTED_ROLES.map(|role| RoleAccess {
-                model: model.name.clone(),
-                table: db_table_name(model).to_string(),
-                role: role.to_string(),
-                link: false,
-                before: Vec::new(),
-                after: in_verbs(&api_privileges(ast, model, role)),
-                denied: None,
-            })
-        })
+        .flat_map(|model| GRANTED_ROLES.map(|role| model_access(ast, model, role, schema)))
         .collect();
     out.extend(ast.junction_tables.iter().flat_map(|j| link_access(ast, j)));
     for entry in &mut out {
@@ -95,8 +104,60 @@ pub fn summarize(ast: &SchemaAst, catalog: &CatalogState, schema: &str) -> Vec<R
             entry.before.retain(|verb| !denied.verbs.contains(verb));
             entry.after.retain(|verb| !denied.verbs.contains(verb));
         }
+        if entry.link {
+            entry.effective = linked_effective(&entry.after);
+        }
     }
     out
+}
+
+/// One model's access for one API role.
+fn model_access(ast: &SchemaAst, model: &ModelAst, role: &'static str, schema: &str) -> RoleAccess {
+    let after = in_verbs(&api_privileges(ast, model, role));
+    RoleAccess {
+        model: model.name.clone(),
+        table: db_table_name(model).to_string(),
+        role: role.to_string(),
+        link: false,
+        before: Vec::new(),
+        effective: effective(ast, model, schema, &after),
+        after,
+        denied: None,
+    }
+}
+
+/// What the rules leave reachable of the verbs in `after`: a rule that renders `FALSE` shuts its
+/// verb out however the privilege reads, and one that renders `TRUE` reaches every row.
+fn effective(
+    ast: &SchemaAst,
+    model: &ModelAst,
+    schema: &str,
+    after: &[&'static str],
+) -> Vec<Effective> {
+    VERBS
+        .iter()
+        .zip(rules(platform_access(model)))
+        .filter(|((_, verb), _)| after.contains(verb))
+        .filter_map(|((_, verb), rule)| {
+            let rows = match access_rule_to_expr(ast, model, rule?, schema).as_str() {
+                "FALSE" => return None,
+                "TRUE" => ALL_ROWS,
+                _ => BY_RULE,
+            };
+            Some(Effective { verb, rows })
+        })
+        .collect()
+}
+
+/// A link follows its ends' rows, so each verb it keeps is decided by their rules.
+fn linked_effective(after: &[&'static str]) -> Vec<Effective> {
+    after
+        .iter()
+        .map(|verb| Effective {
+            verb,
+            rows: BY_RULE,
+        })
+        .collect()
 }
 
 /// A link's access for each API role: its privileges, and what it denies for want of a rule.
@@ -108,6 +169,7 @@ fn link_access(ast: &SchemaAst, junction: &JunctionTableAst) -> [RoleAccess; 2] 
         role: role.to_string(),
         link: true,
         before: Vec::new(),
+        effective: Vec::new(),
         after: in_verbs(&junction_privileges(ast, junction, role)),
         denied: denied.clone(),
     })
