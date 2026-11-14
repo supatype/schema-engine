@@ -796,8 +796,10 @@ fn interval_literal(spec: &IntervalSpec) -> String {
 /// or a number: `jwt_claim_text('is_anonymous') = FALSE` is `text = boolean`, which Postgres
 /// refuses, so a schema writing `Eq<Claim<"is_anonymous">, Literal<false>>` failed to push. Against
 /// such a literal the claim is read as that JSON type instead ([`typed_claim_expr`]).
-fn compared_operand_expr(operand: &Operand, other: &Operand) -> String {
+pub(crate) fn compared_operand_expr(operand: &Operand, other: &Operand) -> String {
     match (operand, other) {
+        // A folder is text and a user id a uuid, which Postgres will not compare: cast the id.
+        (Operand::AuthUid, Operand::Folder { .. }) => format!("{AUTH_UID}::text"),
         (Operand::Claim { path }, Operand::Literal { value }) => match value {
             LiteralValue::Bool(_) => typed_claim_expr(path, "boolean", "boolean"),
             LiteralValue::Number(_) => typed_claim_expr(path, "number", "numeric"),
@@ -841,6 +843,8 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
         Operand::Claim { path } => {
             format!("{CLAIMS_SCHEMA}.jwt_claim_text({})", quote_literal(path))
         }
+        // `name` is the object name on `storage.objects`; validation refuses it anywhere else.
+        Operand::Folder { index } => format!("(storage.foldername(name))[{index}]"),
         Operand::Literal { value } => literal_to_sql(value),
 
         // Each temporal operand is one scalar subquery, so the planner evaluates it

@@ -160,6 +160,7 @@ fn operand_word(operand: &Operand) -> String {
         Operand::AuthUid => "uid".to_string(),
         Operand::AuthRole => "role".to_string(),
         Operand::Claim { .. } => "claim".to_string(),
+        Operand::Folder { .. } => "folder".to_string(),
         Operand::Now
         | Operand::StartOf { .. }
         | Operand::Ago { .. }

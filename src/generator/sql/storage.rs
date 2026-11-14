@@ -1,4 +1,6 @@
-use crate::generator::sql::rls::{role_matches, AUTH_ROLE, AUTH_UID};
+use crate::generator::sql::rls::{
+    compared_operand_expr, operand_to_expr, role_matches, AUTH_ROLE, AUTH_UID,
+};
 use crate::parser::ast::{AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageBucketAst};
 use crate::parser::resolver::{bucket_uses_declared_storage_rls, storage_policy_label};
 use crate::sql_quote::{comment_text, quote_ident, quote_literal};
@@ -115,6 +117,19 @@ BEGIN
 END
 $storage_version$;
 
+-- `Folder<N>` in a bucket rule reads `storage.foldername(name)`. The storage service creates it
+-- too, so it is made only when missing: a push can run before that service has started, and a
+-- policy naming a function that does not exist is refused.
+DO $storage_foldername$
+BEGIN
+  IF to_regprocedure('storage.foldername(text)') IS NULL THEN
+    CREATE FUNCTION storage.foldername(name text) RETURNS text[]
+      LANGUAGE sql IMMUTABLE STRICT AS
+      'SELECT (string_to_array(name, ''/''))[1:cardinality(string_to_array(name, ''/'')) - 1]';
+  END IF;
+END
+$storage_foldername$;
+
 "#
 }
 
@@ -220,17 +235,30 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
         AccessRule::Role { roles } => role_matches(AUTH_ROLE, roles),
-        // Storage policies run on `storage.objects`, which has none of the
-        // model's columns. A rule naming one cannot be evaluated here, so it
-        // denies rather than being rendered against a table where the column
-        // means something else or nothing at all. `Bucket*` rules are the
-        // supported vocabulary for buckets.
-        AccessRule::All { .. }
-        | AccessRule::Not { .. }
-        | AccessRule::Compare { .. }
-        | AccessRule::NullCheck { .. }
-        | AccessRule::In { .. }
-        | AccessRule::Exists { .. } => "FALSE".to_string(),
+        // Rules about the caller and the object's folder only: the table renderer's own
+        // comparison, so a claim reads the same here as on a model.
+        AccessRule::All { rules } => rules
+            .iter()
+            .map(|r| format!("({})", access_rule_to_storage_expr(r)))
+            .collect::<Vec<_>>()
+            .join(" AND "),
+        AccessRule::Not { rule } => format!("NOT ({})", access_rule_to_storage_expr(rule)),
+        AccessRule::Compare { left, op, right } => format!(
+            "{} {} {}",
+            compared_operand_expr(left, right),
+            op.sql(),
+            compared_operand_expr(right, left)
+        ),
+        AccessRule::NullCheck { operand, is_null } => {
+            let test = if *is_null { "IS NULL" } else { "IS NOT NULL" };
+            format!("{} {test}", operand_to_expr(operand))
+        }
+        // Storage policies run on `storage.objects`, which has none of the model's columns, so
+        // a rule reading one, or another table, cannot be evaluated here. The parser refuses
+        // them in a bucket's own rules ([`crate::parser::validator`]); one that arrives through
+        // a model's rules, applied to a bucket that declares none, denies rather than being
+        // rendered against a table where the column means something else or nothing at all.
+        AccessRule::In { .. } | AccessRule::Exists { .. } => "FALSE".to_string(),
     }
 }
 
