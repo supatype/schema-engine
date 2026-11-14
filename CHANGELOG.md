@@ -1,19 +1,5 @@
 # Changelog
 
-## 0.9.3
-
-### Bug Fixes
-
-* **seed:** rows that differ in an inline expression (`now`, `ago`, ...) are no longer batched into one
-  statement, which wrote the first row's expression for every row and turned a later row's expression
-  into NULL after a bound value.
-
-### Features
-
-* **push:** warns when an insert, update or delete rule contains `Exists<Rows<...>>`, which cannot refer
-  to the row being written, and suggests `In<"col", Rows<...>>`.
-* **access summary:** each role's entry carries `effective`, the verbs the rules leave reachable.
-
 ## [0.10.1](https://github.com/supatype/schema-engine/compare/v0.10.0...v0.10.1) (2026-11-11)
 
 

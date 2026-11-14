@@ -77,19 +77,6 @@ fn render(value: &Value) -> Rendered {
     }
 }
 
-/// The SQL a write puts inline, column by column: `None` for a bound column.
-///
-/// Two rows may share a statement only when this matches, because an inline expression is
-/// written once per statement while a bound value is carried per row.
-pub(super) fn inline_shape(data: &super::DataMap) -> Vec<Option<String>> {
-    data.values()
-        .map(|value| match render(value) {
-            Rendered::Inline(expression) => Some(expression),
-            Rendered::Bound(_) => None,
-        })
-        .collect()
-}
-
 /// One column of an insert: its name, and the SQL its value comes from.
 struct Column {
     name: String,
@@ -113,7 +100,7 @@ struct Parts {
 /// Columns whose value is inline rather than bound are lifted out of the `UNNEST` array
 /// set and into the `SELECT` list, because every row in a batch shares the same expression
 /// by construction: a batch is only formed from rows with the same column set and the same
-/// inline SQL for each column (`group` compares `inline_shape`).
+/// inline SQL for each column (`group` compares them).
 ///
 /// **Every bound column is cast to its real type.** Values travel as `text[]` so one
 /// parameter carries a whole column whatever it holds, but Postgres does not implicitly
