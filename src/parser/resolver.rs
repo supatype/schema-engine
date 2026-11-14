@@ -96,12 +96,24 @@ fn resolve_junction_tables(ast: &mut SchemaAst) {
                 Some(name) => declared_junction(name, &model.name, &rel.target),
                 None => derived_junction(ast, &model.name, &rel.target),
             };
-            found.push(junction);
+            found.push((junction, model.name.clone()));
         }
     }
-    for junction in found {
-        if !ast.junction_tables.iter().any(|j| j.name == junction.name) {
-            ast.junction_tables.push(junction);
+    for (junction, declarer) in found {
+        match ast
+            .junction_tables
+            .iter_mut()
+            .find(|j| j.name == junction.name)
+        {
+            Some(existing) => {
+                if !existing.declared_by.contains(&declarer) {
+                    existing.declared_by.push(declarer);
+                }
+            }
+            None => ast.junction_tables.push(JunctionTableAst {
+                declared_by: vec![declarer],
+                ..junction
+            }),
         }
     }
 }
@@ -123,6 +135,7 @@ fn declared_junction(name: &str, model_a: &str, model_b: &str) -> JunctionTableA
         model_b: model_b.to_string(),
         fk_a: format!("{}_id", to_snake_case(model_a)),
         fk_b: format!("{}_id", to_snake_case(model_b)),
+        declared_by: Vec::new(),
     }
 }
 

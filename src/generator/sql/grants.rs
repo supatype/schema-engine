@@ -369,7 +369,7 @@ fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGra
 }
 
 /// Whether a junction's policies can admit `role` to `privilege`: for a linked junction, reading
-/// both ends and, for a write, updating either.
+/// both ends and, for a write, updating an end that owns the link.
 fn junction_allows(
     ast: &SchemaAst,
     access: &JunctionAccess<'_>,
@@ -382,9 +382,9 @@ fn junction_allows(
             let reads = ends
                 .iter()
                 .all(|end| allowed(ast, role, platform_access(end.model).read.as_ref()));
-            let updates = ends
-                .iter()
-                .any(|end| allowed(ast, role, platform_access(end.model).update.as_ref()));
+            let updates = ends.iter().any(|end| {
+                end.owns && allowed(ast, role, platform_access(end.model).update.as_ref())
+            });
             reads && (privilege == "SELECT" || updates)
         }
     }
