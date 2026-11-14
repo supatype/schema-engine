@@ -117,9 +117,9 @@ BEGIN
 END
 $storage_version$;
 
--- `Folder<N>` in a bucket rule reads `storage.foldername(name)`. The storage service creates it
--- too, so it is made only when missing: a push can run before that service has started, and a
--- policy naming a function that does not exist is refused.
+-- `Folder<N>` in a bucket rule reads `storage.foldername(name)`. Nothing else creates it: the
+-- storage service does not, so the engine is its creator. Guarded so a database that already has
+-- one (a hand-made or imported project) keeps it, and a push never fails on ownership.
 DO $storage_foldername$
 BEGIN
   IF to_regprocedure('storage.foldername(text)') IS NULL THEN
@@ -337,6 +337,8 @@ struct ObjectPolicies<'a> {
     bucket_id: &'a str,
     comment: String,
     rules: [Option<&'a AccessRule>; 4],
+    /// The model the rules come from, `None` for a bucket's own.
+    model: Option<&'a str>,
 }
 
 impl<'a> ObjectPolicies<'a> {
@@ -353,6 +355,7 @@ impl<'a> ObjectPolicies<'a> {
             bucket_id,
             comment,
             rules,
+            model: None,
         }
     }
 
@@ -429,12 +432,14 @@ fn object_policy_sets(ast: &SchemaAst) -> Vec<ObjectPolicies<'_>> {
     for (model, bucket_id) in model_bucket_uses(ast) {
         let table = model.table_name();
         let access = (!declared.contains(bucket_id)).then(|| model.access());
-        sets.push(ObjectPolicies::new(
+        let mut set = ObjectPolicies::new(
             (table.to_string(), bucket_id.to_string()),
             format!("Storage policies for model '{table}', bucket '{bucket_id}'"),
             bucket_id,
             access,
-        ));
+        );
+        set.model = Some(&model.name);
+        sets.push(set);
     }
     assign_policy_names(&mut sets);
     sets
@@ -544,6 +549,30 @@ pub fn rule_warnings(ast: &SchemaAst) -> Vec<String> {
             ));
         }
         warnings.extend(unreadable_change_warnings(&sets, &bucket.id));
+    }
+    warnings.extend(inherited_rule_warnings(&sets));
+    warnings
+}
+
+/// A rule a bucket inherits from a model that storage objects cannot evaluate, such as one naming
+/// a column of the model. It is not refused, since the model's rule is right for its table, but on
+/// `storage.objects` it renders as `FALSE`, so the operation is refused for everyone.
+fn inherited_rule_warnings(sets: &[ObjectPolicies<'_>]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for set in sets {
+        let Some(model) = set.model else { continue };
+        for (op, rule) in ObjectOp::ALL.into_iter().zip(&set.rules) {
+            let Some(reason) = rule.and_then(crate::parser::validator::bucket_refusal) else {
+                continue;
+            };
+            warnings.push(format!(
+                "Bucket \"{}\" inherits the {} rule of model \"{model}\", which cannot be evaluated \n                 on storage objects ({reason}), so {} are refused for everyone. Declare a \n                 bucket-level `{}` rule in the bucket's access.",
+                set.bucket_id,
+                op.names().key,
+                op.names().refused.split(" are refused").next().unwrap_or("requests"),
+                op.names().key,
+            ));
+        }
     }
     warnings
 }

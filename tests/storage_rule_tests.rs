@@ -485,3 +485,57 @@ fn a_folder_in_a_model_rule_is_refused() {
         "{message}"
     );
 }
+
+// A rule a bucket inherits from a model is not refused, but it is warned about.
+
+fn model_with_read(rule: &str) -> String {
+    format!(
+        r#"{{
+  "name": "doc",
+  "annotations": {{ "db": {{ "tableName": "doc" }},
+    "platform": {{ "access": {{ "read": {rule} }} }} }},
+  "fields": {{
+    "id": {{ "kind": "uuid", "required": true }},
+    "author_id": {{ "kind": "uuid", "required": false }},
+    "file": {{ "kind": "image", "required": false, "bucket": "shared" }}
+  }}
+}}"#
+    )
+}
+
+const COLUMN_RULE: &str = r#"{ "type": "compare", "op": "eq",
+  "left": { "kind": "column", "name": "author_id" }, "right": { "kind": "authUid" } }"#;
+
+#[test]
+fn a_model_rule_naming_a_column_warns_when_a_bucket_inherits_it() {
+    let warnings = warnings_for(SHARED_UNDECLARED, &model_with_read(COLUMN_RULE));
+    let warning = warnings
+        .iter()
+        .find(|w| w.contains("inherits"))
+        .unwrap_or_else(|| panic!("no inheritance warning in {warnings:?}"));
+    for part in ["\"shared\"", "\"doc\"", "read", "author_id", "bucket-level"] {
+        assert!(warning.contains(part), "{part} missing from: {warning}");
+    }
+}
+
+#[test]
+fn a_model_rule_that_renders_on_a_bucket_does_not_warn() {
+    let warnings = warnings_for(
+        SHARED_UNDECLARED,
+        &model_with_read(r#"{ "type": "authenticated" }"#),
+    );
+    assert!(
+        warnings.iter().all(|w| !w.contains("inherits")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn a_bucket_with_its_own_rules_does_not_warn_about_the_models_column_rule() {
+    let bucket = r#"{ "id": "shared", "access": { "read": { "type": "public" } } }"#;
+    let warnings = warnings_for(bucket, &model_with_read(COLUMN_RULE));
+    assert!(
+        warnings.iter().all(|w| !w.contains("inherits")),
+        "{warnings:?}"
+    );
+}

@@ -198,7 +198,7 @@ fn for_each_operand(
 /// no way to read another table from a rule. A rule that needs either used to render as `FALSE`
 /// there, with nothing said, so an author who believed they had written "registered users only"
 /// had written "nobody". Refused here instead; `Private` is how a bucket says "nobody" on purpose.
-fn bucket_refusal(rule: &AccessRule) -> Option<String> {
+pub(crate) fn bucket_refusal(rule: &AccessRule) -> Option<String> {
     match rule {
         AccessRule::Public
         | AccessRule::Private
