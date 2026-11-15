@@ -11,7 +11,7 @@
 
 use super::{reference_parts, Condition, DataMap, Operation, SeedIr, Value};
 use crate::generator::seed_model::{describe, RelationKind, SeedModel, SeedRelation, SeedSchema};
-use crate::parser::ast::SchemaAst;
+use crate::parser::ast::{Operand, SchemaAst};
 use indexmap::IndexMap;
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -766,14 +766,36 @@ fn condition_model(condition: &Condition) -> Option<&str> {
     }
 }
 
+/// The values a write puts inline, column by column: `None` for one that travels as a bound
+/// parameter.
+///
+/// Two rows may share a statement only when this matches, because an inline expression is written
+/// once per statement while a bound value is carried per row. Compared as values rather than as
+/// rendered SQL, since the same operand always renders the same SQL and rendering is not available
+/// where the plan is built for wasm. Keep in step with `execute::render`, which decides what is
+/// inline.
+fn inline_shape(data: &DataMap) -> Vec<Option<&Value>> {
+    data.values()
+        .map(|value| match value {
+            Value::Default { .. } => Some(value),
+            Value::Operand(Operand::Literal { .. }) => None,
+            Value::Operand(_) => Some(value),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Collapse adjacent writes that share a shape into one statement.
 ///
 /// Adjacency comes from the ordering, so grouping can never reorder across a dependency:
-/// it only ever merges neighbours. Three things must match, and the third is the one that
+/// it only ever merges neighbours. Four things must match, and the third is the one that
 /// is easy to miss: the enclosing guards, because one statement cannot run for some of its
-/// rows and not others.
+/// rows and not others. The fourth is each column's inline SQL (`now()`, `ago`, `DEFAULT`),
+/// which is written once per statement, so rows that differ there cannot share one.
 pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
     let mut batches: Vec<Batch> = Vec::new();
+    // The inline SQL of the last write added, kept so each write's is computed once.
+    let mut last_shape: Vec<Option<&Value>> = Vec::new();
 
     for step in steps {
         let PlannedStep::Write(write) = step else {
@@ -793,11 +815,13 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
         };
 
         let columns: Vec<String> = write.data.keys().cloned().collect();
+        let shape = inline_shape(&write.data);
         let extends = batches.last().is_some_and(|last| {
             !last.rows.is_empty()
                 && last.model == write.model
                 && last.kind == write.kind
                 && last.columns == columns
+                && last_shape == shape
                 && last.conflict == write.conflict
                 && last.match_existing == write.match_existing
                 && last.lookups == write.lookups
@@ -822,6 +846,7 @@ pub fn group(steps: &[PlannedStep]) -> Vec<Batch> {
                 guards: write.guards.clone(),
             });
         }
+        last_shape = shape;
     }
 
     batches.retain(|batch| !batch.rows.is_empty());
