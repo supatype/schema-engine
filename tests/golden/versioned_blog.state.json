@@ -1269,9 +1269,7 @@
         "cost": "100",
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.ledger_versions_audit()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), _supatype.jwt_uid());\n    RETURN NULL;\n  END;\n  $function$\n",
-        "acl": [
-          "PUBLIC=EXECUTE"
-        ]
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1596,9 +1594,7 @@
         "cost": "100",
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.posts_versions_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"posts_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  $function$\n",
-        "acl": [
-          "PUBLIC=EXECUTE"
-        ]
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1650,7 +1646,6 @@
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_epoch()\n RETURNS integer\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT s.\"preview_epoch\" FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n",
         "acl": [
-          "PUBLIC=EXECUTE",
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE"
@@ -2005,7 +2000,6 @@
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    IF ((SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')) IS NOT TRUE THEN\n      RETURN false;\n    END IF;\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n",
         "acl": [
-          "PUBLIC=EXECUTE",
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE"
@@ -2033,7 +2027,6 @@
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_posts(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('posts', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('posts', p_record);\n  $function$\n",
         "acl": [
-          "PUBLIC=EXECUTE",
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE"

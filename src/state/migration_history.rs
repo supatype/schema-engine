@@ -302,6 +302,13 @@ $fn$"#
     )
 }
 
+/// Takes [`create_studio_membership_audit_function_sql`]'s function away from `PUBLIC`, which a
+/// new function is granted `EXECUTE` for. It is a trigger function: firing it checks nothing of the
+/// role that wrote the row, so no role needs the privilege, and it runs as its owner.
+pub fn revoke_studio_membership_audit_function_sql() -> String {
+    format!("REVOKE ALL ON FUNCTION {SCHEMA}.audit_studio_membership_change() FROM PUBLIC")
+}
+
 /// Attaches [`create_studio_membership_audit_function_sql`] to `studio_members`. Dropped and
 /// created rather than created if missing, so a changed definition replaces the old one.
 pub fn create_studio_membership_audit_trigger_sql() -> String {
@@ -1656,6 +1663,10 @@ fn bootstrap_statements() -> Vec<(&'static str, String)> {
         (
             "studio_members audit function",
             create_studio_membership_audit_function_sql(),
+        ),
+        (
+            "studio_members audit function privileges",
+            revoke_studio_membership_audit_function_sql(),
         ),
         (
             "studio_members audit trigger",

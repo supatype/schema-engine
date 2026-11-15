@@ -1750,6 +1750,8 @@ REVOKE ALL ON FUNCTION _supatype.prune_preview_links() FROM PUBLIC;
 REVOKE ALL ON FUNCTION _supatype.run_due_publishes(timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION _supatype.draft_visibility_roles() FROM PUBLIC;
 REVOKE ALL ON FUNCTION _supatype.versioned_model(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION _supatype.sees_all_drafts() FROM PUBLIC;
+REVOKE ALL ON FUNCTION _supatype.preview_epoch() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION _supatype.sees_all_drafts() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION _supatype.preview_allows(text, text) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION _supatype.preview_epoch() TO anon, authenticated, service_role;
@@ -1927,6 +1929,7 @@ CREATE OR REPLACE FUNCTION _supatype."sees_draft_page"(p_record text)
          )
     ) OR _supatype.created_in_this_transaction('page', p_record);
   $fn$;
+REVOKE ALL ON FUNCTION _supatype."sees_draft_page"(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION _supatype."sees_draft_page"(text) TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS "page_draft_select" ON "public"."page";
@@ -1978,6 +1981,9 @@ CREATE OR REPLACE FUNCTION _supatype."page_versions_guard"() RETURNS trigger
     RETURN NEW;
   END;
   $fn$;
+
+-- Firing a trigger checks nothing of the role that wrote the row, so no role needs `EXECUTE` here.
+REVOKE ALL ON FUNCTION _supatype."page_versions_guard"() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS "page_versions_guard" ON "public"."page_versions";
 CREATE TRIGGER "page_versions_guard" BEFORE INSERT OR UPDATE ON "public"."page_versions"
@@ -2067,6 +2073,7 @@ CREATE OR REPLACE FUNCTION _supatype."sees_draft_speaker"(p_record text)
          )
     ) OR _supatype.created_in_this_transaction('speaker', p_record);
   $fn$;
+REVOKE ALL ON FUNCTION _supatype."sees_draft_speaker"(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION _supatype."sees_draft_speaker"(text) TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS "speaker_draft_select" ON "public"."speaker";
@@ -2118,6 +2125,9 @@ CREATE OR REPLACE FUNCTION _supatype."speaker_versions_guard"() RETURNS trigger
     RETURN NEW;
   END;
   $fn$;
+
+-- Firing a trigger checks nothing of the role that wrote the row, so no role needs `EXECUTE` here.
+REVOKE ALL ON FUNCTION _supatype."speaker_versions_guard"() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS "speaker_versions_guard" ON "public"."speaker_versions";
 CREATE TRIGGER "speaker_versions_guard" BEFORE INSERT OR UPDATE ON "public"."speaker_versions"
@@ -2207,6 +2217,7 @@ CREATE OR REPLACE FUNCTION _supatype."sees_draft_talk"(p_record text)
          )
     ) OR _supatype.created_in_this_transaction('talk', p_record);
   $fn$;
+REVOKE ALL ON FUNCTION _supatype."sees_draft_talk"(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION _supatype."sees_draft_talk"(text) TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS "talk_draft_select" ON "public"."talk";
@@ -2258,6 +2269,9 @@ CREATE OR REPLACE FUNCTION _supatype."talk_versions_guard"() RETURNS trigger
     RETURN NEW;
   END;
   $fn$;
+
+-- Firing a trigger checks nothing of the role that wrote the row, so no role needs `EXECUTE` here.
+REVOKE ALL ON FUNCTION _supatype."talk_versions_guard"() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS "talk_versions_guard" ON "public"."talk_versions";
 CREATE TRIGGER "talk_versions_guard" BEFORE INSERT OR UPDATE ON "public"."talk_versions"
