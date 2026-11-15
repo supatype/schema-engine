@@ -1169,6 +1169,11 @@ pub struct JunctionTableAst {
     pub model_b: String,
     pub fk_a: String,
     pub fk_b: String,
+    /// The models whose own `ManyToMany` field names this junction, in schema order. One entry
+    /// means that model owns the link (only its update right writes it); both means either end's
+    /// update right does. Empty, as in an AST built without the resolver, is treated as both.
+    #[serde(default)]
+    pub declared_by: Vec<String>,
 }
 
 /// A declared bucket. Serialized with its effective `public` flag and `accessMode` filled in,
