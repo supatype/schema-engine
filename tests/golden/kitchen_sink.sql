@@ -296,6 +296,146 @@ CREATE OR REPLACE FUNCTION "public"."can_delete_kitchen_sink"("kitchen_sink" "pu
 REVOKE ALL ON FUNCTION "public"."can_delete_kitchen_sink"("public"."kitchen_sink", boolean) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION "public"."can_delete_kitchen_sink"("public"."kitchen_sink", boolean) TO anon, authenticated, service_role;
 
+-- Private realtime channels: access functions, mode, outbox and realtime_send
+CREATE TABLE IF NOT EXISTS "_supatype"."realtime_outbox" (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  topic text NOT NULL,
+  event text NOT NULL,
+  payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  sender uuid,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE "_supatype"."realtime_outbox" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON "_supatype"."realtime_outbox" FROM PUBLIC, anon;
+GRANT INSERT, SELECT, DELETE ON "_supatype"."realtime_outbox" TO authenticated;
+GRANT ALL ON "_supatype"."realtime_outbox" TO service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_channel_access"(topic text)
+  RETURNS TABLE (channel text, pattern text, fits boolean, param_error text, can_join boolean, can_send boolean, can_track boolean) LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = '' AS $rt$
+#variable_conflict use_column
+BEGIN
+  IF pg_catalog.char_length($1) > 255 THEN
+    RETURN;
+  END IF;
+
+  RETURN;
+END;
+$rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_channel_access"(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_channel_access"(text) TO anon, authenticated, service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_channel_mode"()
+  RETURNS text LANGUAGE sql STABLE SET search_path = '' AS $rt$ SELECT 'open'::text $rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_channel_mode"() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_channel_mode"() TO anon, authenticated, service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_channel_send_checks"()
+  RETURNS TABLE (channel text, checks jsonb) LANGUAGE sql STABLE SET search_path = '' AS $rt$
+  SELECT NULL::text, NULL::jsonb
+  WHERE FALSE
+$rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_channel_send_checks"() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_channel_send_checks"() TO anon, authenticated, service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_channel_dependencies"()
+  RETURNS TABLE (channel text, table_schema text, table_name text) LANGUAGE sql STABLE SET search_path = '' AS $rt$
+  SELECT NULL::text, NULL::text, NULL::text
+  WHERE FALSE
+$rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_channel_dependencies"() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_channel_dependencies"() TO anon, authenticated, service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_channel_content_ok"(channel text, event text, payload jsonb)
+  RETURNS boolean LANGUAGE sql STABLE SET search_path = '' AS $rt$ SELECT TRUE $rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_channel_content_ok"(text, text, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_channel_content_ok"(text, text, jsonb) TO authenticated, service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_send_refusal"(topic text, event text, payload jsonb)
+  RETURNS text LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $rt$
+  SELECT CASE
+      WHEN (current_user = 'service_role' OR COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles AS r WHERE r.rolname = current_user), FALSE)) THEN NULL
+      WHEN a.channel IS NULL THEN
+        CASE WHEN "_supatype".realtime_channel_mode() = 'declared' THEN
+          $1 || ' matches no declared channel, and this project refuses broadcast and presence on undeclared channels (realtime.channels is "declared")'
+        END
+      WHEN NOT a.fits THEN $1 || ' does not fit ' || a.pattern || ': ' || a.param_error
+      WHEN a.can_send IS NULL THEN a.channel || ' declares no send rule, so only the service role may broadcast on ' || $1
+      WHEN NOT a.can_send THEN 'not allowed to broadcast on ' || $1 || ': the send rule of ' || a.channel || ' denied it'
+      WHEN NOT "_supatype".realtime_channel_content_ok(a.channel, $2, $3) THEN
+        'not allowed to broadcast ' || $2 || ' on ' || $1 || ': the send rule of ' || a.channel || ' refused the payload'
+    END
+    FROM (SELECT 1) AS one
+    LEFT JOIN "_supatype".realtime_channel_access($1) AS a ON TRUE
+  $rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_send_refusal"(text, text, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_send_refusal"(text, text, jsonb) TO authenticated, service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_send"(topic text, event text, payload jsonb DEFAULT '{}'::jsonb)
+  RETURNS void LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = '' AS $rt$
+DECLARE
+  refusal text := "_supatype".realtime_send_refusal(topic, event, payload);
+BEGIN
+  IF refusal IS NOT NULL THEN
+    RAISE EXCEPTION '%', refusal USING ERRCODE = '42501';
+  END IF;
+  INSERT INTO "_supatype"."realtime_outbox" (topic, event, payload, sender)
+    VALUES (topic, event, payload, "_supatype".jwt_uid());
+END;
+$rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_send"(text, text, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_send"(text, text, jsonb) TO authenticated, service_role;
+CREATE OR REPLACE FUNCTION "_supatype"."realtime_outbox_delete_row"()
+  RETURNS trigger LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = '' AS $rt$
+BEGIN
+  DELETE FROM "_supatype"."realtime_outbox" WHERE id = NEW.id;
+  RETURN NULL;
+END;
+$rt$;
+REVOKE ALL ON FUNCTION "_supatype"."realtime_outbox_delete_row"() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION "_supatype"."realtime_outbox_delete_row"() TO authenticated, service_role;
+DO $rt_policy$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = '"_supatype"."realtime_outbox"'::regclass AND polname = 'realtime_outbox_insert') THEN
+    ALTER POLICY "realtime_outbox_insert" ON "_supatype"."realtime_outbox" TO authenticated WITH CHECK ("_supatype".realtime_send_refusal(topic, event, payload) IS NULL AND sender IS NOT DISTINCT FROM (SELECT "_supatype".jwt_uid()));
+  ELSE
+    CREATE POLICY "realtime_outbox_insert" ON "_supatype"."realtime_outbox" AS PERMISSIVE FOR INSERT TO authenticated WITH CHECK ("_supatype".realtime_send_refusal(topic, event, payload) IS NULL AND sender IS NOT DISTINCT FROM (SELECT "_supatype".jwt_uid()));
+  END IF;
+END;
+$rt_policy$;
+DO $rt_policy$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = '"_supatype"."realtime_outbox"'::regclass AND polname = 'realtime_outbox_select') THEN
+    ALTER POLICY "realtime_outbox_select" ON "_supatype"."realtime_outbox" TO authenticated USING (sender IS NOT DISTINCT FROM (SELECT "_supatype".jwt_uid()));
+  ELSE
+    CREATE POLICY "realtime_outbox_select" ON "_supatype"."realtime_outbox" AS PERMISSIVE FOR SELECT TO authenticated USING (sender IS NOT DISTINCT FROM (SELECT "_supatype".jwt_uid()));
+  END IF;
+END;
+$rt_policy$;
+DO $rt_policy$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = '"_supatype"."realtime_outbox"'::regclass AND polname = 'realtime_outbox_delete') THEN
+    ALTER POLICY "realtime_outbox_delete" ON "_supatype"."realtime_outbox" TO authenticated USING (sender IS NOT DISTINCT FROM (SELECT "_supatype".jwt_uid()));
+  ELSE
+    CREATE POLICY "realtime_outbox_delete" ON "_supatype"."realtime_outbox" AS PERMISSIVE FOR DELETE TO authenticated USING (sender IS NOT DISTINCT FROM (SELECT "_supatype".jwt_uid()));
+  END IF;
+END;
+$rt_policy$;
+DO $rt_policy$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = '"_supatype"."realtime_outbox"'::regclass AND polname = 'realtime_outbox_service') THEN
+    ALTER POLICY "realtime_outbox_service" ON "_supatype"."realtime_outbox" TO service_role USING (TRUE);
+  ELSE
+    CREATE POLICY "realtime_outbox_service" ON "_supatype"."realtime_outbox" AS PERMISSIVE FOR ALL TO service_role USING (TRUE);
+  END IF;
+END;
+$rt_policy$;
+DO $rt_trigger$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_trigger
+    WHERE tgrelid = '"_supatype"."realtime_outbox"'::regclass AND tgname = 'realtime_outbox_delete_row'
+      AND tgfoid = '"_supatype"."realtime_outbox_delete_row"'::regproc AND tgenabled = 'A' AND tgtype = 5
+  ) THEN
+    CREATE OR REPLACE TRIGGER "realtime_outbox_delete_row" AFTER INSERT ON "_supatype"."realtime_outbox"
+      FOR EACH ROW EXECUTE FUNCTION "_supatype"."realtime_outbox_delete_row"();
+    ALTER TABLE "_supatype"."realtime_outbox" ENABLE ALWAYS TRIGGER "realtime_outbox_delete_row";
+  END IF;
+END;
+$rt_trigger$;
+
 -- reconciled objects
 CREATE SCHEMA IF NOT EXISTS "_platform";
 CREATE SCHEMA IF NOT EXISTS "supatype";
