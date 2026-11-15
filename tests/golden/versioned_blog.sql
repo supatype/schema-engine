@@ -1417,6 +1417,8 @@ REVOKE ALL ON FUNCTION _supatype.prune_preview_links() FROM PUBLIC;
 REVOKE ALL ON FUNCTION _supatype.run_due_publishes(timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION _supatype.draft_visibility_roles() FROM PUBLIC;
 REVOKE ALL ON FUNCTION _supatype.versioned_model(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION _supatype.sees_all_drafts() FROM PUBLIC;
+REVOKE ALL ON FUNCTION _supatype.preview_epoch() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION _supatype.sees_all_drafts() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION _supatype.preview_allows(text, text) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION _supatype.preview_epoch() TO anon, authenticated, service_role;
@@ -1594,6 +1596,7 @@ CREATE OR REPLACE FUNCTION _supatype."sees_draft_posts"(p_record text)
          )
     ) OR _supatype.created_in_this_transaction('posts', p_record);
   $fn$;
+REVOKE ALL ON FUNCTION _supatype."sees_draft_posts"(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION _supatype."sees_draft_posts"(text) TO anon, authenticated, service_role;
 
 DROP POLICY IF EXISTS "posts_draft_select" ON "public"."posts";
@@ -1645,6 +1648,9 @@ CREATE OR REPLACE FUNCTION _supatype."posts_versions_guard"() RETURNS trigger
     RETURN NEW;
   END;
   $fn$;
+
+-- Firing a trigger checks nothing of the role that wrote the row, so no role needs `EXECUTE` here.
+REVOKE ALL ON FUNCTION _supatype."posts_versions_guard"() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS "posts_versions_guard" ON "public"."posts_versions";
 CREATE TRIGGER "posts_versions_guard" BEFORE INSERT OR UPDATE ON "public"."posts_versions"
@@ -1728,6 +1734,9 @@ CREATE OR REPLACE FUNCTION _supatype."ledger_versions_audit"() RETURNS trigger
     RETURN NULL;
   END;
   $fn$;
+
+-- Firing a trigger checks nothing of the role that wrote the row, so no role needs `EXECUTE` here.
+REVOKE ALL ON FUNCTION _supatype."ledger_versions_audit"() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS "ledger_versions_audit" ON "public"."ledger";
 CREATE TRIGGER "ledger_versions_audit" AFTER INSERT OR UPDATE ON "public"."ledger"

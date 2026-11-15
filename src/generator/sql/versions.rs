@@ -1028,6 +1028,7 @@ fn draft_aware_select_policy_sql(
          )\n    \
          ) OR {helper}.created_in_this_transaction({table_lit}, p_record);\n  \
          ${tag}$;\n\
+         REVOKE ALL ON FUNCTION {helper}.{fn_q}(text) FROM PUBLIC;\n\
          GRANT EXECUTE ON FUNCTION {helper}.{fn_q}(text) TO anon, authenticated, service_role;\n\n\
          DROP POLICY IF EXISTS {policy_q} ON {schema_q}.{table_q};\n\
          CREATE POLICY {policy_q} ON {schema_q}.{table_q}\n  \
@@ -1133,6 +1134,9 @@ fn versions_guard_trigger_sql(schema: &str, versions_table: &str, guard: &str) -
   END;
   ${tag}$;
 
+-- Firing a trigger checks nothing of the role that wrote the row, so no role needs `EXECUTE` here.
+REVOKE ALL ON FUNCTION {helper}.{guard_q}() FROM PUBLIC;
+
 DROP TRIGGER IF EXISTS {guard_q} ON {schema_q}.{versions_q};
 CREATE TRIGGER {guard_q} BEFORE INSERT OR UPDATE ON {schema_q}.{versions_q}
   FOR EACH ROW EXECUTE FUNCTION {helper}.{guard_q}();
@@ -1183,6 +1187,9 @@ fn audit_trigger_sql(
     RETURN NULL;
   END;
   ${tag}$;
+
+-- Firing a trigger checks nothing of the role that wrote the row, so no role needs `EXECUTE` here.
+REVOKE ALL ON FUNCTION {helper}.{audit_q}() FROM PUBLIC;
 
 DROP TRIGGER IF EXISTS {audit_q} ON {schema_q}.{table_q};
 CREATE TRIGGER {audit_q} AFTER INSERT OR UPDATE ON {schema_q}.{table_q}
@@ -1774,6 +1781,8 @@ REVOKE ALL ON FUNCTION {helper}.prune_preview_links() FROM PUBLIC;
 REVOKE ALL ON FUNCTION {helper}.run_due_publishes(timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION {helper}.draft_visibility_roles() FROM PUBLIC;
 REVOKE ALL ON FUNCTION {helper}.versioned_model(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION {helper}.sees_all_drafts() FROM PUBLIC;
+REVOKE ALL ON FUNCTION {helper}.preview_epoch() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION {helper}.sees_all_drafts() TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION {helper}.preview_allows(text, text) TO anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION {helper}.preview_epoch() TO anon, authenticated, service_role;
