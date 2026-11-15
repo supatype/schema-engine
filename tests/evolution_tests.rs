@@ -2073,6 +2073,8 @@ fn test_rls_any_rule_generates_or_expression() {
         default_locale: None,
         plugins: vec![],
         sso: None,
+        channels: vec![],
+        realtime: None,
         publishing: None,
         warnings: vec![],
         rename_journal: Vec::new(),

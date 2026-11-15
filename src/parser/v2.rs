@@ -54,6 +54,13 @@ pub fn deserialize_schema(value: &Value) -> Result<SchemaAst> {
             .get("publishing")
             .map(|v| serde_json::from_value(v.clone()))
             .transpose()?,
+        channels: deserialize_optional_vec(value, "channels")?,
+        realtime: value
+            .get("realtime")
+            .filter(|v| !v.is_null())
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .context("invalid \"realtime\" settings")?,
         warnings: deserialize_optional_string_vec(value, "warnings"),
         rename_journal: deserialize_optional_vec(value, "renameJournal")?,
         recorded_names: Default::default(),
@@ -956,6 +963,12 @@ pub fn serialize_schema(ast: &SchemaAst) -> Value {
     }
     if !ast.rename_journal.is_empty() {
         root["renameJournal"] = serde_json::to_value(&ast.rename_journal).unwrap_or(Value::Null);
+    }
+    if !ast.channels.is_empty() {
+        root["channels"] = serde_json::to_value(&ast.channels).unwrap_or(Value::Null);
+    }
+    if let Some(ref realtime) = ast.realtime {
+        root["realtime"] = serde_json::to_value(realtime).unwrap_or(Value::Null);
     }
     root
 }

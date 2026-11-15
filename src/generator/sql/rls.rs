@@ -439,6 +439,10 @@ pub fn access_rule_to_expr(
         // Constraint-only nodes. The CLI refuses them inside `access`, so reaching here means a
         // hand-written AST; rendering FALSE denies rather than silently granting.
         AccessRule::Matches { .. } => "FALSE".to_string(),
+        // Channel-only nodes. `parser::channels` refuses them in a model rule, and a channel's
+        // `send` rule has them taken out before it is rendered (`generator::sql::realtime`), so
+        // an AST that reaches here is hand-written: denied, as `Matches` is.
+        AccessRule::Event { .. } | AccessRule::Payload { .. } => "FALSE".to_string(),
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
@@ -835,6 +839,15 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
             crate::generator::sql::constraints::measure_expr(column, *form)
         }
         Operand::Column { name } => quote_ident(name),
+        // The derived column a channel function builds from the topic, under the one alias the
+        // channel renderer gives it (`generator::sql::realtime::PARAM_ALIAS`). Qualified here so it
+        // stays unambiguous inside a `Rows` filter, where a bare column belongs to the source table.
+        // `parser::channels` refuses `Param` outside a channel rule, so no model policy renders it.
+        Operand::Param { name } => format!(
+            "{}.{}",
+            quote_ident(crate::generator::sql::realtime::PARAM_ALIAS),
+            quote_ident(name)
+        ),
         Operand::AuthUid => AUTH_UID.to_string(),
         Operand::AuthRole => AUTH_ROLE.to_string(),
         // Text, so it compares against a column or a string literal. A claim used

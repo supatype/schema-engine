@@ -258,7 +258,9 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
         // them in a bucket's own rules ([`crate::parser::validator`]); one that arrives through
         // a model's rules, applied to a bucket that declares none, denies rather than being
         // rendered against a table where the column means something else or nothing at all.
-        AccessRule::In { .. } | AccessRule::Exists { .. } => "FALSE".to_string(),
+        AccessRule::In { .. } | AccessRule::Exists { .. }
+        | AccessRule::Event { .. }
+        | AccessRule::Payload { .. } => "FALSE".to_string(),
     }
 }
 
