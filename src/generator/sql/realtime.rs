@@ -809,7 +809,8 @@ fn outbox_table_sql() -> String {
 fn outbox_policies_sql() -> String {
     let table = quote_qualified(HELPER_SCHEMA, OUTBOX);
     let s = quote_ident(HELPER_SCHEMA);
-    let own = format!("sender IS NOT DISTINCT FROM {s}.jwt_uid()");
+    // Wrapped in a SELECT so the planner evaluates the caller once per query, not once per row.
+    let own = format!("sender IS NOT DISTINCT FROM (SELECT {s}.jwt_uid())");
     let policy = |name: &str, command: &str, to: &str, clause: &str, expr: &str| {
         // Made if absent, altered if present, never dropped: a drop and create would leave the
         // outbox with no policy between the two statements, and a push is not the place to
