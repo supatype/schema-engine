@@ -689,7 +689,10 @@ async fn the_access_function_is_invoker_pinned_and_not_open_to_public() {
             let name: String = row.get(0);
             assert!(!row.get::<bool, _>(1), "{name} is security definer");
             let config: String = row.get(2);
-            assert!(config.replace('\\', "").contains("search_path=\"\""), "{name}: {config}");
+            assert!(
+                config.replace('\\', "").contains("search_path=\"\""),
+                "{name}: {config}"
+            );
             assert!(!row.get::<bool, _>(3), "{name} is executable by PUBLIC");
         }
     })
@@ -908,7 +911,10 @@ async fn the_outbox_is_written_and_emptied_in_one_transaction_and_reaches_the_sl
         }
         let mut conn = pool.acquire().await.unwrap();
         if create_slot(&mut conn, "rt_outbox_test").await.is_none() {
-            assert!(!common::force_integration_tests(), "no usable output plugin");
+            assert!(
+                !common::force_integration_tests(),
+                "no usable output plugin"
+            );
             eprintln!("SKIP slot check: neither wal2json nor test_decoding may be used here");
             return;
         }
@@ -937,7 +943,10 @@ async fn the_outbox_is_written_and_emptied_in_one_transaction_and_reaches_the_sl
                 .any(|c| c.to_lowercase().contains("insert") && c.contains("hello")),
             "{changes:#?}"
         );
-        assert!(outbox.iter().any(|c| c.to_lowercase().contains("delete")), "{changes:#?}");
+        assert!(
+            outbox.iter().any(|c| c.to_lowercase().contains("delete")),
+            "{changes:#?}"
+        );
         let left: i64 = sqlx::query_scalar("SELECT count(*) FROM _supatype.realtime_outbox")
             .fetch_one(&mut *conn)
             .await
@@ -1072,7 +1081,11 @@ async fn a_direct_insert_leaves_no_row_behind_whoever_makes_it() {
         commit_insert(&pool, "service_role", None, "lobby", Some(BOB))
             .await
             .expect("service insert with a foreign sender");
-        assert_eq!(outbox_rows(&pool).await, 0, "the outbox must not accumulate");
+        assert_eq!(
+            outbox_rows(&pool).await,
+            0,
+            "the outbox must not accumulate"
+        );
     })
     .await;
 }
@@ -1157,7 +1170,10 @@ async fn a_direct_insert_still_reaches_the_replication_stream() {
         }
         let mut conn = pool.acquire().await.unwrap();
         let Some(plugin) = create_slot(&mut conn, "rt_outbox_direct_test").await else {
-            assert!(!common::force_integration_tests(), "no usable output plugin");
+            assert!(
+                !common::force_integration_tests(),
+                "no usable output plugin"
+            );
             eprintln!("SKIP slot check: neither wal2json nor test_decoding may be used here");
             return;
         };

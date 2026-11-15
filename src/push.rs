@@ -1604,7 +1604,10 @@ impl<'p> Refresh<'p> {
                 &self.graphql_names_sql,
                 "Failed to name the relations for GraphQL",
             ),
-            (&self.realtime_sql, "Failed to apply the realtime channel functions"),
+            (
+                &self.realtime_sql,
+                "Failed to apply the realtime channel functions",
+            ),
         ];
         for (sql, failure) in scripts {
             if !sql.trim().is_empty() {

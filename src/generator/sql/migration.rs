@@ -263,7 +263,9 @@ fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
 fn render_realtime_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
     vec![
         "-- Private realtime channels: access functions, mode, outbox and realtime_send".into(),
-        crate::generator::sql::realtime::generate(ast, schema).trim().into(),
+        crate::generator::sql::realtime::generate(ast, schema)
+            .trim()
+            .into(),
         String::new(),
     ]
 }
