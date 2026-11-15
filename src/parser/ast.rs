@@ -784,6 +784,12 @@ pub enum Operand {
     AuthRole,
     /// A nested JWT claim by dotted path, e.g. `app_metadata.tier`.
     Claim { path: String },
+    /// The `index`th folder of an object's path, counting from 1 as Postgres arrays do:
+    /// `storage.foldername(name)[index]`, NULL when the path is not that deep.
+    ///
+    /// Bucket rules only. It names a column of `storage.objects`, so a model's rule using it is
+    /// refused at validation. It reads as text, so `AuthUid` compared with it is cast to match.
+    Folder { index: u32 },
     /// A constant supplied in the schema.
     Literal { value: LiteralValue },
 

@@ -324,3 +324,218 @@ fn the_migration_file_creates_storage_objects_before_its_bucket_policies() {
         "the storage layer is inside the forward transaction"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Rules that name the object's folder, claim-only composites, and refusing what cannot render.
+// ---------------------------------------------------------------------------------------------
+
+/// A bucket whose `create` and `update` bind the first folder of the path to the caller.
+const PER_USER_FOLDERS: &str = r#"{
+  "id": "docs", "public": false, "accessMode": "private",
+  "access": {
+    "read": { "type": "owner", "field": "owner_id" },
+    "create": { "type": "compare", "op": "eq",
+                "left": { "kind": "folder", "index": 1 }, "right": { "kind": "authUid" } },
+    "update": { "type": "compare", "op": "eq",
+                "left": { "kind": "folder", "index": 1 }, "right": { "kind": "authUid" } }
+  }
+}"#;
+
+#[test]
+fn a_folder_rule_on_create_compares_the_first_folder_with_the_caller_as_text() {
+    let sql = sql_for(PER_USER_FOLDERS, "");
+    let expected = "CREATE POLICY \"storage_docs_ins\" ON \"storage\".\"objects\"\n  \
+                    FOR INSERT WITH CHECK (\n    bucket_id = 'docs' AND \
+                    ((storage.foldername(name))[1] = (SELECT _supatype.jwt_uid())::text)\n  );";
+    assert!(sql.contains(expected), "got:\n{sql}");
+}
+
+#[test]
+fn a_folder_rule_on_update_checks_the_old_and_the_new_name() {
+    // USING selects the rows the caller may touch, WITH CHECK judges the row after the change, so
+    // a rename into someone else's folder fails the second even though the first passes.
+    let sql = sql_for(PER_USER_FOLDERS, "");
+    let rule = "((storage.foldername(name))[1] = (SELECT _supatype.jwt_uid())::text)";
+    let expected = format!(
+        "FOR UPDATE USING (\n    bucket_id = 'docs' AND {rule}\n  ) \
+         WITH CHECK (\n    bucket_id = 'docs' AND {rule}\n  );"
+    );
+    assert!(sql.contains(&expected), "got:\n{sql}");
+}
+
+#[test]
+fn a_claim_only_registered_rule_renders_on_a_bucket() {
+    let bucket = r#"{
+      "id": "docs", "public": false, "accessMode": "private",
+      "access": { "create": { "type": "all", "rules": [
+        { "type": "authenticated" },
+        { "type": "compare", "op": "eq",
+          "left": { "kind": "claim", "path": "is_anonymous" },
+          "right": { "kind": "literal", "value": false } } ] } }
+    }"#;
+    let sql = sql_for(bucket, "");
+    assert!(
+        sql.contains(
+            "bucket_id = 'docs' AND (((SELECT _supatype.jwt_uid()) IS NOT NULL) AND \
+             ((SELECT CASE WHEN jsonb_typeof(c) = 'boolean' THEN c::boolean END \
+             FROM _supatype.jwt_claim('is_anonymous') AS c) = FALSE))"
+        ),
+        "got:\n{sql}"
+    );
+}
+
+#[test]
+fn a_not_rule_on_a_bucket_negates_its_inner_rule() {
+    let bucket = r#"{ "id": "docs", "access": { "read": { "type": "not",
+        "rule": { "type": "role", "roles": ["banned"] } } } }"#;
+    let sql = sql_for(bucket, "");
+    assert!(
+        sql.contains("NOT ((SELECT _supatype.jwt_role()) = 'banned')"),
+        "got:\n{sql}"
+    );
+}
+
+fn refusal_for(rule: &str) -> String {
+    let bucket = format!(
+        r#"{{ "id": "docs", "access": {{ "read": {{ "type": "public" }}, "update": {rule} }} }}"#
+    );
+    let src = format!(r#"{{ "astVersion": 2, "models": [], "storageBuckets": [{bucket}] }}"#);
+    parser::parse(&src)
+        .expect_err("the rule cannot be rendered on a bucket")
+        .to_string()
+}
+
+#[test]
+fn a_bucket_rule_naming_a_table_column_is_refused_naming_the_bucket_and_operation() {
+    let message = refusal_for(
+        r#"{ "type": "compare", "op": "eq",
+             "left": { "kind": "column", "name": "author_id" }, "right": { "kind": "authUid" } }"#,
+    );
+    assert!(message.contains("Bucket \"docs\""), "{message}");
+    assert!(message.contains("update"), "{message}");
+    assert!(message.contains("author_id"), "{message}");
+}
+
+#[test]
+fn a_bucket_rule_that_cannot_be_rendered_is_refused_wherever_it_is_nested() {
+    let rules = [
+        r#"{ "type": "any", "rules": [ { "type": "public" },
+             { "type": "in", "column": "id", "source": { "kind": "claim", "path": "ids" } } ] }"#,
+        r#"{ "type": "not", "rule": { "type": "exists",
+             "source": { "kind": "claim", "path": "ids" } } }"#,
+        r#"{ "type": "all", "rules": [ { "type": "matches", "column": "name", "pattern": "x" } ] }"#,
+        r#"{ "type": "nullCheck", "operand": { "kind": "column", "name": "x" }, "isNull": true }"#,
+    ];
+    for rule in rules {
+        let message = refusal_for(rule);
+        assert!(
+            message.contains("Bucket \"docs\"") && message.contains("update"),
+            "{rule}: {message}"
+        );
+    }
+}
+
+#[test]
+fn an_explicit_private_rule_is_allowed_on_a_bucket() {
+    let bucket = r#"{ "id": "docs", "access": { "read": { "type": "public" },
+        "delete": { "type": "private" } } }"#;
+    let sql = sql_for(bucket, "");
+    assert!(sql.contains("storage_docs_del"), "got:\n{sql}");
+}
+
+#[test]
+fn a_folder_compared_with_a_number_or_boolean_is_refused() {
+    let message = refusal_for(
+        r#"{ "type": "compare", "op": "eq",
+             "left": { "kind": "folder", "index": 1 },
+             "right": { "kind": "literal", "value": 5 } }"#,
+    );
+    assert!(
+        message.contains("Bucket \"docs\"") && message.contains("folder"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_folder_index_of_zero_is_refused() {
+    let message = refusal_for(
+        r#"{ "type": "compare", "op": "eq",
+             "left": { "kind": "folder", "index": 0 }, "right": { "kind": "authUid" } }"#,
+    );
+    assert!(
+        message.contains("Folder<1>") || message.contains("1-based"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_folder_in_a_model_rule_is_refused() {
+    let model = r#"{
+      "name": "doc", "annotations": { "db": { "tableName": "doc" },
+        "platform": { "access": { "read": { "type": "compare", "op": "eq",
+          "left": { "kind": "folder", "index": 1 }, "right": { "kind": "authUid" } } } } },
+      "fields": { "id": { "kind": "uuid", "required": true } }
+    }"#;
+    let src = format!(r#"{{ "astVersion": 2, "models": [{model}] }}"#);
+    let message = parser::parse(&src)
+        .expect_err("a table has no folder")
+        .to_string();
+    assert!(
+        message.contains("doc") && message.contains("Folder"),
+        "{message}"
+    );
+}
+
+// A rule a bucket inherits from a model is not refused, but it is warned about.
+
+fn model_with_read(rule: &str) -> String {
+    format!(
+        r#"{{
+  "name": "doc",
+  "annotations": {{ "db": {{ "tableName": "doc" }},
+    "platform": {{ "access": {{ "read": {rule} }} }} }},
+  "fields": {{
+    "id": {{ "kind": "uuid", "required": true }},
+    "author_id": {{ "kind": "uuid", "required": false }},
+    "file": {{ "kind": "image", "required": false, "bucket": "shared" }}
+  }}
+}}"#
+    )
+}
+
+const COLUMN_RULE: &str = r#"{ "type": "compare", "op": "eq",
+  "left": { "kind": "column", "name": "author_id" }, "right": { "kind": "authUid" } }"#;
+
+#[test]
+fn a_model_rule_naming_a_column_warns_when_a_bucket_inherits_it() {
+    let warnings = warnings_for(SHARED_UNDECLARED, &model_with_read(COLUMN_RULE));
+    let warning = warnings
+        .iter()
+        .find(|w| w.contains("inherits"))
+        .unwrap_or_else(|| panic!("no inheritance warning in {warnings:?}"));
+    for part in ["\"shared\"", "\"doc\"", "read", "author_id", "bucket-level"] {
+        assert!(warning.contains(part), "{part} missing from: {warning}");
+    }
+}
+
+#[test]
+fn a_model_rule_that_renders_on_a_bucket_does_not_warn() {
+    let warnings = warnings_for(
+        SHARED_UNDECLARED,
+        &model_with_read(r#"{ "type": "authenticated" }"#),
+    );
+    assert!(
+        warnings.iter().all(|w| !w.contains("inherits")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn a_bucket_with_its_own_rules_does_not_warn_about_the_models_column_rule() {
+    let bucket = r#"{ "id": "shared", "access": { "read": { "type": "public" } } }"#;
+    let warnings = warnings_for(bucket, &model_with_read(COLUMN_RULE));
+    assert!(
+        warnings.iter().all(|w| !w.contains("inherits")),
+        "{warnings:?}"
+    );
+}

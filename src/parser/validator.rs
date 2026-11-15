@@ -1,5 +1,5 @@
 use super::accessors::db_foreign_key;
-use super::ast::{AccessRule, FieldAst, MembershipSource, Operand, SchemaAst};
+use super::ast::{AccessRule, FieldAst, LiteralValue, MembershipSource, Operand, SchemaAst};
 use anyhow::{bail, Result};
 use std::collections::HashSet;
 
@@ -37,6 +37,8 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
         validate_auth_user_links(model)?;
         super::column_names::refuse_clashes(model)?;
     }
+
+    validate_bucket_rules(&ast)?;
 
     // Over the whole schema at once: an `Owner` inside a membership filter is checked against
     // the model that filter reads, not the one the rule is attached to.
@@ -190,6 +192,98 @@ fn for_each_operand(
     Ok(())
 }
 
+/// Why `rule` cannot be a bucket rule, or `None` when it can.
+///
+/// A bucket's rules become policies on `storage.objects`, which has none of a model's columns and
+/// no way to read another table from a rule. A rule that needs either used to render as `FALSE`
+/// there, with nothing said, so an author who believed they had written "registered users only"
+/// had written "nobody". Refused here instead; `Private` is how a bucket says "nobody" on purpose.
+pub(crate) fn bucket_refusal(rule: &AccessRule) -> Option<String> {
+    match rule {
+        AccessRule::Public
+        | AccessRule::Private
+        | AccessRule::Authenticated
+        | AccessRule::Owner { .. }
+        | AccessRule::Role { .. } => None,
+        AccessRule::Matches { column, .. } => Some(format!(
+            "`Matches<\"{column}\">` is a constraint on a column, not an access rule"
+        )),
+        AccessRule::In { column, .. } => Some(format!(
+            "`In<\"{column}\", ...>` tests a column, and objects have none of a model's columns"
+        )),
+        AccessRule::Exists { .. } => {
+            Some("`Exists<...>` reads a set, which a bucket rule cannot".to_string())
+        }
+        AccessRule::Compare { left, right, .. } => bucket_operand_refusal(left)
+            .or_else(|| bucket_operand_refusal(right))
+            .or_else(|| folder_pairing_refusal(left, right)),
+        AccessRule::NullCheck { operand, .. } => bucket_operand_refusal(operand),
+        AccessRule::Any { rules } | AccessRule::All { rules } => {
+            rules.iter().find_map(bucket_refusal)
+        }
+        AccessRule::Not { rule } => bucket_refusal(rule),
+    }
+}
+
+/// Why `operand` cannot be read where a bucket's rule is evaluated, or `None` when it can.
+fn bucket_operand_refusal(operand: &Operand) -> Option<String> {
+    match operand {
+        Operand::Column { name } => Some(format!(
+            "it names the column \"{name}\", and objects have none of a model's columns"
+        )),
+        Operand::Length { column, .. } | Operand::ItemCount { column, .. } => Some(format!(
+            "it measures the column \"{column}\", and objects have none of a model's columns"
+        )),
+        Operand::Folder { index: 0 } => {
+            Some("folders count from 1: `Folder<1>` is the first folder".to_string())
+        }
+        Operand::After { base, .. } | Operand::Before { base, .. } => bucket_operand_refusal(base),
+        _ => None,
+    }
+}
+
+/// A folder is text, so a number or boolean beside it is a type error Postgres reports at push.
+fn folder_pairing_refusal(left: &Operand, right: &Operand) -> Option<String> {
+    let typed = |o: &Operand| {
+        matches!(
+            o,
+            Operand::Literal {
+                value: LiteralValue::Number(_) | LiteralValue::Bool(_)
+            }
+        )
+    };
+    let folder = |o: &Operand| matches!(o, Operand::Folder { .. });
+    ((folder(left) && typed(right)) || (folder(right) && typed(left)))
+        .then(|| "a folder is text and cannot be compared with a number or boolean".to_string())
+}
+
+/// Refuse a bucket rule that would render as `FALSE`, naming the bucket and the operation.
+fn validate_bucket_rules(ast: &SchemaAst) -> Result<()> {
+    for bucket in &ast.storage_buckets {
+        let Some(access) = &bucket.access else {
+            continue;
+        };
+        for (operation, rule) in [
+            ("read", &access.read),
+            ("create", &access.create),
+            ("update", &access.update),
+            ("delete", &access.delete),
+        ] {
+            let Some(reason) = rule.as_ref().and_then(bucket_refusal) else {
+                continue;
+            };
+            bail!(
+                "Bucket \"{}\": the {operation} rule cannot be applied to storage objects: \
+                 {reason}. A bucket rule may use Public, Private, Authenticated, Owner, Role, \
+                 AuthUid, AuthRole, Claim, Literal and Folder<N>, joined with Any, All and Not. \
+                 Use Private to refuse the operation on purpose.",
+                bucket.id
+            );
+        }
+    }
+    Ok(())
+}
+
 /// `After` / `Before` are the only operands that carry another operand, so they are the
 /// only ones whose shape can be wrong rather than merely unsuitable.
 ///
@@ -207,6 +301,11 @@ fn for_each_operand(
 /// `After<Now, { dayz: 30 }>` both mean `now()`, silently, and a policy that silently
 /// means something else is the failure this catches.
 fn validate_operand(model: &str, clause: &str, operand: &Operand) -> Result<()> {
+    if matches!(operand, Operand::Folder { .. }) {
+        bail!(
+            "Model '{model}': the {clause} rule uses `Folder<N>`, which names an object's path and \n             exists only in a bucket's rules. A table's rule reads its own columns."
+        );
+    }
     let (name, base, interval) = match operand {
         Operand::After { base, interval } => ("After", base, interval),
         Operand::Before { base, interval } => ("Before", base, interval),
