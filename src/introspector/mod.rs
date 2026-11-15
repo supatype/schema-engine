@@ -1,3 +1,4 @@
+pub mod realtime;
 pub mod catalog;
 pub mod constraints;
 pub mod dependents;

@@ -46,6 +46,10 @@ pub const FEATURES: &[&str] = &[
     // `push` with `run_hooks` / `--run-hooks`: after-hooks run on the rows the push rewrites. Without
     // it the push's transaction carries the skip-hooks marker (`hooks_marker`), as a seed's does.
     "run_hooks",
+    // `channels` and `realtime` in the AST (astVersion 3): private realtime channels, compiled to
+    // `_supatype.realtime_channel_access` and its companions, with `realtime_send` and the outbox.
+    // An engine without it reads neither key, so a CLI refuses to send them.
+    "private_channels",
 ];
 
 /// The capabilities document. `version` is the build's own (`build.rs`): the crate version for a
@@ -61,7 +65,7 @@ mod tests {
         assert_eq!(
             super::capabilities().to_string(),
             format!(
-                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns","migrate_record","online_ddl","push_audit","run_hooks"]}}"#,
+                r#"{{"version":"{}","features":["adopt_keys","adopt_none","release","reclaim","rebaseline","accept_access_drift","rebaseline_keys","overwrite_drift","engine_busy","identity_columns","migrate_record","online_ddl","push_audit","run_hooks","private_channels"]}}"#,
                 env!("ENGINE_VERSION")
             )
         );

@@ -47,6 +47,9 @@ fn anon_reaches(ast: &SchemaAst, rule: &AccessRule, reading: &[&str]) -> bool {
         // reached only if an AST is hand-written; treating it as caller-independent is the safe
         // reading, since the pattern says nothing about who is asking.
         AccessRule::Matches { .. } => true,
+        // Channel-only nodes, refused in a model rule by `parser::channels`: as caller-independent
+        // as `Matches`.
+        AccessRule::Event { .. } | AccessRule::Payload { .. } => true,
         AccessRule::Public => true,
         AccessRule::Private => false,
 

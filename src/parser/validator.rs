@@ -42,6 +42,10 @@ pub fn validate(mut ast: SchemaAst) -> Result<SchemaAst> {
     // the model that filter reads, not the one the rule is attached to.
     super::owner_rules::validate(&mut ast)?;
 
+    // Channels carry their own rule grammar (parameters, content nodes), and a pattern two of
+    // them can both match is refused here rather than ranked.
+    super::channels::validate(&ast)?;
+
     Ok(ast)
 }
 

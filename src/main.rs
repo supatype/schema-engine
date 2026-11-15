@@ -898,6 +898,8 @@ mod tests {
             field_view_plan: Vec::new(),
             rename_candidates: Vec::new(),
             rewrites: Vec::new(),
+            channels: Vec::new(),
+            realtime_mode: None,
         };
         assert!(has_destructive_ops(&diff));
     }

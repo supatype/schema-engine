@@ -57,6 +57,10 @@ pub struct DatabaseState {
     /// without it (read from one) falls back to the keys and indexes the lists above attribute.
     #[serde(skip)]
     pub column_dependents: Vec<crate::introspector::dependents::DbColumnDependent>,
+    /// The body of each realtime channel function the database has, by name (the drift check).
+    /// Never part of a snapshot.
+    #[serde(skip)]
+    pub realtime_functions: BTreeMap<String, String>,
 }
 
 impl DatabaseState {

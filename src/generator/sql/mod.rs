@@ -13,6 +13,7 @@ pub mod junction_access;
 pub mod migration;
 pub mod migration_errors;
 pub mod online;
+pub mod realtime;
 pub mod recreate;
 pub mod rls;
 pub mod rollback;

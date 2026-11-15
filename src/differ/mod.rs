@@ -1,3 +1,4 @@
+pub mod channel_diff;
 pub mod column_diff;
 pub mod constraint_diff;
 pub(crate) mod default_diff;
@@ -53,6 +54,12 @@ pub struct DiffOutput {
     /// database how large its tables are; a push refuses one that needs consent without `force`.
     #[serde(default)]
     pub rewrites: Vec<rewrites::TableRewrite>,
+    /// Realtime channels the push adds, removes or changes, and which operation's rule moved.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<channel_diff::ChannelChange>,
+    /// The realtime mode before and after the push, when it moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub realtime_mode: Option<channel_diff::ModeChange>,
 }
 
 /// How a database enforces per-column rules.
@@ -271,6 +278,10 @@ pub fn diff_with_previous(
     extension_diff::diff(db, &mut ops, &mut warnings);
     table_diff::diff(ast, db, previous, &mut ops, &mut warnings)?;
     rls_diff::diff(ast, db, &mut warnings)?;
+    let channel_diff::Outcome {
+        channels,
+        mode: realtime_mode,
+    } = channel_diff::diff(ast, db, previous, &mut warnings);
     field_access_diff::validate(ast, db, &mut warnings)?;
     warnings.extend(crate::generator::sql::storage::rule_warnings(ast));
 
@@ -321,6 +332,8 @@ pub fn diff_with_previous(
         field_view_plan,
         warnings,
         rewrites: Vec::new(),
+        channels,
+        realtime_mode,
     })
 }
 

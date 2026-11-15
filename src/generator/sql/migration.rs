@@ -254,6 +254,20 @@ fn render_can_function_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
     ]
 }
 
+/// Private realtime channels: the access, mode, send-check and dependency functions, the outbox and
+/// `realtime_send`. Always emitted, with no channels declared too, so the realtime server never has
+/// to ask whether they exist: a schema with no channels answers no rows and `open`.
+///
+/// After the tables, because a rule's `Rows<>` reads them and a SQL function body is checked when it
+/// is created.
+fn render_realtime_lines(ast: &SchemaAst, schema: &str) -> Vec<String> {
+    vec![
+        "-- Private realtime channels: access functions, mode, outbox and realtime_send".into(),
+        crate::generator::sql::realtime::generate(ast, schema).trim().into(),
+        String::new(),
+    ]
+}
+
 /// The schema's names for each end of a relation, in the `@graphql` directive pg_graphql reads
 /// from the key's comment. Re-asserted on every push, after the reconcile's additions, which make
 /// the keys; a key whose comment already holds its directive is not touched.
@@ -302,6 +316,7 @@ fn render_reasserted_lines(
 ) -> Vec<String> {
     // `can_*` functions live in the managed schema and read the table, they do not change it.
     let mut lines = render_can_function_lines(ast, schema);
+    lines.extend(render_realtime_lines(ast, schema));
 
     // One tier or the other, never both. Labels *and* views would give every deployment the views'
     // weaker aggregate behaviour, and the extension rejects the whole-row references the write
@@ -2543,6 +2558,8 @@ mod tests {
             field_view_plan: Vec::new(),
             rename_candidates: Vec::new(),
             rewrites: Vec::new(),
+            channels: Vec::new(),
+            realtime_mode: None,
         };
         let function = crate::desired::ObjectKey {
             kind: crate::introspector::fingerprint::ObjectKind::Function,

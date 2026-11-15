@@ -836,6 +836,11 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
     if tagged(crate::generator::sql::graphql_names::TAG) {
         return Attribution::Ignored("graphql relation names");
     }
+    // The outbox's row level security policies: engine-owned objects in `_supatype`, made or
+    // altered on every push and kept beside the realtime functions, which carry no ledger row.
+    if tagged(crate::generator::sql::realtime::POLICY_TAG) {
+        return Attribution::Ignored("realtime outbox policy");
+    }
     if tagged(versions::RLS_ON_TAG) {
         // Row-level security turned on where it is off: the statement it executes names the table.
         let Some(at) = h.find("ALTER TABLE ") else {
