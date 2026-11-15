@@ -269,16 +269,39 @@ fn send_sql_half(channel: &ChannelAst) -> Option<AccessRule> {
         .map(|(sql, _)| sql)
 }
 
-/// The three verdict columns of a channel's row.
-fn verdicts(ast: &SchemaAst, channel: &ChannelAst, schema: &str) -> String {
+/// The three operations of a channel with the verdict expression each renders to, in the order of
+/// the columns: `NULL` for an operation the declaration has no rule for.
+fn operation_verdicts(
+    ast: &SchemaAst,
+    channel: &ChannelAst,
+    schema: &str,
+) -> [(&'static str, String); 3] {
     let model = channel_model(channel);
     let send = send_sql_half(channel);
     [
-        verdict_sql(ast, &model, channel.access.join.as_ref(), schema),
-        verdict_sql(ast, &model, send.as_ref(), schema),
-        verdict_sql(ast, &model, channel.access.track.as_ref(), schema),
+        (
+            "join",
+            verdict_sql(ast, &model, channel.access.join.as_ref(), schema),
+        ),
+        ("send", verdict_sql(ast, &model, send.as_ref(), schema)),
+        (
+            "track",
+            verdict_sql(ast, &model, channel.access.track.as_ref(), schema),
+        ),
     ]
-    .join(", ")
+}
+
+/// One operation's verdict, read into its own variable inside its own block. A rule that reads a
+/// table the caller has no privilege on raises `42501`, and that denies this operation only: the
+/// others are judged by their own rules. An operation with no rule keeps the variable `NULL`.
+fn guarded_verdict(operation: &str, verdict: &str, from: &str) -> Option<String> {
+    if verdict == "NULL::boolean" {
+        return None;
+    }
+    Some(format!(
+        "      BEGIN\n        SELECT {verdict} INTO verdict_{operation}{from};\n      \
+         EXCEPTION WHEN insufficient_privilege THEN\n        verdict_{operation} := FALSE;\n      END;\n"
+    ))
 }
 
 /// The three verdict columns when the caller may not read something a rule needs: every operation
@@ -334,10 +357,12 @@ fn identity_columns(channel: &ChannelAst) -> String {
 
 /// The block a topic that fits the channel answers with, and returns from.
 ///
-/// **A rule that reads a table the caller has no privilege on raises `42501`**, since the function
-/// is `SECURITY INVOKER`. That is a denial, not an error: each branch catches
-/// `insufficient_privilege` and answers with the operations denied. Only that class is caught, so
-/// a real fault (a bad cast, a missing table) still surfaces rather than reading as "denied".
+/// **Each operation is judged in a block of its own.** A rule that reads a table the caller has no
+/// privilege on raises `42501`, since the function is `SECURITY INVOKER`. That is a denial of that
+/// operation, not an error and not a denial of the channel: a `join: Public` channel whose track
+/// rule reads a private table still admits the caller, and answers `FALSE` to track. Only
+/// `insufficient_privilege` is caught, so a real fault (a bad cast, a missing table) still
+/// surfaces rather than reading as "denied".
 fn fitting_branch(
     ast: &SchemaAst,
     channel: &ChannelAst,
@@ -357,16 +382,18 @@ fn fitting_branch(
     } else {
         format!("$1 ~ {}", quote_literal(&typed))
     };
-    let id = identity_columns(channel);
+    let guarded: String = operation_verdicts(ast, channel, schema)
+        .iter()
+        .filter_map(|(operation, verdict)| guarded_verdict(operation, verdict, &from))
+        .collect();
     format!(
-        "  -- {name}: {pattern}\n  IF {matches_topic} THEN\n    BEGIN\n      \
-         RETURN QUERY SELECT {id}, TRUE, NULL::text, {verdicts}{from};\n    \
-         EXCEPTION WHEN insufficient_privilege THEN\n      \
-         RETURN QUERY SELECT {id}, TRUE, NULL::text, {denied};\n    END;\n    RETURN;\n  END IF;",
+        "  -- {name}: {pattern}\n  IF {matches_topic} THEN\n    DECLARE\n      \
+         verdict_join boolean;\n      verdict_send boolean;\n      verdict_track boolean;\n    BEGIN\n\
+         {guarded}      RETURN QUERY SELECT {id}, TRUE, NULL::text, verdict_join, verdict_send, verdict_track;\n      \
+         RETURN;\n    END;\n  END IF;",
         name = channel.name.replace(['\n', '\r'], " "),
         pattern = channel.pattern.replace(['\n', '\r'], " "),
-        verdicts = verdicts(ast, channel, schema),
-        denied = denied_verdicts(channel),
+        id = identity_columns(channel),
     )
 }
 

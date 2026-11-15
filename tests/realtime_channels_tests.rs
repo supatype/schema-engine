@@ -166,11 +166,13 @@ fn every_emitted_function_is_invoker_or_pins_its_search_path() {
 }
 
 #[test]
-fn an_operation_left_out_renders_false() {
+fn an_operation_left_out_has_no_block_and_stays_null() {
     let mut doc = document(vec![lobby()], "open");
     doc["channels"][0]["access"] = json!({ "join": { "type": "authenticated" } });
     let body = function_body(&parse(&doc).unwrap(), "realtime_channel_access");
-    assert!(body.contains("NULL::boolean, NULL::boolean"), "{body}");
+    assert!(body.contains("INTO verdict_join"), "{body}");
+    assert!(!body.contains("INTO verdict_send"), "{body}");
+    assert!(!body.contains("INTO verdict_track"), "{body}");
 }
 
 #[test]
@@ -1436,6 +1438,57 @@ async fn a_rule_reading_a_table_the_caller_cannot_touch_is_a_denial_not_an_error
             rows,
             verdict_with("LotChannel", Some(false), Some(false), Some(false)),
             "{rows:?}"
+        );
+    })
+    .await;
+}
+
+/// A `join: Public` channel whose other rule reads `lot_watchers`, which `anon` cannot select.
+fn board(operation: &str) -> Value {
+    let reads_watchers = json!({ "type": "in", "column": "id", "source": watchers() });
+    json!({
+        "name": "Board", "pattern": "board:{id}",
+        "params": [{ "name": "id", "type": "uuid" }],
+        "access": { "join": { "type": "public" }, operation: reads_watchers }
+    })
+}
+
+async fn board_verdict(pool: &PgPool, operation: &str, role: &str, sub: Option<&str>) -> Verdict {
+    let ast = parse(&document(vec![board(operation)], "declared")).unwrap();
+    common::push(pool, &ast).await.expect("push");
+    sqlx::raw_sql("REVOKE ALL ON public.lot_watchers FROM anon, authenticated")
+        .execute(pool)
+        .await
+        .expect("revoke");
+    let mut rows = access(pool, role, sub, &format!("board:{LOT_1}")).await;
+    rows.remove(0)
+}
+
+#[tokio::test]
+async fn a_track_rule_that_cannot_be_read_denies_track_and_leaves_join_open() {
+    common::with_integration_pool(|pool| async move {
+        let row = board_verdict(&pool, "track", "anon", None).await;
+        assert_eq!(
+            (row.join, row.send, row.track),
+            (Some(true), None, Some(false)),
+            "join: Public must hold for anon whatever the track rule reads: {row:?}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_send_rule_that_cannot_be_read_denies_send_and_leaves_join_open() {
+    common::with_integration_pool(|pool| async move {
+        let row = board_verdict(&pool, "send", "authenticated", Some(BOB)).await;
+        assert_eq!((row.join, row.send, row.track), (Some(true), Some(false), None), "{row:?}");
+        let (code, message) = send_as(&pool, "authenticated", Some(BOB), &format!("board:{LOT_1}"), "x", json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(code, "42501");
+        assert_eq!(
+            message,
+            format!("not allowed to broadcast on board:{LOT_1}: the send rule of Board denied it")
         );
     })
     .await;
