@@ -841,6 +841,9 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
     if tagged(crate::generator::sql::realtime::POLICY_TAG) {
         return Attribution::Ignored("realtime outbox policy");
     }
+    if tagged(crate::generator::sql::realtime::TRIGGER_TAG) {
+        return Attribution::Ignored("realtime outbox trigger");
+    }
     if tagged(versions::RLS_ON_TAG) {
         // Row-level security turned on where it is off: the statement it executes names the table.
         let Some(at) = h.find("ALTER TABLE ") else {

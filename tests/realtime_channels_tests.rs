@@ -907,7 +907,7 @@ async fn the_outbox_is_written_and_emptied_in_one_transaction_and_reaches_the_sl
             return;
         }
         let mut conn = pool.acquire().await.unwrap();
-        if !create_slot(&mut conn).await {
+        if create_slot(&mut conn, "rt_outbox_test").await.is_none() {
             assert!(!common::force_integration_tests(), "no usable output plugin");
             eprintln!("SKIP slot check: neither wal2json nor test_decoding may be used here");
             return;
@@ -1000,6 +1000,193 @@ async fn a_direct_insert_into_the_outbox_is_judged_like_a_call() {
             insert("anon", None, "lobby".into(), None).await.is_err(),
             "anon holds no grant"
         );
+    })
+    .await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Direct inserts into the outbox (P26)
+// ---------------------------------------------------------------------------------------------
+
+/// One direct insert into the outbox as `role`, COMMITTED (unlike [`as_caller`], which rolls
+/// back), so what is left behind is what a real request would leave.
+async fn commit_insert(
+    pool: &PgPool,
+    role: &str,
+    sub: Option<&str>,
+    topic: &str,
+    sender: Option<&str>,
+) -> Result<(), String> {
+    let mut conn = pool.acquire().await.expect("connection");
+    let mut tx = conn.begin().await.expect("begin");
+    let claims = match sub {
+        Some(sub) => json!({ "sub": sub, "role": role }),
+        None => json!({ "role": role }),
+    };
+    sqlx::query("SELECT set_config('request.jwt.claims', $1, true)")
+        .bind(claims.to_string())
+        .execute(&mut *tx)
+        .await
+        .expect("claims");
+    sqlx::raw_sql(&format!("SET LOCAL ROLE {role}"))
+        .execute(&mut *tx)
+        .await
+        .expect("role");
+    let inserted = sqlx::query(
+        "INSERT INTO _supatype.realtime_outbox (topic, event, payload, sender) \
+         VALUES ($1, 'direct', '{\"n\":7}', $2::uuid)",
+    )
+    .bind(topic)
+    .bind(sender)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| e.to_string());
+    if inserted.is_ok() {
+        tx.commit().await.expect("commit");
+    }
+    inserted.map(|_| ())
+}
+
+async fn outbox_rows(pool: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM _supatype.realtime_outbox")
+        .fetch_one(pool)
+        .await
+        .expect("count")
+}
+
+#[tokio::test]
+async fn a_direct_insert_leaves_no_row_behind_whoever_makes_it() {
+    common::with_integration_pool(|pool| async move {
+        common::push(&pool, &send_document("declared"))
+            .await
+            .expect("push");
+        // The caller as themselves, the service role with no sender, and the service role naming
+        // somebody else as the sender: the last two are rows the caller's own DELETE policy
+        // would not cover.
+        commit_insert(&pool, "authenticated", Some(ALICE), "lobby", Some(ALICE))
+            .await
+            .expect("authenticated insert");
+        commit_insert(&pool, "service_role", None, "lobby", None)
+            .await
+            .expect("service insert");
+        commit_insert(&pool, "service_role", None, "lobby", Some(BOB))
+            .await
+            .expect("service insert with a foreign sender");
+        assert_eq!(outbox_rows(&pool).await, 0, "the outbox must not accumulate");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_refused_direct_insert_leaves_no_row_either() {
+    common::with_integration_pool(|pool| async move {
+        common::push(&pool, &send_document("declared"))
+            .await
+            .expect("push");
+        let refused = commit_insert(&pool, "authenticated", Some(ALICE), "lobby", Some(BOB)).await;
+        assert!(refused.is_err(), "the sender must be the caller");
+        assert_eq!(outbox_rows(&pool).await, 0);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn realtime_send_still_works_when_the_trigger_has_already_deleted_the_row() {
+    common::with_integration_pool(|pool| async move {
+        common::push(&pool, &send_document("declared"))
+            .await
+            .expect("push");
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("SELECT _supatype.realtime_send('lobby', 'hello', '{}')")
+            .execute(&mut *conn)
+            .await
+            .expect("send");
+        drop(conn);
+        assert_eq!(outbox_rows(&pool).await, 0);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_push_with_nothing_to_change_puts_the_trigger_back() {
+    common::with_integration_pool(|pool| async move {
+        let ast = send_document("declared");
+        common::push(&pool, &ast).await.expect("push");
+        let state = || async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT tgenabled::text FROM pg_trigger WHERE tgname = 'realtime_outbox_delete_row' \
+                 AND tgrelid = '_supatype.realtime_outbox'::regclass",
+            )
+            .fetch_optional(&pool)
+            .await
+            .expect("trigger state")
+        };
+        assert_eq!(state().await.as_deref(), Some("A"), "enabled for every session role");
+        // Disabled by hand, then dropped: each time the next push, with no schema change,
+        // puts it back.
+        sqlx::raw_sql("ALTER TABLE _supatype.realtime_outbox DISABLE TRIGGER realtime_outbox_delete_row")
+            .execute(&pool)
+            .await
+            .unwrap();
+        common::push(&pool, &ast).await.expect("repush");
+        assert_eq!(state().await.as_deref(), Some("A"));
+        sqlx::raw_sql("DROP TRIGGER realtime_outbox_delete_row ON _supatype.realtime_outbox")
+            .execute(&pool)
+            .await
+            .unwrap();
+        common::push(&pool, &ast).await.expect("repush");
+        assert_eq!(state().await.as_deref(), Some("A"));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_direct_insert_still_reaches_the_replication_stream() {
+    common::with_integration_pool(|pool| async move {
+        common::push(&pool, &send_document("declared"))
+            .await
+            .expect("push");
+        let wal: String = sqlx::query_scalar("SHOW wal_level")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        if wal != "logical" {
+            assert!(!common::force_integration_tests(), "wal_level is {wal}");
+            eprintln!("SKIP slot check: wal_level is {wal}");
+            return;
+        }
+        let mut conn = pool.acquire().await.unwrap();
+        let Some(plugin) = create_slot(&mut conn, "rt_outbox_direct_test").await else {
+            assert!(!common::force_integration_tests(), "no usable output plugin");
+            eprintln!("SKIP slot check: neither wal2json nor test_decoding may be used here");
+            return;
+        };
+        eprintln!("slot output plugin: {plugin}");
+        commit_insert(&pool, "authenticated", Some(ALICE), "lobby", Some(ALICE))
+            .await
+            .expect("insert");
+        let changes: Vec<String> = sqlx::query_scalar(
+            "SELECT data FROM pg_logical_slot_get_changes('rt_outbox_direct_test', NULL, NULL)",
+        )
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap();
+        sqlx::query("SELECT pg_drop_replication_slot('rt_outbox_direct_test')")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        let outbox: Vec<&String> = changes
+            .iter()
+            .filter(|c| c.contains("realtime_outbox"))
+            .collect();
+        assert!(
+            outbox.iter().any(|c| {
+                let c = c.to_lowercase();
+                c.contains("insert") && c.contains("direct") && c.contains("lobby")
+            }),
+            "the insert must reach the stream: {changes:#?}"
+        );
+        assert_eq!(outbox_rows(&pool).await, 0, "and the row is gone");
     })
     .await;
 }
@@ -1337,15 +1524,17 @@ fn print_the_example_sql() {
 }
 
 /// A logical slot on the first output plugin this server lets us use, or false when none.
-async fn create_slot(conn: &mut sqlx::PgConnection) -> bool {
+/// A logical slot on the first output plugin the server has, and which it was.
+async fn create_slot(conn: &mut sqlx::PgConnection, name: &str) -> Option<&'static str> {
     for plugin in ["wal2json", "test_decoding"] {
-        let made = sqlx::query("SELECT pg_create_logical_replication_slot('rt_outbox_test', $1)")
+        let made = sqlx::query("SELECT pg_create_logical_replication_slot($1, $2)")
+            .bind(name)
             .bind(plugin)
             .execute(&mut *conn)
             .await;
         if made.is_ok() {
-            return true;
+            return Some(plugin);
         }
     }
-    false
+    None
 }

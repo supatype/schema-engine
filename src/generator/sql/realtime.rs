@@ -42,6 +42,12 @@ pub const OUTBOX: &str = "realtime_outbox";
 /// The dollar tag of the blocks that make the outbox's policies, which statement attribution reads.
 pub const POLICY_TAG: &str = "rt_policy";
 
+/// The dollar tag of the block that makes the outbox's delete-after-insert trigger.
+pub const TRIGGER_TAG: &str = "rt_trigger";
+
+/// The outbox's trigger, and the function it runs (one name for both).
+pub const OUTBOX_TRIGGER: &str = "realtime_outbox_delete_row";
+
 /// `[0-9a-fA-F]{8}-...`: the canonical form only. Postgres's own `uuid` input also accepts braces
 /// and unhyphenated forms, which would let one channel have several topic spellings.
 const UUID_RE: &str = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
@@ -115,11 +121,12 @@ pub fn functions(ast: &SchemaAst, schema: &str) -> Vec<RealtimeFunction> {
         content_function(ast),
         refusal_function(),
         send_function(),
+        outbox_trigger_function(),
     ]
 }
 
 /// The names of [`functions`], for the drift check to read the live bodies of.
-pub const FUNCTION_NAMES: [&str; 7] = [
+pub const FUNCTION_NAMES: [&str; 8] = [
     "realtime_channel_access",
     "realtime_channel_mode",
     "realtime_channel_send_checks",
@@ -127,6 +134,7 @@ pub const FUNCTION_NAMES: [&str; 7] = [
     "realtime_channel_content_ok",
     "realtime_send_refusal",
     "realtime_send",
+    "realtime_outbox_delete_row",
 ];
 
 /// Everything a push re-asserts for realtime, as one script: the outbox, then the functions, then
@@ -137,6 +145,7 @@ pub fn generate(ast: &SchemaAst, schema: &str) -> String {
         out.push_str(&function.create_sql());
     }
     out.push_str(&outbox_policies_sql());
+    out.push_str(&outbox_trigger_sql());
     out
 }
 
@@ -699,15 +708,16 @@ const SERVICE_CALLER: &str = "(current_user = 'service_role' OR COALESCE((SELECT
 /// asks the same [`refusal_function`]. Calling `realtime_send` or inserting directly is judged by
 /// one function either way.
 ///
-/// The row is inserted and deleted in the same transaction: the insert reaches the replication
-/// slot the realtime server reads, and the delete means the table never accumulates.
+/// The row is deleted by the outbox's own trigger ([`outbox_trigger_function`]) as it is inserted,
+/// exactly as a direct insert is: the insert reaches the replication slot the realtime server
+/// reads, and the table never accumulates. This function carries no delete of its own, so there
+/// is one place that guarantees it.
 fn send_function() -> RealtimeFunction {
     let body = format!(
-        "\nDECLARE\n  refusal text := {S}.realtime_send_refusal(topic, event, payload);\n  row_id bigint;\nBEGIN\n  \
+        "\nDECLARE\n  refusal text := {S}.realtime_send_refusal(topic, event, payload);\nBEGIN\n  \
          IF refusal IS NOT NULL THEN\n    RAISE EXCEPTION '%', refusal USING ERRCODE = '42501';\n  END IF;\n  \
          INSERT INTO {S}.{OUTBOX} (topic, event, payload, sender)\n    \
-         VALUES (topic, event, payload, {S}.jwt_uid())\n    RETURNING id INTO row_id;\n  \
-         DELETE FROM {S}.{OUTBOX} WHERE id = row_id;\nEND;\n",
+         VALUES (topic, event, payload, {S}.jwt_uid());\nEND;\n",
         S = quote_ident(HELPER_SCHEMA),
         OUTBOX = quote_ident(OUTBOX),
     );
@@ -721,6 +731,49 @@ fn send_function() -> RealtimeFunction {
     }
 }
 
+/// The trigger function that empties the outbox: deletes the row just inserted, by its id.
+///
+/// **`SECURITY INVOKER`**, the narrowest privilege that always deletes. The caller of a direct
+/// insert can delete exactly the row they were let insert: the insert policy requires `sender` to
+/// be them and the delete policy admits their own rows. `service_role` has a policy for every
+/// row, and a superuser meets none. A `SECURITY DEFINER` body would run as the owner and skip
+/// every policy, and buys nothing. It is an `AFTER` trigger, so the row is written and logged
+/// before it is deleted: the realtime server still reads the insert from the replication slot.
+fn outbox_trigger_function() -> RealtimeFunction {
+    let body = format!(
+        "\nBEGIN\n  DELETE FROM {S}.{OUTBOX} WHERE id = NEW.id;\n  RETURN NULL;\nEND;\n",
+        S = quote_ident(HELPER_SCHEMA),
+        OUTBOX = quote_ident(OUTBOX),
+    );
+    RealtimeFunction {
+        name: OUTBOX_TRIGGER,
+        args: "",
+        returns: "trigger",
+        attributes: "LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = ''",
+        body,
+        callers: vec!["authenticated", "service_role"],
+    }
+}
+
+/// The trigger itself: made when absent or not as wanted (changed, or disabled), and left alone
+/// otherwise, because replacing a trigger locks the table and a push that changed nothing has no
+/// reason to. `ENABLE ALWAYS`, so it also fires under `session_replication_role = replica`, which
+/// would otherwise let a row stay. `tgtype = 5` is row-level (1) and `AFTER` (0) and `INSERT` (4).
+fn outbox_trigger_sql() -> String {
+    let table = quote_qualified(HELPER_SCHEMA, OUTBOX);
+    let function = quote_qualified(HELPER_SCHEMA, OUTBOX_TRIGGER);
+    let name = quote_ident(OUTBOX_TRIGGER);
+    do_block(
+        TRIGGER_TAG,
+        &format!(
+            "\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1 FROM pg_catalog.pg_trigger\n    WHERE tgrelid = {rel}::regclass AND tgname = {name_literal}\n      AND tgfoid = {func}::regproc AND tgenabled = 'A' AND tgtype = 5\n  ) THEN\n    CREATE OR REPLACE TRIGGER {name} AFTER INSERT ON {table}\n      FOR EACH ROW EXECUTE FUNCTION {function}();\n    ALTER TABLE {table} ENABLE ALWAYS TRIGGER {name};\n  END IF;\nEND;\n",
+            rel = quote_literal(&table),
+            name_literal = quote_literal(OUTBOX_TRIGGER),
+            func = quote_literal(&function),
+        ),
+    ) + "\n"
+}
+
 // ---------------------------------------------------------------------------------------------
 // The outbox
 // ---------------------------------------------------------------------------------------------
@@ -731,8 +784,8 @@ fn send_function() -> RealtimeFunction {
 /// default, but a caller inserting into a `bigserial` needs `USAGE` on its sequence, which would
 /// be a second grant to `authenticated`, and an identity column needs none.
 ///
-/// A row is written and deleted inside one transaction, so the realtime server sees the insert on
-/// its replication slot and nothing is left behind. `authenticated` holds `INSERT`, `SELECT` and
+/// A row is deleted by a trigger as it is written ([`outbox_trigger_function`]), so the realtime
+/// server sees the insert on its replication slot and nothing is left behind, whoever inserted. `authenticated` holds `INSERT`, `SELECT` and
 /// `DELETE` on it, and each is bounded by a policy: a caller can insert only what
 /// [`refusal_function`] allows, as itself, and see or delete only its own rows. `anon` holds
 /// nothing, so a call without a login is refused before any policy is read.
