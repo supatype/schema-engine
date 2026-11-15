@@ -539,3 +539,19 @@ fn a_bucket_with_its_own_rules_does_not_warn_about_the_models_column_rule() {
         "{warnings:?}"
     );
 }
+
+#[test]
+fn a_channel_event_or_payload_rule_is_refused_on_a_bucket() {
+    let rules = [
+        r#"{ "type": "event", "name": "bid" }"#,
+        r#"{ "type": "any", "rules": [ { "type": "payload", "field": "amount",
+             "check": { "kind": "number", "min": 1.0 } } ] }"#,
+    ];
+    for rule in rules {
+        let message = refusal_for(rule);
+        assert!(
+            message.contains("Bucket \"docs\"") && message.contains("channel"),
+            "{rule}: {message}"
+        );
+    }
+}

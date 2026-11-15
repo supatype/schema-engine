@@ -739,11 +739,6 @@ pub enum AccessRule {
     Exists {
         source: MembershipSource,
     },
-    /// `IS NULL` / `IS NOT NULL` on an operand.
-    ///
-    /// Its own variant rather than a `CompareOp`, because SQL null comparison is
-    /// not an equality: `col = NULL` is null, never true, so rendering it through
-    /// the comparison path would produce a policy that silently denies everything.
     /// The name of a broadcast event. Valid only in a channel's `send` rule, where the realtime
     /// server evaluates it per message; rendered as `TRUE` in SQL (the engine extracts it first,
     /// see `generator::sql::realtime`), so no database round trip sits on the hot path.
@@ -755,6 +750,11 @@ pub enum AccessRule {
         field: String,
         check: PayloadCheck,
     },
+    /// `IS NULL` / `IS NOT NULL` on an operand.
+    ///
+    /// Its own variant rather than a `CompareOp`, because SQL null comparison is
+    /// not an equality: `col = NULL` is null, never true, so rendering it through
+    /// the comparison path would produce a policy that silently denies everything.
     NullCheck {
         operand: Operand,
         /// true for `IS NULL`, false for `IS NOT NULL`.

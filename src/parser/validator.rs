@@ -226,6 +226,10 @@ pub(crate) fn bucket_refusal(rule: &AccessRule) -> Option<String> {
             rules.iter().find_map(bucket_refusal)
         }
         AccessRule::Not { rule } => bucket_refusal(rule),
+        AccessRule::Event { .. } | AccessRule::Payload { .. } => Some(
+            "`Event<...>` and `Payload<...>` belong in a channel's `send` rule, not a bucket's"
+                .to_string(),
+        ),
     }
 }
 
