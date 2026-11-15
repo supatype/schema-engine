@@ -555,3 +555,16 @@ fn a_channel_event_or_payload_rule_is_refused_on_a_bucket() {
         );
     }
 }
+
+#[test]
+fn a_model_rule_naming_a_column_renders_as_false_on_the_bucket_that_inherits_it() {
+    let sql = sql_for(SHARED_UNDECLARED, &model_with_read(COLUMN_RULE));
+    let policy = sql
+        .lines()
+        .find(|l| l.contains("bucket_id = 'shared'"))
+        .unwrap_or_else(|| panic!("no policy for the shared bucket in:\n{sql}"));
+    assert!(
+        policy.contains("(FALSE)") && !policy.contains("author_id"),
+        "the column must not reach storage.objects, got: {policy}"
+    );
+}

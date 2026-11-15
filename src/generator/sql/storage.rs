@@ -212,6 +212,19 @@ fn on_conflict_sql(bucket: &StorageBucketAst) -> String {
     format!("DO UPDATE SET{},\n  updated_at = NOW()", sets.join(","))
 }
 
+/// A bucket's rule as the expression of its policy.
+///
+/// A bucket's own rules are refused at parse time when they cannot be evaluated on
+/// `storage.objects`, so one that is refused here arrived through a model the bucket inherits from.
+/// It denies, as [`inherited_rule_warnings`] says, rather than naming a column the table lacks and
+/// failing the whole push.
+fn object_rule_expr(rule: &AccessRule) -> String {
+    if crate::parser::validator::bucket_refusal(rule).is_some() {
+        return "FALSE".to_string();
+    }
+    access_rule_to_storage_expr(rule)
+}
+
 /// Storage policies run on storage.objects, so owner checks must reference the
 /// objects.owner column rather than model-specific FK columns.
 fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
@@ -373,10 +386,7 @@ impl<'a> ObjectPolicies<'a> {
             .zip(&self.policy_names)
         {
             let Some(rule) = rule else { continue };
-            let expr = format!(
-                "bucket_id = {bucket} AND ({})",
-                access_rule_to_storage_expr(rule)
-            );
+            let expr = format!("bucket_id = {bucket} AND ({})", object_rule_expr(rule));
             out.push_str(&format!(
                 "CREATE POLICY {} ON \"storage\".\"objects\"\n  {};\n",
                 quote_ident(name),
