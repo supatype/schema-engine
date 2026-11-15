@@ -5,6 +5,28 @@ one-line entries say. Newest first.
 
 ## Unreleased
 
+### Draft and version helper functions and the studio audit trigger are no longer executable by PUBLIC
+
+Postgres grants `EXECUTE` on every new function to `PUBLIC`. These `SECURITY DEFINER` functions in
+`_supatype` kept that grant, so any role holding `USAGE` on the schema could call them:
+
+- `sees_draft_<table>` (one per versioned model), `sees_all_drafts` and `preview_epoch`
+- `<table>_versions_guard` and `<table>_audit`, the trigger functions of a versioned model
+- `audit_studio_membership_change`, the trigger function on `studio_members`
+
+A push now revokes `PUBLIC` from each. `anon`, `authenticated` and `service_role` keep the `EXECUTE`
+they were granted by name on the helpers their policies call. The trigger functions need no grant:
+firing a trigger checks nothing of the role that wrote the row. The next push to an existing project
+makes the change.
+
+What changes for an existing project:
+
+- **A database role other than `anon`, `authenticated`, `service_role` or the owner that reads a
+  versioned table needs `GRANT EXECUTE`** on the `_supatype.sees_draft_*` functions,
+  `_supatype.sees_all_drafts()` and `_supatype.preview_epoch()`. A policy runs as the querying role,
+  so without the grant that role's query fails with `permission denied for function` instead of
+  returning rows. The role also needs `USAGE` on `_supatype`, as before.
+
 ### A push leaves a bucket's runtime settings alone unless the schema names them
 
 A push used to rewrite every column of every bucket the schema has, on every push, up-to-date ones

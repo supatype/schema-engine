@@ -229,6 +229,8 @@ jobs:
             --test rls_convergence_tests \
             --test auth_server_migration_tests \
             --test auth_helper_owner_tests \
+            --test definer_function_audit_tests \
+            --test definer_function_upgrade_tests \
             --test seed_execute_tests \
             --test seed_ledger_tests \
             --test seed_command_tests \
