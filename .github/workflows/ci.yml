@@ -295,6 +295,7 @@ jobs:
             --test grant_ledger_tests \
             --test role_access_tests \
             --test realtime_channels_tests \
+            --test storage_folder_rule_tests \
             --test rls_ledger_tests \
             --test column_ledger_tests \
             --test long_table_names_tests \
