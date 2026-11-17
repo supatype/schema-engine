@@ -323,9 +323,9 @@ where
 static CRON_DATABASE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// What the `pg_cron` database held before a test, for [`with_cron_database`] to put it back.
-/// Objects are tracked in `public` and in `_supatype`. supatype/postgres 17.2.15 creates the
-/// `_supatype` schema itself, so it exists before the test, and dropping only new schemas would
-/// leave one test's ledger tables for the next test to read.
+/// Objects are tracked in every schema the schema snapshot covers, not only the ones a test
+/// adds: supatype/postgres 17.2.15 creates `_supatype` itself, and a schema that was there
+/// before the test would otherwise keep one test's ledger tables for the next test to read.
 struct CronDatabaseObjects {
     schemas: Vec<String>,
     relations: Vec<i64>,
@@ -335,20 +335,41 @@ struct CronDatabaseObjects {
     cron_jobs: Vec<i64>,
 }
 
-const CRON_DB_SCHEMAS: &str = "SELECT nspname::text FROM pg_namespace
-     WHERE left(nspname, 3) <> 'pg_' AND nspname <> 'information_schema'";
-const CRON_DB_RELATIONS: &str = "SELECT c.oid::bigint FROM pg_class c
-     WHERE c.relnamespace IN ('public'::regnamespace, to_regnamespace('_supatype'))
-       AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c')
-       -- An identity column's sequence goes with its table; dropping it first is refused.
-       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
-                       AND d.objid = c.oid AND d.deptype = 'i')";
-const CRON_DB_FUNCTIONS: &str = "SELECT p.oid::bigint FROM pg_proc p
+/// The schemas the snapshot covers, given the `pg_namespace` row as `n`.
+macro_rules! cron_db_user_schema {
+    () => {
+        "left(n.nspname, 3) <> 'pg_' AND n.nspname <> 'information_schema'"
+    };
+}
+
+const CRON_DB_SCHEMAS: &str = concat!(
+    "SELECT n.nspname::text FROM pg_namespace n WHERE ",
+    cron_db_user_schema!()
+);
+// An extension's own objects go with the extension. An identity column's sequence (`deptype`
+// 'i') goes with its table, and dropping it first is refused.
+const CRON_DB_RELATIONS: &str = concat!(
+    "SELECT c.oid::bigint FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     LEFT JOIN pg_depend d ON d.classid = 'pg_class'::regclass AND d.objid = c.oid
+       AND d.deptype IN ('e', 'i')
+     WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c') AND d.objid IS NULL AND ",
+    cron_db_user_schema!()
+);
+const CRON_DB_FUNCTIONS: &str = concat!(
+    "SELECT p.oid::bigint FROM pg_proc p
+     JOIN pg_namespace n ON n.oid = p.pronamespace
      LEFT JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
-     WHERE p.pronamespace IN ('public'::regnamespace, to_regnamespace('_supatype')) AND d.objid IS NULL";
-const CRON_DB_TYPES: &str = "SELECT t.oid::bigint FROM pg_type t
+     WHERE d.objid IS NULL AND ",
+    cron_db_user_schema!()
+);
+const CRON_DB_TYPES: &str = concat!(
+    "SELECT t.oid::bigint FROM pg_type t
+     JOIN pg_namespace n ON n.oid = t.typnamespace
      LEFT JOIN pg_depend d ON d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
-     WHERE t.typnamespace IN ('public'::regnamespace, to_regnamespace('_supatype')) AND t.typtype IN ('e', 'd') AND d.objid IS NULL";
+     WHERE t.typtype IN ('e', 'd') AND d.objid IS NULL AND ",
+    cron_db_user_schema!()
+);
 const CRON_DB_EXTENSIONS: &str = "SELECT extname::text FROM pg_extension";
 
 impl CronDatabaseObjects {
