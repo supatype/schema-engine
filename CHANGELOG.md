@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.11.0](https://github.com/supatype/schema-engine/compare/v0.10.1...v0.11.0) (2026-11-17)
+
+
+### Features
+
+* **realtime:** compile private channel declarations to access functions, an outbox and realtime_send ([45abc7b](https://github.com/supatype/schema-engine/commit/45abc7b02f4e1b9caae1c84ea296beed2290f879))
+* **storage:** Folder operand, claim-only bucket rules, refuse bucket rules that render FALSE ([55814e9](https://github.com/supatype/schema-engine/commit/55814e911711ab0255345c321e480e3ca3a03b66))
+* **storage:** warn when a bucket inherits a model rule that cannot render on storage.objects ([5e5df62](https://github.com/supatype/schema-engine/commit/5e5df62e78056a8030c92b8d6418d7c43a0fa13c))
+* Supatype 0.9.3 engine changes: private realtime channels, storage folder rules, security fixes ([d6b81e0](https://github.com/supatype/schema-engine/commit/d6b81e071faf0d9cff1684e430a498e1ddbe5323))
+
+
+### Bug Fixes
+
+* **access:** a many-to-many link is written by the model that declares the relation ([ae704f6](https://github.com/supatype/schema-engine/commit/ae704f6d57de864b333b7c1ec7079402d4aa18a8))
+* **parser:** refuse channel Event and Payload rules on a bucket ([d0b77f5](https://github.com/supatype/schema-engine/commit/d0b77f5e4bc80d4645d960906d23f96eaaf241b3))
+* **push:** skip auth helpers the pushing role does not own ([3e12bec](https://github.com/supatype/schema-engine/commit/3e12bec5abf45d0937868c36d44063ea5aee47a5))
+* **realtime:** delete outbox rows with a trigger so direct inserts never accumulate ([685400c](https://github.com/supatype/schema-engine/commit/685400c9c1d9e021507b7200bd4f5f18b1bd2e00))
+* **realtime:** judge each channel operation in its own privilege guard ([d8e8d6e](https://github.com/supatype/schema-engine/commit/d8e8d6e1d4e941f5e9a7e190dd233fd8e18d5c58))
+* **realtime:** outbox policies read the caller once per query ([bdb46d1](https://github.com/supatype/schema-engine/commit/bdb46d17d65b3445fc45a1a1e9e477caaeac1fac))
+* **security:** draft and version helper functions and the studio audit trigger are no longer executable by PUBLIC ([13c2700](https://github.com/supatype/schema-engine/commit/13c2700120fb775162bdac3925cb0103be7f87af))
+* **seed:** compare inline values structurally so the plan still builds for wasm ([06b1e25](https://github.com/supatype/schema-engine/commit/06b1e25e3ff0eed9f21f19d7a2747409b9988afa))
+* **seed:** stop batching rows that differ in an inline expression; warn on uncorrelated Exists in write rules; report effective access ([d958199](https://github.com/supatype/schema-engine/commit/d95819913b416bb3fe3076991865e4441cd1508e))
+* **storage:** a bucket's inherited model rule that names a column denies instead of failing the push ([527255d](https://github.com/supatype/schema-engine/commit/527255dd996a0527c894047fd7c55af1834f5672))
+
 ## [0.10.1](https://github.com/supatype/schema-engine/compare/v0.10.0...v0.10.1) (2026-11-11)
 
 
