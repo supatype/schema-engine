@@ -107,21 +107,24 @@ pub fn generate_auth_helpers() -> String {
     // `auth.roles()` has no reader of its own and is referenced by hand-written policies, so it
     // stays here rather than disappearing. It reads the claims through the guarded reader: its own
     // cast raised `22P02` on an empty claims setting instead of answering an empty array.
-    sql.push_str(&format!(
-        r#"
-
--- auth.roles(): the `roles` claim as a text array.
-CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
+    let roles = format!(
+        r#"CREATE OR REPLACE FUNCTION auth.roles() RETURNS text[]
   LANGUAGE sql STABLE AS $$
     SELECT ARRAY(
       SELECT jsonb_array_elements_text(
         COALESCE({CLAIMS_SCHEMA}.jwt_claims() -> 'roles', '[]'::jsonb)
       )
     );
-  $$;
-
-"#
+  $$;"#
+    );
+    sql.push_str("\n\n-- auth.roles(): the `roles` claim as a text array.\n");
+    sql.push_str(&crate::generator::sql::auth_functions::when_role_may_write(
+        AUTH_SCHEMA,
+        "roles",
+        "",
+        &roles,
     ));
+    sql.push_str("\n\n");
     sql
 }
 
@@ -439,6 +442,10 @@ pub fn access_rule_to_expr(
         // Constraint-only nodes. The CLI refuses them inside `access`, so reaching here means a
         // hand-written AST; rendering FALSE denies rather than silently granting.
         AccessRule::Matches { .. } => "FALSE".to_string(),
+        // Channel-only nodes. `parser::channels` refuses them in a model rule, and a channel's
+        // `send` rule has them taken out before it is rendered (`generator::sql::realtime`), so
+        // an AST that reaches here is hand-written: denied, as `Matches` is.
+        AccessRule::Event { .. } | AccessRule::Payload { .. } => "FALSE".to_string(),
         AccessRule::Public => "TRUE".to_string(),
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
@@ -796,8 +803,10 @@ fn interval_literal(spec: &IntervalSpec) -> String {
 /// or a number: `jwt_claim_text('is_anonymous') = FALSE` is `text = boolean`, which Postgres
 /// refuses, so a schema writing `Eq<Claim<"is_anonymous">, Literal<false>>` failed to push. Against
 /// such a literal the claim is read as that JSON type instead ([`typed_claim_expr`]).
-fn compared_operand_expr(operand: &Operand, other: &Operand) -> String {
+pub(crate) fn compared_operand_expr(operand: &Operand, other: &Operand) -> String {
     match (operand, other) {
+        // A folder is text and a user id a uuid, which Postgres will not compare: cast the id.
+        (Operand::AuthUid, Operand::Folder { .. }) => format!("{AUTH_UID}::text"),
         (Operand::Claim { path }, Operand::Literal { value }) => match value {
             LiteralValue::Bool(_) => typed_claim_expr(path, "boolean", "boolean"),
             LiteralValue::Number(_) => typed_claim_expr(path, "number", "numeric"),
@@ -833,6 +842,15 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
             crate::generator::sql::constraints::measure_expr(column, *form)
         }
         Operand::Column { name } => quote_ident(name),
+        // The derived column a channel function builds from the topic, under the one alias the
+        // channel renderer gives it (`generator::sql::realtime::PARAM_ALIAS`). Qualified here so it
+        // stays unambiguous inside a `Rows` filter, where a bare column belongs to the source table.
+        // `parser::channels` refuses `Param` outside a channel rule, so no model policy renders it.
+        Operand::Param { name } => format!(
+            "{}.{}",
+            quote_ident(crate::generator::sql::realtime::PARAM_ALIAS),
+            quote_ident(name)
+        ),
         Operand::AuthUid => AUTH_UID.to_string(),
         Operand::AuthRole => AUTH_ROLE.to_string(),
         // Text, so it compares against a column or a string literal. A claim used
@@ -841,6 +859,8 @@ pub(crate) fn operand_to_expr(operand: &Operand) -> String {
         Operand::Claim { path } => {
             format!("{CLAIMS_SCHEMA}.jwt_claim_text({})", quote_literal(path))
         }
+        // `name` is the object name on `storage.objects`; validation refuses it anywhere else.
+        Operand::Folder { index } => format!("(storage.foldername(name))[{index}]"),
         Operand::Literal { value } => literal_to_sql(value),
 
         // Each temporal operand is one scalar subquery, so the planner evaluates it

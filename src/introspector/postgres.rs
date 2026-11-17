@@ -13,6 +13,7 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
     let installed_extensions = extensions::read(conn).await?;
     let db_enums = enums::read(conn, schema).await?;
     let column_dependents = dependents::read(conn, schema).await?;
+    let realtime_functions = super::realtime::read_function_sources(conn).await?;
     let database: String = sqlx::query_scalar("SELECT current_database()::text")
         .fetch_one(&mut *conn)
         .await?;
@@ -39,5 +40,6 @@ pub async fn introspect(conn: &mut PgConnection, schema: &str) -> Result<Databas
         adopted_columns: Default::default(),
         database,
         column_dependents,
+        realtime_functions,
     })
 }

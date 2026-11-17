@@ -47,20 +47,6 @@ const SCHEMA: &str = r#"{
     ]
 }"#;
 
-fn engine_binary() -> PathBuf {
-    // The test binary sits in target/<profile>/deps, so the engine is two levels up.
-    let mut path = std::env::current_exe().expect("this test has a path");
-    path.pop();
-    path.pop();
-    path.push(format!("supatype-engine{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        path.exists(),
-        "the engine binary is not built at {}: run `cargo build` first",
-        path.display()
-    );
-    path
-}
-
 /// A directory of this test's own, so two tests running at once do not share files.
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("supatype-seed-command-{name}"));
@@ -87,7 +73,8 @@ struct Run {
 }
 
 fn seed(args: &[&str]) -> Run {
-    let output = Command::new(engine_binary())
+    // Cargo builds the binary before its integration tests and names its path here.
+    let output = Command::new(env!("CARGO_BIN_EXE_supatype-engine"))
         .arg("seed")
         .args(args)
         .output()

@@ -250,6 +250,8 @@ mod tests {
             field_view_plan: Vec::new(),
             rename_candidates: Vec::new(),
             rewrites: Vec::new(),
+            channels: Vec::new(),
+            realtime_mode: None,
         };
 
         let msg = enrich_migration_error("cannot cast type integer to uuid", Some(&diff), &[]);

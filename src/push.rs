@@ -1552,6 +1552,10 @@ struct Refresh<'p> {
     storage_sql: String,
     versions_sql: String,
     graphql_names_sql: String,
+    /// The realtime channel functions and outbox, which a push re-asserts whether or not the
+    /// schema changed: a hand edit of one is put back, and an engine that adds them reaches a
+    /// project that has nothing else to apply.
+    realtime_sql: String,
     admin_cfg: serde_json::Value,
     schema_snap: serde_json::Value,
     audit: &'p crate::state::audit::PushAudit,
@@ -1579,6 +1583,7 @@ impl<'p> Refresh<'p> {
                 &plan.ast,
                 &plan.schema,
             ),
+            realtime_sql: crate::generator::sql::realtime::generate(&plan.ast, &plan.schema),
             // AST-only changes (widgets, labels) still need admin_config and the snapshot so
             // Studio and tooling see the latest schema without a DDL migration.
             admin_cfg: admin::generate(&plan.ast)?,
@@ -1598,6 +1603,10 @@ impl<'p> Refresh<'p> {
             (
                 &self.graphql_names_sql,
                 "Failed to name the relations for GraphQL",
+            ),
+            (
+                &self.realtime_sql,
+                "Failed to apply the realtime channel functions",
             ),
         ];
         for (sql, failure) in scripts {

@@ -1,4 +1,6 @@
-use crate::generator::sql::rls::{role_matches, AUTH_ROLE, AUTH_UID};
+use crate::generator::sql::rls::{
+    compared_operand_expr, operand_to_expr, role_matches, AUTH_ROLE, AUTH_UID,
+};
 use crate::parser::ast::{AccessAst, AccessRule, FieldAst, ModelAst, SchemaAst, StorageBucketAst};
 use crate::parser::resolver::{bucket_uses_declared_storage_rls, storage_policy_label};
 use crate::sql_quote::{comment_text, quote_ident, quote_literal};
@@ -115,6 +117,19 @@ BEGIN
 END
 $storage_version$;
 
+-- `Folder<N>` in a bucket rule reads `storage.foldername(name)`. Nothing else creates it: the
+-- storage service does not, so the engine is its creator. Guarded so a database that already has
+-- one (a hand-made or imported project) keeps it, and a push never fails on ownership.
+DO $storage_foldername$
+BEGIN
+  IF to_regprocedure('storage.foldername(text)') IS NULL THEN
+    CREATE FUNCTION storage.foldername(name text) RETURNS text[]
+      LANGUAGE sql IMMUTABLE STRICT AS
+      'SELECT (string_to_array(name, ''/''))[1:cardinality(string_to_array(name, ''/'')) - 1]';
+  END IF;
+END
+$storage_foldername$;
+
 "#
 }
 
@@ -197,6 +212,19 @@ fn on_conflict_sql(bucket: &StorageBucketAst) -> String {
     format!("DO UPDATE SET{},\n  updated_at = NOW()", sets.join(","))
 }
 
+/// A bucket's rule as the expression of its policy.
+///
+/// A bucket's own rules are refused at parse time when they cannot be evaluated on
+/// `storage.objects`, so one that is refused here arrived through a model the bucket inherits from.
+/// It denies, as [`inherited_rule_warnings`] says, rather than naming a column the table lacks and
+/// failing the whole push.
+fn object_rule_expr(rule: &AccessRule) -> String {
+    if crate::parser::validator::bucket_refusal(rule).is_some() {
+        return "FALSE".to_string();
+    }
+    access_rule_to_storage_expr(rule)
+}
+
 /// Storage policies run on storage.objects, so owner checks must reference the
 /// objects.owner column rather than model-specific FK columns.
 fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
@@ -220,17 +248,33 @@ fn access_rule_to_storage_expr(rule: &AccessRule) -> String {
         AccessRule::Private => "FALSE".to_string(),
         AccessRule::Authenticated => format!("{AUTH_UID} IS NOT NULL"),
         AccessRule::Role { roles } => role_matches(AUTH_ROLE, roles),
-        // Storage policies run on `storage.objects`, which has none of the
-        // model's columns. A rule naming one cannot be evaluated here, so it
-        // denies rather than being rendered against a table where the column
-        // means something else or nothing at all. `Bucket*` rules are the
-        // supported vocabulary for buckets.
-        AccessRule::All { .. }
-        | AccessRule::Not { .. }
-        | AccessRule::Compare { .. }
-        | AccessRule::NullCheck { .. }
-        | AccessRule::In { .. }
-        | AccessRule::Exists { .. } => "FALSE".to_string(),
+        // Rules about the caller and the object's folder only: the table renderer's own
+        // comparison, so a claim reads the same here as on a model.
+        AccessRule::All { rules } => rules
+            .iter()
+            .map(|r| format!("({})", access_rule_to_storage_expr(r)))
+            .collect::<Vec<_>>()
+            .join(" AND "),
+        AccessRule::Not { rule } => format!("NOT ({})", access_rule_to_storage_expr(rule)),
+        AccessRule::Compare { left, op, right } => format!(
+            "{} {} {}",
+            compared_operand_expr(left, right),
+            op.sql(),
+            compared_operand_expr(right, left)
+        ),
+        AccessRule::NullCheck { operand, is_null } => {
+            let test = if *is_null { "IS NULL" } else { "IS NOT NULL" };
+            format!("{} {test}", operand_to_expr(operand))
+        }
+        // Storage policies run on `storage.objects`, which has none of the model's columns, so
+        // a rule reading one, or another table, cannot be evaluated here. The parser refuses
+        // them in a bucket's own rules ([`crate::parser::validator`]); one that arrives through
+        // a model's rules, applied to a bucket that declares none, denies rather than being
+        // rendered against a table where the column means something else or nothing at all.
+        AccessRule::In { .. }
+        | AccessRule::Exists { .. }
+        | AccessRule::Event { .. }
+        | AccessRule::Payload { .. } => "FALSE".to_string(),
     }
 }
 
@@ -309,6 +353,8 @@ struct ObjectPolicies<'a> {
     bucket_id: &'a str,
     comment: String,
     rules: [Option<&'a AccessRule>; 4],
+    /// The model the rules come from, `None` for a bucket's own.
+    model: Option<&'a str>,
 }
 
 impl<'a> ObjectPolicies<'a> {
@@ -325,6 +371,7 @@ impl<'a> ObjectPolicies<'a> {
             bucket_id,
             comment,
             rules,
+            model: None,
         }
     }
 
@@ -339,10 +386,7 @@ impl<'a> ObjectPolicies<'a> {
             .zip(&self.policy_names)
         {
             let Some(rule) = rule else { continue };
-            let expr = format!(
-                "bucket_id = {bucket} AND ({})",
-                access_rule_to_storage_expr(rule)
-            );
+            let expr = format!("bucket_id = {bucket} AND ({})", object_rule_expr(rule));
             out.push_str(&format!(
                 "CREATE POLICY {} ON \"storage\".\"objects\"\n  {};\n",
                 quote_ident(name),
@@ -401,12 +445,14 @@ fn object_policy_sets(ast: &SchemaAst) -> Vec<ObjectPolicies<'_>> {
     for (model, bucket_id) in model_bucket_uses(ast) {
         let table = model.table_name();
         let access = (!declared.contains(bucket_id)).then(|| model.access());
-        sets.push(ObjectPolicies::new(
+        let mut set = ObjectPolicies::new(
             (table.to_string(), bucket_id.to_string()),
             format!("Storage policies for model '{table}', bucket '{bucket_id}'"),
             bucket_id,
             access,
-        ));
+        );
+        set.model = Some(&model.name);
+        sets.push(set);
     }
     assign_policy_names(&mut sets);
     sets
@@ -516,6 +562,30 @@ pub fn rule_warnings(ast: &SchemaAst) -> Vec<String> {
             ));
         }
         warnings.extend(unreadable_change_warnings(&sets, &bucket.id));
+    }
+    warnings.extend(inherited_rule_warnings(&sets));
+    warnings
+}
+
+/// A rule a bucket inherits from a model that storage objects cannot evaluate, such as one naming
+/// a column of the model. It is not refused, since the model's rule is right for its table, but on
+/// `storage.objects` it renders as `FALSE`, so the operation is refused for everyone.
+fn inherited_rule_warnings(sets: &[ObjectPolicies<'_>]) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for set in sets {
+        let Some(model) = set.model else { continue };
+        for (op, rule) in ObjectOp::ALL.into_iter().zip(&set.rules) {
+            let Some(reason) = rule.and_then(crate::parser::validator::bucket_refusal) else {
+                continue;
+            };
+            warnings.push(format!(
+                "Bucket \"{}\" inherits the {} rule of model \"{model}\", which cannot be evaluated \n                 on storage objects ({reason}), so {} are refused for everyone. Declare a \n                 bucket-level `{}` rule in the bucket's access.",
+                set.bucket_id,
+                op.names().key,
+                op.names().refused.split(" are refused").next().unwrap_or("requests"),
+                op.names().key,
+            ));
+        }
     }
     warnings
 }

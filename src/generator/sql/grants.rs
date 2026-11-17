@@ -47,6 +47,9 @@ fn anon_reaches(ast: &SchemaAst, rule: &AccessRule, reading: &[&str]) -> bool {
         // reached only if an AST is hand-written; treating it as caller-independent is the safe
         // reading, since the pattern says nothing about who is asking.
         AccessRule::Matches { .. } => true,
+        // Channel-only nodes, refused in a model rule by `parser::channels`: as caller-independent
+        // as `Matches`.
+        AccessRule::Event { .. } | AccessRule::Payload { .. } => true,
         AccessRule::Public => true,
         AccessRule::Private => false,
 
@@ -369,7 +372,7 @@ fn junction_grants(ast: &SchemaAst, junction: &JunctionTableAst) -> Vec<TableGra
 }
 
 /// Whether a junction's policies can admit `role` to `privilege`: for a linked junction, reading
-/// both ends and, for a write, updating either.
+/// both ends and, for a write, updating an end that owns the link.
 fn junction_allows(
     ast: &SchemaAst,
     access: &JunctionAccess<'_>,
@@ -382,9 +385,9 @@ fn junction_allows(
             let reads = ends
                 .iter()
                 .all(|end| allowed(ast, role, platform_access(end.model).read.as_ref()));
-            let updates = ends
-                .iter()
-                .any(|end| allowed(ast, role, platform_access(end.model).update.as_ref()));
+            let updates = ends.iter().any(|end| {
+                end.owns && allowed(ast, role, platform_access(end.model).update.as_ref())
+            });
             reads && (privilege == "SELECT" || updates)
         }
     }

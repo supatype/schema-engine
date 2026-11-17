@@ -836,12 +836,28 @@ fn attribute_do_block(schema: &str, h: &str) -> Attribution {
     if tagged(crate::generator::sql::graphql_names::TAG) {
         return Attribution::Ignored("graphql relation names");
     }
+    // The outbox's row level security policies: engine-owned objects in `_supatype`, made or
+    // altered on every push and kept beside the realtime functions, which carry no ledger row.
+    if tagged(crate::generator::sql::realtime::POLICY_TAG) {
+        return Attribution::Ignored("realtime outbox policy");
+    }
+    if tagged(crate::generator::sql::realtime::TRIGGER_TAG) {
+        return Attribution::Ignored("realtime outbox trigger");
+    }
     if tagged(versions::RLS_ON_TAG) {
         // Row-level security turned on where it is off: the statement it executes names the table.
         let Some(at) = h.find("ALTER TABLE ") else {
             return Attribution::Unknown;
         };
         return attribute(schema, &h[at..], &mut Context::default());
+    }
+    if tagged(auth_functions::AUTH_ALIAS_TAG) {
+        // One `auth.*` helper, created where the role may: the statement it executes names it.
+        let Some(at) = h.find("CREATE OR REPLACE FUNCTION ") else {
+            return Attribution::Unknown;
+        };
+        let executed = h[at..].replace("''", "'");
+        return attribute(schema, &executed, &mut Context::default());
     }
     if tagged(auth_functions::AUTH_SCHEMA_USAGE_TAG) {
         return Attribution::Object(key(ObjectKind::Schema, "auth", "", "auth"));

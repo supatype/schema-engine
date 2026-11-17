@@ -7,9 +7,12 @@
 //!   tested by reading its row, so the end's own policies decide, a draft-reading Studio policy
 //!   included, and the link of a post the caller may not see stays hidden with it.
 //! - **Write** (insert, update, delete): a link may be added or removed by a caller who can see both
-//!   ends and may update at least one of them. Tagging a post is an edit of the post, which is how
-//!   Prisma's `connect` and a hand-written Supabase policy treat it: the editor of a post may tag it
-//!   with any tag they can see, without the right to edit the tag.
+//!   ends and may update the model that owns the link. Tagging a post is an edit of the post, which
+//!   is how Prisma's `connect` and a hand-written Supabase policy treat it: the editor of a post
+//!   may tag it with any tag they can see, without the right to edit the tag. The owner is the
+//!   model whose own `ManyToMany` field names the junction. When both models declare the field,
+//!   either one owns it: the update right on either end's row, plus read on the other, writes the
+//!   link.
 //!
 //! An end's read is a subquery on its table, so when an end's own read rule reads the junction as a
 //! membership source the two policies would read each other and Postgres would refuse every query
@@ -36,6 +39,8 @@ const WRITES: [&str; 3] = ["insert", "update", "delete"];
 pub(crate) struct End<'a> {
     pub model: &'a ModelAst,
     pub fk: &'a str,
+    /// Whether this model's update right writes the link (it declares the relation).
+    pub owns: bool,
 }
 
 /// How a junction's access is derived.
@@ -65,14 +70,20 @@ pub(crate) fn junction_access<'a>(
     if reads_junction(a) || reads_junction(b) {
         return JunctionAccess::Intersected(Box::new(intersect_access(a.access(), b.access())));
     }
+    // No recorded declarer (an AST built without the resolver) lets either end write.
+    let owns = |m: &ModelAst| {
+        junction.declared_by.is_empty() || junction.declared_by.iter().any(|d| d == &m.name)
+    };
     JunctionAccess::Linked([
         End {
             model: a,
             fk: &junction.fk_a,
+            owns: owns(a),
         },
         End {
             model: b,
             fk: &junction.fk_b,
+            owns: owns(b),
         },
     ])
 }
@@ -95,11 +106,11 @@ pub(crate) fn reads_table(rule: &AccessRule, table: &str) -> bool {
     }
 }
 
-/// Whether either end of a linked junction declares an update rule, which is what lets anyone
+/// Whether an owning end of a linked junction declares an update rule, which is what lets anyone
 /// write a link at all.
 fn writable(ends: &[End<'_>; 2]) -> bool {
     ends.iter()
-        .any(|end| platform_access(end.model).update.is_some())
+        .any(|end| end.owns && platform_access(end.model).update.is_some())
 }
 
 /// The suffixes of the policies `access` puts on the junction.
@@ -158,7 +169,7 @@ fn rule_for<'a>(access: &'a AccessAst, suffix: &str) -> Option<&'a AccessRule> {
     }
 }
 
-/// Both ends readable and, for a write, at least one of them updatable.
+/// Both ends readable and, for a write, an owning end updatable.
 fn linked_expr(
     schema: &str,
     ast: &SchemaAst,
@@ -176,6 +187,7 @@ fn linked_expr(
     }
     let update = ends
         .iter()
+        .filter(|end| end.owns)
         .filter_map(|end| {
             let rule = platform_access(end.model).update.as_ref()?;
             Some(end_expr(schema, ast, junction, *end, Some(rule)))

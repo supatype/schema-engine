@@ -121,6 +121,7 @@ enum Caller {
     Anon,
     Reader,
     Editor,
+    BadgeEditor,
 }
 
 impl Caller {
@@ -138,6 +139,8 @@ impl Caller {
             Caller::Reader => json!({ "role": "authenticated", "sub": sub }),
             Caller::Editor => json!({ "role": "authenticated", "sub": sub,
                                       "app_metadata": { "role": "editor" } }),
+            Caller::BadgeEditor => json!({ "role": "authenticated", "sub": sub,
+                                           "app_metadata": { "role": "badge_editor" } }),
         }
     }
 }
@@ -571,6 +574,150 @@ async fn a_project_read_through_exists_on_its_junction_is_not_refused() {
         let read = "SELECT id::text AS line FROM public.projects";
         let rows = as_caller(&pool, Caller::Reader, read).await;
         assert!(rows.is_ok(), "{rows:?}");
+    })
+    .await;
+}
+
+// ---- Who owns a link ----
+//
+// A link is written by the model that declares the `ManyToMany` field. When only `Lot` does,
+// the right to update a badge does not let anyone attach it to a lot. When both models declare it,
+// either end's update right writes the link.
+
+const LOT: &str = "66666666-6666-6666-6666-666666666666";
+const BADGE: &str = "77777777-7777-7777-7777-777777777777";
+
+fn relation(target: &str) -> Value {
+    json!({ "kind": "relation", "cardinality": "manyToMany", "target": target })
+}
+
+/// `Lot` (editors update it) and `Badge` (badge editors update it), readable by anyone. `lot_declares`
+/// and `badge_declares` say which of them names the relation.
+fn lots_and_badges(lot_declares: bool, badge_declares: bool) -> SchemaAst {
+    let access = |updater: &str| {
+        json!({ "read": { "type": "public" }, "create": role(updater),
+                "update": role(updater), "delete": role(updater) })
+    };
+    let mut lot_fields = json!({ "id": uuid_key(), "title": column("text", "TEXT", true) });
+    if lot_declares {
+        lot_fields["badges"] = relation("Badge");
+    }
+    let mut badge_fields = json!({ "id": uuid_key(), "name": column("text", "TEXT", true) });
+    if badge_declares {
+        badge_fields["lots"] = relation("Lot");
+    }
+    let doc = json!({ "astVersion": 2, "models": [
+        model("Lot", "lots", lot_fields, access("editor")),
+        model("Badge", "badges", badge_fields, access("badge_editor")),
+    ]});
+    parser::parse(&doc.to_string()).expect("the lots and badges fixture parses")
+}
+
+async fn seed_lot_and_badge(pool: &PgPool) {
+    common::exec(
+        pool,
+        &format!(
+            "INSERT INTO public.lots (id, title) VALUES ('{LOT}', 'vase');
+             INSERT INTO public.badges (id, name) VALUES ('{BADGE}', 'mint');"
+        ),
+    )
+    .await
+    .expect("seed");
+}
+
+fn insert_badge_link() -> String {
+    format!(
+        "INSERT INTO public.badges_lots (lot_id, badge_id) VALUES ('{LOT}', '{BADGE}') \
+         RETURNING lot_id::text || '|' || badge_id::text AS line"
+    )
+}
+
+fn refused_by_rls(result: &Result<Vec<String>, String>) -> bool {
+    result
+        .as_ref()
+        .is_err_and(|e| e.contains("row-level security"))
+}
+
+#[tokio::test]
+async fn only_the_declaring_model_owns_a_link() {
+    common::with_integration_pool(|pool| async move {
+        prepare(&pool).await;
+        common::push(&pool, &lots_and_badges(true, false))
+            .await
+            .expect("push");
+        seed_lot_and_badge(&pool).await;
+
+        let by_badge_editor = as_caller(&pool, Caller::BadgeEditor, &insert_badge_link()).await;
+        assert!(
+            refused_by_rls(&by_badge_editor),
+            "may update the badge, not the lot that declares the link: {by_badge_editor:?}"
+        );
+        let by_editor = as_caller(&pool, Caller::Editor, &insert_badge_link()).await;
+        assert_eq!(by_editor, Ok(vec![format!("{LOT}|{BADGE}")]));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn reading_a_link_does_not_depend_on_who_owns_it() {
+    common::with_integration_pool(|pool| async move {
+        prepare(&pool).await;
+        common::push(&pool, &lots_and_badges(true, false))
+            .await
+            .expect("push");
+        seed_lot_and_badge(&pool).await;
+        common::exec(
+            &pool,
+            &format!(
+                "INSERT INTO public.badges_lots (lot_id, badge_id) VALUES ('{LOT}', '{BADGE}')"
+            ),
+        )
+        .await
+        .expect("a link");
+
+        let read = "SELECT lot_id::text || '|' || badge_id::text AS line FROM public.badges_lots";
+        for caller in [Caller::Anon, Caller::Reader, Caller::BadgeEditor] {
+            let rows = as_caller(&pool, caller, read).await;
+            assert_eq!(rows, Ok(vec![format!("{LOT}|{BADGE}")]), "{caller:?}");
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn when_both_models_declare_the_relation_either_end_owns_the_link() {
+    common::with_integration_pool(|pool| async move {
+        prepare(&pool).await;
+        common::push(&pool, &lots_and_badges(true, true))
+            .await
+            .expect("push");
+        seed_lot_and_badge(&pool).await;
+
+        let by_badge_editor = as_caller(&pool, Caller::BadgeEditor, &insert_badge_link()).await;
+        assert_eq!(by_badge_editor, Ok(vec![format!("{LOT}|{BADGE}")]));
+        let by_editor = as_caller(&pool, Caller::Editor, &insert_badge_link()).await;
+        assert_eq!(by_editor, Ok(vec![format!("{LOT}|{BADGE}")]));
+        let by_reader = as_caller(&pool, Caller::Reader, &insert_badge_link()).await;
+        assert!(refused_by_rls(&by_reader), "{by_reader:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_declaring_model_with_no_update_rule_leaves_the_link_unwritable() {
+    // `Badge` may be updated, but it does not declare the relation, and `Lot` has no update rule.
+    let mut doc: Value = serde_json::to_value(lots_and_badges(true, false)).expect("serializes");
+    doc["models"][0]["annotations"]["platform"]["access"]["update"] = Value::Null;
+    let ast = parser::parse(&doc.to_string()).expect("parses");
+    common::with_integration_pool(|pool| async move {
+        prepare(&pool).await;
+        common::push(&pool, &ast).await.expect("push");
+        seed_lot_and_badge(&pool).await;
+
+        for caller in [Caller::Editor, Caller::BadgeEditor] {
+            let added = as_caller(&pool, caller, &insert_badge_link()).await;
+            assert!(added.is_err(), "{caller:?}: {added:?}");
+        }
     })
     .await;
 }

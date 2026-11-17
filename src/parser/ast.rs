@@ -24,6 +24,11 @@ pub struct SchemaAst {
     /// `None` when the project sent none, which is correct for a schema with no versioned model and
     /// an error for one that has: see [`PublishingAst`].
     pub publishing: Option<PublishingAst>,
+    /// Realtime channels the schema declares, compiled to `_supatype.realtime_channel_access`.
+    /// Empty when the project declares none, which still emits the functions (returning no rows).
+    pub channels: Vec<ChannelAst>,
+    /// The project's realtime settings. `None` means `open`.
+    pub realtime: Option<RealtimeAst>,
     /// Warnings from parse/validation.
     pub warnings: Vec<String>,
     /// The project's rename journal (`supatype/renames.json`): each entry a declared rename, read
@@ -734,6 +739,17 @@ pub enum AccessRule {
     Exists {
         source: MembershipSource,
     },
+    /// The name of a broadcast event. Valid only in a channel's `send` rule, where the realtime
+    /// server evaluates it per message; rendered as `TRUE` in SQL (the engine extracts it first,
+    /// see `generator::sql::realtime`), so no database round trip sits on the hot path.
+    Event {
+        name: String,
+    },
+    /// A check on one field of a broadcast payload. Same rules as [`AccessRule::Event`].
+    Payload {
+        field: String,
+        check: PayloadCheck,
+    },
     /// `IS NULL` / `IS NOT NULL` on an operand.
     ///
     /// Its own variant rather than a `CompareOp`, because SQL null comparison is
@@ -776,6 +792,9 @@ pub enum MembershipSource {
 pub enum Operand {
     /// A column on the model the policy is attached to.
     Column { name: String },
+    /// A parameter of the channel the rule is on (`{id}` in `lot:{id}`). Valid only in a channel
+    /// rule, where it renders as the derived column the channel function builds from the topic.
+    Param { name: String },
     /// The caller's user id (`_supatype.jwt_uid()`, which `auth.uid()` aliases), wrapped so the
     /// planner evaluates it once per query.
     AuthUid,
@@ -784,6 +803,12 @@ pub enum Operand {
     AuthRole,
     /// A nested JWT claim by dotted path, e.g. `app_metadata.tier`.
     Claim { path: String },
+    /// The `index`th folder of an object's path, counting from 1 as Postgres arrays do:
+    /// `storage.foldername(name)[index]`, NULL when the path is not that deep.
+    ///
+    /// Bucket rules only. It names a column of `storage.objects`, so a model's rule using it is
+    /// refused at validation. It reads as text, so `AuthUid` compared with it is cast to match.
+    Folder { index: u32 },
     /// A constant supplied in the schema.
     Literal { value: LiteralValue },
 
@@ -1081,6 +1106,109 @@ pub struct PublishingAst {
     pub preview_allow_project_scope: bool,
 }
 
+/// One declared realtime channel: a topic pattern and who may join, send and track on it.
+///
+/// Compiled to `_supatype.realtime_channel_access` (see `generator::sql::realtime`), which the
+/// realtime server asks as the caller. The AST is the CLI's; the engine validates it again
+/// (`parser::channels`) because a pattern or a rule that slips through becomes SQL.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelAst {
+    /// The declaration's name, as the author wrote the exported type (`LotChannel`). Names the
+    /// channel in every message and in the functions' output.
+    pub name: String,
+    /// `:`-separated segments: a literal, `{name}` for a parameter, or a final `*` that matches
+    /// one or more remaining segments.
+    pub pattern: String,
+    #[serde(default)]
+    pub params: Vec<ChannelParamAst>,
+    pub access: ChannelAccessAst,
+}
+
+/// A `{name}` in a channel pattern, with the type its segment must fit before it is cast.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelParamAst {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: ChannelParamType,
+}
+
+/// The closed set of parameter types. A segment is checked against the type's shape before any
+/// cast, so a topic that does not fit is "does not fit" and never a Postgres error.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChannelParamType {
+    Uuid,
+    String,
+    Integer,
+}
+
+/// What each operation on a channel requires. A `None` is denied to every caller but the
+/// service role, as an operation a model leaves out is.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelAccessAst {
+    /// Subscribe, and receive broadcasts and presence.
+    #[serde(default)]
+    pub join: Option<AccessRule>,
+    /// Broadcast. May carry `Event` and `Payload` nodes, which the realtime server evaluates.
+    #[serde(default)]
+    pub send: Option<AccessRule>,
+    /// Appear in presence.
+    #[serde(default)]
+    pub track: Option<AccessRule>,
+}
+
+/// The realtime settings the project config carries into the database.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RealtimeAst {
+    /// `open` leaves an undeclared channel as it is today; `declared` refuses broadcast and
+    /// presence on one.
+    pub channels: ChannelMode,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ChannelMode {
+    Open,
+    Declared,
+}
+
+impl ChannelMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ChannelMode::Open => "open",
+            ChannelMode::Declared => "declared",
+        }
+    }
+}
+
+/// A check on one field of a broadcast payload, evaluated by the realtime server (and by
+/// `realtime_send` for a send made from SQL). **Fails closed**: a field that is absent, or of
+/// another type, fails every kind but `required`'s own test, so an author who wants an optional
+/// field says so with `Any`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PayloadCheck {
+    /// A string, at most `max_length` characters.
+    String {
+        #[serde(default, rename = "maxLength", skip_serializing_if = "Option::is_none")]
+        max_length: Option<u32>,
+    },
+    /// A number within `min` and `max`, both inclusive.
+    Number {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f64>,
+    },
+    Boolean,
+    /// Present and not null, of any type.
+    Required,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexAst {
@@ -1163,6 +1291,11 @@ pub struct JunctionTableAst {
     pub model_b: String,
     pub fk_a: String,
     pub fk_b: String,
+    /// The models whose own `ManyToMany` field names this junction, in schema order. One entry
+    /// means that model owns the link (only its update right writes it); both means either end's
+    /// update right does. Empty, as in an AST built without the resolver, is treated as both.
+    #[serde(default)]
+    pub declared_by: Vec<String>,
 }
 
 /// A declared bucket. Serialized with its effective `public` flag and `accessMode` filled in,

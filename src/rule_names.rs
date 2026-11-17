@@ -154,12 +154,14 @@ fn op_word(op: CompareOp) -> &'static str {
 fn operand_word(operand: &Operand) -> String {
     match operand {
         Operand::Column { name } => name.clone(),
+        Operand::Param { name } => name.clone(),
         Operand::Length { column, .. } => format!("{column}_length"),
         Operand::ItemCount { column, .. } => format!("{column}_items"),
         Operand::Literal { .. } => "value".to_string(),
         Operand::AuthUid => "uid".to_string(),
         Operand::AuthRole => "role".to_string(),
         Operand::Claim { .. } => "claim".to_string(),
+        Operand::Folder { .. } => "folder".to_string(),
         Operand::Now
         | Operand::StartOf { .. }
         | Operand::Ago { .. }

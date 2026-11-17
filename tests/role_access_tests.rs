@@ -382,3 +382,63 @@ fn what_a_link_denies_is_left_out_of_before_too() {
         .expect("the link entry");
     assert!(link.before.is_empty(), "{link:?}");
 }
+
+/// The fixture with `notice` also private to create and update, so a grant could outrun a rule.
+fn ast_with_private_notice_writes() -> SchemaAst {
+    let mut document: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture is JSON");
+    let models = document["models"].as_array_mut().expect("models");
+    let notice = models
+        .iter_mut()
+        .find(|m| m["name"] == "Notice")
+        .expect("notice");
+    notice["annotations"]["platform"]["access"]["create"] = serde_json::json!({"type": "private"});
+    notice["annotations"]["platform"]["access"]["update"] = serde_json::json!({"type": "public"});
+    parser::parse(&document.to_string()).expect("edited fixture parses")
+}
+
+fn effective(ast: &SchemaAst, table: &str, role: &str) -> Vec<(&'static str, &'static str)> {
+    summarize(ast, &CatalogState::default(), "public")
+        .into_iter()
+        .find(|a| a.table == table && a.role == role)
+        .expect("entry")
+        .effective
+        .into_iter()
+        .map(|e| (e.verb, e.rows))
+        .collect()
+}
+
+#[test]
+fn effective_access_drops_a_verb_whose_rule_renders_false() {
+    let ast = ast_with_private_notice_writes();
+    // The private `create` rule shuts the verb out for every role that holds the grant.
+    let granted = summarize(&ast, &CatalogState::default(), "public");
+    let entry = granted
+        .iter()
+        .find(|a| a.table == "notice" && a.role == "authenticated")
+        .expect("entry");
+    assert!(
+        entry.after.contains(&"create"),
+        "the grant is still reported: {:?}",
+        entry.after
+    );
+    let reachable = effective(&ast, "notice", "authenticated");
+    assert!(
+        reachable.iter().all(|(verb, _)| *verb != "create"),
+        "{reachable:?}"
+    );
+    assert_eq!(reachable, [("read", "all rows"), ("update", "all rows")]);
+}
+
+#[test]
+fn effective_access_says_when_the_rule_decides_the_rows() {
+    // `profile` needs a login, which is a test of the caller, not a grant of every row.
+    let reachable = effective(&ast(), "profile", "authenticated");
+    assert_eq!(reachable.len(), 4, "{reachable:?}");
+    assert!(
+        reachable
+            .iter()
+            .all(|(_, rows)| *rows == "rows decided by rule"),
+        "{reachable:?}"
+    );
+    assert!(effective(&ast(), "profile", "anon").is_empty());
+}

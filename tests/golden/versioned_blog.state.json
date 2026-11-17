@@ -929,6 +929,21 @@
     "expressionIndexes": [],
     "triggers": [
       {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
+        "name": "realtime_outbox_delete_row",
+        "timing": "AFTER",
+        "events": [
+          "INSERT"
+        ],
+        "columns": [],
+        "forEachRow": true,
+        "function": "_supatype.realtime_outbox_delete_row",
+        "definition": "CREATE TRIGGER realtime_outbox_delete_row AFTER INSERT ON _supatype.realtime_outbox FOR EACH ROW EXECUTE FUNCTION _supatype.realtime_outbox_delete_row()",
+        "enabled": true,
+        "comment": null
+      },
+      {
         "schema": "public",
         "table": "ledger",
         "name": "ledger_versions_audit",
@@ -1254,9 +1269,7 @@
         "cost": "100",
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.ledger_versions_audit()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    next_version integer;\n  BEGIN\n    SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO next_version\n      FROM \"public\".\"ledger_versions\" v WHERE v.\"record_id\" = NEW.\"id\";\n    INSERT INTO \"public\".\"ledger_versions\"\n      (\"record_id\", \"version\", \"status\", \"data\", \"created_by\")\n    VALUES (NEW.\"id\", next_version, 'published', to_jsonb(NEW), _supatype.jwt_uid());\n    RETURN NULL;\n  END;\n  $function$\n",
-        "acl": [
-          "PUBLIC=EXECUTE"
-        ]
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1581,9 +1594,7 @@
         "cost": "100",
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.posts_versions_guard()\n RETURNS trigger\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  BEGIN\n    IF TG_OP = 'INSERT' THEN\n      -- Assigned here, not accepted from the caller. The snapshot table is exposed like any other\n      -- table in the managed schema, so a direct insert has to be a draft save and nothing else:\n      -- no forged published version, no renumbering over someone else's, no borrowed authorship.\n      SELECT COALESCE(MAX(v.\"version\"), 0) + 1 INTO NEW.\"version\"\n        FROM \"public\".\"posts_versions\" v WHERE v.\"record_id\" = NEW.\"record_id\";\n      NEW.\"created_by\" := _supatype.caller_id();\n      -- A version is born a draft. Publishing it is `supatype.publish`, which is a separate act with\n      -- a separate permission check.\n      NEW.\"status\" := 'draft';\n      RETURN NEW;\n    END IF;\n\n    -- Only the publishing state may move: `status`, `published_locales`, `scheduled_locales`. A caller\n    -- who can still edit the record must not be able to rewrite what an earlier version said, or\n    -- the history stops being evidence of anything.\n    NEW.\"data\" := OLD.\"data\";\n    NEW.\"created_by\" := OLD.\"created_by\";\n    NEW.\"created_at\" := OLD.\"created_at\";\n    NEW.\"version\" := OLD.\"version\";\n    NEW.\"record_id\" := OLD.\"record_id\";\n    RETURN NEW;\n  END;\n  $function$\n",
-        "acl": [
-          "PUBLIC=EXECUTE"
-        ]
+        "acl": []
       },
       {
         "schema": "_supatype",
@@ -1635,7 +1646,6 @@
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.preview_epoch()\n RETURNS integer\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT s.\"preview_epoch\" FROM _supatype.publishing_settings s WHERE s.\"singleton\";\n  $function$\n",
         "acl": [
-          "PUBLIC=EXECUTE",
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE"
@@ -1686,6 +1696,218 @@
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.prune_versions()\n RETURNS integer\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    entry _supatype.versioned_models;\n    removed integer := 0;\n    n integer;\n  BEGIN\n    FOR entry IN SELECT * FROM _supatype.versioned_models LOOP\n      EXECUTE format(\n        'DELETE FROM %I.%I v\n          WHERE v.%I IN (\n            SELECT id FROM (\n              SELECT k.%I AS id,\n                     row_number() OVER (PARTITION BY k.%I ORDER BY k.%I DESC) AS rank,\n                     k.%I AS live\n                FROM %I.%I k\n            ) ranked\n            WHERE ranked.rank > $1 AND ranked.live = ''{}''::jsonb\n          )',\n        entry.\"schema_name\", entry.\"versions_table\",\n        'id', 'id', 'record_id', 'version', 'published_locales',\n        entry.\"schema_name\", entry.\"versions_table\")\n        USING entry.\"keep\";\n      GET DIAGNOSTICS n = ROW_COUNT;\n      removed := removed + n;\n    END LOOP;\n\n    -- And the notes of transactions that have ended, which no caller can match any more.\n    DELETE FROM _supatype.created_records\n     WHERE pg_xact_status(\"xact\") IS DISTINCT FROM 'in progress';\n    RETURN removed;\n  END;\n  $function$\n",
         "acl": []
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_channel_access",
+        "identityArguments": "topic text",
+        "identityTypes": "text",
+        "returnType": "TABLE(channel text, pattern text, fits boolean, param_error text, can_join boolean, can_send boolean, can_track boolean)",
+        "language": "plpgsql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n#variable_conflict use_column\nBEGIN\n  IF pg_catalog.char_length($1) > 255 THEN\n    RETURN;\n  END IF;\n\n  RETURN;\nEND;\n",
+        "comment": null,
+        "arguments": "topic text",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "1000",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_channel_access(topic text)\n RETURNS TABLE(channel text, pattern text, fits boolean, param_error text, can_join boolean, can_send boolean, can_track boolean)\n LANGUAGE plpgsql\n STABLE\n SET search_path TO ''\nAS $function$\n#variable_conflict use_column\nBEGIN\n  IF pg_catalog.char_length($1) > 255 THEN\n    RETURN;\n  END IF;\n\n  RETURN;\nEND;\n$function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_channel_content_ok",
+        "identityArguments": "channel text, event text, payload jsonb",
+        "identityTypes": "text, text, jsonb",
+        "returnType": "boolean",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": " SELECT TRUE ",
+        "comment": null,
+        "arguments": "channel text, event text, payload jsonb",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_channel_content_ok(channel text, event text, payload jsonb)\n RETURNS boolean\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$ SELECT TRUE $function$\n",
+        "acl": [
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_channel_dependencies",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "TABLE(channel text, table_schema text, table_name text)",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT NULL::text, NULL::text, NULL::text\n  WHERE FALSE\n",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "1000",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_channel_dependencies()\n RETURNS TABLE(channel text, table_schema text, table_name text)\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n  SELECT NULL::text, NULL::text, NULL::text\n  WHERE FALSE\n$function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_channel_mode",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": " SELECT 'open'::text ",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_channel_mode()\n RETURNS text\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$ SELECT 'open'::text $function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_channel_send_checks",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "TABLE(channel text, checks jsonb)",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT NULL::text, NULL::jsonb\n  WHERE FALSE\n",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "1000",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_channel_send_checks()\n RETURNS TABLE(channel text, checks jsonb)\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n  SELECT NULL::text, NULL::jsonb\n  WHERE FALSE\n$function$\n",
+        "acl": [
+          "anon=EXECUTE",
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_outbox_delete_row",
+        "identityArguments": "",
+        "identityTypes": "",
+        "returnType": "trigger",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nBEGIN\n  DELETE FROM \"_supatype\".\"realtime_outbox\" WHERE id = NEW.id;\n  RETURN NULL;\nEND;\n",
+        "comment": null,
+        "arguments": "",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_outbox_delete_row()\n RETURNS trigger\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nBEGIN\n  DELETE FROM \"_supatype\".\"realtime_outbox\" WHERE id = NEW.id;\n  RETURN NULL;\nEND;\n$function$\n",
+        "acl": [
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_send",
+        "identityArguments": "topic text, event text, payload jsonb",
+        "identityTypes": "text, text, jsonb",
+        "returnType": "void",
+        "language": "plpgsql",
+        "volatility": "v",
+        "securityDefiner": false,
+        "body": "\nDECLARE\n  refusal text := \"_supatype\".realtime_send_refusal(topic, event, payload);\nBEGIN\n  IF refusal IS NOT NULL THEN\n    RAISE EXCEPTION '%', refusal USING ERRCODE = '42501';\n  END IF;\n  INSERT INTO \"_supatype\".\"realtime_outbox\" (topic, event, payload, sender)\n    VALUES (topic, event, payload, \"_supatype\".jwt_uid());\nEND;\n",
+        "comment": null,
+        "arguments": "topic text, event text, payload jsonb DEFAULT '{}'::jsonb",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_send(topic text, event text, payload jsonb DEFAULT '{}'::jsonb)\n RETURNS void\n LANGUAGE plpgsql\n SET search_path TO ''\nAS $function$\nDECLARE\n  refusal text := \"_supatype\".realtime_send_refusal(topic, event, payload);\nBEGIN\n  IF refusal IS NOT NULL THEN\n    RAISE EXCEPTION '%', refusal USING ERRCODE = '42501';\n  END IF;\n  INSERT INTO \"_supatype\".\"realtime_outbox\" (topic, event, payload, sender)\n    VALUES (topic, event, payload, \"_supatype\".jwt_uid());\nEND;\n$function$\n",
+        "acl": [
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_send_refusal",
+        "identityArguments": "topic text, event text, payload jsonb",
+        "identityTypes": "text, text, jsonb",
+        "returnType": "text",
+        "language": "sql",
+        "volatility": "s",
+        "securityDefiner": false,
+        "body": "\n  SELECT CASE\n      WHEN (current_user = 'service_role' OR COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles AS r WHERE r.rolname = current_user), FALSE)) THEN NULL\n      WHEN a.channel IS NULL THEN\n        CASE WHEN \"_supatype\".realtime_channel_mode() = 'declared' THEN\n          $1 || ' matches no declared channel, and this project refuses broadcast and presence on undeclared channels (realtime.channels is \"declared\")'\n        END\n      WHEN NOT a.fits THEN $1 || ' does not fit ' || a.pattern || ': ' || a.param_error\n      WHEN a.can_send IS NULL THEN a.channel || ' declares no send rule, so only the service role may broadcast on ' || $1\n      WHEN NOT a.can_send THEN 'not allowed to broadcast on ' || $1 || ': the send rule of ' || a.channel || ' denied it'\n      WHEN NOT \"_supatype\".realtime_channel_content_ok(a.channel, $2, $3) THEN\n        'not allowed to broadcast ' || $2 || ' on ' || $1 || ': the send rule of ' || a.channel || ' refused the payload'\n    END\n    FROM (SELECT 1) AS one\n    LEFT JOIN \"_supatype\".realtime_channel_access($1) AS a ON TRUE\n  ",
+        "comment": null,
+        "arguments": "topic text, event text, payload jsonb",
+        "config": [
+          "search_path=\"\""
+        ],
+        "strict": false,
+        "leakproof": false,
+        "parallel": "u",
+        "cost": "100",
+        "rows": "0",
+        "definition": "CREATE OR REPLACE FUNCTION _supatype.realtime_send_refusal(topic text, event text, payload jsonb)\n RETURNS text\n LANGUAGE sql\n STABLE\n SET search_path TO ''\nAS $function$\n  SELECT CASE\n      WHEN (current_user = 'service_role' OR COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles AS r WHERE r.rolname = current_user), FALSE)) THEN NULL\n      WHEN a.channel IS NULL THEN\n        CASE WHEN \"_supatype\".realtime_channel_mode() = 'declared' THEN\n          $1 || ' matches no declared channel, and this project refuses broadcast and presence on undeclared channels (realtime.channels is \"declared\")'\n        END\n      WHEN NOT a.fits THEN $1 || ' does not fit ' || a.pattern || ': ' || a.param_error\n      WHEN a.can_send IS NULL THEN a.channel || ' declares no send rule, so only the service role may broadcast on ' || $1\n      WHEN NOT a.can_send THEN 'not allowed to broadcast on ' || $1 || ': the send rule of ' || a.channel || ' denied it'\n      WHEN NOT \"_supatype\".realtime_channel_content_ok(a.channel, $2, $3) THEN\n        'not allowed to broadcast ' || $2 || ' on ' || $1 || ': the send rule of ' || a.channel || ' refused the payload'\n    END\n    FROM (SELECT 1) AS one\n    LEFT JOIN \"_supatype\".realtime_channel_access($1) AS a ON TRUE\n  $function$\n",
+        "acl": [
+          "authenticated=EXECUTE",
+          "service_role=EXECUTE"
+        ]
       },
       {
         "schema": "_supatype",
@@ -1778,7 +2000,6 @@
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_all_drafts()\n RETURNS boolean\n LANGUAGE plpgsql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n  DECLARE\n    caller uuid := _supatype.caller_id();\n  BEGIN\n    IF ((SELECT _supatype.jwt_claim_text('supatype_studio')) IN ('read', 'write')) IS NOT TRUE THEN\n      RETURN false;\n    END IF;\n    RETURN EXISTS (\n      SELECT 1 FROM _supatype.studio_members m\n       WHERE caller IN (m.user_id, m.platform_user_id)\n         AND m.role = ANY (COALESCE(_supatype.draft_visibility_roles(), ARRAY[]::text[]))\n    );\n  EXCEPTION WHEN undefined_table THEN\n    RETURN false;\n  END;\n  $function$\n",
         "acl": [
-          "PUBLIC=EXECUTE",
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE"
@@ -1806,7 +2027,6 @@
         "rows": "0",
         "definition": "CREATE OR REPLACE FUNCTION _supatype.sees_draft_posts(p_record text)\n RETURNS boolean\n LANGUAGE sql\n STABLE SECURITY DEFINER\n SET search_path TO ''\nAS $function$\n    SELECT EXISTS (\n      SELECT 1 FROM \"public\".\"posts_versions\" v\n       WHERE v.\"record_id\"::text = p_record\n         AND (\n           (v.\"created_by\" IS NOT NULL AND v.\"created_by\" = _supatype.caller_id())\n           OR (SELECT _supatype.sees_all_drafts())\n           OR _supatype.preview_allows('posts', v.\"record_id\"::text)\n         )\n    ) OR _supatype.created_in_this_transaction('posts', p_record);\n  $function$\n",
         "acl": [
-          "PUBLIC=EXECUTE",
           "anon=EXECUTE",
           "authenticated=EXECUTE",
           "service_role=EXECUTE"
@@ -2580,6 +2800,12 @@
         "name": "created_records_seq_seq",
         "ownedBy": "created_records.seq",
         "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "name": "realtime_outbox_id_seq",
+        "ownedBy": "realtime_outbox.id",
+        "comment": null
       }
     ],
     "enumTypes": [],
@@ -2606,6 +2832,58 @@
       {
         "schema": "_supatype",
         "table": "preview_links",
+        "grantee": "supatype_admin",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
+        "grantee": "authenticated",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "SELECT"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
+        "grantee": "service_role",
+        "privileges": [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE"
+        ],
+        "heldWith": {
+          "grantOption": [],
+          "otherGrantors": []
+        }
+      },
+      {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
         "grantee": "supatype_admin",
         "privileges": [
           "DELETE",
@@ -2913,6 +3191,13 @@
       },
       {
         "schema": "_supatype",
+        "table": "realtime_outbox",
+        "enabled": true,
+        "forced": false,
+        "replicaIdentity": "d"
+      },
+      {
+        "schema": "_supatype",
         "table": "versioned_models",
         "enabled": false,
         "forced": false,
@@ -2962,6 +3247,58 @@
       }
     ],
     "policies": [
+      {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
+        "name": "realtime_outbox_delete",
+        "command": "d",
+        "permissive": true,
+        "roles": [
+          "authenticated"
+        ],
+        "usingExpr": "(NOT (sender IS DISTINCT FROM ( SELECT _supatype.jwt_uid() AS jwt_uid)))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
+        "name": "realtime_outbox_insert",
+        "command": "a",
+        "permissive": true,
+        "roles": [
+          "authenticated"
+        ],
+        "usingExpr": null,
+        "checkExpr": "((_supatype.realtime_send_refusal(topic, event, payload) IS NULL) AND (NOT (sender IS DISTINCT FROM ( SELECT _supatype.jwt_uid() AS jwt_uid))))",
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
+        "name": "realtime_outbox_select",
+        "command": "r",
+        "permissive": true,
+        "roles": [
+          "authenticated"
+        ],
+        "usingExpr": "(NOT (sender IS DISTINCT FROM ( SELECT _supatype.jwt_uid() AS jwt_uid)))",
+        "checkExpr": null,
+        "comment": null
+      },
+      {
+        "schema": "_supatype",
+        "table": "realtime_outbox",
+        "name": "realtime_outbox_service",
+        "command": "*",
+        "permissive": true,
+        "roles": [
+          "service_role"
+        ],
+        "usingExpr": "true",
+        "checkExpr": null,
+        "comment": null
+      },
       {
         "schema": "public",
         "table": "ledger",
@@ -3429,6 +3766,75 @@
           },
           {
             "schema": "_supatype",
+            "name": "realtime_outbox",
+            "columns": [
+              {
+                "name": "id",
+                "dataType": "bigint",
+                "udtName": "int8",
+                "nullable": false,
+                "default": null,
+                "ordinalPosition": 1,
+                "numericPrecision": 64,
+                "numericScale": 0,
+                "isIdentity": true,
+                "identityGeneration": "ALWAYS"
+              },
+              {
+                "name": "topic",
+                "dataType": "text",
+                "udtName": "text",
+                "nullable": false,
+                "default": null,
+                "ordinalPosition": 2,
+                "numericPrecision": null,
+                "numericScale": null
+              },
+              {
+                "name": "event",
+                "dataType": "text",
+                "udtName": "text",
+                "nullable": false,
+                "default": null,
+                "ordinalPosition": 3,
+                "numericPrecision": null,
+                "numericScale": null
+              },
+              {
+                "name": "payload",
+                "dataType": "jsonb",
+                "udtName": "jsonb",
+                "nullable": false,
+                "default": "'{}'::jsonb",
+                "ordinalPosition": 4,
+                "numericPrecision": null,
+                "numericScale": null
+              },
+              {
+                "name": "sender",
+                "dataType": "uuid",
+                "udtName": "uuid",
+                "nullable": true,
+                "default": null,
+                "ordinalPosition": 5,
+                "numericPrecision": null,
+                "numericScale": null
+              },
+              {
+                "name": "created_at",
+                "dataType": "timestamp with time zone",
+                "udtName": "timestamptz",
+                "nullable": false,
+                "default": "now()",
+                "ordinalPosition": 6,
+                "numericPrecision": null,
+                "numericScale": null
+              }
+            ],
+            "comment": null
+          },
+          {
+            "schema": "_supatype",
             "name": "versioned_models",
             "columns": [
               {
@@ -3630,6 +4036,22 @@
             "options": ""
           },
           {
+            "table": "realtime_outbox",
+            "name": "realtime_outbox_pkey",
+            "columns": [
+              "id"
+            ],
+            "unique": true,
+            "method": "btree",
+            "isPrimary": true,
+            "comment": null,
+            "expressions": null,
+            "predicate": null,
+            "definition": "CREATE UNIQUE INDEX realtime_outbox_pkey ON _supatype.realtime_outbox USING btree (id)",
+            "include": [],
+            "options": ""
+          },
+          {
             "table": "versioned_models",
             "name": "versioned_models_pkey",
             "columns": [
@@ -3727,6 +4149,21 @@
             "foreignSchema": null,
             "foreignColumns": null,
             "checkExpression": "CHECK (singleton)",
+            "onDelete": null,
+            "definition": null,
+            "comment": null
+          },
+          {
+            "table": "realtime_outbox",
+            "name": "realtime_outbox_pkey",
+            "constraintType": "primaryKey",
+            "columns": [
+              "id"
+            ],
+            "foreignTable": null,
+            "foreignSchema": null,
+            "foreignColumns": null,
+            "checkExpression": null,
             "onDelete": null,
             "definition": null,
             "comment": null

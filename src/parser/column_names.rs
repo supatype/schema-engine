@@ -140,7 +140,9 @@ fn clip_rule(rule: &mut AccessRule) {
         AccessRule::Public
         | AccessRule::Private
         | AccessRule::Authenticated
-        | AccessRule::Role { .. } => {}
+        | AccessRule::Role { .. }
+        | AccessRule::Event { .. }
+        | AccessRule::Payload { .. } => {}
     }
 }
 
