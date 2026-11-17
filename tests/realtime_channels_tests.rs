@@ -1481,10 +1481,21 @@ async fn a_track_rule_that_cannot_be_read_denies_track_and_leaves_join_open() {
 async fn a_send_rule_that_cannot_be_read_denies_send_and_leaves_join_open() {
     common::with_integration_pool(|pool| async move {
         let row = board_verdict(&pool, "send", "authenticated", Some(BOB)).await;
-        assert_eq!((row.join, row.send, row.track), (Some(true), Some(false), None), "{row:?}");
-        let (code, message) = send_as(&pool, "authenticated", Some(BOB), &format!("board:{LOT_1}"), "x", json!({}))
-            .await
-            .unwrap_err();
+        assert_eq!(
+            (row.join, row.send, row.track),
+            (Some(true), Some(false), None),
+            "{row:?}"
+        );
+        let (code, message) = send_as(
+            &pool,
+            "authenticated",
+            Some(BOB),
+            &format!("board:{LOT_1}"),
+            "x",
+            json!({}),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(code, "42501");
         assert_eq!(
             message,
