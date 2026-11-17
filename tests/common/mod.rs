@@ -323,25 +323,32 @@ where
 static CRON_DATABASE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// What the `pg_cron` database held before a test, for [`with_cron_database`] to put it back.
+/// Objects are tracked in `public` and in `_supatype`. supatype/postgres 17.2.15 creates the
+/// `_supatype` schema itself, so it exists before the test, and dropping only new schemas would
+/// leave one test's ledger tables for the next test to read.
 struct CronDatabaseObjects {
     schemas: Vec<String>,
-    public_relations: Vec<i64>,
-    public_functions: Vec<i64>,
-    public_types: Vec<i64>,
+    relations: Vec<i64>,
+    functions: Vec<i64>,
+    types: Vec<i64>,
     extensions: Vec<String>,
     cron_jobs: Vec<i64>,
 }
 
 const CRON_DB_SCHEMAS: &str = "SELECT nspname::text FROM pg_namespace
      WHERE left(nspname, 3) <> 'pg_' AND nspname <> 'information_schema'";
-const CRON_DB_PUBLIC_RELATIONS: &str = "SELECT c.oid::bigint FROM pg_class c
-     WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c')";
-const CRON_DB_PUBLIC_FUNCTIONS: &str = "SELECT p.oid::bigint FROM pg_proc p
+const CRON_DB_RELATIONS: &str = "SELECT c.oid::bigint FROM pg_class c
+     WHERE c.relnamespace IN ('public'::regnamespace, to_regnamespace('_supatype'))
+       AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f', 'c')
+       -- An identity column's sequence goes with its table; dropping it first is refused.
+       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
+                       AND d.objid = c.oid AND d.deptype = 'i')";
+const CRON_DB_FUNCTIONS: &str = "SELECT p.oid::bigint FROM pg_proc p
      LEFT JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
-     WHERE p.pronamespace = 'public'::regnamespace AND d.objid IS NULL";
-const CRON_DB_PUBLIC_TYPES: &str = "SELECT t.oid::bigint FROM pg_type t
+     WHERE p.pronamespace IN ('public'::regnamespace, to_regnamespace('_supatype')) AND d.objid IS NULL";
+const CRON_DB_TYPES: &str = "SELECT t.oid::bigint FROM pg_type t
      LEFT JOIN pg_depend d ON d.classid = 'pg_type'::regclass AND d.objid = t.oid AND d.deptype = 'e'
-     WHERE t.typnamespace = 'public'::regnamespace AND t.typtype IN ('e', 'd') AND d.objid IS NULL";
+     WHERE t.typnamespace IN ('public'::regnamespace, to_regnamespace('_supatype')) AND t.typtype IN ('e', 'd') AND d.objid IS NULL";
 const CRON_DB_EXTENSIONS: &str = "SELECT extname::text FROM pg_extension";
 
 impl CronDatabaseObjects {
@@ -360,9 +367,9 @@ impl CronDatabaseObjects {
         };
         Self {
             schemas: texts(CRON_DB_SCHEMAS).await,
-            public_relations: oids(CRON_DB_PUBLIC_RELATIONS).await,
-            public_functions: oids(CRON_DB_PUBLIC_FUNCTIONS).await,
-            public_types: oids(CRON_DB_PUBLIC_TYPES).await,
+            relations: oids(CRON_DB_RELATIONS).await,
+            functions: oids(CRON_DB_FUNCTIONS).await,
+            types: oids(CRON_DB_TYPES).await,
             extensions: texts(CRON_DB_EXTENSIONS).await,
             cron_jobs: cron_job_ids(pool).await,
         }
@@ -384,11 +391,7 @@ impl CronDatabaseObjects {
                 ext.replace('"', "\"\"")
             ));
         }
-        for oid in now
-            .public_relations
-            .iter()
-            .filter(|o| !self.public_relations.contains(o))
-        {
+        for oid in now.relations.iter().filter(|o| !self.relations.contains(o)) {
             sql.push_str(&format!(
                 "DO $$ DECLARE r record; BEGIN
                    SELECT oid::regclass AS name, relkind INTO r FROM pg_class WHERE oid = {oid};
@@ -401,11 +404,7 @@ impl CronDatabaseObjects {
                  END $$;\n"
             ));
         }
-        for oid in now
-            .public_functions
-            .iter()
-            .filter(|o| !self.public_functions.contains(o))
-        {
+        for oid in now.functions.iter().filter(|o| !self.functions.contains(o)) {
             sql.push_str(&format!(
                 "DO $$ BEGIN
                    IF EXISTS (SELECT 1 FROM pg_proc WHERE oid = {oid}) THEN
@@ -414,11 +413,7 @@ impl CronDatabaseObjects {
                  END $$;\n"
             ));
         }
-        for oid in now
-            .public_types
-            .iter()
-            .filter(|o| !self.public_types.contains(o))
-        {
+        for oid in now.types.iter().filter(|o| !self.types.contains(o)) {
             sql.push_str(&format!(
                 "DO $$ BEGIN
                    IF EXISTS (SELECT 1 FROM pg_type WHERE oid = {oid}) THEN
