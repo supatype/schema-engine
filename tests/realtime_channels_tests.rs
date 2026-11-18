@@ -1213,7 +1213,7 @@ async fn a_direct_insert_still_reaches_the_replication_stream() {
 // Diff and drift
 // ---------------------------------------------------------------------------------------------
 
-use supatype_engine::differ::channel_diff::{ChannelChange, ChannelChangeKind};
+use supatype_engine::differ::channel_diff::{ChannelChange, ChannelChangeKind, ModeChange};
 
 async fn plan_diff(pool: &PgPool, ast: &SchemaAst) -> supatype_engine::differ::DiffOutput {
     supatype_engine::push::prepare(pool, ast, "public")
@@ -1288,6 +1288,53 @@ async fn the_diff_lists_added_changed_and_removed_channels_and_warns_on_a_mode_f
             warnings.contains("changes from \"open\" to \"declared\""),
             "{warnings}"
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_mode_flip_on_a_project_with_no_channels_says_nothing() {
+    common::with_integration_pool(|pool| async move {
+        // The database holds mode "open" from an earlier push that declared nothing.
+        let open = parse(&document(vec![], "open")).unwrap();
+        common::push(&pool, &open).await.expect("first push");
+
+        let declared = parse(&document(vec![], "declared")).unwrap();
+        let diff = plan_diff(&pool, &declared).await;
+        assert!(
+            diff.warnings
+                .iter()
+                .all(|w| !w.contains("realtime.channels")),
+            "{:?}",
+            diff.warnings
+        );
+        assert_eq!(
+            diff.realtime_mode,
+            Some(ModeChange {
+                before: "open".into(),
+                after: "declared".into()
+            })
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_mode_flip_after_channels_were_declared_still_warns() {
+    common::with_integration_pool(|pool| async move {
+        common::push(&pool, &parse(&document(vec![lobby()], "open")).unwrap())
+            .await
+            .expect("first push");
+
+        // The channel is gone from the schema, but the database still holds it.
+        let declared = parse(&document(vec![], "declared")).unwrap();
+        let diff = plan_diff(&pool, &declared).await;
+        let warnings = diff.warnings.join("\n");
+        assert!(
+            warnings.contains("changes from \"open\" to \"declared\""),
+            "{warnings}"
+        );
+        assert!(warnings.contains("will stop working"), "{warnings}");
     })
     .await;
 }
