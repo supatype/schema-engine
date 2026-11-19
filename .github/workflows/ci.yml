@@ -286,6 +286,7 @@ jobs:
             --test column_default_tests \
             --test junction_name_tests \
             --test owner_caller_default_tests \
+            --test owner_insert_without_user_tests \
             --test seed_rich_text_tests \
             --test seed_array_tests \
             --test seed_column_type_tests \

@@ -14,7 +14,8 @@
 use crate::desired::identity::{function_key, quote_if_needed};
 use crate::managed::ObjectNames;
 use crate::parser::ast::{FieldAst, ModelAst, SchemaAst};
-use crate::sql_quote::{dollar_quote, quote_ident, quote_qualified};
+use crate::parser::normaliser::{caller_owned_fields, CALLER_ID_DEFAULT};
+use crate::sql_quote::{dollar_quote, quote_ident, quote_literal, quote_qualified};
 use anyhow::Result;
 
 /// The schema the trigger functions live in.
@@ -223,6 +224,33 @@ pub fn model_functions(model: &ModelAst, names: &ObjectNames) -> Vec<TriggerFunc
             search_path: None,
         });
     }
+    // An insert that leaves a caller-owned column empty, with nobody signed in, fails the NOT NULL
+    // constraint with a message that says nothing of why. This says why. SQLSTATE 23502 is the
+    // constraint's own, so everything that classifies the error by code still does.
+    for field in caller_owned_fields(model) {
+        let table_literal = quote_literal(table);
+        let column_literal = quote_literal(&field);
+        let message = quote_literal(&format!(
+            "{field} is required when inserting into {table} without a signed-in user"
+        ));
+        let detail = quote_literal(&format!(
+            "the database fills {field} from the signed-in user, and this request has none"
+        ));
+        let hint = quote_literal(&format!(
+            "set {field} to the owning user's id, for example in a server script using the service role key"
+        ));
+        out.push(TriggerFunction {
+            name: names.owner_required_function(table, &field),
+            args: "",
+            returns: "trigger",
+            volatility: 'v',
+            body: format!(
+                "\nBEGIN\n  IF NEW.{column} IS NULL AND {CALLER_ID_DEFAULT} IS NULL THEN\n    RAISE EXCEPTION USING\n      ERRCODE = '23502',\n      MESSAGE = {message},\n      DETAIL = {detail},\n      HINT = {hint},\n      TABLE = {table_literal},\n      COLUMN = {column_literal};\n  END IF;\n  RETURN NEW;\nEND;\n",
+                column = quote_ident(&field),
+            ),
+            search_path: None,
+        });
+    }
     out
 }
 
@@ -244,6 +272,14 @@ pub fn model_triggers(model: &ModelAst, names: &ObjectNames) -> Vec<ModelTrigger
             name: names.slug_trigger(table, slug_field),
             events: &["INSERT", "UPDATE"],
             function: names.slug_function(table, slug_field),
+        });
+    }
+    for field in caller_owned_fields(model) {
+        out.push(ModelTrigger {
+            table: table.to_string(),
+            name: names.owner_required_trigger(table, &field),
+            events: &["INSERT"],
+            function: names.owner_required_function(table, &field),
         });
     }
     if !rich_text_fields(model).is_empty() {

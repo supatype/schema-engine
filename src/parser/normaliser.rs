@@ -88,6 +88,28 @@ fn default_owner_to_caller(model: &mut super::ast::ModelAst) {
     }
 }
 
+/// The required auth user id fields a model's create rule pins to the caller: the ones whose
+/// default is the caller's id, and so the ones a request with no caller leaves empty.
+///
+/// The trigger layer (which gives an insert that leaves them empty a plain error) and the name
+/// chooser both read this, so they cannot disagree about which columns they mean. An optional
+/// field is left out: NULL is a value it may hold.
+pub fn caller_owned_fields(model: &super::ast::ModelAst) -> Vec<String> {
+    let Some(rule) = model.access().create.as_ref() else {
+        return Vec::new();
+    };
+    let mut owners = owners_in_rule(rule);
+    owners.sort();
+    owners.dedup();
+    owners.retain(|owner| {
+        matches!(
+            model.fields.get(owner),
+            Some(FieldAst::Uuid(field)) if field.annotations.db.auth_user_id && field.required
+        )
+    });
+    owners
+}
+
 /// Every field an `Owner` names in `rule`, looking inside `any` and `all`.
 fn owners_in_rule(rule: &super::ast::AccessRule) -> Vec<String> {
     use super::ast::AccessRule;

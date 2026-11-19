@@ -874,6 +874,18 @@ impl ObjectNames {
                     triggers.choose(table, Some(slug), "trigger")
                 });
             }
+            for owner in crate::parser::normaliser::caller_owned_fields(model) {
+                self.pick(table, "owner_required_function", &owner, || {
+                    platform.choose(
+                        &format!("require_{lower}"),
+                        Some(&owner.to_ascii_lowercase()),
+                        "",
+                    )
+                });
+                self.pick(table, "owner_required_trigger", &owner, || {
+                    triggers.choose(table, Some(&owner), "required_trigger")
+                });
+            }
             self.pick(table, "rich_text_function", "", || {
                 platform.choose(&format!("normalise_{lower}"), None, "rich_text")
             });
@@ -957,6 +969,24 @@ impl ObjectNames {
     pub fn slug_trigger(&self, table: &str, slug: &str) -> String {
         self.named(table, "slug_trigger", slug, || {
             make_object_name(table, Some(slug), "trigger")
+        })
+    }
+
+    /// `_platform.require_{table}_{column}`, folded to lower case as Postgres folds the unquoted name.
+    pub fn owner_required_function(&self, table: &str, column: &str) -> String {
+        self.named(table, "owner_required_function", column, || {
+            make_object_name(
+                &format!("require_{}", table.to_ascii_lowercase()),
+                Some(&column.to_ascii_lowercase()),
+                "",
+            )
+        })
+    }
+
+    /// `{table}_{column}_required_trigger`.
+    pub fn owner_required_trigger(&self, table: &str, column: &str) -> String {
+        self.named(table, "owner_required_trigger", column, || {
+            make_object_name(table, Some(column), "required_trigger")
         })
     }
 
