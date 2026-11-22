@@ -5968,6 +5968,66 @@ fn test_admin_config_honours_declared_search_fields() {
     );
 }
 
+/// A model that declares hooks tells Studio so.
+///
+/// Studio's record editor shows "This post has custom logic that runs on save." when the model's
+/// `hasHooks` is true, and nothing ever sent it: the CLI writes declared hooks to
+/// `annotations.platform.hooks`, the engine's annotation struct did not know the key and dropped it
+/// on parse, so the notice was dead on every host. This asserts the declaration survives into the
+/// admin config, and that a model with none still reports false rather than omitting the key.
+#[test]
+fn test_admin_config_reports_has_hooks() {
+    let model = |hooks: &str| {
+        format!(
+            r#"{{
+  "astVersion": 2,
+  "models": [
+    {{
+      "name": "Post",
+      "fields": {{
+        "id": {{
+          "kind": "uuid",
+          "primaryKey": true,
+          "required": true,
+          "default": {{ "kind": "genRandomUuid" }},
+          "annotations": {{ "db": {{ "pgType": "UUID", "unique": false }} }}
+        }},
+        "title": {{
+          "kind": "text",
+          "required": true,
+          "annotations": {{ "db": {{ "pgType": "TEXT" }} }}
+        }}
+      }},
+      "options": {{ "timestamps": false, "softDelete": false }},
+      "annotations": {{
+        "db": {{ "tableName": "post", "indexes": [] }},
+        "platform": {{ "access": {{}}{hooks} }}
+      }}
+    }}
+  ]
+}}"#
+        )
+    };
+
+    let has_hooks = |ast_json: String| -> serde_json::Value {
+        let ast = parser::parse(&ast_json).unwrap();
+        let config = admin::generate(&ast).unwrap();
+        config["models"][0]["hasHooks"].clone()
+    };
+
+    assert_eq!(
+        has_hooks(model(
+            r#", "hooks": { "beforeChange": "post-hooks", "afterChange": "post-hooks" }"#
+        )),
+        serde_json::json!(true),
+    );
+    assert_eq!(has_hooks(model("")), serde_json::json!(false));
+    assert_eq!(
+        has_hooks(model(r#", "hooks": {}"#)),
+        serde_json::json!(false)
+    );
+}
+
 /// Declared bounds reach Studio, not just Postgres.
 ///
 /// `FieldConfig.validation` has been read by four Studio widgets since the admin panel was built and
