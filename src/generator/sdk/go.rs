@@ -1,3 +1,4 @@
+use super::{array_element, ArrayElement};
 use crate::parser::ast::{FieldAst, SchemaAst};
 use anyhow::Result;
 
@@ -126,12 +127,14 @@ fn go_type_of(field: &FieldAst) -> (String, bool) {
 }
 
 fn go_array_elem(element_type: &str) -> &'static str {
-    match element_type.to_uppercase().as_str() {
-        "INTEGER" | "INT" | "INT4" | "SMALLINT" => "int32",
-        "BIGINT" => "int64",
-        "FLOAT" | "FLOAT8" | "NUMERIC" | "DECIMAL" | "REAL" => "float64",
-        "BOOLEAN" | "BOOL" => "bool",
-        _ => "string",
+    match array_element(element_type) {
+        ArrayElement::Int32 => "int32",
+        ArrayElement::BigInt => "int64",
+        ArrayElement::Float => "float64",
+        // Exact digits, as the single decimal and money kinds: no binary float holds them.
+        ArrayElement::Decimal => "string",
+        ArrayElement::Bool => "bool",
+        ArrayElement::Text => "string",
     }
 }
 
