@@ -1,3 +1,4 @@
+use super::{array_element, ArrayElement};
 use crate::parser::ast::{FieldAst, SchemaAst};
 use anyhow::Result;
 
@@ -125,12 +126,14 @@ fn kotlin_type_of(model: &str, name: &str, field: &FieldAst) -> (String, bool) {
 }
 
 fn kotlin_array_elem(element_type: &str) -> &'static str {
-    match element_type.to_uppercase().as_str() {
-        "INTEGER" | "INT" | "INT4" | "SMALLINT" => "Int",
-        "BIGINT" => "Long",
-        "FLOAT" | "FLOAT8" | "NUMERIC" | "DECIMAL" | "REAL" => "Double",
-        "BOOLEAN" | "BOOL" => "Boolean",
-        _ => "String",
+    match array_element(element_type) {
+        ArrayElement::Int32 => "Int",
+        ArrayElement::BigInt => "Long",
+        ArrayElement::Float => "Double",
+        // Exact digits, as the single decimal and money kinds: no binary float holds them.
+        ArrayElement::Decimal => "BigDecimal",
+        ArrayElement::Bool => "Boolean",
+        ArrayElement::Text => "String",
     }
 }
 

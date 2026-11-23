@@ -1,3 +1,4 @@
+use super::{array_element, ArrayElement};
 use crate::parser::ast::{FieldAst, SchemaAst};
 use anyhow::Result;
 
@@ -142,11 +143,13 @@ fn py_type_of(model: &str, name: &str, field: &FieldAst) -> (String, bool) {
 }
 
 fn py_array_elem(element_type: &str) -> &'static str {
-    match element_type.to_uppercase().as_str() {
-        "INTEGER" | "INT" | "INT4" | "SMALLINT" | "BIGINT" => "int",
-        "FLOAT" | "FLOAT8" | "NUMERIC" | "DECIMAL" | "REAL" => "float",
-        "BOOLEAN" | "BOOL" => "bool",
-        _ => "str",
+    match array_element(element_type) {
+        ArrayElement::Int32 | ArrayElement::BigInt => "int",
+        ArrayElement::Float => "float",
+        // Exact digits, as the single decimal and money kinds: no binary float holds them.
+        ArrayElement::Decimal => "Decimal",
+        ArrayElement::Bool => "bool",
+        ArrayElement::Text => "str",
     }
 }
 

@@ -342,6 +342,26 @@ fn block_variant(block: &BlockDefinitionAst) -> String {
     format!("{{ type: {name}; data: {data} }}")
 }
 
+/// The TypeScript type of an array column's elements, from its Postgres element type.
+///
+/// The exact-value element types follow the single-value kinds: `bigint` for BIGINT (and its
+/// aliases) and an exact decimal string for NUMERIC, DECIMAL and MONEY, since a double holds
+/// neither. They were `number`, which documented the rounding the client now prevents. A
+/// precision on the element (`NUMERIC(19,4)`) is ignored when choosing, as it is for a single
+/// `decimal` or `money` column.
+fn array_element_ts(element_type: &str) -> &'static str {
+    let lowered = element_type.to_lowercase();
+    let base = lowered.split('(').next().unwrap_or("").trim();
+    match base {
+        "bigint" | "int8" | "bigserial" | "serial8" => "bigint",
+        "numeric" | "decimal" | "money" => "string",
+        "integer" | "int4" | "int" | "smallint" | "int2" | "float" | "double precision"
+        | "float8" | "real" | "float4" => "number",
+        "boolean" | "bool" => "boolean",
+        _ => "string",
+    }
+}
+
 pub(crate) fn ts_type_of(field: &FieldAst) -> (String, bool) {
     match field {
         FieldAst::Text(f)
@@ -389,15 +409,10 @@ pub(crate) fn ts_type_of(field: &FieldAst) -> (String, bool) {
             !f.required,
         ),
         FieldAst::Button(f) => ("Button".into(), !f.required),
-        FieldAst::Array(f) => {
-            let elem = match f.element_type.to_lowercase().as_str() {
-                "integer" | "int4" | "int" | "smallint" | "int2" | "bigint" | "int8" | "float"
-                | "double precision" | "float8" | "real" | "float4" | "numeric" => "number",
-                "boolean" | "bool" => "boolean",
-                _ => "string",
-            };
-            (format!("{elem}[]"), !f.required)
-        }
+        FieldAst::Array(f) => (
+            format!("{}[]", array_element_ts(&f.element_type)),
+            !f.required,
+        ),
         FieldAst::Image(f) | FieldAst::File(f) => ("StorageReference".into(), !f.required),
         FieldAst::Geo(f) => ("Json".into(), !f.required),
         FieldAst::Vector(f) => (format!("number[] /* dim {} */", f.dimensions), !f.required),
