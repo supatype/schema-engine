@@ -333,8 +333,7 @@ fn php_array_elements_follow_the_single_values() {
         ("tags", "string"),
         ("maybe_ids", "int"),
     ] {
-        let needle =
-            format!("/** @var list<{elem}> */\n        public readonly array ${column}");
+        let needle = format!("/** @var list<{elem}> */\n        public readonly array ${column}");
         has(&src, &needle, "php");
     }
     lacks(&src, "?array", "php");
