@@ -315,11 +315,29 @@ fn dart_array_decode_converts_rather_than_casting() {
 }
 
 #[test]
-fn php_arrays_stay_untyped() {
-    // PHP declares an array column as `array` with no element type, so there is nothing for an
-    // exact element to disagree with. How the elements are decoded is the caller's json_decode.
+fn php_array_elements_follow_the_single_values() {
+    // The PHP type of every array column stays `array`. The element type is PHPDoc only, following
+    // the PHP single-value rule: a single bigint is `int` and a single numeric is `string`.
     let src = generated_arrays("php");
-    has(&src, "array $rates", "php");
+    for (column, elem) in [
+        ("big_ids", "int"),
+        ("int8_ids", "int"),
+        ("serial_ids", "int"),
+        ("rates", "string"),
+        ("scaled", "string"),
+        ("decimals", "string"),
+        ("amounts", "string"),
+        ("small", "int"),
+        ("floats", "float"),
+        ("flags", "bool"),
+        ("tags", "string"),
+        ("maybe_ids", "int"),
+    ] {
+        let needle =
+            format!("/** @var list<{elem}> */\n        public readonly array ${column}");
+        has(&src, &needle, "php");
+    }
+    lacks(&src, "?array", "php");
 }
 
 #[test]
