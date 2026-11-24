@@ -325,3 +325,114 @@ fn test_xml_column_matches_xml_field_without_drift() {
         "an xml field against a text column is real drift and must still be reported"
     );
 }
+
+/// An `ARRAY` column of the given declared element type.
+fn array_field(element_type: &str) -> FieldAst {
+    FieldAst::Array(supatype_engine::parser::ast::ArrayFieldAst {
+        check: None,
+        validation: None,
+        element_type: element_type.into(),
+        required: false,
+        unique: false,
+        default: None,
+        read_only: false,
+        annotations: Default::default(),
+    })
+}
+
+/// A column as `information_schema` reports an array: `data_type` ARRAY, `udt_name` `_<element>`.
+fn pg_array_col(udt_name: &str) -> DbColumn {
+    pg_col("tags", "ARRAY", udt_name, 1, true)
+}
+
+/// `migration.rs` renders the declared element type upper-cased and unquoted (`NUMERIC[]`), so
+/// Postgres creates the array of that element's internal name. The differ used to fall back to
+/// `_text` for every element it did not list, so each of these reported a lossy type change
+/// forever. One case per declared spelling, against the udt Postgres reports for it.
+#[test]
+fn array_element_types_match_the_udt_postgres_reports() {
+    let cases: &[(&str, &str)] = &[
+        ("TEXT", "_text"),
+        ("text", "_text"),
+        ("VARCHAR", "_varchar"),
+        ("VARCHAR(40)", "_varchar"),
+        ("CHARACTER VARYING", "_varchar"),
+        ("CHARACTER VARYING(40)", "_varchar"),
+        ("CHAR", "_bpchar"),
+        ("CHARACTER(3)", "_bpchar"),
+        ("INTEGER", "_int4"),
+        ("INT", "_int4"),
+        ("INT4", "_int4"),
+        ("BIGINT", "_int8"),
+        ("INT8", "_int8"),
+        ("SMALLINT", "_int2"),
+        ("INT2", "_int2"),
+        ("BOOLEAN", "_bool"),
+        ("BOOL", "_bool"),
+        ("DOUBLE PRECISION", "_float8"),
+        ("FLOAT8", "_float8"),
+        ("REAL", "_float4"),
+        ("FLOAT4", "_float4"),
+        ("NUMERIC", "_numeric"),
+        ("NUMERIC(10, 2)", "_numeric"),
+        ("DECIMAL", "_numeric"),
+        ("DECIMAL(10,2)", "_numeric"),
+        ("TIMESTAMPTZ", "_timestamptz"),
+        ("TIMESTAMP WITH TIME ZONE", "_timestamptz"),
+        ("TIMESTAMP(3) WITH TIME ZONE", "_timestamptz"),
+        ("TIMESTAMP", "_timestamp"),
+        ("TIMESTAMP WITHOUT TIME ZONE", "_timestamp"),
+        ("TIME", "_time"),
+        ("TIME WITH TIME ZONE", "_timetz"),
+        ("DATE", "_date"),
+        ("JSONB", "_jsonb"),
+        ("JSON", "_json"),
+        ("BYTEA", "_bytea"),
+        ("INET", "_inet"),
+        ("CIDR", "_cidr"),
+        ("UUID", "_uuid"),
+        ("INTERVAL", "_interval"),
+    ];
+    for (declared, udt) in cases {
+        let field = array_field(declared);
+        assert!(
+            column_diff::column_type_matches_introspected(&field, &pg_array_col(udt)),
+            "{declared}[] should match a column reporting udt_name {udt}"
+        );
+    }
+}
+
+/// `NUMERIC[]` against the `_numeric` Postgres reports: the case that showed a change forever.
+#[test]
+fn decimal_array_matches_numeric_array_column() {
+    let field = array_field("NUMERIC");
+    assert!(column_diff::column_type_matches_introspected(
+        &field,
+        &pg_array_col("_numeric"),
+    ));
+    assert!(!column_diff::column_type_matches_introspected(
+        &field,
+        &pg_array_col("_text"),
+    ));
+}
+
+/// A custom enum used as an element is created unquoted, so Postgres folds it to lower case and
+/// reports `_<enum name>`.
+#[test]
+fn custom_enum_array_matches_its_udt() {
+    let field = array_field("Post_Status");
+    assert!(column_diff::column_type_matches_introspected(
+        &field,
+        &pg_array_col("_post_status"),
+    ));
+}
+
+/// The fix must not be "always true": an array of the wrong element still differs.
+#[test]
+fn array_with_a_different_element_still_differs() {
+    let field = array_field("INTEGER");
+    assert!(!column_diff::column_type_matches_introspected(
+        &field,
+        &pg_array_col("_text"),
+    ));
+}
