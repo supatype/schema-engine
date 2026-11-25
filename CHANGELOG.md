@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.2](https://github.com/supatype/schema-engine/compare/v0.11.1...v0.11.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* **differ:** stop warning about the realtime mode when no channels are declared ([bee0de4](https://github.com/supatype/schema-engine/commit/bee0de4358104fbdc1182abdcc993fc2b7e08a18))
+* say why an insert with no signed-in user fails on an owner column ([e01e891](https://github.com/supatype/schema-engine/commit/e01e891f59c234135c5ef7f5e9c54c44af03ebfd))
+
 ## [0.11.1](https://github.com/supatype/schema-engine/compare/v0.11.0...v0.11.1) (2026-11-25)
 
 
