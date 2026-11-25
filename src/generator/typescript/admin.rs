@@ -181,6 +181,7 @@ fn build_model_config(model: &ModelAst, default_locale: &str, ast: &SchemaAst) -
         },
         "softDelete": has_soft_delete,
         "timestamps": has_timestamps,
+        "hasHooks": !model.annotations.platform.hooks.is_empty(),
         "listColumns": list_columns,
         "searchFields": search_fields,
         "defaultSort": default_sort,

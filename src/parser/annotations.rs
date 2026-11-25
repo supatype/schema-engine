@@ -41,6 +41,14 @@ pub struct PlatformModelAnnotations {
     /// schema said nothing, not that search is off: see `derive_search_fields`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search_fields: Vec<String>,
+    /// Lifecycle hooks the schema declares, keyed by event (`beforeChange`, `afterChange`, ...).
+    ///
+    /// The engine never runs a hook, the API server does, from the route manifest. It is read here
+    /// only so the admin config can say a model has some: the CLI already writes this key, and it
+    /// used to be dropped on parse, which left Studio unable to show its "custom logic runs on
+    /// save" notice. Values are kept opaque because their shape belongs to the server.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hooks: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

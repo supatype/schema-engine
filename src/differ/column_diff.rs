@@ -145,18 +145,44 @@ fn is_text_like(field: &FieldAst) -> bool {
     )
 }
 
-fn array_element_udt(element_type: &str) -> &'static str {
-    match element_type.to_uppercase().as_str() {
-        "TEXT" | "VARCHAR" | "CHARACTER VARYING" => "_text",
-        "INTEGER" | "INT" | "INT4" => "_int4",
-        "BIGINT" | "INT8" => "_int8",
-        "SMALLINT" | "INT2" => "_int2",
-        "UUID" => "_uuid",
-        "BOOLEAN" | "BOOL" => "_bool",
-        "DOUBLE PRECISION" | "FLOAT8" => "_float8",
-        "REAL" | "FLOAT4" => "_float4",
-        _ => "_text",
+/// The `udt_name` Postgres reports for an array of the declared element type.
+///
+/// `migration.rs` renders the declared element upper-cased and unquoted (`NUMERIC[]`), so Postgres
+/// creates the array of that element's internal name and reports it as `_<internal name>`. This
+/// derives that name for any element instead of listing a few and guessing `_text` for the rest,
+/// which made every other element (numeric, dates, json, bytea, inet, enums) report a type change
+/// on every diff. Unquoted identifiers fold to lower case, so a custom enum element is `_<name>`.
+fn array_element_udt(element_type: &str) -> String {
+    let mut bare = String::new();
+    let mut depth = 0u32;
+    for ch in element_type.chars() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => bare.push(ch),
+            _ => {}
+        }
     }
+    let upper = bare.to_uppercase();
+    let normalised = upper.split_whitespace().collect::<Vec<_>>().join(" ");
+    let internal = match normalised.as_str() {
+        "DOUBLE PRECISION" | "FLOAT8" | "FLOAT" => "float8".to_string(),
+        "REAL" | "FLOAT4" => "float4".to_string(),
+        "INTEGER" | "INT" | "INT4" => "int4".to_string(),
+        "BIGINT" | "INT8" => "int8".to_string(),
+        "SMALLINT" | "INT2" => "int2".to_string(),
+        "BOOLEAN" | "BOOL" => "bool".to_string(),
+        "CHARACTER VARYING" | "VARCHAR" => "varchar".to_string(),
+        "CHARACTER" | "CHAR" => "bpchar".to_string(),
+        "TIMESTAMP WITH TIME ZONE" | "TIMESTAMPTZ" => "timestamptz".to_string(),
+        "TIMESTAMP" | "TIMESTAMP WITHOUT TIME ZONE" => "timestamp".to_string(),
+        "TIME WITH TIME ZONE" | "TIMETZ" => "timetz".to_string(),
+        "TIME" | "TIME WITHOUT TIME ZONE" => "time".to_string(),
+        "NUMERIC" | "DECIMAL" => "numeric".to_string(),
+        "BIT VARYING" | "VARBIT" => "varbit".to_string(),
+        other => other.to_lowercase(),
+    };
+    format!("_{internal}")
 }
 
 pub(crate) fn expected_udt(field: &FieldAst) -> Option<String> {
@@ -198,7 +224,7 @@ pub(crate) fn expected_udt(field: &FieldAst) -> Option<String> {
         FieldAst::TsQuery(_) => Some("tsquery".into()),
         FieldAst::TsVector(_) => Some("tsvector".into()),
         FieldAst::Decimal(_) | FieldAst::Money(_) => Some("numeric".into()),
-        FieldAst::Array(a) => Some(array_element_udt(&a.element_type).into()),
+        FieldAst::Array(a) => Some(array_element_udt(&a.element_type)),
         FieldAst::Geo(_) => Some("geography".into()),
         FieldAst::Vector(_) => Some("vector".into()),
         FieldAst::Custom(c) => Some(c.pg_type.to_lowercase()),

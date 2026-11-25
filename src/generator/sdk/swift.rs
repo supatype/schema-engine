@@ -1,3 +1,4 @@
+use super::{array_element, ArrayElement};
 use crate::parser::ast::{FieldAst, SchemaAst};
 use anyhow::Result;
 
@@ -134,11 +135,14 @@ fn swift_type_of(model: &str, name: &str, field: &FieldAst) -> (String, bool) {
 }
 
 fn swift_array_elem(element_type: &str) -> &'static str {
-    match element_type.to_uppercase().as_str() {
-        "INTEGER" | "INT" | "INT4" | "SMALLINT" | "BIGINT" => "Int",
-        "FLOAT" | "FLOAT8" | "NUMERIC" | "DECIMAL" | "REAL" => "Double",
-        "BOOLEAN" | "BOOL" => "Bool",
-        _ => "String",
+    match array_element(element_type) {
+        ArrayElement::Int32 => "Int",
+        ArrayElement::BigInt => "Int64",
+        ArrayElement::Float => "Double",
+        // Exact digits, as the single decimal and money kinds: no binary float holds them.
+        ArrayElement::Decimal => "Decimal",
+        ArrayElement::Bool => "Bool",
+        ArrayElement::Text => "String",
     }
 }
 

@@ -1,3 +1,4 @@
+use super::{array_element, ArrayElement};
 use crate::parser::ast::{FieldAst, SchemaAst};
 use anyhow::Result;
 
@@ -37,9 +38,16 @@ pub fn generate(ast: &SchemaAst) -> Result<String> {
             } else {
                 String::new()
             };
+            let doc = match fld {
+                FieldAst::Array(a) => format!(
+                    "        /** @var list<{}> */\n",
+                    php_array_elem(&a.element_type)
+                ),
+                _ => String::new(),
+            };
             params.push(format!(
-                "        public readonly {} ${}{}",
-                prefix, name, default
+                "{}        public readonly {} ${}{}",
+                doc, prefix, name, default
             ));
         }
 
@@ -110,6 +118,17 @@ fn php_type_of(field: &FieldAst) -> (String, bool) {
         FieldAst::Blocks(f) => ("array".into(), !f.required),
         FieldAst::Custom(f) => (ts_to_php(&f.ts_type), !f.required),
         _ => ("mixed".into(), true),
+    }
+}
+
+/// PHPDoc element type of an array column. Documentation only: the PHP type stays `array`.
+/// Follows the single values: bigint is `int`, and numeric, decimal and money are `string`.
+fn php_array_elem(element_type: &str) -> &'static str {
+    match array_element(element_type) {
+        ArrayElement::Int32 | ArrayElement::BigInt => "int",
+        ArrayElement::Float => "float",
+        ArrayElement::Decimal | ArrayElement::Text => "string",
+        ArrayElement::Bool => "bool",
     }
 }
 

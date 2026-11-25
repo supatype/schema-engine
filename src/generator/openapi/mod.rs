@@ -1,3 +1,4 @@
+use crate::generator::sdk::{array_element, ArrayElement};
 use crate::parser::ast::{FieldAst, RelationCardinality, SchemaAst};
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -5,11 +6,11 @@ use serde_json::{json, Value};
 /// Generate an OpenAPI 3.0 specification from the schema AST.
 ///
 /// The output follows the PostgREST-compatible REST convention:
-///   GET    /{table}      — list records
-///   POST   /{table}      — create record
-///   GET    /{table}/{id} — get single record
-///   PATCH  /{table}/{id} — update record
-///   DELETE /{table}/{id} — delete record
+///   GET    /{table}      : list records
+///   POST   /{table}      : create record
+///   GET    /{table}/{id} : get single record
+///   PATCH  /{table}/{id} : update record
+///   DELETE /{table}/{id} : delete record
 ///
 /// Components.schemas contains a JSON Schema for each model.
 pub fn generate(ast: &SchemaAst) -> Result<Value> {
@@ -210,7 +211,7 @@ fn build_model_schema(model: &crate::parser::ast::ModelAst) -> Value {
                 // Only BelongsTo owns a column here, and this must agree with the migration
                 // generator or the document describes a table that does not exist. It used to
                 // include HasOne, which `generator/sql/migration.rs` explicitly does not emit a
-                // column for — HasOne is the *inverse* side, and the foreign key (with its UNIQUE)
+                // column for: HasOne is the *inverse* side, and the foreign key (with its UNIQUE)
                 // belongs to whichever model declares the RelatedTo. So the spec advertised an
                 // `<name>_id` that was never created, and a client generated from it sent a column
                 // PostgREST rejects.
@@ -319,9 +320,9 @@ fn field_to_schema(field: &FieldAst) -> Value {
         }),
         FieldAst::Array(a) => json!({
             "type": "array",
-            "items": { "type": array_element_openapi_type(&a.element_type) }
+            "items": array_items_schema(&a.element_type)
         }),
-        // Custom plugin field — emit the ts_type as a description hint; fall back to string type
+        // Custom plugin field: emit the ts_type as a description hint; fall back to string type
         FieldAst::Custom(c) => json!({
             "type": "string",
             "description": format!("Custom field type '{}' from plugin '{}'", c.field_type, c.plugin),
@@ -332,12 +333,14 @@ fn field_to_schema(field: &FieldAst) -> Value {
     }
 }
 
-fn array_element_openapi_type(element_type: &str) -> &'static str {
-    match element_type.to_uppercase().as_str() {
-        "INTEGER" | "INT" | "INT4" | "SMALLINT" | "BIGINT" => "integer",
-        "FLOAT" | "FLOAT8" | "NUMERIC" | "DECIMAL" => "number",
-        "BOOLEAN" | "BOOL" => "boolean",
-        _ => "string",
+/// The schema of an array's items, matching what the single column of the same type declares.
+fn array_items_schema(element_type: &str) -> Value {
+    match array_element(element_type) {
+        ArrayElement::Int32 => json!({ "type": "integer", "format": "int32" }),
+        ArrayElement::BigInt => json!({ "type": "integer", "format": "int64" }),
+        ArrayElement::Float | ArrayElement::Decimal => json!({ "type": "number" }),
+        ArrayElement::Bool => json!({ "type": "boolean" }),
+        ArrayElement::Text => json!({ "type": "string" }),
     }
 }
 

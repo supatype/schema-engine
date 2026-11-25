@@ -1,3 +1,4 @@
+use super::{array_element, ArrayElement};
 use crate::parser::ast::{FieldAst, SchemaAst};
 use anyhow::Result;
 
@@ -204,6 +205,7 @@ fn dart_from_json(name: &str, field: &FieldAst) -> String {
         // where `as String` throws. toString() is correct for either shape.
         FieldAst::Money(f) => exact_from_json(name, f.required),
         FieldAst::Decimal(f) => exact_from_json(name, f.required),
+        FieldAst::Array(a) => dart_array_from_json(name, &a.element_type, a.required),
         _ => {
             let (dart_type, nullable) = dart_type_of(field);
             if nullable {
@@ -238,11 +240,36 @@ fn dart_to_json(prop: &str, field: &FieldAst) -> String {
 }
 
 fn dart_array_elem(element_type: &str) -> &'static str {
-    match element_type.to_uppercase().as_str() {
-        "INTEGER" | "INT" | "INT4" | "SMALLINT" | "BIGINT" => "int",
-        "FLOAT" | "FLOAT8" | "NUMERIC" | "DECIMAL" | "REAL" => "double",
-        "BOOLEAN" | "BOOL" => "bool",
-        _ => "String",
+    match array_element(element_type) {
+        ArrayElement::Int32 | ArrayElement::BigInt => "int",
+        ArrayElement::Float => "double",
+        // Exact digits, as the single decimal and money kinds: Dart has no exact decimal, so the
+        // digits cross as a String.
+        ArrayElement::Decimal => "String",
+        ArrayElement::Bool => "bool",
+        ArrayElement::Text => "String",
+    }
+}
+
+/// Decode for an array column.
+///
+/// `jsonDecode` builds a `List<dynamic>`, which is not a `List<int>` whatever it holds, so a plain
+/// `as List<int>` cast throws on every real payload. Exact elements are converted one by one, as a
+/// single decimal is: `toString()` is exact whichever form the wire sends. A null element throws
+/// rather than becoming the text "null".
+fn dart_array_from_json(name: &str, element_type: &str, required: bool) -> String {
+    let list = format!("(json['{name}'] as List<dynamic>)");
+    let converted = match array_element(element_type) {
+        ArrayElement::Int32 | ArrayElement::BigInt => format!("{list}.cast<int>()"),
+        ArrayElement::Float => format!("{list}.map((e) => (e as num).toDouble()).toList()"),
+        ArrayElement::Decimal => format!("{list}.map((e) => (e as Object).toString()).toList()"),
+        ArrayElement::Bool => format!("{list}.cast<bool>()"),
+        ArrayElement::Text => format!("{list}.cast<String>()"),
+    };
+    if required {
+        converted
+    } else {
+        format!("json['{name}'] == null ? null : {converted}")
     }
 }
 
