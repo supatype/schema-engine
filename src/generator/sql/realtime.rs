@@ -482,10 +482,20 @@ fn access_body(ast: &SchemaAst, schema: &str) -> String {
         blocks.push(fitting_branch(ast, channel, &segments, schema));
         blocks.extend(misfit_branch(channel, &segments));
     }
+    access_body_of(&blocks)
+}
+
+fn access_body_of(blocks: &[String]) -> String {
     format!(
         "\n#variable_conflict use_column\nBEGIN\n  IF pg_catalog.char_length($1) > {MAX_TOPIC_CHARS} THEN\n    RETURN;\n  END IF;\n{}\n  RETURN;\nEND;\n",
         blocks.join("\n")
     )
+}
+
+/// The access function's body when a project declares no channels: what a database holds until a
+/// channel is declared, for the differ to tell "no channels" from "some".
+pub fn empty_access_body() -> String {
+    access_body_of(&[])
 }
 
 fn access_function(ast: &SchemaAst, schema: &str) -> RealtimeFunction {
