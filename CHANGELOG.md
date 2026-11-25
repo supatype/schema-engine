@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.1](https://github.com/supatype/schema-engine/compare/v0.11.0...v0.11.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **differ:** derive the array element udt for any element type ([1b538f9](https://github.com/supatype/schema-engine/commit/1b538f9c26c64a76358cc4ab3695f56a10336f93))
+* **sdk,openapi:** type bigint and numeric array elements as the single values are ([3c98d3d](https://github.com/supatype/schema-engine/commit/3c98d3de648ed1549674f4617403fc79da236c9b))
+* **sdk:** give PHP array columns a PHPDoc element type ([7fa5528](https://github.com/supatype/schema-engine/commit/7fa552802f17db23ccd5a9cee59082726430f99e))
+* **studio-config:** report hasHooks on each model so the record editor shows its custom logic notice ([ad61bf1](https://github.com/supatype/schema-engine/commit/ad61bf131268bcd51ef727fa7be98edf0641eb6b))
+* **types:** type bigint arrays as bigint[] and numeric arrays as string[] ([824aba5](https://github.com/supatype/schema-engine/commit/824aba5a59b339813b531c9e785322d895b70a91))
+
 ## [0.11.0](https://github.com/supatype/schema-engine/compare/v0.10.1...v0.11.0) (2026-11-17)
 
 
