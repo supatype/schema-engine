@@ -1,6 +1,6 @@
 [package]
 name = "supatype-engine"
-version = "0.11.2"
+version = "0.11.3"
 edition = "2021"
 authors = ["Supatype"]
 description = "Supatype schema engine: turns a declared schema into Postgres migrations, policies and typed clients"
