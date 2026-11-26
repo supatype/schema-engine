@@ -317,13 +317,16 @@ fn field_has_default(field: &FieldAst) -> bool {
 
 /// One block's entry: its name under `type`, its fields under `data`, each typed as the same field
 /// would be on a column (a localized one is a locale map). A relation stores nothing in the entry.
-fn block_variant(block: &BlockDefinitionAst) -> String {
+fn block_variant(block: &BlockDefinitionAst, rich_text: Option<&str>) -> String {
     let fields: Vec<String> = block
         .fields
         .iter()
         .filter(|(_, bf)| !matches!(bf, FieldAst::Relation(_)))
         .map(|(name, bf)| {
-            let (ts, nullable) = ts_type_of(bf);
+            let (ts, nullable) = match (bf, rich_text) {
+                (FieldAst::RichText(f), Some(leaf)) => (leaf.to_string(), !f.required),
+                _ => ts_type_of(bf),
+            };
             let ts = if crate::parser::accessors::is_localized(bf) {
                 format!("LocalizedValue<{ts}>")
             } else {
@@ -340,6 +343,17 @@ fn block_variant(block: &BlockDefinitionAst) -> String {
     };
     let name = serde_json::to_string(&block.name).unwrap_or_else(|_| format!("\"{}\"", block.name));
     format!("{{ type: {name}; data: {data} }}")
+}
+
+/// The type of a blocks column: the union of its declared blocks, as an array. `rich_text` names
+/// the type a rich text field inside a block takes where a caller wants something other than
+/// `RichText` (the seed builder's own document type).
+pub(crate) fn blocks_ts_type(blocks: &[BlockDefinitionAst], rich_text: Option<&str>) -> String {
+    if blocks.is_empty() {
+        return "{ type: string; data: { [key: string]: unknown } }[]".into();
+    }
+    let variants: Vec<String> = blocks.iter().map(|b| block_variant(b, rich_text)).collect();
+    format!("({})[]", variants.join(" | "))
 }
 
 /// The TypeScript type of an array column's elements, from its Postgres element type.
@@ -418,18 +432,7 @@ pub(crate) fn ts_type_of(field: &FieldAst) -> (String, bool) {
         FieldAst::Vector(f) => (format!("number[] /* dim {} */", f.dimensions), !f.required),
         // Studio's block editor stores `{ "type": <block>, "data": { <its fields> } }` per entry.
         // With no block declared the entry still has that shape; only its fields are unknown.
-        FieldAst::Blocks(f) => {
-            if f.blocks.is_empty() {
-                (
-                    "{ type: string; data: { [key: string]: unknown } }[]".into(),
-                    !f.required,
-                )
-            } else {
-                let variants: Vec<String> = f.blocks.iter().map(block_variant).collect();
-                let union = variants.join(" | ");
-                (format!("({union})[]"), !f.required)
-            }
-        }
+        FieldAst::Blocks(f) => (blocks_ts_type(&f.blocks, None), !f.required),
         FieldAst::Custom(f) => (f.ts_type.clone(), !f.required),
         FieldAst::Timestamps | FieldAst::Publishable | FieldAst::SoftDelete => {
             ("never".into(), false)
