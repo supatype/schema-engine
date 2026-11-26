@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.3](https://github.com/supatype/schema-engine/compare/v0.11.2...v0.11.3) (2026-11-26)
+
+
+### Bug Fixes
+
+* **seed:** type a blocks column as its block union in the seed builder ([6689d2a](https://github.com/supatype/schema-engine/commit/6689d2a1f1917f8bb9397febe3f8ad9b9f2410ef))
+* **seed:** type blocks and rich text in the seed builder as the Row types do ([2dd696c](https://github.com/supatype/schema-engine/commit/2dd696c26fb249c6c9b3ad5e8f97fe0b93fd3ffb))
+* **seed:** type rich text in the seed builder as the Lexical type the Row types use ([f258154](https://github.com/supatype/schema-engine/commit/f25815477cc13599806a7e26e93e295c57b66a6f))
+
 ## [0.11.2](https://github.com/supatype/schema-engine/compare/v0.11.1...v0.11.2) (2026-11-25)
 
 
