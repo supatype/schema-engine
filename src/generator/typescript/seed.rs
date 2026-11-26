@@ -17,6 +17,7 @@
 //! structure; that it type-checks is proven where it is compiled against the runtime, in
 //! the acceptance app.
 
+use super::types::blocks_ts_type;
 use crate::generator::seed_model::{
     describe, RelationKind, ScalarKind, SeedColumn, SeedModel, SeedRelation,
 };
@@ -637,6 +638,9 @@ fn json_string(value: &str) -> String {
 fn declared_type(column: &SeedColumn) -> Option<String> {
     match column.source.as_ref()? {
         FieldAst::Custom(field) if !field.ts_type.is_empty() => Some(field.ts_type.clone()),
+        // The trigger normalises prose in top level rich text columns only, so a document inside
+        // a block is a document and never a string.
+        FieldAst::Blocks(field) => Some(blocks_ts_type(&field.blocks, Some("SeedRichText"))),
         _ => None,
     }
 }
@@ -1092,5 +1096,39 @@ mod tests {
     #[test]
     fn a_condition_where_takes_a_predicate_or_column_values() {
         assert_contains(&rendered(), "where?: Predicate<C> | ConditionMatch<C>\n");
+    }
+
+    /// A blocks column was typed `SeedJson`, so a seed could not pass a typed rich text value
+    /// inside a block (`SerializedEditorState` has no index signature) and nothing in a block was
+    /// checked at all. The database types name each block; the builder must name them too. The
+    /// normalising trigger covers only top level rich text columns, so inside a block the leaf is
+    /// a document and not prose.
+    #[test]
+    fn a_blocks_column_is_typed_as_its_block_union() {
+        let ast: SchemaAst = serde_json::from_str(
+            r#"{"astVersion": 2, "models": [{"name": "Cv",
+                "fields": {
+                    "id": {"kind": "uuid", "required": true, "primaryKey": true},
+                    "experience": {"kind": "blocks", "required": false, "blocks": [
+                        {"name": "experience", "fields": {
+                            "company": {"kind": "text", "pgType": "TEXT", "required": true, "unique": false},
+                            "end": {"kind": "text", "pgType": "TEXT", "required": false, "unique": false},
+                            "body": {"kind": "richText", "pgType": "JSONB", "required": true, "unique": false}
+                        }},
+                        {"name": "education", "fields": {"school": {"kind": "text", "pgType": "TEXT", "required": true, "unique": false}}}
+                    ]}
+                },
+                "annotations": {"db": {"tableName": "cv"}}}]}"#,
+        )
+        .expect("parses");
+        let out = generate(&ast).expect("renders");
+        assert_contains(
+            &out,
+            "experience?: ({ type: \"experience\"; data: { company: string; end?: string; body: SeedRichText } } | { type: \"education\"; data: { school: string } })[] | null",
+        );
+        assert!(
+            !out.contains("experience?: SeedJson"),
+            "a blocks column is not any JSON: {out}"
+        );
     }
 }
